@@ -203,15 +203,23 @@ pub fn present(cleaner: &Cleaner, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bo
             }
             has_real_match(p, &guard, env)
         }),
-        Action::RegKey { root, path } => reg_exists(&RegItem::Key {
-            root: *root,
-            path: path.clone(),
-        }),
-        Action::RegValue { root, path, value } => reg_exists(&RegItem::Value {
-            root: *root,
-            path: path.clone(),
-            value: value.clone(),
-        }),
+        Action::RegKey { root, path } => existing_view(
+            RegItem::Key {
+                root: *root,
+                path: path.clone(),
+            },
+            reg_exists,
+        )
+        .is_some(),
+        Action::RegValue { root, path, value } => existing_view(
+            RegItem::Value {
+                root: *root,
+                path: path.clone(),
+                value: value.clone(),
+            },
+            reg_exists,
+        )
+        .is_some(),
     })
 }
 
@@ -279,8 +287,9 @@ fn has_real_match(path: &Path, guard: &Guard, env: &Env) -> bool {
 }
 
 /// Esistenza vera di una chiave o di un valore di registro (sola lettura).
-/// HKLM si guarda nella vista a 64 bit e, per `Software\…`, anche in
-/// `Software\Wow6432Node\…` (la vista a 32 bit).
+/// Solo il percorso dato, nella vista a 64 bit: la vista a 32 bit di HKLM la
+/// prova chi chiama con `Software\Wow6432Node\…` (la raccolta lo fa da sé,
+/// così il `Collected` porta il percorso che esiste davvero).
 #[cfg(windows)]
 pub fn reg_exists_real(item: &RegItem) -> bool {
     use winreg::RegKey;
@@ -296,11 +305,7 @@ pub fn reg_exists_real(item: &RegItem) -> bool {
     };
     match root {
         RegRoot::Hkcu => check(HKEY_CURRENT_USER, path, KEY_READ),
-        RegRoot::Hklm => {
-            check(HKEY_LOCAL_MACHINE, path, KEY_READ | KEY_WOW64_64KEY)
-                || wow6432_path(path)
-                    .is_some_and(|alt| check(HKEY_LOCAL_MACHINE, &alt, KEY_READ | KEY_WOW64_64KEY))
-        }
+        RegRoot::Hklm => check(HKEY_LOCAL_MACHINE, path, KEY_READ | KEY_WOW64_64KEY),
     }
 }
 
@@ -335,6 +340,26 @@ pub fn overlaps(a: &str, b: &str, env: &Env) -> bool {
                     .all(|(p, q)| wildcard_match(p, q) || wildcard_match(q, p))
         })
     })
+}
+
+/// `true` se il percorso di regola `inner` sta dentro `outer` o coincide
+/// (verso unico, per la regola 9): ogni espansione di `inner` ha almeno i
+/// componenti di un'espansione di `outer`, e ognuno di quei componenti di
+/// `inner` è soddisfatto dal modello di `outer` (un jolly di `inner` non è
+/// coperto da un nome letterale di `outer`). Maiuscole, `/` e `\` finali
+/// ignorati; una variabile non definita da una parte o dall'altra dà `false`.
+pub fn within(inner: &str, outer: &str, env: &Env) -> bool {
+    let inner: Vec<Vec<String>> = expand(inner, env).iter().map(|p| key_comps(p)).collect();
+    let outer: Vec<Vec<String>> = expand(outer, env).iter().map(|p| key_comps(p)).collect();
+    !inner.is_empty()
+        && inner.iter().all(|x| {
+            !x.is_empty()
+                && outer.iter().any(|y| {
+                    !y.is_empty()
+                        && x.len() >= y.len()
+                        && y.iter().zip(x).all(|(pat, name)| wildcard_match(pat, name))
+                })
+        })
 }
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -638,10 +663,38 @@ impl Ctx<'_> {
             self.skip(|| format!("chiave di registro protetta: {} ({why})", reg_display(&item)));
             return;
         }
-        if !self.out.reg.contains(&item) && reg_exists(&item) {
+        // Si raccoglie il percorso che esiste davvero: per HKLM, se la chiave
+        // c'è solo nella vista a 32 bit, `Software\Wow6432Node\…` (chi pulisce
+        // apre sempre la vista a 64 bit, dove quel percorso è una chiave vera).
+        let Some(item) = existing_view(item, reg_exists) else {
+            return;
+        };
+        if !self.out.reg.contains(&item) {
             self.out.reg.push(item);
         }
     }
+}
+
+/// `item` se esiste (vista a 64 bit); altrimenti, per HKLM sotto `Software`,
+/// la stessa voce in `Software\Wow6432Node\…` se esiste quella; altrimenti
+/// `None`.
+fn existing_view(item: RegItem, reg_exists: &dyn Fn(&RegItem) -> bool) -> Option<RegItem> {
+    if reg_exists(&item) {
+        return Some(item);
+    }
+    let alt = match &item {
+        RegItem::Key { root: RegRoot::Hklm, path } => RegItem::Key {
+            root: RegRoot::Hklm,
+            path: wow6432_path(path)?,
+        },
+        RegItem::Value { root: RegRoot::Hklm, path, value } => RegItem::Value {
+            root: RegRoot::Hklm,
+            path: wow6432_path(path)?,
+            value: value.clone(),
+        },
+        _ => return None,
+    };
+    reg_exists(&alt).then_some(alt)
 }
 
 /// `path` coincide con `dir` o sta sotto; i componenti di `dir` possono avere
@@ -1604,6 +1657,63 @@ mod tests {
         ]);
         assert!(present(&cleaner(vec![walk_all(r"%TEMP%\pytest-of-*")]), &e, &never));
         assert!(present(&cleaner(vec![walk_all(r"%LocalAppData%\Google\AndroidStudio*\caches")]), &e, &never));
+    }
+
+    /// I2: una chiave HKLM che c'è solo nella vista a 32 bit si raccoglie con
+    /// il percorso vero (`Software\Wow6432Node\…`); se c'è a 64 bit, solo quella.
+    #[test]
+    fn hklm_key_only_in_the_32_bit_view_is_collected_with_its_real_path() {
+        let o = opt(vec![
+            Action::RegKey { root: RegRoot::Hklm, path: r"Software\Vendor\App\Recent".into() },
+            Action::RegValue { root: RegRoot::Hklm, path: r"Software\Vendor\App".into(), value: "Last".into() },
+            Action::RegKey { root: RegRoot::Hklm, path: r"Software\Both\Recent".into() },
+            Action::RegKey { root: RegRoot::Hkcu, path: r"Software\User\Recent".into() },
+        ]);
+        let exists = |i: &RegItem| {
+            let p = match i {
+                RegItem::Key { path, .. } | RegItem::Value { path, .. } => path.as_str(),
+            };
+            p.starts_with(r"Software\Wow6432Node\") || p.starts_with(r"Software\Both")
+        };
+        let c = collect(&o, &Env::default(), &exists);
+        assert_eq!(
+            c.reg,
+            vec![
+                RegItem::Key { root: RegRoot::Hklm, path: r"Software\Wow6432Node\Vendor\App\Recent".into() },
+                RegItem::Value {
+                    root: RegRoot::Hklm,
+                    path: r"Software\Wow6432Node\Vendor\App".into(),
+                    value: "Last".into(),
+                },
+                RegItem::Key { root: RegRoot::Hklm, path: r"Software\Both\Recent".into() },
+            ]
+        );
+        // `present` guarda le due viste allo stesso modo.
+        let only32 = cleaner(vec![Action::RegKey { root: RegRoot::Hklm, path: r"Software\Vendor\App".into() }]);
+        assert!(present(&only32, &Env::default(), &exists));
+        let user = cleaner(vec![Action::RegKey { root: RegRoot::Hkcu, path: r"Software\User".into() }]);
+        assert!(!present(&user, &Env::default(), &exists));
+    }
+
+    /// I3: `within` è a senso unico (dentro o uguale, mai un antenato).
+    #[test]
+    fn within_is_one_way_and_wildcard_aware() {
+        let e = env(&[
+            ("temp", r"C:\Users\u\AppData\Local\Temp"),
+            ("localappdata", r"C:\Users\u\AppData\Local"),
+            ("userprofile", r"C:\Users\u"),
+        ]);
+        assert!(within(r"%UserProfile%\.cargo\registry", r"%UserProfile%\.cargo\registry", &e));
+        assert!(within(r"%UserProfile%\.cargo\registry\cache\x", r"%UserProfile%\.cargo\registry", &e));
+        assert!(within(r"%LocalAppData%\Google\AndroidStudio4.1\caches", r"%LocalAppData%\Google\AndroidStudio*", &e));
+        assert!(within(r"C:\USERS\u\appdata\local\temp\claude\", r"%TEMP%\claude", &e));
+        // Un antenato non sta dentro.
+        assert!(!within(r"%Temp%", r"%TEMP%\claude", &e));
+        assert!(!within(r"%UserProfile%\.gradle", r"%UserProfile%\.gradle\caches", &e));
+        // Un jolly della voce può uscire da una cartella letterale.
+        assert!(!within(r"%LocalAppData%\Google\Android*\caches", r"%LocalAppData%\Google\AndroidStudio4.1", &e));
+        assert!(!within(r"%Nope%\x", r"%TEMP%", &e));
+        assert!(!within(r"%TEMP%\x", r"%Nope%", &e));
     }
 
     #[test]

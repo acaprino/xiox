@@ -31,7 +31,7 @@ pub use regguard::reg_allowed;
 pub use wildcard::wildcard_match;
 pub use model::{Action, Cleaner, Env, Opt, Origin, RegRoot, Search};
 pub use collect::{
-    collect, collect_ctl, collect_with_excludes, overlaps, present, reg_exists_real, running,
+    collect, collect_ctl, collect_with_excludes, overlaps, present, reg_exists_real, running, within,
     CollectCtl, Collected, ExcludeRule, RegItem,
 };
 pub use embedded::embedded;
