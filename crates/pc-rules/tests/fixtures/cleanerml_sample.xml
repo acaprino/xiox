@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Esempio nel formato dei cleaner dell'utente (come ai_claude_code.xml), con in più
+     una variabile a più valori, un comando non supportato e le chiavi di registro. -->
+<cleaner id="sample_tool" os="windows">
+  <label>Strumento di prova (AI)</label>
+  <description>Pulizia selettiva di cache, trascrizioni e cronologia.</description>
+  <running type="exe" os="windows" same_user="true">claude.exe</running>
+  <running type="exe" os="windows" same_user="true">claude-helper.exe</running>
+  <running type="exe" os="linux">claude</running>
+  <var id="roots">
+    <value>%USERPROFILE%\.sample</value>
+    <value>%XDG_DATA_HOME_MISSING%\sample</value>
+    <value>%APPDATA%\Sample</value>
+    <value os="linux">/home/x/.sample</value>
+  </var>
+  <option id="cache">
+    <label>Cache temporanea</label>
+    <description>Elimina cache rigenerabili.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.sample\cache"/>
+  </option>
+  <option id="transcripts">
+    <label>Trascrizioni sessioni</label>
+    <description>Elimina i file JSONL delle conversazioni.</description>
+    <warning>Non potrai riprendere le conversazioni eliminate.</warning>
+    <action command="delete" search="walk.files" path="%USERPROFILE%\.sample\projects" regex="\.jsonl($|\.)" type="f"/>
+  </option>
+  <option id="history">
+    <label>Cronologia</label>
+    <description>Elimina la cronologia e i file di log.</description>
+    <action command="delete" search="file" path="%USERPROFILE%\.sample\history.jsonl"/>
+    <action command="delete" search="glob" path="%USERPROFILE%\.sample\logs_*.sqlite*"/>
+    <action command="delete" search="walk.top" path="%USERPROFILE%\.sample\tmp"/>
+  </option>
+  <option id="multi">
+    <label>Cartelle multiple</label>
+    <description>Una variabile con più valori.</description>
+    <action command="delete" search="walk.all" path="$$roots$$\cache"/>
+  </option>
+  <option id="database">
+    <label>Database (avanzato)</label>
+    <description>Compatta i database SQLite.</description>
+    <action command="sqlite.vacuum" search="file" path="%USERPROFILE%\.sample\state.db"/>
+  </option>
+  <option id="registry">
+    <label>Registro</label>
+    <description>Chiave e valore di registro.</description>
+    <action command="winreg" path="HKCU\Software\Sample\Recent"/>
+    <action command="winreg" path="HKCU\Software\Sample" name="LastFile"/>
+  </option>
+</cleaner>
