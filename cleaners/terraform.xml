@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Terraform: solo la cartella di TF_PLUGIN_CACHE_DIR (la documentazione non dà un percorso predefinito su Windows).
+     Pulumi: %USERPROFILE%\.pulumi\plugins (plugin installati dall'utente o in automatico). credentials.json e i workspace non si toccano. -->
+<cleaner id="terraform" os="windows">
+  <label>Plugin di Terraform e Pulumi</label>
+  <description>Provider scaricati da Terraform e plugin scaricati da Pulumi, riscaricabili. Non tocca credenziali, stato e configurazione.</description>
+  <var id="terraform_plugin_cache">
+    <value>%TF_PLUGIN_CACHE_DIR%</value>
+  </var>
+  <option id="terraform_plugins">
+    <label>Cache dei provider di Terraform</label>
+    <description>Rimuove i provider salvati nella cartella indicata da TF_PLUGIN_CACHE_DIR.</description>
+    <warning>I provider si riscaricano al prossimo `terraform init`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="$$terraform_plugin_cache$$"/>
+  </option>
+  <option id="pulumi_plugins">
+    <label>Plugin di Pulumi</label>
+    <description>Rimuove i plugin dei provider scaricati da Pulumi (cartella plugins).</description>
+    <warning>I plugin si riscaricano al prossimo `pulumi up` o con `pulumi plugin install`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.pulumi\plugins"/>
+  </option>
+</cleaner>

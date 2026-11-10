@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Helm: cache (HELM_CACHE_HOME o %TEMP%\helm).
+     Non supportato: la cache di kubectl %USERPROFILE%\.kube\cache. La cartella .kube è protetta per intero dal guard
+     (guard.rs, CREDENTIAL_CONTENT_DIRS) perché contiene il file config con le credenziali dei cluster: la voce non si offre. -->
+<cleaner id="kubectl" os="windows">
+  <label>Cache di Helm</label>
+  <description>Indici dei repository e chart scaricati da Helm. Non tocca la configurazione di Helm né la cartella .kube.</description>
+  <var id="helm_cache">
+    <value>%HELM_CACHE_HOME%</value>
+    <value>%TEMP%\helm</value>
+  </var>
+  <option id="helm_cache">
+    <label>Cache di Helm</label>
+    <description>Rimuove gli indici dei repository e i chart scaricati nella cache di Helm.</description>
+    <warning>Gli indici si riscaricano con `helm repo update`, i chart al prossimo `helm install` o `helm pull`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="$$helm_cache$$"/>
+  </option>
+</cleaner>

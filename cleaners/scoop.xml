@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Gestori di pacchetti per Windows: cache di Scoop (SCOOP\cache), file scaricati di Chocolatey (%TEMP%\chocolatey),
+     file scaricati e log di WinGet. apps, persist e le versioni installate di Scoop non si toccano. -->
+<cleaner id="scoop" os="windows">
+  <label>Cache di Scoop, Chocolatey e WinGet</label>
+  <description>Installer scaricati e log dei gestori di pacchetti Scoop, Chocolatey e WinGet. Non tocca le app installate né i loro dati.</description>
+  <var id="scoop_cache">
+    <value>%SCOOP%\cache</value>
+    <value>%USERPROFILE%\scoop\cache</value>
+  </var>
+  <option id="scoop_cache">
+    <label>Cache di Scoop</label>
+    <description>Rimuove gli installer e gli archivi scaricati da Scoop (cartella cache).</description>
+    <warning>Gli installer si riscaricano al prossimo `scoop install` o `scoop update`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="$$scoop_cache$$"/>
+  </option>
+  <option id="chocolatey_cache">
+    <label>File scaricati da Chocolatey</label>
+    <description>Rimuove i pacchetti e gli installer scaricati da Chocolatey nella cartella temporanea.</description>
+    <warning>I pacchetti si riscaricano al prossimo `choco install` o `choco upgrade`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%TEMP%\chocolatey"/>
+  </option>
+  <option id="winget_cache">
+    <label>Installer scaricati da WinGet</label>
+    <description>Rimuove gli installer che WinGet scarica nella cartella temporanea.</description>
+    <warning>Gli installer si riscaricano al prossimo `winget install` o `winget upgrade`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%TEMP%\WinGet"/>
+  </option>
+  <option id="winget_logs">
+    <label>Registri di WinGet</label>
+    <description>Rimuove i file di registro diagnostici di WinGet (DiagOutputDir).</description>
+    <action command="delete" search="walk.all" path="%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir"/>
+  </option>
+</cleaner>
