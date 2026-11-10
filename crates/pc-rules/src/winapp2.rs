@@ -15,6 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::expand::expand;
 use crate::guard::protected;
 use crate::model::{Action, Cleaner, Env, ExcludeRule, Opt, Origin, RegRoot, Search};
+use crate::regguard::reg_allowed;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Winapp2 {
@@ -425,7 +426,7 @@ pub fn to_cleaners_with(
             });
         }
         for rk in &entry.reg_keys {
-            if !reg_path_allowed(&rk.path, rk.value.is_none()) {
+            if reg_allowed(rk.root, &rk.path, rk.value.as_deref()).is_err() {
                 report.discarded_protected += 1;
                 continue;
             }
@@ -523,53 +524,6 @@ fn unsafe_files_rule(expanded: &Path, fk: &FileKey, env: &Env) -> bool {
     }
     let prefix = comps[..first_wild].join("\\");
     protected(Path::new(&prefix), env).is_some()
-}
-
-/// Rami di `Software` (con `Wow6432Node` tolto) che non si cancellano interi.
-const REG_BRANCHES: &[&str] = &["classes", "microsoft", "policies"];
-
-/// Chiavi di registro che una regola può cancellare: `Software\<qualcosa>`.
-/// Per le chiavi intere (`whole_key`) anche: mai `Software`, `Software\Classes`,
-/// `Software\Microsoft`, `Software\Policies` e `Wow6432Node` interi, mai le
-/// chiavi contenitore di Windows (`Microsoft\Windows`, `Windows NT`,
-/// `…\CurrentVersion` e le sue figlie dirette: `Run`, `RunOnce`, `Policies`,
-/// `Uninstall`, `Explorer`, `Winlogon`…). I valori (`|Nome`) seguono la regola
-/// semplice.
-fn reg_path_allowed(path: &str, whole_key: bool) -> bool {
-    let mut comps: Vec<String> = path
-        .split('\\')
-        .filter(|p| !p.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    if comps.iter().any(|c| c == "..") || comps.first().map(String::as_str) != Some("software") {
-        return false;
-    }
-    if comps.len() < 2 {
-        return false;
-    }
-    if !whole_key {
-        return true;
-    }
-    // La vista a 32 bit ha le stesse regole della principale.
-    if comps[1] == "wow6432node" {
-        comps.remove(1);
-        if comps.len() < 2 {
-            return false;
-        }
-    }
-    if comps.len() == 2 && REG_BRANCHES.contains(&comps[1].as_str()) {
-        return false;
-    }
-    if comps[1] == "microsoft" {
-        let rest: Vec<&str> = comps[2..].iter().map(String::as_str).collect();
-        match rest.as_slice() {
-            ["windows"] | ["windows nt"] => return false,
-            ["windows" | "windows nt", "currentversion"]
-            | ["windows" | "windows nt", "currentversion", _] => return false,
-            _ => {}
-        }
-    }
-    true
 }
 
 /// Esiste almeno uno dei percorsi ottenuti espandendo le variabili (con `*` e
@@ -1100,13 +1054,59 @@ mod tests {
     }
 
     #[test]
-    fn value_deletes_under_system_branches_keep_the_old_rule() {
+    fn value_deletes_inside_critical_keys_are_discarded() {
         let (actions, report) = reg_actions(
             "RegKey1=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run|Foo\n\
-             RegKey2=HKCU\\Software|Foo\n",
+             RegKey2=HKCU\\Software|Foo\n\
+             RegKey3=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer|ScreenshotIndex\n",
         );
-        assert_eq!(actions.len(), 1);
-        assert_eq!(report.discarded_protected, 1);
+        assert_eq!(
+            actions,
+            vec![Action::RegValue {
+                root: RegRoot::Hkcu,
+                path: r"Software\Microsoft\Windows\CurrentVersion\Explorer".into(),
+                value: "ScreenshotIndex".into(),
+            }]
+        );
+        assert_eq!(report.discarded_protected, 2);
+    }
+
+    /// Le chiavi provate dalla revisione: la conversione le scarta tutte e
+    /// tiene le chiavi profonde che Winapp2 usa davvero.
+    #[test]
+    fn review_registry_probes_are_discarded_at_conversion() {
+        let (actions, report) = reg_actions(
+            "RegKey1=HKLM\\Software\\Microsoft\n\
+             RegKey2=HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\n\
+             RegKey3=HKLM\\Software\\Policies\\Google\n\
+             RegKey4=HKLM\\Software\\Classes\\exefile\n\
+             RegKey5=HKLM\\Software\\Classes\\*\n\
+             RegKey6=HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n\
+             RegKey7=HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon|Userinit\n\
+             RegKey8=HKLM\\Software\\Classes\\exefile\\shell\\open\\command\n\
+             RegKey9=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\\Run|x\n\
+             RegKey10=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\n\
+             RegKey11=HKLM\\Software\\Classes\\.mpf\n\
+             RegKey12=HKLM\\Software\\Microsoft\\Tracing\n\
+             RegKey13=HKCU\\Software\\Microsoft\\Internet Explorer\\TypedURLs\n",
+        );
+        assert_eq!(report.discarded_protected, 9, "{report:?}");
+        let paths: Vec<&str> = actions
+            .iter()
+            .map(|a| match a {
+                Action::RegKey { path, .. } | Action::RegValue { path, .. } => path.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs",
+                r"Software\Classes\.mpf",
+                r"Software\Microsoft\Tracing",
+                r"Software\Microsoft\Internet Explorer\TypedURLs",
+            ]
+        );
     }
 
     #[test]
@@ -1184,6 +1184,55 @@ mod tests {
         assert!(wildcard_match("*.log", "x.y.log"));
     }
 
+    /// Regola di registro precedente (`reg_path_allowed`), per misurare sul file
+    /// vero cosa scarta in più `regguard`.
+    /// Rami di `Software` (con `Wow6432Node` tolto) che non si cancellano interi.
+    const REG_BRANCHES: &[&str] = &["classes", "microsoft", "policies"];
+
+    /// Chiavi di registro che una regola può cancellare: `Software\<qualcosa>`.
+    /// Per le chiavi intere (`whole_key`) anche: mai `Software`, `Software\Classes`,
+    /// `Software\Microsoft`, `Software\Policies` e `Wow6432Node` interi, mai le
+    /// chiavi contenitore di Windows (`Microsoft\Windows`, `Windows NT`,
+    /// `…\CurrentVersion` e le sue figlie dirette: `Run`, `RunOnce`, `Policies`,
+    /// `Uninstall`, `Explorer`, `Winlogon`…). I valori (`|Nome`) seguono la regola
+    /// semplice.
+    fn previous_reg_path_allowed(path: &str, whole_key: bool) -> bool {
+        let mut comps: Vec<String> = path
+            .split('\\')
+            .filter(|p| !p.is_empty())
+            .map(str::to_lowercase)
+            .collect();
+        if comps.iter().any(|c| c == "..") || comps.first().map(String::as_str) != Some("software") {
+            return false;
+        }
+        if comps.len() < 2 {
+            return false;
+        }
+        if !whole_key {
+            return true;
+        }
+        // La vista a 32 bit ha le stesse regole della principale.
+        if comps[1] == "wow6432node" {
+            comps.remove(1);
+            if comps.len() < 2 {
+                return false;
+            }
+        }
+        if comps.len() == 2 && REG_BRANCHES.contains(&comps[1].as_str()) {
+            return false;
+        }
+        if comps[1] == "microsoft" {
+            let rest: Vec<&str> = comps[2..].iter().map(String::as_str).collect();
+            match rest.as_slice() {
+                ["windows"] | ["windows nt"] => return false,
+                ["windows" | "windows nt", "currentversion"]
+                | ["windows" | "windows nt", "currentversion", _] => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
     /// `PC_RULES_WINAPP2=<percorso> cargo test -p pc-rules parses_the_real_file -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -1221,10 +1270,10 @@ mod tests {
         let env = Env::from_process();
         let (mut wild_extra, mut reg_new, mut dropped_wild, mut dropped_reg) = (0, 0, 0, 0);
         let (mut entries_with_rules, mut dropped_any) = (0, 0);
-        let old_reg = |path: &str| {
-            let mut p = path.split('\\').filter(|p| !p.is_empty());
-            p.next().is_some_and(|f| f.eq_ignore_ascii_case("software")) && p.next().is_some()
-        };
+        // Registro: regola precedente contro `regguard`, con l'elenco di ciò che
+        // `regguard` scarta in più, per motivo.
+        let mut reg_dropped: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let (mut reg_total, mut reg_prev_refused, mut reg_now_refused) = (0, 0, 0);
         for e in &w.entries {
             let (mut old_ok, mut new_ok, mut only_wild, mut only_reg) = (0, 0, 0, 0);
             for fk in &e.file_keys {
@@ -1242,8 +1291,24 @@ mod tests {
                 }
             }
             for rk in &e.reg_keys {
-                let old = old_reg(&rk.path);
-                let new = reg_path_allowed(&rk.path, rk.value.is_none());
+                let old = previous_reg_path_allowed(&rk.path, rk.value.is_none());
+                let verdict = reg_allowed(rk.root, &rk.path, rk.value.as_deref());
+                let new = verdict.is_ok();
+                reg_total += 1;
+                reg_prev_refused += u32::from(!old);
+                reg_now_refused += u32::from(!new);
+                if let Err(why) = verdict {
+                    let root = match rk.root {
+                        RegRoot::Hkcu => "HKCU",
+                        RegRoot::Hklm => "HKLM",
+                    };
+                    let value = rk.value.as_ref().map(|v| format!("|{v}")).unwrap_or_default();
+                    let mark = if old { "  [nuova]" } else { "" };
+                    reg_dropped
+                        .entry(why)
+                        .or_default()
+                        .push(format!("{root}\\{}{value}{mark}", rk.path));
+                }
                 old_ok += old as u32;
                 new_ok += new as u32;
                 if old && !new {
@@ -1264,5 +1329,18 @@ mod tests {
             "nuove regole: FileKey con jolly sotto cartella protetta scartate {wild_extra}, RegKey intere di sistema scartate {reg_new}; voci con azioni prima {entries_with_rules}, voci che restano senza azioni per il nuovo controllo {dropped_any} (di cui con file {dropped_wild}, con registro {dropped_reg}); regole ignorate in lettura {}",
             w.entries.iter().map(|e| e.skipped_rules).sum::<u32>()
         );
+        let lines = text
+            .lines()
+            .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("regkey"))
+            .count();
+        eprintln!(
+            "registro: righe RegKey {lines}, lette (HKCU/HKLM) {reg_total}, rifiutate dalla regola precedente {reg_prev_refused}, rifiutate da regguard {reg_now_refused} (per motivo qui sotto; «[nuova]» = la regola precedente la teneva)"
+        );
+        for (why, keys) in &reg_dropped {
+            eprintln!("  {why}: {}", keys.len());
+            for k in keys {
+                eprintln!("    {k}");
+            }
+        }
     }
 }

@@ -9,9 +9,11 @@ pub mod cleanerml;
 pub mod embedded;
 pub mod updater;
 pub mod winapp2;
+pub mod regguard;
 pub mod wildcard;
 
 pub use expand::expand;
 pub use guard::protected;
+pub use regguard::reg_allowed;
 pub use wildcard::wildcard_match;
 pub use model::{Action, Cleaner, Env, Opt, Origin, RegRoot, Search};
