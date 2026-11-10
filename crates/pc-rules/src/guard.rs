@@ -479,7 +479,8 @@ fn covers_whole(path: &[String], dir: &[String]) -> bool {
     if path.len() <= dir.len() {
         prefix_matches(path, dir)
     } else {
-        prefix_matches(&path[..dir.len()], dir) && path[dir.len()..].iter().all(|c| wildcard_only(c))
+        // Prima la coda (controllo economico: un percorso concreto non ha jolly).
+        path[dir.len()..].iter().all(|c| wildcard_only(c)) && prefix_matches(&path[..dir.len()], dir)
     }
 }
 
