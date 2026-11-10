@@ -278,7 +278,7 @@ struct RuleSources<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KnownFolder {
+pub(crate) enum KnownFolder {
     Profile,
     RoamingAppData,
     LocalAppData,
@@ -373,7 +373,7 @@ fn path_comps(p: &str) -> Vec<String> {
 
 /// Percorso di una cartella nota di Windows (`SHGetKnownFolderPath`).
 #[cfg(windows)]
-fn known_folder(which: KnownFolder) -> Option<String> {
+pub(crate) fn known_folder(which: KnownFolder) -> Option<String> {
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::UI::Shell::{
         FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
@@ -429,7 +429,7 @@ fn known_folder(which: KnownFolder) -> Option<String> {
 }
 
 #[cfg(not(windows))]
-fn known_folder(_which: KnownFolder) -> Option<String> {
+pub(crate) fn known_folder(_which: KnownFolder) -> Option<String> {
     None
 }
 
