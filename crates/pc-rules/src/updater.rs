@@ -4,11 +4,17 @@
 //! modificare, [`data_dir`] = `%ProgramData%\PulisciPC\winapp2\`, insieme a
 //! `etag.txt`: le regole decidono cosa cancella un'app che gira sempre da
 //! amministratore, quindi un utente senza privilegi non deve poterle
-//! scrivere. Prima di ogni scrittura [`secure_dir`] rimette l'ACL (SYSTEM e
-//! Administrators controllo completo, Users sola lettura, niente
-//! ereditarietà); [`read_valid`] rifiuta una copia in una cartella o in un
-//! file che altri possono modificare (una copia piazzata prima non vale) e
-//! l'app la riscarica.
+//! scrivere. Prima di ogni uso [`ensure_admin_dir`] rende fidate, dalla più
+//! esterna, `PulisciPC`, `winapp2` e `tmp` (vedi [`trust_chain`]): una
+//! cartella creata prima da un utente qualunque, un collegamento al suo posto
+//! o ACE estranee la fanno spostare da parte ([`quarantine_dir`], senza
+//! seguire collegamenti) e ricreare nuova; poi [`secure_dir`] rimette l'ACL
+//! (SYSTEM e Administrators controllo completo, Users sola lettura, niente
+//! ereditarietà) e la verifica. [`read_valid`] rifiuta una copia in una
+//! catena non fidata, e controlla proprietario e DACL sullo stesso handle da
+//! cui legge; il file temporaneo si crea con `create_new`; i file di curl si
+//! leggono solo da una cartella di lavoro fidata, ognuno da un solo handle
+//! controllato.
 //!
 //! A ogni avvio si chiede il file con `If-None-Match`: 304 = niente da fare;
 //! 200 valido sostituisce la copia in modo atomico (scrittura in `.tmp` +
@@ -31,6 +37,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::model::{KnownFolder, known_folder};
 
 pub const WINAPP2_URL: &str =
     "https://raw.githubusercontent.com/MoscaDotTo/Winapp2/master/Non-CCleaner/Winapp2.ini";
@@ -74,13 +82,20 @@ pub trait Fetch: Send + Sync {
 /// Protezione della cartella delle regole, sostituibile nei test (che non
 /// toccano ACL vere).
 pub trait Protect: Send + Sync {
-    /// Crea `dir` se manca e la rende modificabile solo dagli amministratori.
+    /// Crea `dir` se manca e la rende modificabile solo dagli amministratori
+    /// (poi lo verifica).
     fn secure(&self, dir: &Path) -> Result<(), String>;
     /// `Ok` se `path` (cartella o file) è modificabile solo dagli amministratori.
     fn check(&self, path: &Path) -> Result<(), String>;
+    /// Come `check`, sul file aperto (lo stesso handle da cui si legge).
+    fn check_file(&self, file: &fs::File) -> Result<(), String>;
+    /// Toglie di mezzo una cartella non fidata senza seguirne i collegamenti
+    /// (vedi [`quarantine_dir`]).
+    fn quarantine(&self, dir: &Path) -> Result<(), String>;
 }
 
-/// La protezione vera: [`secure_dir`] e [`check_admin_only`].
+/// La protezione vera: [`secure_dir`], [`check_admin_only`],
+/// [`check_admin_only_file`], [`quarantine_dir`].
 pub struct AdminOnly;
 
 impl Protect for AdminOnly {
@@ -90,6 +105,195 @@ impl Protect for AdminOnly {
     fn check(&self, path: &Path) -> Result<(), String> {
         check_admin_only(path)
     }
+    fn check_file(&self, file: &fs::File) -> Result<(), String> {
+        check_admin_only_file(file)
+    }
+    fn quarantine(&self, dir: &Path) -> Result<(), String> {
+        quarantine_dir(dir)
+    }
+}
+
+/// Cartelle da fidare, dalla più esterna: `PulisciPC` e `winapp2` per
+/// [`data_dir`] (e per ogni `…\PulisciPC\<dir>`), altrimenti solo `dir`.
+pub fn trust_chain(dir: &Path) -> Vec<PathBuf> {
+    let mut chain = Vec::new();
+    if let Some(parent) = dir.parent()
+        && parent.file_name().is_some_and(|n| n.eq_ignore_ascii_case("PulisciPC"))
+    {
+        chain.push(parent.to_path_buf());
+    }
+    chain.push(dir.to_path_buf());
+    chain
+}
+
+/// Rende `dir` una cartella fidata: se esiste ma è un collegamento, non è una
+/// cartella o non passa `check` (creata prima da un utente qualunque, ACE
+/// estranee che `/grant:r` non toglie), la si toglie di mezzo con
+/// `quarantine` e la si ricrea nuova; poi `secure`. Il genitore deve essere
+/// già fidato (vedi [`trust_chain`]).
+pub fn ensure_admin_dir(dir: &Path, protect: &dyn Protect) -> Result<(), String> {
+    for _ in 0..3 {
+        match fs::symlink_metadata(dir) {
+            Ok(md) => {
+                if is_link_md(&md) || !md.is_dir() || protect.check(dir).is_err() {
+                    protect.quarantine(dir)?;
+                    continue;
+                }
+                return protect.secure(dir);
+            }
+            Err(_) => match fs::create_dir(dir) {
+                Ok(()) => return protect.secure(dir),
+                // Ricreata da altri nel frattempo: si ricontrolla.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("cartella non creabile: {e}")),
+            },
+        }
+    }
+    Err(format!("{}: ricreata da altri più volte", dir.display()))
+}
+
+/// [`ensure_admin_dir`] su ogni cartella di [`trust_chain`], dalla più esterna.
+fn ensure_chain(dir: &Path, protect: &dyn Protect) -> Result<(), String> {
+    trust_chain(dir).iter().try_for_each(|d| ensure_admin_dir(d, protect))
+}
+
+/// Segno nel nome di una cartella non fidata messa da parte.
+const QUARANTINE_MARK: &str = ".non-fidata-";
+
+/// Sposta `dir` (un collegamento si sposta come collegamento) accanto a sé con
+/// un nome nuovo, poi prova a cancellarla senza mai seguire collegamenti; le
+/// cartelle messe da parte prima si riprovano. Spostarla basta: il nome
+/// originale è libero e quella messa da parte non si legge mai. Il genitore
+/// deve essere fidato (gli amministratori possono spostarne i figli qualunque
+/// sia il loro ACL).
+pub fn quarantine_dir(dir: &Path) -> Result<(), String> {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return Err("cartella senza genitore".into());
+    };
+    let name = name.to_string_lossy().into_owned();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let aside = parent.join(format!(
+        "{name}{QUARANTINE_MARK}{}-{nanos}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::rename(dir, &aside).map_err(|e| format!("cartella non fidata non spostabile: {e}"))?;
+    if let Ok(rd) = fs::read_dir(parent) {
+        let prefix = format!("{name}{QUARANTINE_MARK}").to_lowercase();
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().to_lowercase().starts_with(&prefix) {
+                remove_tree_no_follow(&e.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collegamento o giunzione (punto di analisi).
+fn is_link_md(md: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        md.file_type().is_symlink() || md.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        md.file_type().is_symlink()
+    }
+}
+
+/// Cancella `p` e ciò che contiene senza seguire collegamenti (un collegamento
+/// si toglie come collegamento). Al meglio: `true` se non resta nulla.
+fn remove_tree_no_follow(p: &Path) -> bool {
+    let Ok(md) = fs::symlink_metadata(p) else {
+        return true;
+    };
+    if is_link_md(&md) {
+        #[cfg(windows)]
+        let as_dir = {
+            use std::os::windows::fs::MetadataExt;
+            md.file_attributes() & 0x10 != 0
+        };
+        #[cfg(not(windows))]
+        let as_dir = false;
+        let gone = if as_dir { fs::remove_dir(p) } else { fs::remove_file(p) };
+        return gone.is_ok();
+    }
+    if md.is_dir() {
+        if let Ok(rd) = fs::read_dir(p) {
+            for e in rd.flatten() {
+                remove_tree_no_follow(&e.path());
+            }
+        }
+        return fs::remove_dir(p).is_ok();
+    }
+    let mut perm = md.permissions();
+    if perm.readonly() {
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        let _ = fs::set_permissions(p, perm);
+    }
+    fs::remove_file(p).is_ok()
+}
+
+/// Legge al più `max` byte da `path` attraverso un solo handle: aperto senza
+/// seguire un collegamento finale e senza condividere la scrittura (nessuno lo
+/// cambia mentre si legge), deve essere un file normale e passare
+/// `check_file` su quello stesso handle.
+fn read_trusted(path: &Path, protect: &dyn Protect, max: u64) -> Result<Vec<u8>, ReadError> {
+    use std::io::Read;
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.share_mode(0x1) // FILE_SHARE_READ
+            .custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
+    let file = opts.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ReadError::Missing
+        } else {
+            ReadError::Other(format!("{} non si apre: {e}", path.display()))
+        }
+    })?;
+    let md = file
+        .metadata()
+        .map_err(|e| ReadError::Other(format!("{}: {e}", path.display())))?;
+    if is_link_md(&md) || !md.is_file() {
+        return Err(ReadError::Other(format!("{} non è un file normale", path.display())));
+    }
+    if md.len() > max {
+        return Err(ReadError::Other(format!("{} troppo grande ({} byte)", path.display(), md.len())));
+    }
+    protect.check_file(&file).map_err(|_| ReadError::Untrusted)?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| ReadError::Other(format!("{} illeggibile: {e}", path.display())))?;
+    if bytes.len() as u64 > max {
+        return Err(ReadError::Other(format!("{} troppo grande", path.display())));
+    }
+    Ok(bytes)
+}
+
+#[derive(Debug)]
+enum ReadError {
+    Missing,
+    Untrusted,
+    Other(String),
+}
+
+/// Scrive un file nuovo: fallisce se esiste già (nessun file piazzato prima,
+/// né un collegamento, viene riusato).
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 /// Esito di un giro di aggiornamento.
@@ -114,11 +318,11 @@ pub fn data_dir() -> PathBuf {
 /// Cartella della prima versione, `%APPDATA%\PulisciPC\winapp2`: non si legge
 /// mai; vedi [`remove_legacy_copy`].
 pub fn legacy_dir() -> Option<PathBuf> {
-    known_folder(KnownFolder::RoamingAppData).map(|p| p.join("PulisciPC").join("winapp2"))
+    known_folder(KnownFolder::RoamingAppData).map(|p| PathBuf::from(p).join("PulisciPC").join("winapp2"))
 }
 
 fn program_data() -> PathBuf {
-    known_folder(KnownFolder::ProgramData).unwrap_or_else(|| {
+    known_folder(KnownFolder::ProgramData).map(PathBuf::from).unwrap_or_else(|| {
         let drive = system_directory()
             .and_then(|d| d.to_string_lossy().get(..2).map(str::to_string))
             .unwrap_or_else(|| "C:".to_string());
@@ -220,16 +424,21 @@ pub fn read_valid(dir: &Path) -> Result<(String, String), String> {
 /// Come [`read_valid`], con la protezione scelta da chi chiama.
 pub fn read_valid_with(dir: &Path, protect: &dyn Protect) -> Result<(String, String), String> {
     let ini = dir.join(INI_NAME);
-    let md = fs::symlink_metadata(&ini).map_err(|_| "nessuna copia locale".to_string())?;
-    if !md.is_file() {
-        return Err("la copia locale non è un file".into());
+    if fs::symlink_metadata(&ini).is_err() {
+        return Err("nessuna copia locale".into());
     }
-    if md.len() > MAX_BYTES as u64 {
-        return Err(format!("copia locale troppo grande ({} byte)", md.len()));
+    for d in trust_chain(dir) {
+        let link = fs::symlink_metadata(&d).is_ok_and(|m| is_link_md(&m));
+        if link || protect.check(&d).is_err() {
+            return Err(UNPROTECTED_COPY.to_string());
+        }
     }
-    protect.check(dir).map_err(|_| UNPROTECTED_COPY.to_string())?;
-    protect.check(&ini).map_err(|_| UNPROTECTED_COPY.to_string())?;
-    let bytes = fs::read(&ini).map_err(|e| format!("copia locale illeggibile: {e}"))?;
+    // Controllo e lettura sullo stesso handle.
+    let bytes = read_trusted(&ini, protect, MAX_BYTES as u64).map_err(|e| match e {
+        ReadError::Missing => "nessuna copia locale".to_string(),
+        ReadError::Untrusted => UNPROTECTED_COPY.to_string(),
+        ReadError::Other(e) => format!("copia locale illeggibile: {e}"),
+    })?;
     let version = is_valid(&bytes).map_err(|e| format!("copia locale non valida: {e}"))?;
     let text = String::from_utf8(bytes).map_err(|_| "il file non è UTF-8".to_string())?;
     Ok((text, version))
@@ -255,7 +464,9 @@ pub fn update_with(dir: &Path, fetch: &dyn Fetch, url: &str, protect: &dyn Prote
             UpdateOutcome::NoCopyYet(reason)
         }
     };
-    if let Err(e) = protect.secure(dir) {
+    // `PulisciPC` e `winapp2` fidate (una cartella creata prima da altri si
+    // toglie di mezzo e si ricrea), prima di ogni rete e scrittura.
+    if let Err(e) = ensure_chain(dir, protect) {
         return fail(format!("cartella delle regole non protetta: {e}"));
     }
 
@@ -288,11 +499,16 @@ pub fn update_with(dir: &Path, fetch: &dyn Fetch, url: &str, protect: &dyn Prote
                 return fail("versione più vecchia ignorata".into());
             }
             // La cartella si riprotegge subito prima di scrivere.
-            if let Err(e) = protect.secure(dir) {
+            if let Err(e) = ensure_chain(dir, protect) {
                 return fail(format!("cartella delle regole non protetta: {e}"));
             }
+            // La cartella è fidata: un `.tmp` rimasto è nostro e si toglie; il
+            // nuovo si crea con `create_new` (mai un file già esistente).
             let tmp = dir.join(TMP_NAME);
-            if let Err(e) = write_synced(&tmp, &bytes) {
+            if fs::symlink_metadata(&tmp).is_ok() && !remove_tree_no_follow(&tmp) {
+                return fail("file temporaneo rimasto non cancellabile".into());
+            }
+            if let Err(e) = write_new(&tmp, &bytes) {
                 let _ = fs::remove_file(&tmp);
                 return fail(format!("scrittura non riuscita: {e}"));
             }
@@ -335,7 +551,7 @@ fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 /// in panico o il thread non riesce a partire). Con `dir` = [`data_dir`],
 /// quando la copia nuova è a posto si toglie quella vecchia di `%APPDATA%`.
 pub fn spawn_update(dir: PathBuf, on_done: impl FnOnce(UpdateOutcome) + Send + 'static) {
-    let fetch = Arc::new(CurlFetch::new(dir.join(WORK_NAME)));
+    let fetch = Arc::new(CurlFetch::new(dir.join(WORK_NAME), Arc::new(AdminOnly)));
     let legacy = if dir == data_dir() { legacy_dir() } else { None };
     spawn_update_with(
         dir,
@@ -419,11 +635,6 @@ fn is_older(new: &str, old: &str) -> bool {
     }
 }
 
-fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut f = fs::File::create(path)?;
-    f.write_all(bytes)?;
-    f.sync_all()
-}
 
 // ---------------------------------------------------------------------------
 // ACL della cartella delle regole.
@@ -610,16 +821,31 @@ pub fn check_admin_only(path: &Path) -> Result<(), String> {
     if has_link_in_chain(path) {
         return Err("collegamento nel percorso".into());
     }
-    let (owner, dacl) = read_acl(path)?;
+    let (owner, dacl) = read_acl(AclOf::Path(path))?;
     acl_verdict(&owner, dacl.as_deref())
 }
 
+/// Come [`check_admin_only`], sull'oggetto aperto da `file` (`GetSecurityInfo`
+/// sullo stesso handle da cui poi si legge: nessun intervallo fra controllo e
+/// lettura).
+pub fn check_admin_only_file(file: &fs::File) -> Result<(), String> {
+    let (owner, dacl) = read_acl(AclOf::File(file))?;
+    acl_verdict(&owner, dacl.as_deref())
+}
+
+/// Di chi leggere proprietario e DACL.
+enum AclOf<'a> {
+    Path(&'a Path),
+    File(&'a fs::File),
+}
+
 #[cfg(windows)]
-fn read_acl(path: &Path) -> Result<(String, Option<Vec<AceInfo>>), String> {
+fn read_acl(of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{
-        ConvertSidToStringSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+        ConvertSidToStringSidW, GetNamedSecurityInfoW, GetSecurityInfo, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
         ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
@@ -645,23 +871,39 @@ fn read_acl(path: &Path) -> Result<(String, Option<Vec<AceInfo>>), String> {
         }
     }
 
-    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut owner: PSID = std::ptr::null_mut();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut sd = std::ptr::null_mut();
-    // SAFETY: `name` è terminata da zero; i puntatori di uscita sono validi; il
-    // descrittore si libera con `LocalFree` alla fine.
+    let what = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    // SAFETY: il nome è terminato da zero, l'handle è aperto per tutta la
+    // chiamata; i puntatori di uscita sono validi; il descrittore si libera con
+    // `LocalFree` alla fine.
     let err = unsafe {
-        GetNamedSecurityInfoW(
-            name.as_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &mut owner,
-            std::ptr::null_mut(),
-            &mut dacl,
-            std::ptr::null_mut(),
-            &mut sd,
-        )
+        match of {
+            AclOf::Path(path) => {
+                let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+                GetNamedSecurityInfoW(
+                    name.as_ptr(),
+                    SE_FILE_OBJECT,
+                    what,
+                    &mut owner,
+                    std::ptr::null_mut(),
+                    &mut dacl,
+                    std::ptr::null_mut(),
+                    &mut sd,
+                )
+            }
+            AclOf::File(file) => GetSecurityInfo(
+                file.as_raw_handle(),
+                SE_FILE_OBJECT,
+                what,
+                &mut owner,
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            ),
+        }
     };
     if err != 0 {
         return Err(format!(
@@ -723,55 +965,12 @@ fn read_acl(path: &Path) -> Result<(String, Option<Vec<AceInfo>>), String> {
 }
 
 #[cfg(not(windows))]
-fn read_acl(_path: &Path) -> Result<(String, Option<Vec<AceInfo>>), String> {
+fn read_acl(_of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
     Err("permessi non verificabili fuori da Windows".into())
 }
 
 // ---------------------------------------------------------------------------
-// Cartelle note e cartella di sistema.
-
-#[derive(Clone, Copy)]
-enum KnownFolder {
-    ProgramData,
-    RoamingAppData,
-}
-
-/// Percorso di una cartella nota di Windows (`SHGetKnownFolderPath`).
-#[cfg(windows)]
-fn known_folder(which: KnownFolder) -> Option<PathBuf> {
-    use windows_sys::Win32::System::Com::CoTaskMemFree;
-    use windows_sys::Win32::UI::Shell::{
-        FOLDERID_ProgramData, FOLDERID_RoamingAppData, SHGetKnownFolderPath,
-    };
-    let id = match which {
-        KnownFolder::ProgramData => &FOLDERID_ProgramData,
-        KnownFolder::RoamingAppData => &FOLDERID_RoamingAppData,
-    };
-    let mut raw: *mut u16 = std::ptr::null_mut();
-    // SAFETY: `raw` è un puntatore di uscita valido; su successo contiene una
-    // stringa UTF-16 terminata da zero allocata da COM, liberata dopo la copia.
-    unsafe {
-        let hr = SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut raw);
-        if hr < 0 || raw.is_null() {
-            if !raw.is_null() {
-                CoTaskMemFree(raw as *const _);
-            }
-            return None;
-        }
-        let mut len = 0;
-        while *raw.add(len) != 0 {
-            len += 1;
-        }
-        let text = String::from_utf16_lossy(std::slice::from_raw_parts(raw, len));
-        CoTaskMemFree(raw as *const _);
-        Some(PathBuf::from(text)).filter(|p| !p.as_os_str().is_empty())
-    }
-}
-
-#[cfg(not(windows))]
-fn known_folder(_which: KnownFolder) -> Option<PathBuf> {
-    None
-}
+// Cartella di sistema.
 
 #[cfg(windows)]
 fn system_directory() -> Option<PathBuf> {
@@ -804,11 +1003,14 @@ fn system_directory() -> Option<PathBuf> {
 /// protetta), usata come directory corrente di curl e tolta alla fine.
 pub struct CurlFetch {
     work: PathBuf,
+    protect: Arc<dyn Protect>,
 }
 
 impl CurlFetch {
-    pub fn new(work: PathBuf) -> CurlFetch {
-        CurlFetch { work }
+    /// `work` è la sottocartella di lavoro dentro la cartella fidata; si rende
+    /// fidata con `protect` (vedi [`ensure_admin_dir`]) prima di ogni uso.
+    pub fn new(work: PathBuf, protect: Arc<dyn Protect>) -> CurlFetch {
+        CurlFetch { work, protect }
     }
 }
 
@@ -963,10 +1165,8 @@ impl CurlFetch {
         timeout: Duration,
     ) -> Result<Fetched, String> {
         let curl = curl_exe_path()?;
-        if has_link_in_chain(&self.work) {
-            return Err("cartella di lavoro: collegamento nel percorso".into());
-        }
-        fs::create_dir_all(&self.work).map_err(|e| format!("cartella di lavoro: {e}"))?;
+        ensure_admin_dir(&self.work, self.protect.as_ref())
+            .map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
         remove_stale_scratch(&self.work, STALE_AFTER);
         let scratch = ScratchDir::new_in(&self.work).map_err(|e| format!("cartella di lavoro: {e}"))?;
 
@@ -1010,26 +1210,34 @@ impl CurlFetch {
             return Err(curl_error_text(status.code()));
         }
 
-        let headers = fs::read(scratch.0.join("headers.txt"))
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .map_err(|e| format!("header non leggibili: {e}"))?;
+        // Si legge solo da una cartella di lavoro fidata, ogni file da un solo
+        // handle controllato.
+        let read = |name: &str, max: u64| read_scratch(&scratch.0, name, self.protect.as_ref(), max);
+        let headers = String::from_utf8_lossy(&read("headers.txt", 64 * 1024)?).into_owned();
         let (code, new_etag) = parse_headers(&headers)?;
         match code {
             304 => Ok(Fetched::NotModified),
             200 => {
-                let body = scratch.0.join("body.bin");
-                let len = fs::metadata(&body)
-                    .map_err(|e| format!("corpo non leggibile: {e}"))?
-                    .len();
-                if len > MAX_BYTES as u64 {
-                    return Err(format!("corpo troppo grande ({len} byte)"));
-                }
-                let bytes = fs::read(&body).map_err(|e| format!("corpo non leggibile: {e}"))?;
+                let bytes = read("body.bin", MAX_BYTES as u64)?;
                 Ok(Fetched::Body { bytes, etag: new_etag })
             }
             other => Err(format!("risposta HTTP {other}")),
         }
     }
+}
+
+/// Un file di lavoro di curl, se la cartella `scratch` è fidata subito prima e
+/// il file passa il controllo sul suo stesso handle.
+fn read_scratch(scratch: &Path, name: &str, protect: &dyn Protect, max: u64) -> Result<Vec<u8>, String> {
+    let link = fs::symlink_metadata(scratch).is_ok_and(|m| is_link_md(&m));
+    if link || protect.check(scratch).is_err() {
+        return Err("cartella di lavoro non protetta: risposta ignorata".into());
+    }
+    read_trusted(&scratch.join(name), protect, max).map_err(|e| match e {
+        ReadError::Missing => format!("{name} mancante"),
+        ReadError::Untrusted => format!("{name} non protetto: risposta ignorata"),
+        ReadError::Other(e) => e,
+    })
 }
 
 /// Dall'ultimo blocco di header (dopo eventuali redirect): codice e ETag.
@@ -1073,6 +1281,12 @@ mod tests {
     struct Open;
 
     impl Protect for Open {
+        fn check_file(&self, _file: &fs::File) -> Result<(), String> {
+            Ok(())
+        }
+        fn quarantine(&self, dir: &Path) -> Result<(), String> {
+            quarantine_dir(dir)
+        }
         fn secure(&self, dir: &Path) -> Result<(), String> {
             fs::create_dir_all(dir).map_err(|e| e.to_string())
         }
@@ -1430,7 +1644,15 @@ mod tests {
             body(valid_ini("261001"), Some("\"e2\"")),
         ]);
         upd(dir.path(), &fake, "u");
-        fs::create_dir(dir.path().join("Winapp2.ini.tmp")).unwrap();
+        // Un `.tmp` rimasto che non si riesce a togliere (un file dentro è
+        // aperto senza condivisione): non si scrive.
+        let stuck = dir.path().join("Winapp2.ini.tmp");
+        fs::create_dir(&stuck).unwrap();
+        fs::write(stuck.join("x"), "x").unwrap();
+        let _held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new().read(true).share_mode(0).open(stuck.join("x")).unwrap()
+        };
         let out = upd(dir.path(), &fake, "u");
         assert!(matches!(out, UpdateOutcome::KeptOld(_)), "{out:?}");
         assert_eq!(fs::read(dir.path().join("Winapp2.ini")).unwrap(), v1);
@@ -1493,7 +1715,7 @@ mod tests {
     fn real_network_check() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/winapp2-updater-check");
         let _ = fs::remove_dir_all(&dir);
-        let curl = CurlFetch::new(dir.join(WORK_NAME));
+        let curl = CurlFetch::new(dir.join(WORK_NAME), Arc::new(Open));
         let first = update_with(&dir, &curl, WINAPP2_URL, &Open);
         println!("primo giro: {first:?}");
         let second = update_with(&dir, &curl, WINAPP2_URL, &Open);
@@ -1616,6 +1838,12 @@ mod tests {
     struct Untrusted;
 
     impl Protect for Untrusted {
+        fn check_file(&self, _file: &fs::File) -> Result<(), String> {
+            Err("Users ha diritti di modifica".into())
+        }
+        fn quarantine(&self, dir: &Path) -> Result<(), String> {
+            quarantine_dir(dir)
+        }
         fn secure(&self, dir: &Path) -> Result<(), String> {
             fs::create_dir_all(dir).map_err(|e| e.to_string())
         }
@@ -1628,6 +1856,12 @@ mod tests {
     struct CannotSecure;
 
     impl Protect for CannotSecure {
+        fn check_file(&self, _file: &fs::File) -> Result<(), String> {
+            Ok(())
+        }
+        fn quarantine(&self, dir: &Path) -> Result<(), String> {
+            quarantine_dir(dir)
+        }
         fn secure(&self, _dir: &Path) -> Result<(), String> {
             Err("icacls.exe non trovato".into())
         }
@@ -1650,15 +1884,20 @@ mod tests {
 
     #[test]
     fn planted_copy_in_an_unprotected_folder_is_ignored_and_replaced() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(INI_NAME), valid_ini("999999")).unwrap();
-        fs::write(dir.path().join(ETAG_NAME), "\"piazzato\"").unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let rules = base.path().join("regole");
+        fs::create_dir(&rules).unwrap();
+        fs::write(rules.join(INI_NAME), valid_ini("999999")).unwrap();
+        fs::write(rules.join(ETAG_NAME), "\"piazzato\"").unwrap();
         let fake = FakeFetch::new(vec![body(valid_ini("260915"), Some("\"vero\""))]);
-        let out = update_with(dir.path(), &fake, "u", &Untrusted);
+        let out = update_with(&rules, &fake, "u", &Untrusted);
         // Nessun If-None-Match dalla copia piazzata, nessun «più vecchia».
         assert_eq!(out, UpdateOutcome::Updated { version: "260915".into() });
         assert_eq!(*fake.seen_etags.lock().unwrap(), vec![None]);
-        assert_eq!(is_valid(&fs::read(dir.path().join(INI_NAME)).unwrap()), Ok("260915".into()));
+        assert_eq!(is_valid(&fs::read(rules.join(INI_NAME)).unwrap()), Ok("260915".into()));
+        // La cartella piazzata è stata tolta di mezzo (anche il suo etag).
+        assert!(!rules.join(ETAG_NAME).exists() || fs::read_to_string(rules.join(ETAG_NAME)).unwrap() == "\"vero\"");
+        assert_eq!(leftovers(base.path()), 0);
     }
 
     #[test]
@@ -1752,5 +1991,209 @@ mod tests {
         println!("data_dir: {}", data_dir().display());
         println!("legacy_dir: {:?}", legacy_dir());
         assert!(data_dir().ends_with(r"PulisciPC\winapp2"));
+    }
+    /// Cartelle messe da parte rimaste accanto a quelle vere.
+    fn leftovers(parent: &Path) -> usize {
+        fs::read_dir(parent)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(QUARANTINE_MARK))
+            .count()
+    }
+
+    /// Protezione finta con verdetti preparati: le cartelle in `tainted` non
+    /// passano `check` e `secure` fallisce su di loro (ACE estranee che
+    /// `/grant:r` non toglie) finché non vengono tolte di mezzo e ricreate.
+    #[derive(Default)]
+    struct Scripted {
+        tainted: Mutex<std::collections::HashSet<PathBuf>>,
+        files_untrusted: bool,
+        log: Mutex<Vec<String>>,
+    }
+
+    impl Scripted {
+        fn tainted(paths: &[&Path]) -> Scripted {
+            Scripted {
+                tainted: Mutex::new(paths.iter().map(|p| p.to_path_buf()).collect()),
+                ..Default::default()
+            }
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl Protect for Scripted {
+        fn secure(&self, dir: &Path) -> Result<(), String> {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            self.log.lock().unwrap().push(format!("secure {name}"));
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            if self.tainted.lock().unwrap().contains(dir) {
+                return Err("ACE estranea rimasta".into());
+            }
+            Ok(())
+        }
+        fn check(&self, path: &Path) -> Result<(), String> {
+            if self.tainted.lock().unwrap().contains(path) {
+                Err("Users ha diritti di modifica".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn check_file(&self, _file: &fs::File) -> Result<(), String> {
+            if self.files_untrusted {
+                Err("proprietario utente".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn quarantine(&self, dir: &Path) -> Result<(), String> {
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            self.log.lock().unwrap().push(format!("quarantine {name}"));
+            // Ciò che conteneva sparisce con lei.
+            self.tainted.lock().unwrap().retain(|p| !p.starts_with(dir));
+            quarantine_dir(dir)
+        }
+    }
+
+    /// N1: `PulisciPC\winapp2` creata prima da un utente qualunque (con una
+    /// copia e un `tmp` piazzati) si toglie di mezzo e si ricrea.
+    #[test]
+    fn planted_folders_are_recreated_before_use() {
+        let base = tempfile::tempdir().unwrap();
+        let top = base.path().join("PulisciPC");
+        let rules = top.join("winapp2");
+        fs::create_dir_all(rules.join(WORK_NAME)).unwrap();
+        fs::write(rules.join(INI_NAME), valid_ini("999999")).unwrap();
+        fs::write(rules.join(WORK_NAME).join("body.bin"), "piazzato").unwrap();
+        let p = Scripted::tainted(&[&top, &rules]);
+        let fake = FakeFetch::new(vec![body(valid_ini("260915"), None)]);
+        let out = update_with(&rules, &fake, "u", &p);
+        assert_eq!(out, UpdateOutcome::Updated { version: "260915".into() });
+        assert_eq!(*fake.seen_etags.lock().unwrap(), vec![None], "copia piazzata usata");
+        assert_eq!(
+            p.log()[..3],
+            ["quarantine PulisciPC", "secure PulisciPC", "secure winapp2"]
+        );
+        assert!(!rules.join(WORK_NAME).exists(), "tmp piazzato sopravvissuto");
+        assert_eq!(leftovers(base.path()), 0);
+    }
+
+    /// N1: ACE estranee che `secure` non toglie non bloccano per sempre: la
+    /// cartella si ricrea.
+    #[test]
+    fn foreign_ace_folder_is_recreated_not_a_permanent_failure() {
+        let base = tempfile::tempdir().unwrap();
+        let rules = base.path().join("regole");
+        fs::create_dir(&rules).unwrap();
+        let p = Scripted::tainted(&[&rules]);
+        assert!(p.secure(&rules).is_err(), "la finta deve fallire come icacls");
+        let fake = FakeFetch::new(vec![body(valid_ini("260915"), None)]);
+        assert_eq!(
+            update_with(&rules, &fake, "u", &p),
+            UpdateOutcome::Updated { version: "260915".into() }
+        );
+        assert!(p.log().contains(&"quarantine regole".to_string()));
+    }
+
+    /// N1: `tmp` di curl piazzato: tolto di mezzo e ricreato; un collegamento al
+    /// posto della cartella si toglie come collegamento.
+    #[test]
+    fn planted_work_dir_is_recreated_and_links_are_not_followed() {
+        let base = tempfile::tempdir().unwrap();
+        let work = base.path().join(WORK_NAME);
+        fs::create_dir(&work).unwrap();
+        fs::write(work.join("body.bin"), "piazzato").unwrap();
+        let p = Scripted::tainted(&[&work]);
+        ensure_admin_dir(&work, &p).unwrap();
+        assert!(work.is_dir() && !work.join("body.bin").exists());
+        assert_eq!(p.log(), ["quarantine tmp", "secure tmp"]);
+        // Giunzione verso un'altra cartella: si sposta e si toglie il
+        // collegamento; la destinazione resta com'è.
+        fs::remove_dir(&work).unwrap();
+        let other = base.path().join("other");
+        fs::create_dir(&other).unwrap();
+        fs::write(other.join("keep.txt"), "keep").unwrap();
+        let linked = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&work)
+            .arg(&other)
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !linked {
+            println!("SKIP: mklink /J non riuscito");
+            return;
+        }
+        let p = Scripted::default();
+        ensure_admin_dir(&work, &p).unwrap();
+        let md = fs::symlink_metadata(&work).unwrap();
+        assert!(md.is_dir() && !is_link_md(&md));
+        assert_eq!(fs::read_to_string(other.join("keep.txt")).unwrap(), "keep");
+        assert_eq!(leftovers(base.path()), 0);
+    }
+
+    /// N1: un `Winapp2.ini.tmp` piazzato prima non si riusa: si toglie (la
+    /// cartella è fidata) e il nuovo si crea con `create_new`.
+    #[test]
+    fn stale_tmp_file_is_never_reused() {
+        let base = tempfile::tempdir().unwrap();
+        let rules = base.path().join("regole");
+        fs::create_dir(&rules).unwrap();
+        fs::write(rules.join(TMP_NAME), "piazzato").unwrap();
+        assert_eq!(
+            write_new(&rules.join(TMP_NAME), b"x").unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        let fake = FakeFetch::new(vec![body(valid_ini("260915"), None)]);
+        let out = update_with(&rules, &fake, "u", &Scripted::default());
+        assert_eq!(out, UpdateOutcome::Updated { version: "260915".into() });
+        assert!(!rules.join(TMP_NAME).exists());
+        assert_eq!(is_valid(&fs::read(rules.join(INI_NAME)).unwrap()), Ok("260915".into()));
+    }
+
+    /// N1: la copia si legge dallo stesso handle che si controlla; una copia
+    /// il cui file non passa il controllo, o in una catena non fidata, non vale.
+    #[test]
+    fn copy_is_checked_on_the_handle_it_is_read_from() {
+        let base = tempfile::tempdir().unwrap();
+        let top = base.path().join("PulisciPC");
+        let rules = top.join("winapp2");
+        fs::create_dir_all(&rules).unwrap();
+        fs::write(rules.join(INI_NAME), valid_ini("260915")).unwrap();
+        assert!(read_valid_with(&rules, &Scripted::default()).is_ok());
+        let p = Scripted { files_untrusted: true, ..Default::default() };
+        assert_eq!(read_valid_with(&rules, &p), Err(UNPROTECTED_COPY.to_string()));
+        assert_eq!(
+            read_valid_with(&rules, &Scripted::tainted(&[&top])),
+            Err(UNPROTECTED_COPY.to_string())
+        );
+        // Lettura limitata e su file normali soltanto.
+        assert!(matches!(read_trusted(&rules.join(INI_NAME), &Open, 10), Err(ReadError::Other(_))));
+        assert!(read_trusted(&rules, &Open, MAX_BYTES as u64).is_err());
+        assert!(matches!(read_trusted(&rules.join("nope"), &Open, 10), Err(ReadError::Missing)));
+    }
+
+    /// N1: i file di curl si leggono solo da una cartella di lavoro fidata.
+    #[test]
+    fn curl_output_is_read_only_from_a_trusted_scratch_folder() {
+        let base = tempfile::tempdir().unwrap();
+        let scratch = base.path().join("pulisci-curl-1");
+        fs::create_dir(&scratch).unwrap();
+        fs::write(scratch.join("body.bin"), "corpo").unwrap();
+        assert_eq!(read_scratch(&scratch, "body.bin", &Scripted::default(), 100).unwrap(), b"corpo");
+        let err = read_scratch(&scratch, "body.bin", &Scripted::tainted(&[&scratch]), 100).unwrap_err();
+        assert!(err.starts_with("cartella di lavoro non protetta"), "{err}");
+        let p = Scripted { files_untrusted: true, ..Default::default() };
+        assert!(read_scratch(&scratch, "body.bin", &p, 100).unwrap_err().contains("non protetto"));
+    }
+
+    #[test]
+    fn trust_chain_covers_the_pulisci_pc_folder() {
+        let d = Path::new(r"C:\ProgramData\PulisciPC\winapp2");
+        assert_eq!(
+            trust_chain(d),
+            vec![PathBuf::from(r"C:\ProgramData\PulisciPC"), d.to_path_buf()]
+        );
+        assert_eq!(trust_chain(Path::new(r"C:\x\regole")), vec![PathBuf::from(r"C:\x\regole")]);
     }
 }
