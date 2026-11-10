@@ -2252,4 +2252,221 @@ mod tests {
         assert!(win::key_exists(RegRoot::Hklm, r"Software\Microsoft\Windows NT\CurrentVersion"));
         assert!(!win::key_exists(RegRoot::Hkcu, r"Software\pulisci-pc-no-such-key"));
     }
+
+    // ---------- prova del registro vero da amministratore (ignorata) ----------
+
+    /// Chiavi di prova e backup creati da [`real_registry_round_trip_as_admin`]:
+    /// all'uscita (anche per un panico) si tolgono le chiavi con il nome del
+    /// test e i `.reg` restituiti dal test che contengono quel nome.
+    #[cfg(windows)]
+    struct VerifyCleanup {
+        marker: String,
+        keys: Vec<(RegRoot, String)>,
+        backups: Vec<PathBuf>,
+    }
+
+    #[cfg(windows)]
+    impl Drop for VerifyCleanup {
+        fn drop(&mut self) {
+            use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+            for (root, path) in &self.keys {
+                // Solo le chiavi del test: il nome contiene il marcatore unico.
+                let Some((parent, name)) = split_parent(path) else { continue };
+                if !name.starts_with(&self.marker) {
+                    continue;
+                }
+                let hive = winreg::RegKey::predef(match root {
+                    RegRoot::Hkcu => HKEY_CURRENT_USER,
+                    RegRoot::Hklm => HKEY_LOCAL_MACHINE,
+                });
+                if let Ok(p) = hive.open_subkey_with_flags(&parent, KEY_ALL_ACCESS | KEY_WOW64_64KEY) {
+                    let _ = p.delete_subkey_all(&name);
+                }
+            }
+            for b in &self.backups {
+                if backup_text(b).is_some_and(|t| t.contains(&self.marker)) {
+                    let _ = fs::remove_file(b);
+                }
+            }
+        }
+    }
+
+    /// Testo di un `.reg` UTF-16 (con BOM).
+    #[cfg(windows)]
+    fn backup_text(path: &Path) -> Option<String> {
+        let b = fs::read(path).ok()?;
+        let w: Vec<u16> = b.get(2..)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        Some(String::from_utf16_lossy(&w))
+    }
+
+    /// Crea `root\path` (vista a 64 bit; `Software\Wow6432Node\…` per la 32 bit)
+    /// con i valori dati.
+    #[cfg(windows)]
+    fn create_key(root: RegRoot, path: &str, values: &[(&str, &str)]) {
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        let hive = winreg::RegKey::predef(match root {
+            RegRoot::Hkcu => HKEY_CURRENT_USER,
+            RegRoot::Hklm => HKEY_LOCAL_MACHINE,
+        });
+        let (k, _) = hive
+            .create_subkey_with_flags(path, KEY_ALL_ACCESS | KEY_WOW64_64KEY)
+            .unwrap_or_else(|e| panic!("chiave di prova non creata {path}: {e}"));
+        for (n, v) in values {
+            k.set_value(n, &v.to_string()).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    fn analyze_real(o: &Opt, env: &Env) -> RuleFound {
+        let cancel = AtomicBool::new(false);
+        let tick = |_: u64| {};
+        analyze_option(o, env, &reg_exists, &CollectCtl { cancel: &cancel, tick: &tick })
+    }
+
+    #[cfg(windows)]
+    fn clean_real(found: &RuleFound, o: &Opt, env: &Env, cleanup: &mut VerifyCleanup) -> RuleCleaned {
+        let done = clean_option(found, o, env, &Guard::new(env), &RealRegistry, &AtomicBool::new(false));
+        if let Some(b) = &done.backup {
+            cleanup.backups.push(b.clone());
+        }
+        done
+    }
+
+    /// Prova sul registro vero, da un terminale da amministratore:
+    /// `cargo test -p pulisci-pc real_registry_round_trip_as_admin -- --ignored --nocapture`.
+    /// Usa solo chiavi create dal test (`PulisciPC_Verify_<pid>_<nanos>`) e le
+    /// toglie all'uscita, anche dopo un panico. Prova: backup con `reg.exe` nella
+    /// cartella solo per amministratori, cancellazione vera di chiavi e valori,
+    /// `HKCU\Software\Classes` (collegamento), vista a 32 bit di HKLM, due backup
+    /// nello stesso secondo, rifiuto di una chiave protetta.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn real_registry_round_trip_as_admin() {
+        assert!(sys::is_admin(), "serve un terminale da amministratore: il test non ha fatto nulla");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let marker = format!("PulisciPC_Verify_{}_{nanos}", std::process::id());
+        let env = Env::default();
+        let key_a = format!(r"Software\{marker}_A");
+        let key_b = format!(r"Software\{marker}_B");
+        let key_c = format!(r"Software\Classes\{marker}_C");
+        let key_d64 = format!(r"Software\{marker}_D");
+        let key_d32 = format!(r"Software\Wow6432Node\{marker}_D");
+        let key_e1 = format!(r"Software\{marker}_E1");
+        let key_e2 = format!(r"Software\{marker}_E2");
+        let mut cleanup = VerifyCleanup {
+            marker: marker.clone(),
+            keys: vec![
+                (RegRoot::Hkcu, key_a.clone()),
+                (RegRoot::Hkcu, key_b.clone()),
+                (RegRoot::Hkcu, key_c.clone()),
+                (RegRoot::Hklm, key_d32.clone()),
+                (RegRoot::Hklm, key_d64.clone()),
+                (RegRoot::Hkcu, key_e1.clone()),
+                (RegRoot::Hkcu, key_e2.clone()),
+            ],
+            backups: vec![],
+        };
+        let key_rule = |root, path: &str| opt(vec![Action::RegKey { root, path: path.to_string() }]);
+        let key_exists_now = |root, path: &str| reg_exists(&RegItem::Key { root, path: path.to_string() });
+
+        // (a) chiave con una sottochiave e due valori.
+        create_key(RegRoot::Hkcu, &key_a, &[("Uno", "1"), ("Due", "2")]);
+        create_key(RegRoot::Hkcu, &format!(r"{key_a}\Sotto"), &[("Tre", "3")]);
+        let o = key_rule(RegRoot::Hkcu, &key_a);
+        let found = analyze_real(&o, &env);
+        assert_eq!(found.reg, vec![RegItem::Key { root: RegRoot::Hkcu, path: key_a.clone() }], "(a) analisi");
+        let done = clean_real(&found, &o, &env, &mut cleanup);
+        eprintln!("(a) {done:?}");
+        assert_eq!((done.removed, done.failed), (1, 0), "(a) {:?}", done.notes);
+        let bk = done.backup.clone().expect("(a) nessun backup");
+        assert!(bk.starts_with(sys::data_dir()), "(a) backup fuori da Documenti\\PulisciPC: {}", bk.display());
+        assert!(backup_text(&bk).is_some_and(|t| t.contains(&format!("{marker}_A"))), "(a) backup senza la chiave");
+        assert!(!key_exists_now(RegRoot::Hkcu, &key_a), "(a) la chiave c'è ancora");
+
+        // (b) un solo valore: sparisce lui, il resto resta.
+        create_key(RegRoot::Hkcu, &key_b, &[("Via", "x"), ("Resta", "y")]);
+        let o = opt(vec![Action::RegValue { root: RegRoot::Hkcu, path: key_b.clone(), value: "Via".into() }]);
+        let found = analyze_real(&o, &env);
+        assert_eq!(found.reg.len(), 1, "(b) analisi");
+        let done = clean_real(&found, &o, &env, &mut cleanup);
+        eprintln!("(b) {done:?}");
+        assert_eq!((done.removed, done.failed), (1, 0), "(b) {:?}", done.notes);
+        let value = |name: &str| RegItem::Value { root: RegRoot::Hkcu, path: key_b.clone(), value: name.into() };
+        assert!(!reg_exists(&value("Via")), "(b) il valore c'è ancora");
+        assert!(reg_exists(&value("Resta")), "(b) l'altro valore è sparito");
+        assert!(key_exists_now(RegRoot::Hkcu, &key_b), "(b) la chiave è sparita");
+
+        // (c) sotto HKCU\Software\Classes (collegamento verso HKU\<SID>_Classes).
+        create_key(RegRoot::Hkcu, &key_c, &[("Mru", "z")]);
+        let o = key_rule(RegRoot::Hkcu, &key_c);
+        let found = analyze_real(&o, &env);
+        assert_eq!(found.reg.len(), 1, "(c) analisi: {found:?}");
+        let done = clean_real(&found, &o, &env, &mut cleanup);
+        eprintln!("(c) {done:?}");
+        assert_eq!((done.removed, done.failed), (1, 0), "(c) {:?}", done.notes);
+        let bk = done.backup.clone().expect("(c) nessun backup");
+        assert!(backup_text(&bk).is_some_and(|t| t.contains(&format!("{marker}_C"))), "(c) backup senza la chiave");
+        assert!(!key_exists_now(RegRoot::Hkcu, &key_c), "(c) la chiave c'è ancora");
+
+        // (d) HKLM solo nella vista a 32 bit, regola scritta senza Wow6432Node.
+        create_key(RegRoot::Hklm, &key_d32, &[("Recent", "r")]);
+        assert!(!key_exists_now(RegRoot::Hklm, &key_d64), "(d) la chiave esiste anche a 64 bit");
+        let o = key_rule(RegRoot::Hklm, &key_d64);
+        let found = analyze_real(&o, &env);
+        assert_eq!(found.reg, vec![RegItem::Key { root: RegRoot::Hklm, path: key_d32.clone() }], "(d) analisi");
+        let done = clean_real(&found, &o, &env, &mut cleanup);
+        eprintln!("(d) {done:?}");
+        assert_eq!((done.removed, done.failed), (1, 0), "(d) {:?}", done.notes);
+        let bk = done.backup.clone().expect("(d) nessun backup");
+        assert!(backup_text(&bk).is_some_and(|t| t.contains(&format!("{marker}_D"))), "(d) backup senza la chiave");
+        assert!(!key_exists_now(RegRoot::Hklm, &key_d32), "(d) la chiave a 32 bit c'è ancora");
+        // Seconda pulizia della stessa raccolta: niente da togliere.
+        let again = clean_real(&found, &o, &env, &mut cleanup);
+        eprintln!("(d) di nuovo {again:?}");
+        assert_eq!((again.removed, again.failed), (0, 0), "(d) di nuovo {:?}", again.notes);
+        assert!(again.notes.iter().any(|n| n.starts_with("Già assente")), "(d) di nuovo {:?}", again.notes);
+        assert_eq!(again.backup, None, "(d) backup di una chiave assente");
+
+        // (e) due pulizie di fila: due backup diversi.
+        create_key(RegRoot::Hkcu, &key_e1, &[("x", "1")]);
+        create_key(RegRoot::Hkcu, &key_e2, &[("x", "2")]);
+        let (o1, o2) = (key_rule(RegRoot::Hkcu, &key_e1), key_rule(RegRoot::Hkcu, &key_e2));
+        let (f1, f2) = (analyze_real(&o1, &env), analyze_real(&o2, &env));
+        let d1 = clean_real(&f1, &o1, &env, &mut cleanup);
+        let d2 = clean_real(&f2, &o2, &env, &mut cleanup);
+        eprintln!("(e) {:?} {:?}", d1.backup, d2.backup);
+        let (b1, b2) = (d1.backup.clone().expect("(e) primo"), d2.backup.clone().expect("(e) secondo"));
+        assert_ne!(b1, b2, "(e) stesso file di backup");
+        assert!(backup_text(&b1).is_some_and(|t| t.contains(&format!("{marker}_E1"))), "(e) primo backup");
+        assert!(backup_text(&b2).is_some_and(|t| t.contains(&format!("{marker}_E2"))), "(e) secondo backup");
+        assert_eq!((d1.removed, d2.removed), (1, 1));
+
+        // (f) chiave protetta: solo rifiuto. Prima di tutto `reg_allowed` deve
+        // rifiutarla, altrimenti il test si ferma qui senza chiamare nulla.
+        let protected_path = r"Software\Microsoft\Windows\CurrentVersion\Run";
+        assert!(
+            reg_allowed(RegRoot::Hklm, protected_path, None).is_err(),
+            "(f) reg_allowed non rifiuta {protected_path}: test fermato senza cancellare"
+        );
+        assert!(key_exists_now(RegRoot::Hklm, protected_path), "(f) la chiave protetta non c'è su questo PC");
+        let o = key_rule(RegRoot::Hklm, protected_path);
+        let found = analyze_real(&o, &env);
+        assert!(found.reg.is_empty() && found.skipped == 1, "(f) analisi: {found:?}");
+        // Anche un `RuleFound` costruito a mano: `clean_option` la rifiuta prima del backup.
+        let forged = RuleFound {
+            reg: vec![RegItem::Key { root: RegRoot::Hklm, path: protected_path.into() }],
+            count: 1,
+            ..Default::default()
+        };
+        let done = clean_real(&forged, &o, &env, &mut cleanup);
+        eprintln!("(f) {done:?}");
+        assert_eq!((done.removed, done.failed), (0, 1), "(f) {:?}", done.notes);
+        assert_eq!(done.backup, None);
+        assert!(key_exists_now(RegRoot::Hklm, protected_path), "(f) la chiave protetta è sparita");
+        drop(cleanup);
+    }
 }
