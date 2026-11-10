@@ -1,0 +1,13 @@
+[package]
+name = "dc-sessions"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dc-model = { path = "../dc-model" }
+dc-mukade = { path = "../dc-mukade" }
+trash = "5.3.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
