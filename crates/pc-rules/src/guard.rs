@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::model::Env;
+use crate::wildcard::wildcard_match;
 
 /// `Some(motivo in italiano)` se il percorso è protetto.
 ///
@@ -212,27 +213,12 @@ fn covers_whole(path: &[String], dir: &[String]) -> bool {
 /// I componenti di `path` corrispondono, uno a uno (jolly compresi), ai primi
 /// componenti di `dir`.
 fn prefix_matches(path: &[String], dir: &[String]) -> bool {
-    path.iter().zip(dir).all(|(p, d)| glob(p, d) || glob(d, p))
+    path.iter().zip(dir).all(|(p, d)| wildcard_match(p, d) || wildcard_match(d, p))
 }
 
 /// Componente fatto solo di `*`, `?` e `.` con almeno un jolly (`*`, `*.*`).
 fn wildcard_only(c: &str) -> bool {
     c.contains(['*', '?']) && c.chars().all(|ch| matches!(ch, '*' | '?' | '.'))
-}
-
-/// Confronto con `*` e `?` (testo già in minuscolo).
-fn glob(pattern: &str, text: &str) -> bool {
-    fn go(p: &[char], t: &[char]) -> bool {
-        match p.split_first() {
-            None => t.is_empty(),
-            Some(('*', rest)) => (0..=t.len()).any(|i| go(rest, &t[i..])),
-            Some(('?', rest)) => !t.is_empty() && go(rest, &t[1..]),
-            Some((c, rest)) => t.first() == Some(c) && go(rest, &t[1..]),
-        }
-    }
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    go(&p, &t)
 }
 
 #[cfg(test)]
@@ -427,6 +413,18 @@ mod tests {
             r"C:\Users\u\AppData\Local\Foo\*",
             r"D:\proj\*\target",
         ]);
+    }
+
+    #[test]
+    fn many_wildcards_are_checked_quickly() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        for stars in [12usize, 40] {
+            let comp = format!("{}z", "*".repeat(stars));
+            assert!(!refused(&format!(r"C:\{comp}\x")));
+            assert!(!refused(&format!(r"C:\Program Files (x86)\{comp}")));
+        }
+        assert!(start.elapsed() < Duration::from_millis(100), "{:?}", start.elapsed());
     }
 
     #[test]
