@@ -6,7 +6,7 @@
   <option id="dumps">
     <label>CrashDumps .dmp</label>
     <description>Rimuove i dump standard di crash delle applicazioni nel profilo utente.</description>
-    <warning>I dump possono essere fondamentali per diagnosticare crash o inviare report a supporto tecnico. Salvali prima se necessari.</warning>
+    <warning>I dump possono essere fondamentali per diagnosticare crash o inviare report al supporto tecnico. Salvali prima se necessari.</warning>
     <action command="delete" search="glob" path="%LocalAppData%\CrashDumps\*.dmp"/>
   </option>
 </cleaner>

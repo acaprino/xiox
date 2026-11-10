@@ -2,7 +2,7 @@
 <!-- CleanerML: definizioni Windows; ogni opzione va selezionata esplicitamente. -->
 <cleaner id="ai_opencode" os="windows">
   <label>OpenCode (AI)</label>
-  <description>Cache, log e archivi di sessioni legacy. OpenCode V2 usa SQLite.</description>
+  <description>Cache, log e archivi delle sessioni vecchie. OpenCode V2 usa SQLite.</description>
   <running type="exe" os="windows" same_user="true">opencode.exe</running>
   <option id="cache">
     <label>Cache pacchetti e modelli</label>
@@ -11,14 +11,14 @@
     <action command="delete" search="walk.all" path="%USERPROFILE%\.cache\opencode"/>
   </option>
   <option id="logs">
-    <label>Log applicazione</label>
+    <label>Log dell'applicazione</label>
     <description>Elimina i log sotto la cartella dati di OpenCode.</description>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.local\share\opencode\log"/>
   </option>
   <option id="legacy_sessions">
-    <label>Sessioni V1 / legacy (avanzato)</label>
+    <label>Sessioni V1 / precedenti (avanzato)</label>
     <description>Elimina la vecchia cartella project contenente sessioni e messaggi V1.</description>
-    <warning>Distrugge dati per progetto V1. La V2 usa SQLite: NON eliminare opencode.db perché contiene anche credenziali; usa opencode session delete ID.</warning>
+    <warning>Elimina i dati dei progetti della versione 1. La V2 usa SQLite: NON eliminare opencode.db perché contiene anche credenziali; usa opencode session delete ID.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.local\share\opencode\project"/>
   </option>
 </cleaner>

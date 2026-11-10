@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- GOCACHE predefinita di Go su Windows. Non tocca GOPATH né la cache dei moduli. -->
 <cleaner id="bbag_go" os="windows">
-  <label>Cache di build di Go</label>
-  <description>Cache degli artefatti di compilazione Go, ricostruibili al successivo build.</description>
+  <label>Cache di compilazione di Go</label>
+  <description>Cache degli artefatti di compilazione Go, ricostruibili alla successiva compilazione.</description>
   <running type="exe" os="windows" same_user="true">go.exe</running>
   <option id="build">
-    <label>Cache di build di Go</label>
-    <description>Rimuove la cache di build di Go. Attendi che le build finiscano; le successive compilazioni impiegheranno più tempo.</description>
+    <label>Cache di compilazione di Go</label>
+    <description>Rimuove la cache di compilazione di Go. Attendi che le compilazioni in corso finiscano; le successive compilazioni impiegheranno più tempo.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\go-build"/>
   </option>
 </cleaner>

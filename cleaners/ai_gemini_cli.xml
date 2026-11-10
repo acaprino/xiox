@@ -23,7 +23,7 @@
     <action command="delete" search="glob" path="%USERPROFILE%\.gemini\tmp\*\shell_history"/>
   </option>
   <option id="checkpoints">
-    <label>Checkpoint snapshot (avanzato)</label>
+    <label>Checkpoint e istantanee (avanzato)</label>
     <description>Elimina gli snapshot Git di checkpoint gestiti da Gemini CLI.</description>
     <warning>Perderai la possibilità di ripristinare modifiche tramite i checkpoint Gemini CLI.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.gemini\history"/>

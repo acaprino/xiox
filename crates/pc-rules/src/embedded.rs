@@ -133,4 +133,60 @@ mod tests {
         assert_eq!(running(c, &["claude.exe".to_string()]), vec!["claude.exe"]);
         assert!(running(c, &["notepad.exe".to_string()]).is_empty());
     }
+
+    /// Le correzioni ai testi non toccano opzioni né azioni: numero di
+    /// opzioni e azioni e id delle opzioni di ogni file restano quelli
+    /// originali.
+    #[test]
+    fn xml_structure_unchanged() {
+        let expected: [(&str, usize, usize, &[&str]); 11] = [
+            ("ai_claude_code", 6, 13, &[]),
+            ("ai_codex", 7, 9, &[]),
+            ("ai_gemini_cli", 4, 5, &[]),
+            ("ai_opencode", 3, 3, &[]),
+            ("bbag_cargo", 1, 1, &[]),
+            ("bbag_crash", 1, 1, &[]),
+            ("bbag_go", 1, 1, &["build"]),
+            ("bbag_jetbrains", 1, 1, &[]),
+            ("bbag_npm", 3, 3, &[]),
+            ("bbag_pip", 1, 3, &[]),
+            ("bbag_shader", 3, 5, &[]),
+        ];
+        for ((name, xml), (want, options, actions, ids)) in CLEANERS.iter().zip(expected) {
+            assert_eq!(*name, want);
+            let doc = roxmltree::Document::parse(xml).unwrap();
+            let count = |tag: &str| doc.descendants().filter(|n| n.has_tag_name(tag)).count();
+            assert_eq!(count("option"), options, "{name}: opzioni");
+            assert_eq!(count("action"), actions, "{name}: azioni");
+            let got: Vec<&str> = doc
+                .descendants()
+                .filter(|n| n.has_tag_name("option"))
+                .filter_map(|n| n.attribute("id"))
+                .collect();
+            for id in ids {
+                assert!(got.contains(id), "{name}: manca l'opzione {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn reviewed_italian_wording() {
+        let all: String = CLEANERS.iter().map(|(_, x)| *x).collect();
+        for bad in [
+            "incollature",
+            "Perdi ricerca",
+            "Trascrizioni sessioni",
+            "Checkpoint snapshot",
+            "sessioni legacy",
+            "V1 / legacy",
+            "Log applicazione",
+            "Distrugge dati",
+            "a supporto tecnico",
+            "al successivo build",
+            "le build",
+            "Cache di build",
+        ] {
+            assert!(!all.contains(bad), "testo da correggere ancora presente: «{bad}»");
+        }
+    }
 }

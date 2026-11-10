@@ -20,13 +20,13 @@
   </option>
   <option id="prompt_history">
     <label>Cronologia prompt</label>
-    <description>Elimina la cronologia dei prompt e i contenuti delle grandi incollature.</description>
-    <warning>Perdi ricerca e recupero dei prompt precedenti.</warning>
+    <description>Elimina la cronologia dei prompt e i contenuti delle grandi testi incollati.</description>
+    <warning>Perderai la ricerca e il recupero dei prompt precedenti.</warning>
     <action command="delete" search="file" path="%USERPROFILE%\.claude\history.jsonl"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\paste-cache"/>
   </option>
   <option id="transcripts">
-    <label>Trascrizioni sessioni</label>
+    <label>Trascrizioni delle sessioni</label>
     <description>Elimina i file JSONL delle conversazioni nei progetti, senza eliminare le memorie Markdown.</description>
     <warning>Non potrai riprendere le conversazioni eliminate. Restano eventuali metadati e file ausiliari. Per una rimozione coerente di tutti i dati usa claude purge.</warning>
     <action command="delete" search="walk.files" path="%USERPROFILE%\.claude\projects" regex="\.jsonl($|\.)" type="f"/>

@@ -1,4 +1,4 @@
-//! Lettura dei file CleanerML (il formato dei cleaner di BleachBit).
+//! Lettura dei file CleanerML (cleaner descritti in XML: opzioni e azioni).
 //!
 //! Significato dei `Search` nelle azioni prodotte (lo applica `collect`):
 //! - `File`: il file indicato; `Glob`: i file che corrispondono al modello nel
