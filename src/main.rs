@@ -4,22 +4,13 @@ mod cleaner;
 mod registry;
 mod services;
 mod sys;
+mod theme;
 
-use eframe::egui::{self, Align, Color32, CornerRadius, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
+use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
-
-const SIDEBAR: Color32 = Color32::from_rgb(0x23, 0x26, 0x2c);
-const SIDEBAR_SEL: Color32 = Color32::from_rgb(0x36, 0x3a, 0x43);
-const ACCENT: Color32 = Color32::from_rgb(0x2f, 0x80, 0xed);
-const GREEN: Color32 = Color32::from_rgb(0x2e, 0xa8, 0x62);
-const BG: Color32 = Color32::from_rgb(0xf3, 0xf4, 0xf6);
-const CARD: Color32 = Color32::WHITE;
-const TEXT: Color32 = Color32::from_rgb(0x2b, 0x2e, 0x33);
-const MUTED: Color32 = Color32::from_rgb(0x7a, 0x7f, 0x87);
-const WARN_BG: Color32 = Color32::from_rgb(0xff, 0xf4, 0xd6);
-const LINE: Color32 = Color32::from_rgb(0xe1, 0xe3, 0xe7);
+use theme::*;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -871,18 +862,6 @@ fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u3
     let _ = tx.send(SvcMsg::Message(msg));
 }
 
-fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) {
-    egui::Frame::new()
-        .fill(CARD)
-        .corner_radius(8)
-        .stroke(Stroke::new(1.0_f32, LINE))
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui);
-        });
-}
-
 fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
     ui.allocate_ui_with_layout(Vec2::new(w, 20.0), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(w);
@@ -890,27 +869,6 @@ fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Respons
         ui.add(egui::Label::new(text).truncate())
     })
     .inner
-}
-
-fn primary(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(RichText::new(text).color(Color32::WHITE).strong().size(15.0))
-            .fill(if enabled { ACCENT } else { Color32::from_rgb(0xa8, 0xc4, 0xee) })
-            .corner_radius(CornerRadius::same(5))
-            .min_size(Vec2::new(150.0, 36.0)),
-    )
-}
-
-fn secondary(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(RichText::new(text).color(ACCENT).strong().size(15.0))
-            .fill(CARD)
-            .stroke(Stroke::new(1.0_f32, ACCENT))
-            .corner_radius(CornerRadius::same(5))
-            .min_size(Vec2::new(130.0, 36.0)),
-    )
 }
 
 impl eframe::App for App {
