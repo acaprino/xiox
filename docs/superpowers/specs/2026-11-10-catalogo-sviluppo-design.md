@@ -1,6 +1,6 @@
 # PulisciPC: catalogo generale dei residui di sviluppo
 
-Data: 2026-11-10. Stato: **da approvare**: domande del revisore risolte, risposta dell'utente sul rilevamento inclusa.
+Data: 2026-11-10. Stato: **da approvare**: rivista dopo la decisione 6 (l'app propone, l'utente sceglie).
 Estende `2026-11-10-dev-mode-design.md` (approvato). Dove questo documento non dice nulla, vale quello.
 
 ## Intento
@@ -14,6 +14,7 @@ PulisciPC è un prodotto da vendere, usabile da tutti, rivale di CCleaner. CClea
 3. Le dipendenze che si riscaricano ma costano tempo o banda (modelli AI da GB, browser di Playwright, repository Maven, SDK Android) sono **pulibili**.
 4. "Il programma deve rilevare in automatico quali sono, tra quelli supportati, i programmi installati effettivamente nel PC", "e mostrare tutti e solo quelli". Niente domande al cliente su cartelle o strumenti.
 5. "Va sempre avviato come amministratore", "con lettura veloce MFT".
+6. "L'utente sceglie cosa eliminare o cosa no: l'app propone, l'utente seleziona, come in CCleaner." In particolare non vanno bene due esclusioni della bozza: i programmi installati che altri usano (toolchain di rustup, Python di uv, versioni di nvm, `.cargo\bin`) e Docker, WSL e macchine virtuali. Entrano anche quelli.
 
 ## Cosa cambia nella spec principale
 
@@ -41,35 +42,40 @@ Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, 
 
 - **Parte A, Progetti** (modalità Sviluppatori): nuovi ecosistemi in `markers.rs`, cartelle dentro ogni progetto.
 - **Parte B, cache globali** (Pulizia file → gruppo "Sviluppo e AI"): nuovi XML CleanerML inglobati, uno per strumento.
-- **Parte C, logica nativa**: immagini di sistema Android non usate da nessun emulatore.
+- **Parte C, logica nativa**: emulatori Android e immagini di sistema non usate.
+- **Parte D, Docker, Podman, WSL e macchine virtuali**: pulizia con i loro strumenti, poi lo spazio torna a Windows.
 - Ogni voce: etichetta e avviso in italiano corretto; se la voce si riscarica, l'avviso dice **come riaverla** (comando o azione).
 
 ## Non obiettivi
 
-- macOS e Linux: PulisciPC usa registro, servizi e MFT, è solo Windows. *Scelta mia:* i percorsi macOS/Linux dell'inventario restano fuori, così come Xcode, CocoaPods, Carthage, simulatori Apple, Homebrew, APT, Nix.
-- Docker, Podman, WSL, VM: lo spazio liberato resta dentro il disco virtuale (`ext4.vhdx`, `Docker.raw`) e Windows non lo vede finché non si compatta. *Scelta mia:* fuori da questo documento. Si può fare dopo con la CLI di Docker (`docker builder prune`, mai i volumi) e la compattazione del VHDX.
+- macOS: PulisciPC usa registro, servizi e MFT, è solo Windows. I percorsi macOS dell'inventario restano fuori, così come Xcode, CocoaPods, Carthage, simulatori Apple, Homebrew. I percorsi Linux servono solo dentro le distro WSL (Parte D).
 - File sparsi nei progetti (`*.tsbuildinfo`, `.eslintcache`, `.coverage`, `*.hprof`, ausiliari LaTeX): pesano poco. Il modello di oggi gestisce solo cartelle.
 - Cache dentro `node_modules` (`.cache`, `.vite`): si tolgono già con `node_modules`.
 - Leggere i percorsi lanciando gli strumenti (`npm config get cache`, `pnpm store path`…): lento, e alcuni comandi scrivono metadati. Si usano variabili d'ambiente e percorsi predefiniti.
 
 ## Anti-obiettivi (fallimento anche se "funziona")
 
-- Cancellare dati unici: emulatori Android (AVD), volumi e dischi di container, stato Terraform, checkpoint di training, cronologie locali degli IDE, database, credenziali.
-- Rompere in silenzio qualcosa che il cliente usa: un comando nel PATH che sparisce, un `.venv` che punta a un Python cancellato, progetti renv collegati alla cache.
-- Togliere una cartella dal nome ambiguo (`dist`, `build`, `out`, `vendor`, `public`, `site`, `artifacts`) che contiene sorgenti.
+- Cancellare qualcosa che l'utente non ha spuntato, o dati unici (emulatori, volumi Docker, dischi di VM, stato Terraform, checkpoint di training, cronologie locali degli IDE) senza che abbia letto e confermato l'avviso.
+- Rompere qualcosa senza dirlo prima: se una voce fa sparire un comando dal PATH o rompe un `.venv`, l'avviso lo scrive con i nomi di cosa si rompe.
+- Preselezionare una cartella dal nome ambiguo (`dist`, `build`, `out`, `vendor`, `public`, `site`, `artifacts`) che contiene sorgenti.
 - Cancellare file mentre lo strumento li sta usando.
 
 ## Regole valide per tutte le parti
 
-1. **Classi.** C (cache) e B (build) entrano. D (dipendenze, SDK, modelli, browser) entra, con avviso e comando per riaverla (decisione 3). L (log, report) entra. P (dati unici) **non entra mai**.
-2. *Scelta mia:* **D che rompe in silenzio non entra**: toolchain e programmi installati che altri ambienti o il PATH usano. Esempi: `rustup` toolchains, `.cargo\bin`, `go\bin`, `.dotnet\tools`, pipx, Python e tool di uv, versioni di nvm-windows e pyenv, ambienti Conda (`envs`), app e `persist` di Scoop, cache renv (i progetti ci puntano con junction), `bin` della cache Pub. Si riscaricano solo se il cliente sa cosa reinstallare.
+1. **L'app propone, l'utente sceglie** (decisione 6). Ogni voce dell'inventario compare come opzione con la sua casella. Il livello decide solo la preselezione e l'avviso (*scelta mia*, come CCleaner):
+   - **Consigliato**, preselezionato: C, B e L, si rigenerano senza scaricare nulla.
+   - **Facoltativo**, non selezionato, avviso "si riscarica" con il comando per riaverla: D non in uso.
+   - **Attenzione**, non selezionato, avviso rosso da confermare: P (dati unici), D in uso, nomi ambigui non ignorati da git, cartelle tracciate da git.
+
+   Gli 11 XML di oggi restano spenti di default, come deciso nella spec principale. *Scelta mia:* unica esclusione, i file di credenziali e configurazione (token, chiavi, `credentials.toml`, `config.toml`, `settings.json`, `.kube\config`, `gradle.properties`, `debug.keystore`, `adbkey`): non sono residui e non liberano spazio. Nelle tabelle sono segnati 🔒.
+2. **In uso.** Toolchain e programmi installati entrano (decisione 6): toolchain di `rustup`, `.cargo\bin`, `go\bin`, `.dotnet\tools`, pipx, Python e tool di uv, versioni di nvm-windows e pyenv, ambienti Conda (`envs`), versioni vecchie e `persist` di Scoop, cache renv, `bin` della cache Pub. *Scelta mia:* l'app capisce cosa è in uso: la toolchain predefinita (`settings.toml` di rustup), la versione attiva di nvm, il Python a cui punta un venv trovato dall'analisi (`home` in `pyvenv.cfg`), i progetti renv collegati alla cache. Le voci in uso vanno al livello Attenzione e l'avviso dice cosa si rompe ("2 venv usano questo Python: smetteranno di funzionare"); le altre sono Facoltative.
 3. **Percorsi.** Prima la variabile d'ambiente dello strumento (`CARGO_HOME`, `GRADLE_USER_HOME`, `NUGET_PACKAGES`, `GOCACHE`, `GOMODCACHE`, `HF_HOME`, `OLLAMA_MODELS`, `PLAYWRIGHT_BROWSERS_PATH`…); se non è definita, il percorso predefinito di Windows. Una variabile non definita **scarta** quel percorso, non lo usa alla lettera.
 4. **Verifica dei percorsi.** I percorsi delle tabelle vengono dall'inventario incollato e da quanto ne so. Prima di scrivere una voce, il builder controlla il percorso Windows sulla documentazione ufficiale dello strumento; se non lo trova documentato, la voce si toglie e si annota in fondo a questo file.
 5. **Visibilità.** Una categoria compare se e solo se lo strumento è installato (vedi Rilevamento automatico).
-6. **Default.** Come da spec principale: tutte le opzioni inglobate sono spente di default. La Parte A segue la preselezione di oggi (progetti inattivi).
-7. **Processi attivi.** Se lo strumento è in esecuzione, l'opzione è bloccata (`<running>` di CleanerML, come `bbag_jetbrains.xml`). I file bloccati da altri processi si saltano e si contano nel riepilogo.
+6. **Selezione.** Come in CCleaner: ogni voce ha la sua casella, quella del gruppo seleziona o toglie tutte le sue voci, il totale selezionato si aggiorna subito.
+7. **Processi attivi.** Se lo strumento è in esecuzione (`<running>` di CleanerML), alla pulizia l'app chiede di chiuderlo o di saltare quella voce, come fa CCleaner con i browser. "Bloccata con X" nelle tabelle vuol dire questo. I file bloccati da altri processi si saltano e si contano nel riepilogo.
 8. **Cestino.** *Scelta mia:* il flag Cestino/definitivo vale anche qui. Prima di pulire, se il totale supera lo spazio libero del Cestino su quell'unità (quota da registro, occupato da `SHQueryRecycleBin`), la UI lo dice e propone il definitivo per quella pulizia; non si lascia decidere a Windows.
-9. **Una regola sola per percorso.** *Scelta mia:* le "mai" di questo documento (P, credenziali, cronologie locali come `LocalHistory` di JetBrains e `User\History`/`Local Storage` di VS Code) filtrano anche le regole Winapp2. Se una sezione Winapp2 copre lo stesso strumento di una categoria inglobata (stessi percorsi o sottopercorsi), la sezione Winapp2 si nasconde: vince la categoria inglobata.
+9. **Una regola sola per percorso.** *Scelta mia:* i livelli valgono anche per le regole Winapp2: una regola che tocca dati P o in uso (per esempio `LocalHistory` di JetBrains, `User\History`/`Local Storage` di VS Code) prende il livello Attenzione; una che tocca file 🔒 si scarta. Se una sezione Winapp2 copre lo stesso strumento di una categoria inglobata (stessi percorsi o sottopercorsi), la sezione Winapp2 si nasconde: vince la categoria inglobata.
 10. **Prove.** Mai sul PC dell'utente: i test usano un profilo finto in una cartella temporanea (variabili `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TEMP` e quelle degli strumenti puntate lì) e alberi di progetto costruiti dal test.
 
 ## Parte A: Progetti (`markers.rs`)
@@ -81,8 +87,8 @@ Stesso modello di oggi: un file marcatore nella cartella del progetto implica le
 - **Marcatore come sottopercorso o cartella**: `ProjectSettings/ProjectVersion.txt` (Unity), `.storybook/` (Storybook).
 - **Artefatto come sottopercorso** (massimo 3 segmenti): `.nx/cache`, `resources/_gen`, `cypress/videos`, `vendor/bundle`, `.cache/clangd`, `project/target`.
 - **Artefatto riconosciuto dal contenuto**: una build Meson è qualsiasi sottocartella diretta del progetto che contiene `meson-private/` e `build.ninja`.
-- **Nomi ambigui** (segnati † nella tabella): l'artefatto entra solo se il progetto è un repository git e `git check-ignore` dice che la cartella è ignorata e non tracciata. Altrimenti **non compare** (non blocca il progetto come farebbe un artefatto "non verificato"). Serve una funzione `is_ignored` in `dc-git`. *Scelta mia:* se un marcatore del progetto segna un nome come †, la regola † vale per quel nome anche quando un altro marcatore lo accetterebbe senza git (progetto con `package.json` e `CMakeLists.txt`: `build` richiede git). Senza marcatori † (solo Gradle o solo CMake) `build` resta com'è oggi: nessuna regressione.
-- *Scelta mia:* la selezione resta per progetto, come oggi (`node_modules` e venv sono già dipendenze e partono con il progetto). Le cartelle D nuove fanno lo stesso; l'anteprima le segna "si riscarica" con il comando per riaverle.
+- **Nomi ambigui** (segnati † nella tabella): l'artefatto entra solo se il progetto è un repository git e `git check-ignore` dice che la cartella è ignorata e non tracciata. Altrimenti compare al livello Attenzione ("potrebbe contenere sorgenti"), non preselezionato. Serve una funzione `is_ignored` in `dc-git`. *Scelta mia:* se un marcatore del progetto segna un nome come †, la regola † vale per quel nome anche quando un altro marcatore lo accetterebbe senza git (progetto con `package.json` e `CMakeLists.txt`: `build` richiede git). Senza marcatori † (solo Gradle o solo CMake) `build` resta com'è oggi: nessuna regressione.
+- **Selezione per cartella** (decisione 6, cambia rispetto a oggi): ogni artefatto ha la sua casella, la riga del progetto le seleziona tutte. Preselezionate solo le voci Consigliate dei progetti inattivi; nei progetti attivi niente. Gli artefatti "non verificati" e quelli tracciati da git non bloccano più il progetto: vanno al livello Attenzione. Cambiano `Artifact` (serve un id), `build_plan` (riceve id di artefatti, non di progetti) e la griglia.
 - `crates/dc-cleaner/src/guard.rs::name_plausible` resta una lista chiusa per tipo: ogni nome nuovo va aggiunto lì, altrimenti la pulizia lo rifiuta.
 - `NEVER_ENTER` si estende con i nomi non ambigui e pesanti (`.next`, `.nuxt`, `.svelte-kit`, `.angular`, `.turbo`, `.dart_tool`, `.terraform`, `.terragrunt-cache`, `.stack-work`, `dist-newstyle`, `.zig-cache`, `.pio`).
 - `ArtifactKind`: varianti nuove o un tipo generico con id del catalogo, a scelta del builder. L'etichetta è in italiano ("Cache Next.js (.next)").
@@ -137,7 +143,7 @@ Stesso modello di oggi: un file marcatore nella cartella del progetto implica le
 | Serverless | `serverless.{yml,ts}` | `.serverless` | B |
 | dbt | `dbt_project.yml` | `target`, `dbt_packages`, `logs` | B/D/L |
 
-Esclusi dentro i progetti (P o misti): `.ipynb_checkpoints`, `.hypothesis` (database degli esempi che hanno fatto fallire i test), `.vs`, `.idea`, `.Rproj.user`, Unreal `Saved` e `Binaries` (DLL di plugin senza sorgenti), Unity `UserSettings`, `wandb`, `mlruns`, `runs`, `checkpoint-*`, `.dvc/cache`, link `bazel-*` (puntano fuori dal progetto: togliere il link non libera spazio), cache di Laravel e Symfony (contengono `.gitignore` tracciati).
+Livello Attenzione dentro i progetti (P o misti, mai preselezionati): `.ipynb_checkpoints`, `.hypothesis` (database degli esempi che hanno fatto fallire i test), `.vs`, `.idea`, `.Rproj.user`, `.yarn/cache` (Zero Installs: sta nel repository), Unreal `Saved` e `Binaries` (DLL di plugin senza sorgenti), Unity `UserSettings`, `wandb`, `mlruns`, `runs`, `checkpoint-*`, `.dvc/cache`, cache di Laravel e Symfony (contengono `.gitignore` tracciati). I link `bazel-*` non liberano spazio: lo spazio vero è la radice di output di Bazel, voce della Parte B.
 
 ## Parte B: cache globali (XML CleanerML, gruppo "Sviluppo e AI")
 
@@ -156,39 +162,39 @@ Un XML per strumento in `cleaners/`, scritto da zero (nessuna derivazione da Ble
 |---|---|---|---|
 | npm (esiste) | in più: `%npm_config_cache%` | C/L | — |
 | pnpm | store `%LOCALAPPDATA%\pnpm\store`; `%LOCALAPPDATA%\pnpm-cache` | D/C | Si riscarica al prossimo `pnpm install`; i `node_modules` esistenti restano validi (hard link) |
-| Yarn | `%LOCALAPPDATA%\Yarn\Cache` (Classic), `%LOCALAPPDATA%\Yarn\Berry\cache`, `%USERPROFILE%\.yarn\berry\cache` | C/D | Mai la `.yarn/cache` dentro i progetti (Zero Installs) |
+| Yarn | `%LOCALAPPDATA%\Yarn\Cache` (Classic), `%LOCALAPPDATA%\Yarn\Berry\cache`, `%USERPROFILE%\.yarn\berry\cache` | C/D | La `.yarn/cache` dentro i progetti è in Parte A, livello Attenzione |
 | Bun | `%BUN_INSTALL_CACHE_DIR%`, `%USERPROFILE%\.bun\install\cache` | C/D | Progetti con linker isolato: rifare `bun install` |
 | Deno | `%DENO_DIR%`, `%LOCALAPPDATA%\deno` | C/D | — |
 | Electron | `%ELECTRON_CACHE%`, `%LOCALAPPDATA%\electron\Cache`, `%LOCALAPPDATA%\electron-builder\Cache` | C/D | — |
 | pip (esiste) | — | C | — |
-| uv | `%UV_CACHE_DIR%`, `%LOCALAPPDATA%\uv\cache` | C | Solo la cache: mai Python e tool installati (regola 2) |
+| uv | `%UV_CACHE_DIR%`, `%LOCALAPPDATA%\uv\cache` | C | Python e tool installati: opzioni separate, regola 2 |
 | Poetry | `%LOCALAPPDATA%\pypoetry\Cache\cache` e `\artifacts`; opzione separata `\virtualenvs` | C / D | Ambienti: rifare `poetry install` |
 | Pipenv | `%WORKON_HOME%`, `%USERPROFILE%\.virtualenvs` | D | Rifare `pipenv install` |
-| Conda | `<radice>\pkgs` per `%USERPROFILE%\{miniconda3,anaconda3,miniforge3,mambaforge}` e `%CONDA_PKGS_DIRS%` | C/D | Mai `envs` |
+| Conda | `<radice>\pkgs` per `%USERPROFILE%\{miniconda3,anaconda3,miniforge3,mambaforge}` e `%CONDA_PKGS_DIRS%` | C/D | `envs`: opzione separata, regola 2 |
 | virtualenv | `%LOCALAPPDATA%\pypa\virtualenv` | C | — |
 | pre-commit | `%PRE_COMMIT_HOME%`, `%USERPROFILE%\.cache\pre-commit` | C/D | — |
-| pyenv-win | `%USERPROFILE%\.pyenv\pyenv-win\install_cache` | C | Mai le versioni |
-| Hugging Face | `%HF_HUB_CACHE%`, `%HF_HOME%\hub`, `%USERPROFILE%\.cache\huggingface\{hub,datasets,xet,assets}` | D | Mai `token` e `stored_tokens`. Si riscaricano al prossimo uso |
+| pyenv-win | `%USERPROFILE%\.pyenv\pyenv-win\install_cache` | C | Versioni installate: opzione separata, regola 2 |
+| Hugging Face | `%HF_HUB_CACHE%`, `%HF_HOME%\hub`, `%USERPROFILE%\.cache\huggingface\{hub,datasets,xet,assets}` | D | 🔒 `token` e `stored_tokens`. Si riscaricano al prossimo uso |
 | PyTorch | `%TORCH_HOME%\hub`, `%USERPROFILE%\.cache\torch\hub` | D | — |
-| Keras | `%USERPROFILE%\.keras\{datasets,models}` | D | Mai `keras.json` |
+| Keras | `%USERPROFILE%\.keras\{datasets,models}` | D | 🔒 `keras.json` |
 | Ollama | `%OLLAMA_MODELS%`, `%USERPROFILE%\.ollama\models` | D | Bloccata con `ollama.exe` attivo. Avviso: i modelli spariscono da `ollama list`, rifare `ollama pull` |
 | CUDA | `%CUDA_CACHE_PATH%`, `%APPDATA%\NVIDIA\ComputeCache` | C | Nel cleaner delle shader GPU |
 | Maven | `%USERPROFILE%\.m2\repository`; `%USERPROFILE%\.m2\wrapper\dists` | D | Avviso: gli artefatti fatti con `mvn install` esistono solo qui |
-| Gradle | `%GRADLE_USER_HOME%` o `%USERPROFILE%\.gradle`: `caches`, `wrapper\dists`, `native`, `jdks`; log `daemon\*\*.out.log` | C/D/L | Bloccata con un daemon Gradle attivo. Mai `gradle.properties`, `init.d` |
+| Gradle | `%GRADLE_USER_HOME%` o `%USERPROFILE%\.gradle`: `caches`, `wrapper\dists`, `native`, `jdks`; log `daemon\*\*.out.log` | C/D/L | Bloccata con un daemon Gradle attivo. 🔒 `gradle.properties`, `init.d` |
 | Kotlin/Native | `%KONAN_DATA_DIR%`, `%USERPROFILE%\.konan` | D | — |
-| sbt / Ivy / Coursier | `%USERPROFILE%\.sbt\boot`, `%USERPROFILE%\.ivy2\cache`, `%COURSIER_CACHE%`, `%LOCALAPPDATA%\Coursier\Cache` | C/D | Mai `.ivy2\local` |
-| Android | `%ANDROID_USER_HOME%\cache` o `%USERPROFILE%\.android\cache`; SDK (`%ANDROID_HOME%`, `%ANDROID_SDK_ROOT%`, `%LOCALAPPDATA%\Android\Sdk`) `\.temp`, `\.downloadIntermediates`; `%LOCALAPPDATA%\Google\AndroidStudio*\caches`, `\log` | C/L | Mai `avd`, `debug.keystore`, chiavi `adbkey`, `LocalHistory`. Bloccata con `studio64.exe` |
-| Pub (Dart/Flutter) | `%PUB_CACHE%` o `%LOCALAPPDATA%\Pub\Cache`: `hosted`, `git` | D | Mai `bin` e `global_packages` |
+| sbt / Ivy / Coursier | `%USERPROFILE%\.sbt\boot`, `%USERPROFILE%\.ivy2\cache`, `%COURSIER_CACHE%`, `%LOCALAPPDATA%\Coursier\Cache` | C/D | `.ivy2\local`: Attenzione, i pacchetti pubblicati in locale esistono solo qui |
+| Android | `%ANDROID_USER_HOME%\cache` o `%USERPROFILE%\.android\cache`; SDK (`%ANDROID_HOME%`, `%ANDROID_SDK_ROOT%`, `%LOCALAPPDATA%\Android\Sdk`) `\.temp`, `\.downloadIntermediates`; `%LOCALAPPDATA%\Google\AndroidStudio*\caches`, `\log` | C/L | 🔒 `debug.keystore`, `adbkey`. `LocalHistory`: Attenzione. Emulatori: Parte C. Bloccata con `studio64.exe` |
+| Pub (Dart/Flutter) | `%PUB_CACHE%` o `%LOCALAPPDATA%\Pub\Cache`: `hosted`, `git` | D | `bin` e `global_packages`: regola 2 |
 | NuGet | `%NUGET_PACKAGES%` o `%USERPROFILE%\.nuget\packages`; `%NUGET_HTTP_CACHE_PATH%` o `%LOCALAPPDATA%\NuGet\v3-cache`; `plugins-cache`; `%TEMP%\NuGetScratch` | D/C | Si riscarica al prossimo restore |
 | Visual Studio | `%LOCALAPPDATA%\Microsoft\VisualStudio\*\ComponentModelCache` | C | Bloccata con `devenv.exe` |
 | .NET single-file | `%DOTNET_BUNDLE_EXTRACT_BASE_DIR%`, `%TEMP%\.net` | C | — |
-| Cargo (esiste) | in più: `registry\src`, `registry\index`, `git\checkouts`, `git\db`, con `%CARGO_HOME%` | C/D | Mai `bin`, `credentials.toml`, `config.toml` |
-| rustup | `%RUSTUP_HOME%` o `%USERPROFILE%\.rustup`: `downloads`, `tmp` | C | Mai `toolchains` |
-| Go (esiste) | in più: moduli `%GOMODCACHE%` o `%USERPROFILE%\go\pkg\mod`, con `%GOCACHE%` | D | File in sola lettura. Mai `go\bin` |
+| Cargo (esiste) | in più: `registry\src`, `registry\index`, `git\checkouts`, `git\db`, con `%CARGO_HOME%` | C/D | `bin`: regola 2. 🔒 `credentials.toml`, `config.toml` |
+| rustup | `%RUSTUP_HOME%` o `%USERPROFILE%\.rustup`: `downloads`, `tmp` | C | `toolchains`: regola 2 (la predefinita è in uso) |
+| Go (esiste) | in più: moduli `%GOMODCACHE%` o `%USERPROFILE%\go\pkg\mod`, con `%GOCACHE%` | D | File in sola lettura. `go\bin`: regola 2 |
 | ccache / sccache | `%CCACHE_DIR%`, `%LOCALAPPDATA%\ccache`; `%SCCACHE_DIR%`, `%LOCALAPPDATA%\Mozilla\sccache\cache` | C | Bloccata con `sccache.exe` |
 | vcpkg | `%VCPKG_DEFAULT_BINARY_CACHE%`, `%LOCALAPPDATA%\vcpkg\archives`; con `%VCPKG_ROOT%`: `buildtrees`, `packages`, `downloads` | C/B/D | — |
 | Conan | `%CONAN_HOME%\p` o `%USERPROFILE%\.conan2\p` | D | Avviso: i pacchetti fatti con `conan create` esistono solo qui |
-| Composer | `%COMPOSER_CACHE_DIR%`, `%LOCALAPPDATA%\Composer` | C | Mai `%APPDATA%\Composer` |
+| Composer | `%COMPOSER_CACHE_DIR%`, `%LOCALAPPDATA%\Composer` | C | `%APPDATA%\Composer\vendor` (pacchetti globali): regola 2. 🔒 `config.json`, `auth.json` |
 | Bundler | `%USERPROFILE%\.bundle\cache` | C | — |
 | Hex / rebar3 | `%USERPROFILE%\.hex\packages`, `%USERPROFILE%\.cache\rebar3` | C | — |
 | Cabal | `%APPDATA%\cabal\packages` | C | — |
@@ -198,40 +204,69 @@ Un XML per strumento in `cleaners/`, scritto da zero (nessuna derivazione da Ble
 | Playwright | `%PLAYWRIGHT_BROWSERS_PATH%`, `%LOCALAPPDATA%\ms-playwright` | D | Avviso: rifare `npx playwright install` |
 | Puppeteer | `%PUPPETEER_CACHE_DIR%`, `%USERPROFILE%\.cache\puppeteer` | D | Rifare `npm install` |
 | Cypress | `%CYPRESS_CACHE_FOLDER%`, `%LOCALAPPDATA%\Cypress\Cache` | D | Rifare `npx cypress install` |
-| VS Code e derivati | `%APPDATA%\{Code,Code - Insiders,VSCodium,Cursor,Windsurf}\{Cache,CachedData,Code Cache,GPUCache,CachedExtensionVSIXs,logs}` | C/L | Mai `User` (cronologia locale, workspaceStorage) e `Backups`. Bloccata con l'editor aperto |
-| JetBrains (esiste) | — | C | Già esclude local history |
+| VS Code e derivati | `%APPDATA%\{Code,Code - Insiders,VSCodium,Cursor,Windsurf}\{Cache,CachedData,Code Cache,GPUCache,CachedExtensionVSIXs,logs}` | C/L | `User\History`, `User\workspaceStorage`, `Backups` (modifiche non salvate): Attenzione. 🔒 `settings.json`, `keybindings.json`. Bloccata con l'editor aperto |
+| JetBrains (esiste) | — | C | In più `LocalHistory`: Attenzione |
 | Minikube | `%MINIKUBE_HOME%\.minikube\cache`, `%USERPROFILE%\.minikube\cache` | C/D | — |
 | Vagrant | `%VAGRANT_HOME%\boxes`, `%USERPROFILE%\.vagrant.d\boxes` | D | Avviso: rifare `vagrant box add` |
-| kubectl / Helm | `%USERPROFILE%\.kube\cache`; `%HELM_CACHE_HOME%`, `%TEMP%\helm` | C | Mai `.kube\config` |
+| kubectl / Helm | `%USERPROFILE%\.kube\cache`; `%HELM_CACHE_HOME%`, `%TEMP%\helm` | C | 🔒 `.kube\config` |
 | Terraform / Pulumi | `%TF_PLUGIN_CACHE_DIR%`, `%APPDATA%\terraform.d\plugin-cache`; `%USERPROFILE%\.pulumi\plugins` | D | — |
-| Firebase | `%USERPROFILE%\.cache\firebase\emulators` | D | Mai gli export dei dati |
-| Scoop / Chocolatey / WinGet | `%SCOOP%\cache` o `%USERPROFILE%\scoop\cache`; `%TEMP%\chocolatey`; `%TEMP%\WinGet` e i log `DiagOutputDir` di `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe` | C/L | Mai `apps`, `persist` |
+| Firebase | `%USERPROFILE%\.cache\firebase\emulators` | D | Gli export dei dati stanno dove li salva l'utente: non si cercano |
+| Scoop / Chocolatey / WinGet | `%SCOOP%\cache` o `%USERPROFILE%\scoop\cache`; `%TEMP%\chocolatey`; `%TEMP%\WinGet` e i log `DiagOutputDir` di `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe` | C/L | Versioni vecchie in `apps\<app>\<versione>` (non `current`): Facoltativo. `persist`: Attenzione |
 | pytest | `%TEMP%\pytest-of-*` | C | — |
+| Bazel | radice di output `%USERPROFILE%\_bazel_<utente>` | C/B | Come `bazel clean --expunge` su tutti i workspace. Bloccata con un server Bazel attivo |
 
 ## Parte C: logica nativa
 
+**Emulatori Android (AVD).** Ogni AVD in `%ANDROID_AVD_HOME%`, `%ANDROID_USER_HOME%\avd` o `%USERPROFILE%\.android\avd` compare con nome, peso e ultimo avvio. Voci: snapshot (`snapshots\`, Facoltativo: il prossimo avvio è a freddo); dati del dispositivo (`userdata-qemu.img*`, `cache.img*`, Attenzione: il dispositivo torna come nuovo); AVD intero, cartella e `.ini` accanto (Attenzione). Bloccata con `emulator.exe` o `qemu-system-*.exe` attivi.
+
 **Immagini di sistema Android non usate.** Le immagini in `<SDK>\system-images\android-*\*\*` pesano 1-3 GB l'una. Un'immagine si offre solo se nessun AVD la usa: si leggono `image.sysdir.1` dai `config.ini` in `%ANDROID_AVD_HOME%`, `%ANDROID_USER_HOME%\avd` o `%USERPROFILE%\.android\avd`. Se un `config.ini` non si legge, non si offre nessuna immagine (fail closed). Bloccata con `emulator.exe` o `qemu-system-*.exe` attivi. Avviso: riscaricabile da Android Studio, SDK Manager.
+
+## Parte D: Docker, Podman, WSL e macchine virtuali
+
+Entrano per decisione dell'utente (decisione 6). Lo spazio liberato dentro un disco virtuale torna a Windows solo dopo la compattazione: ogni sezione finisce con la voce "Restituisci lo spazio a Windows", con il peso del file prima e dopo.
+
+**Docker e Podman.** Rilevati da registro e `PATH` (`docker.exe`, `podman.exe`). Si lavora solo con la loro CLI, mai sui file del disco virtuale.
+- Analisi con `docker system df -v`: immagini, container, volumi, cache di build, spazio recuperabile. *Scelta mia:* se Docker Desktop è chiuso, la sezione lo dice e offre "Avvia Docker"; non lo avvia da sola, ci mette decine di secondi.
+- Voci: cache di build (`docker builder prune -a`, Consigliato); immagini senza tag (`docker image prune`, Consigliato); immagini non usate da nessun container (Facoltativo, si riscaricano con `docker pull`); container fermi, uno per uno (Attenzione: il loro filesystem si perde); volumi non collegati a container, uno per uno con nome e peso (Attenzione: spesso contengono database).
+- Podman: stessi comandi (`podman system df`, `podman image prune`…).
+- "Restituisci lo spazio a Windows": chiude Docker Desktop e WSL, compatta il disco di Docker Desktop. Il percorso del disco cambia tra le versioni di Docker Desktop: il builder lo verifica (regola 4).
+
+**WSL.** Distro rilevate dal registro (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`: `DistributionName`, `BasePath` → `ext4.vhdx`), senza avviarle.
+- Dentro ogni distro, il catalogo Linux dell'inventario: cache dei pacchetti (`/var/cache/apt/archives`, `dnf`, `pacman`, `zypp`), journal (`journalctl --vacuum-size`), `/tmp`, `/var/tmp`, e per ogni utente le cache della Parte B con i percorsi Linux (`~/.cache/pip`, `~/.npm/_cacache`, `~/.cargo/registry`, `~/.m2/repository`, `~/.gradle/caches`, `~/.cache/huggingface`…). Stesse regole: rilevamento dello strumento dentro la distro, livelli, 🔒.
+- Progetti dentro le distro: stessa tabella della Parte A, cercati sotto `/home` e `/root`.
+- *Scelta mia:* misura e cancellazione girano dentro la distro (`wsl -d <distro> -u root -- …`), perché camminare `\\wsl.localhost\` da Windows è lento. Le distro spente si avviano per l'analisi e si rispengono alla fine (`wsl --terminate`); quelle già accese restano accese.
+- "Restituisci lo spazio a Windows" (Facoltativo, avviso: chiude tutte le distro e Docker Desktop): `wsl --shutdown`, poi `diskpart` `compact vdisk` sul `.vhdx`. Funziona anche su Windows Home, e PulisciPC è sempre amministratore.
+- Distro intera (Attenzione, conferma scrivendo il nome): `wsl --unregister`.
+
+**Macchine virtuali.** Rilevate da registro e `PATH`: VirtualBox (`VBoxManage.exe`), VMware Workstation e Player (`vmrun.exe`, inventario `%APPDATA%\VMware\inventory.vmls`), Hyper-V (solo Windows Pro, via WMI `root\virtualization\v2`), Vagrant.
+- Ogni VM: nome, peso, ultimo avvio. Voci: compatta i dischi a VM spenta (`VBoxManage modifymedium --compact`, `vmware-vdiskmanager -k`, `Optimize-VHD`; Facoltativo); snapshot, uno per uno, eliminati con il programma della VM (`VBoxManage snapshot delete`, `vmrun deleteSnapshot`; Attenzione); VM intera con i suoi dischi (`VBoxManage unregistervm --delete`, `vmrun deleteVM`, `Remove-VM`; Attenzione).
+- Dischi orfani: file `.vdi`, `.vmdk`, `.vhd`, `.vhdx`, `.qcow2` che nessuna VM registrata usa, trovati dalla MFT (`dc-disktree` tiene anche queste estensioni). Attenzione: possono essere l'unica copia. Esclusi i dischi di WSL e Docker (sezioni sopra) e i dischi montati.
+- ISO dentro le cartelle delle VM: Facoltativo.
 
 ## Ordine e stime
 
 1. Avvio sempre da amministratore (manifest, avviso sull'account): circa 30 minuti, subito, è indipendente.
-2. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
-3. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4). Più 2 ore per il rilevamento degli strumenti installati.
-4. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 1 ora.
+2. Livelli, selezione per cartella e riconoscimento di cosa è in uso (`dc-model`, `dc-engine`, UI): circa 5 ore, prima delle Parti A e B.
+3. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
+4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4). Più 2 ore per il rilevamento degli strumenti installati.
+5. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 2 ore.
+6. Parte D: dopo la Fase 3. Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
 
-Totale: circa 12 ore e mezza.
+Totale: circa 32 ore e mezza.
 
 ## Verifica
 
-- Parte A: un test per ogni riga della tabella, con un albero finto (marcatore + cartella → artefatto trovato con l'etichetta giusta); per i nomi † tre casi: repo con cartella ignorata (trovata), non ignorata (assente), senza git (assente). `guard.rs` rifiuta un nome non in lista.
-- Parte B: ogni XML si carica dall'exe; con il profilo finto (regola 8) l'anteprima elenca i file attesi e **non** quelli esclusi (`token` di Hugging Face, `credentials.toml` di Cargo, `User\History` di VS Code, `avd` di Android); con variabile d'ambiente impostata vince il suo percorso; con variabile non definita nessun percorso letterale `%…%`.
-- Parte C: un AVD finto che usa un'immagine e un'altra immagine libera: si offre solo la seconda; un `config.ini` illeggibile: nessuna offerta.
+- Parte A: un test per ogni riga della tabella, con un albero finto (marcatore + cartella → artefatto trovato con l'etichetta giusta); per i nomi † tre casi: repo con cartella ignorata (livello della sua classe), non ignorata (Attenzione, non preselezionata), senza git (Attenzione). Selezione: una sola cartella di un progetto finisce nel piano, le altre no. `guard.rs` rifiuta un nome non in lista.
+- Parte B: ogni XML si carica dall'exe; con il profilo finto (regola 10) l'anteprima elenca i file attesi e **mai** quelli 🔒 (`token` di Hugging Face, `credentials.toml` di Cargo, `settings.json` di VS Code); le voci Attenzione (`User\History` di VS Code, toolchain predefinita di rustup) compaiono non selezionate; un Python usato da un venv finto va ad Attenzione con il nome del venv nell'avviso; con variabile d'ambiente impostata vince il suo percorso; con variabile non definita nessun percorso letterale `%…%`.
+- Parte C: un AVD finto che usa un'immagine e un'altra immagine libera: si propone solo la seconda; un `config.ini` illeggibile: nessuna immagine proposta. L'AVD compare con le sue tre voci, nessuna preselezionata.
+- Parte D: con CLI finte (come `FakeCli` di `dc-sessions`) per `docker`, `wsl`, `VBoxManage`, `vmrun`: l'analisi interpreta output registrati, la pulizia manda i comandi attesi e solo per le voci spuntate; il registro `Lxss` finto dà le distro e i loro `.vhdx`; lo script `diskpart` generato punta al file giusto. Nessun comando reale sul PC dell'utente.
 - Rilevamento: con registro e `PATH` finti (chiavi di prova sotto `HKCU\Software\PulisciPC-test`, `PATH` del processo puntato a una cartella temporanea) uno strumento installato senza cartelle compare con 0 B, uno con sole cartelle e nessuna installazione non compare; la ricerca dei progetti trova un `Cargo.toml` in un albero finto e ignora quello sotto `node_modules` e sotto `AppData`.
 
 ## Lasciato al builder
 
 - Come rappresentare i tipi nuovi in `ArtifactKind`.
 - Come riconoscere un daemon Gradle attivo.
+- Il percorso del disco di Docker Desktop per versione, e come misurare dentro le distro WSL (`du` o altro).
 - Le etichette esatte, purché in italiano corretto e senza nomi di prodotti terzi nella UI oltre a quello dello strumento.
 - Le voci da togliere perché il percorso non è documentato (regola 4): si annotano qui sotto.
 
