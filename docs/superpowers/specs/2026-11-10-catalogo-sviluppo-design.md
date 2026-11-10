@@ -26,18 +26,15 @@ Le decisioni 5 sostituiscono, in `2026-11-10-dev-mode-design.md`, "la modalità 
 
 ## Rilevamento automatico
 
-**Strumenti (Parte B e C).** Per ogni strumento del catalogo, una ricetta di rilevamento nel suo XML (un elemento nuovo, per esempio `<detect>`), valutata a ogni analisi, senza lanciare programmi:
-- voci di disinstallazione nel registro (`HKLM` e `HKCU` `…\Uninstall`, anche `WOW6432Node`) per nome visualizzato;
-- eseguibile nel `PATH` (`cargo.exe`, `pnpm.cmd`, `ollama.exe`…) o in `App Paths`;
-- cartelle di installazione note o variabili d'ambiente (`JAVA_HOME`, `ANDROID_HOME`, `CARGO_HOME`…).
-
-Si mostrano **tutti e solo** gli strumenti installati (decisione 4): uno strumento installato compare anche se oggi non ha nulla da pulire (0 B); uno non installato non compare, anche se sul disco restano sue cartelle.
+**Strumenti (Parti B, C, D).** Decisione dell'utente (2026-11-10, precisa la 4): una categoria compare **se le sue cartelle esistono** sul disco. Il segnale è la lettura MFT, non il registro né il `PATH`: molti strumenti di sviluppo non lasciano una voce di disinstallazione, e le cartelle sono ciò che si pulisce. Conseguenze: gli avanzi di un programma disinstallato compaiono (per esempio l'SDK Android dopo aver tolto Android Studio); uno strumento installato che non ha lasciato cartelle non compare. Registro e `PATH` servono solo dove occorre un comando (`docker`, `wsl`, `VBoxManage`): se il comando manca, la voce che lo richiede non compare.
 
 **Progetti (Parte A).** Si trovano da soli, senza chiedere cartelle al primo avvio:
 - dalle sessioni degli agenti, come oggi;
 - dalla MFT di tutti i dischi fissi NTFS. `dc-disktree` tiene il nome di un file solo se corrisponde a un marcatore della tabella, così la RAM resta sotto il limite di 300 MB della spec principale.
 
-Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, `Program Files*`, `ProgramData`, `AppData`, `$Recycle.Bin`. Le cartelle aggiuntive in Impostazioni restano, facoltative. I progetti non dipendono dagli strumenti installati: un `node_modules` si pulisce anche se Node non c'è più.
+Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, `Program Files*`, `ProgramData`, `AppData`, `$Recycle.Bin`. Le cartelle aggiuntive in Impostazioni restano, facoltative.
+
+**Incrocio con mukade.** La chiave è il percorso: dalla cartella di una sessione si risale alla radice del progetto (radice git o primo marcatore, come oggi in `crates/dc-scanner/src/sessions.rs`) e la si confronta con i progetti trovati dalla MFT. Progetto con sessioni: data di ultimo uso dalla sessione; sessione viva: non toccabile. *Scelta mia:* progetto senza sessioni (cambia `crates/dc-engine/src/lib.rs:171`, dove oggi non è mai preselezionato): vale l'ultimo commit git o l'ultima modifica dei file, con la stessa soglia di inattività (14 giorni), perché la maggior parte dei clienti non usa agenti. Cartella di sessione su un disco senza MFT: si cammina. I progetti non dipendono dagli strumenti installati: un `node_modules` si pulisce anche se Node non c'è più.
 
 ## Obiettivi
 
@@ -72,7 +69,7 @@ Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, 
 2. **In uso.** Toolchain e programmi installati entrano (decisione 6): toolchain di `rustup`, `.cargo\bin`, `go\bin`, `.dotnet\tools`, pipx, Python e tool di uv, versioni di nvm-windows e pyenv, ambienti Conda (`envs`), versioni vecchie e `persist` di Scoop, cache renv, `bin` della cache Pub. *Scelta mia:* l'app capisce cosa è in uso: la toolchain predefinita (`settings.toml` di rustup), la versione attiva di nvm, il Python a cui punta un venv trovato dall'analisi (`home` in `pyvenv.cfg`), i progetti renv collegati alla cache. Le voci in uso vanno al livello Attenzione e l'avviso dice cosa si rompe ("2 venv usano questo Python: smetteranno di funzionare"); le altre sono Facoltative.
 3. **Percorsi.** Prima la variabile d'ambiente dello strumento (`CARGO_HOME`, `GRADLE_USER_HOME`, `NUGET_PACKAGES`, `GOCACHE`, `GOMODCACHE`, `HF_HOME`, `OLLAMA_MODELS`, `PLAYWRIGHT_BROWSERS_PATH`…); se non è definita, il percorso predefinito di Windows. Una variabile non definita **scarta** quel percorso, non lo usa alla lettera.
 4. **Verifica dei percorsi.** I percorsi delle tabelle vengono dall'inventario incollato e da quanto ne so. Prima di scrivere una voce, il builder controlla il percorso Windows sulla documentazione ufficiale dello strumento; se non lo trova documentato, la voce si toglie e si annota in fondo a questo file.
-5. **Visibilità.** Una categoria compare se e solo se lo strumento è installato (vedi Rilevamento automatico).
+5. **Visibilità.** Una categoria compare se e solo se le sue cartelle esistono (vedi Rilevamento automatico).
 6. **Selezione.** Come in CCleaner: ogni voce ha la sua casella, quella del gruppo seleziona o toglie tutte le sue voci, il totale selezionato si aggiorna subito.
 7. **Processi attivi.** Se lo strumento è in esecuzione (`<running>` di CleanerML), alla pulizia l'app chiede di chiuderlo o di saltare quella voce, come fa CCleaner con i browser. "Bloccata con X" nelle tabelle vuol dire questo. I file bloccati da altri processi si saltano e si contano nel riepilogo.
 8. **Cestino.** *Scelta mia:* il flag Cestino/definitivo vale anche qui. Prima di pulire, se il totale supera lo spazio libero del Cestino su quell'unità (quota da registro, occupato da `SHQueryRecycleBin`), la UI lo dice e propone il definitivo per quella pulizia; non si lascia decidere a Windows.
@@ -260,11 +257,11 @@ Decisione 7. Vale per Pulizia file e per Sviluppatori.
 2. Livelli, selezione per cartella e riconoscimento di cosa è in uso (`dc-model`, `dc-engine`, UI): circa 5 ore, prima delle Parti A e B.
    Worker e resoconto finale: circa 4 ore, insieme a questo punto.
 3. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
-4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4). Più 2 ore per il rilevamento degli strumenti installati.
+4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4).
 5. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 2 ore.
 6. Parte D: dopo la Fase 3. Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
 
-Totale: circa 36 ore e mezza.
+Totale: circa 34 ore e mezza.
 
 ## Verifica
 
@@ -273,7 +270,7 @@ Totale: circa 36 ore e mezza.
 - Parte C: un AVD finto che usa un'immagine e un'altra immagine libera: si propone solo la seconda; un `config.ini` illeggibile: nessuna immagine proposta. L'AVD compare con le sue tre voci, nessuna preselezionata.
 - Parte D: con CLI finte (come `FakeCli` di `dc-sessions`) per `docker`, `wsl`, `VBoxManage`, `vmrun`: l'analisi interpreta output registrati, la pulizia manda i comandi attesi e solo per le voci spuntate; il registro `Lxss` finto dà le distro e i loro `.vhdx`; lo script `diskpart` generato punta al file giusto. Nessun comando reale sul PC dell'utente.
 - Worker: un albero finto con 10.000 file si cancella tutto con 1 e con 8 worker, stesso risultato; un file tenuto aperto finisce nel resoconto come saltato e non ferma gli altri; "Annulla" a metà lascia un resoconto con i conteggi giusti. Tempi misurati solo su alberi finti.
-- Rilevamento: con registro e `PATH` finti (chiavi di prova sotto `HKCU\Software\PulisciPC-test`, `PATH` del processo puntato a una cartella temporanea) uno strumento installato senza cartelle compare con 0 B, uno con sole cartelle e nessuna installazione non compare; la ricerca dei progetti trova un `Cargo.toml` in un albero finto e ignora quello sotto `node_modules` e sotto `AppData`.
+- Rilevamento: con registro e `PATH` finti (chiavi di prova sotto `HKCU\Software\PulisciPC-test`, `PATH` del processo puntato a una cartella temporanea) una categoria con le cartelle presenti compare anche senza voce di disinstallazione, una senza cartelle non compare; la ricerca dei progetti trova un `Cargo.toml` in un albero finto e ignora quello sotto `node_modules` e sotto `AppData`.
 
 ## Lasciato al builder
 
