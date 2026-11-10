@@ -15,6 +15,7 @@ PulisciPC è un prodotto da vendere, usabile da tutti, rivale di CCleaner. CClea
 4. "Il programma deve rilevare in automatico quali sono, tra quelli supportati, i programmi installati effettivamente nel PC", "e mostrare tutti e solo quelli". Niente domande al cliente su cartelle o strumenti.
 5. "Va sempre avviato come amministratore", "con lettura veloce MFT".
 6. "L'utente sceglie cosa eliminare o cosa no: l'app propone, l'utente seleziona, come in CCleaner." In particolare non vanno bene due esclusioni della bozza: i programmi installati che altri usano (toolchain di rustup, Python di uv, versioni di nvm, `.cargo\bin`) e Docker, WSL e macchine virtuali. Entrano anche quelli.
+7. "La pulizia deve essere veloce e multithreading, con worker che si dividono il lavoro, e dare un resoconto finale."
 
 ## Cosa cambia nella spec principale
 
@@ -243,16 +244,27 @@ Entrano per decisione dell'utente (decisione 6). Lo spazio liberato dentro un di
 - Dischi orfani: file `.vdi`, `.vmdk`, `.vhd`, `.vhdx`, `.qcow2` che nessuna VM registrata usa, trovati dalla MFT (`dc-disktree` tiene anche queste estensioni). Attenzione: possono essere l'unica copia. Esclusi i dischi di WSL e Docker (sezioni sopra) e i dischi montati.
 - ISO dentro le cartelle delle VM: Facoltativo.
 
+## Esecuzione della pulizia: worker e resoconto
+
+Decisione 7. Vale per Pulizia file e per Sviluppatori.
+
+- **Worker.** Un gruppo di thread (*scelta mia:* uno per core logico, massimo 8) prende il lavoro da una coda comune. Le cartelle grandi si spezzano in sottoalberi, così un `node_modules` da 200.000 file non tiene fermo un solo worker: i file si cancellano in parallelo, le cartelle vuote dopo, dal basso verso l'alto. Un worker che finisce prende lavoro dalla coda degli altri.
+- **Controlli prima, in un solo punto.** Le verifiche di sicurezza (`guard.rs`, percorsi dell'ultima analisi, processi attivi) si fanno prima di mettere una voce in coda; i worker cancellano soltanto.
+- **Cosa resta in sequenza.** I comandi degli strumenti (`docker`, `wsl`, `VBoxManage`, `git worktree remove`) vanno uno alla volta per strumento. *Scelta mia:* con il Cestino i worker lavorano per voce di primo livello (una cartella intera = uno spostamento), perché il Cestino di Windows non guadagna dal parallelismo sui singoli file; il definitivo è il modo veloce, e la UI lo dice.
+- **Avanzamento e annulla.** Barra con byte liberati e voci fatte sul totale; "Annulla" ferma i worker alla fine del file in corso e il resoconto dice cosa è stato fatto.
+- **Resoconto finale.** Sempre, a fine pulizia: spazio liberato in totale e per categoria, numero di file e cartelle, durata, voci saltate con il motivo (file in uso, accesso negato, strumento aperto), errori. *Scelta mia:* si può salvare come file di testo; lo spazio nel Cestino è indicato a parte ("si libera svuotando il Cestino").
+
 ## Ordine e stime
 
 1. Avvio sempre da amministratore (manifest, avviso sull'account): circa 30 minuti, subito, è indipendente.
 2. Livelli, selezione per cartella e riconoscimento di cosa è in uso (`dc-model`, `dc-engine`, UI): circa 5 ore, prima delle Parti A e B.
+   Worker e resoconto finale: circa 4 ore, insieme a questo punto.
 3. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
 4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4). Più 2 ore per il rilevamento degli strumenti installati.
 5. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 2 ore.
 6. Parte D: dopo la Fase 3. Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
 
-Totale: circa 32 ore e mezza.
+Totale: circa 36 ore e mezza.
 
 ## Verifica
 
@@ -260,6 +272,7 @@ Totale: circa 32 ore e mezza.
 - Parte B: ogni XML si carica dall'exe; con il profilo finto (regola 10) l'anteprima elenca i file attesi e **mai** quelli 🔒 (`token` di Hugging Face, `credentials.toml` di Cargo, `settings.json` di VS Code); le voci Attenzione (`User\History` di VS Code, toolchain predefinita di rustup) compaiono non selezionate; un Python usato da un venv finto va ad Attenzione con il nome del venv nell'avviso; con variabile d'ambiente impostata vince il suo percorso; con variabile non definita nessun percorso letterale `%…%`.
 - Parte C: un AVD finto che usa un'immagine e un'altra immagine libera: si propone solo la seconda; un `config.ini` illeggibile: nessuna immagine proposta. L'AVD compare con le sue tre voci, nessuna preselezionata.
 - Parte D: con CLI finte (come `FakeCli` di `dc-sessions`) per `docker`, `wsl`, `VBoxManage`, `vmrun`: l'analisi interpreta output registrati, la pulizia manda i comandi attesi e solo per le voci spuntate; il registro `Lxss` finto dà le distro e i loro `.vhdx`; lo script `diskpart` generato punta al file giusto. Nessun comando reale sul PC dell'utente.
+- Worker: un albero finto con 10.000 file si cancella tutto con 1 e con 8 worker, stesso risultato; un file tenuto aperto finisce nel resoconto come saltato e non ferma gli altri; "Annulla" a metà lascia un resoconto con i conteggi giusti. Tempi misurati solo su alberi finti.
 - Rilevamento: con registro e `PATH` finti (chiavi di prova sotto `HKCU\Software\PulisciPC-test`, `PATH` del processo puntato a una cartella temporanea) uno strumento installato senza cartelle compare con 0 B, uno con sole cartelle e nessuna installazione non compare; la ricerca dei progetti trova un `Cargo.toml` in un albero finto e ignora quello sotto `node_modules` e sotto `AppData`.
 
 ## Lasciato al builder
