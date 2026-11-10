@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da pipenv.pypa.io/en/latest/virtualenv.html: WORKON_HOME, altrimenti %USERPROFILE%\.virtualenvs. -->
+<cleaner id="pipenv" os="windows">
+  <label>Pipenv (Python)</label>
+  <description>Gli ambienti virtuali creati da Pipenv. Non tocca i progetti, i Pipfile e i Pipfile.lock.</description>
+  <var id="venvs">
+    <value>%WORKON_HOME%</value>
+    <value>%USERPROFILE%\.virtualenvs</value>
+  </var>
+  <option id="virtualenvs">
+    <label>Ambienti virtuali di Pipenv</label>
+    <description>Rimuove tutti gli ambienti virtuali della cartella degli ambienti di Pipenv.</description>
+    <warning>I progetti che li usano smettono di funzionare finché non rifai `pipenv install` in ognuno. Se la cartella è condivisa con altri strumenti che usano WORKON_HOME, vanno via anche i loro ambienti.</warning>
+    <action command="delete" search="walk.all" path="$$venvs$$"/>
+  </option>
+</cleaner>

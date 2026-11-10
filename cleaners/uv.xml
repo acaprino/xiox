@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da docs.astral.sh/uv/concepts/cache: UV_CACHE_DIR, altrimenti %LOCALAPPDATA%\uv\cache. Python e tool installati da uv NON si toccano. -->
+<cleaner id="uv" os="windows">
+  <label>uv (Python)</label>
+  <description>Cache dei pacchetti di uv. Non tocca i progetti, gli ambienti virtuali, i Python e i tool installati da uv.</description>
+  <var id="cache">
+    <value>%UV_CACHE_DIR%</value>
+    <value>%LocalAppData%\uv\cache</value>
+  </var>
+  <option id="cache">
+    <label>Cache di uv</label>
+    <description>Rimuove i pacchetti, le wheel e i repository Git scaricati o compilati da uv.</description>
+    <warning>Si riscarica al prossimo `uv sync` o `uv pip install`.</warning>
+    <action command="delete" search="walk.all" path="$$cache$$"/>
+  </option>
+</cleaner>
