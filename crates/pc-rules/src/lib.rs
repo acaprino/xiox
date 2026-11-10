@@ -1,5 +1,17 @@
 //! Regole di pulizia esterne (Winapp2, CleanerML): modello, espansione dei
 //! percorsi e percorsi protetti.
+//!
+//! # Contratto per Task 7 (pulizia)
+//!
+//! - File e cartelle si cancellano **solo** con
+//!   [`safedelete::delete_checked_with`], con un solo [`Guard`] per pulizia;
+//!   le cartelle di `Collected::dirs_to_remove` dopo i file, nell'ordine dato.
+//! - Prima di cancellare una chiave o un valore di registro si rifà
+//!   [`regguard::reg_allowed`]; le chiavi si aprono con `REG_OPTION_OPEN_LINK`
+//!   (un collegamento simbolico del registro non si segue).
+//! - Un `Collected` con `cancelled` non si pulisce.
+//! - Rinviati: segnaposto di cloud (reparse point dei file su richiesta) e
+//!   byte dei collegamenti fisici (oggi contati per intero).
 
 pub mod model;
 pub mod expand;
