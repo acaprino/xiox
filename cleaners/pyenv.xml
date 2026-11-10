@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da pyenv-win/libexec/libs/pyenv-lib.vbs (pyenv-win/pyenv-win su GitHub): strDirCache = &lt;pyenv-win&gt;\install_cache. Le versioni installate (versions) NON si toccano. -->
+<cleaner id="pyenv" os="windows">
+  <label>pyenv-win (Python)</label>
+  <description>Gli installer scaricati da pyenv-win. Non tocca le versioni di Python installate.</description>
+  <option id="install_cache">
+    <label>Installer scaricati</label>
+    <description>Rimuove i file di installazione di Python scaricati da `pyenv install`.</description>
+    <warning>Si riscaricano al prossimo `pyenv install`.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.pyenv\pyenv-win\install_cache"/>
+  </option>
+</cleaner>

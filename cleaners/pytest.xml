@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da docs.pytest.org/en/stable/how-to/tmp_path.html: {temproot}/pytest-of-{user}/pytest-{num}, con temproot = cartella temporanea di sistema. -->
+<cleaner id="pytest" os="windows">
+  <label>pytest (Python)</label>
+  <description>Le cartelle temporanee delle ultime esecuzioni di pytest. Non tocca i progetti né le cartelle .pytest_cache.</description>
+  <option id="tmp">
+    <label>Cartelle temporanee di pytest</label>
+    <description>Rimuove il contenuto delle cartelle pytest-of-utente nella cartella temporanea.</description>
+    <warning>Perdi i file prodotti dai test nelle ultime esecuzioni (tmp_path), utili per capire un test fallito. Non pulire mentre pytest è in esecuzione.</warning>
+    <action command="delete" search="walk.all" path="%TEMP%\pytest-of-*"/>
+  </option>
+</cleaner>
