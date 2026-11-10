@@ -607,6 +607,11 @@ pub fn select_archived(
                 Some("ha una sessione figlia non archiviata o in uso".to_string())
             } else if agent == Agent::Opencode && path_key(&path) != store_key {
                 Some("la sessione è in un altro database di OpenCode".to_string())
+            } else if agent == Agent::Codex && file.is_none() && is_transcript_file(&path) {
+                // A real rollout outside `sessions/` and `archived_sessions/`: `codex delete`
+                // would remove it with no copy in the Recycle Bin. A row whose rollout is gone
+                // (or that names the database) has no file and stays deletable.
+                Some("file della sessione fuori dallo store".to_string())
             } else if matches!(agent, Agent::Claude | Agent::Pi) && file.is_none() {
                 // Claude Code and Pi sessions ARE their transcript: without it nothing may be
                 // removed. Codex and OpenCode go through their CLI, which deletes a session
@@ -1175,6 +1180,14 @@ mod tests {
         touch(&other, "123");
         for p in [&out, &other] {
             let s = one(Agent::Codex, p);
+            assert_eq!((s.file, s.bytes), (None, 0), "{p:?}");
+            assert!(s.blocked.as_deref().unwrap_or("").contains("fuori dallo store"), "{p:?}: {:?}", s.blocked);
+        }
+        // Codex rows with no rollout on disk (gone, or naming the database): still deletable.
+        let db = store.join("state_5.sqlite");
+        touch(&db, "x");
+        for p in [store.join("sessions").join("rollout-gone.jsonl"), elsewhere.join("gone.jsonl"), db] {
+            let s = one(Agent::Codex, &p);
             assert_eq!((s.file, s.bytes, s.blocked), (None, 0, None), "{p:?}");
         }
         let arch = store.join("archived_sessions").join("rollout.jsonl");

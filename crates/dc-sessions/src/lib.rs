@@ -133,6 +133,11 @@ fn delete_codex(
     if !cli.codex_available() {
         return failed("CLI di Codex non trovata");
     }
+    // The analysis saw a rollout that is gone now: the CLI would delete the thread with no copy
+    // in the Recycle Bin. Leave it alone; a new analysis shows what it has become.
+    if s.file.as_ref().is_some_and(|f| !f.exists()) {
+        return failed("il file della sessione non c'è più: sessione non toccata");
+    }
     let rollout = s.file.as_ref().filter(|f| f.exists());
     // A paginated thread keeps earlier pages beside its rollout and the CLI deletes them all:
     // every page is backed up, measured and checked.
@@ -509,6 +514,19 @@ mod tests {
         assert_eq!(env.log.all(), vec![format!("codex_delete {id}")]);
         assert_removed(outcome(&r), 2);
         assert!(first.exists());
+    }
+
+    #[test]
+    fn codex_whose_rollout_vanished_is_not_deleted() {
+        let env = Env::new();
+        let gone = env.work.path().join("rollout-gone.jsonl");
+        for mode in [RemoveMode::Recycle, RemoveMode::Permanent] {
+            let s = session(Agent::Codex, "t-codex-vanished", Some(gone.clone()), 5);
+            let r = env.run(&[s], mode);
+            assert!(failed_text(outcome(&r)).contains("non c'è più"), "{mode:?}");
+        }
+        assert!(env.log.all().is_empty(), "CLI never called, nothing binned");
+        assert!(env.scratch_is_empty());
     }
 
     #[test]
