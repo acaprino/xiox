@@ -1,0 +1,19 @@
+[package]
+name = "dc-app"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dc-model = { path = "../dc-model" }
+dc-scanner = { path = "../dc-scanner" }
+dc-git = { path = "../dc-git" }
+dc-cleaner = { path = "../dc-cleaner" }
+dc-engine = { path = "../dc-engine" }
+dc-mukade = { path = "../dc-mukade" }
+dc-disktree = { path = "../dc-disktree" }
+dc-sessions = { path = "../dc-sessions" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
