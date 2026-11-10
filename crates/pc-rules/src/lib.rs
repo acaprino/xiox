@@ -13,7 +13,7 @@ pub mod regguard;
 pub mod wildcard;
 
 pub use expand::expand;
-pub use guard::protected;
+pub use guard::{protected, protected_dir_removal, Guard};
 pub use regguard::reg_allowed;
 pub use wildcard::wildcard_match;
 pub use model::{Action, Cleaner, Env, Opt, Origin, RegRoot, Search};
