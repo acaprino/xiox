@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::expand::expand;
-use crate::guard::{protected, protected_dir_removal};
+use crate::guard::Guard;
 pub use crate::model::ExcludeRule;
 use crate::model::{Action, Cleaner, Env, Opt, RegRoot, Search};
 use crate::regguard::reg_allowed;
@@ -106,6 +106,7 @@ fn run(
 ) -> Collected {
     let mut ctx = Ctx {
         env,
+        guard: Guard::new(env),
         excludes: prepare_excludes(opt.excludes.iter().chain(excludes), env),
         out: Collected::default(),
         seen: HashSet::new(),
@@ -175,6 +176,8 @@ const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 struct Ctx<'a> {
     env: &'a Env,
+    /// Cartelle protette calcolate una volta per raccolta.
+    guard: Guard,
     excludes: Vec<Exclude>,
     out: Collected,
     /// Chiavi dei file già elencati (azioni che si sovrappongono).
@@ -201,15 +204,14 @@ struct Spec<'a> {
 }
 
 impl Ctx<'_> {
-    /// Percorsi protetti per file e cartelle di base (un solo punto da cambiare
-    /// quando arriva `guard::Guard`).
+    /// Percorsi protetti: file, cartelle di base e percorso della regola.
     fn prot(&self, path: &Path) -> Option<&'static str> {
-        protected(path, self.env)
+        self.guard.protected(path)
     }
 
     /// Cartelle che si toglierebbero esse stesse (`dirs_to_remove`).
     fn prot_dir(&self, path: &Path) -> Option<&'static str> {
-        protected_dir_removal(path, self.env)
+        self.guard.protected_dir_removal(path)
     }
 
     /// Mette `dir` fra le cartelle da togliere, se si può togliere essa stessa
@@ -1257,7 +1259,6 @@ mod tests {
 
     /// I5: 20 000 file si raccolgono in tempo lineare.
     #[test]
-    #[ignore = "provvisorio: guard::protected costa ~40 µs a chiamata; si riattiva con guard::Guard"]
     fn twenty_thousand_files_collect_quickly() {
         let t = tempfile::tempdir().unwrap();
         let base = t.path().join("many");
@@ -1273,6 +1274,7 @@ mod tests {
         let c = collect(&o, &Env::default(), &never);
         let took = t0.elapsed();
         assert_eq!(c.files.len(), 20_000);
+        eprintln!("raccolta di 20 000 file: {took:?}");
         let limit = if cfg!(debug_assertions) { 3.0 } else { 1.0 };
         assert!(took.as_secs_f64() < limit, "raccolta di 20 000 file in {took:?}");
     }

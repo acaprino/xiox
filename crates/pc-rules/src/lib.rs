@@ -10,6 +10,7 @@ pub mod embedded;
 pub mod updater;
 pub mod winapp2;
 pub mod regguard;
+pub mod safedelete;
 pub mod wildcard;
 
 pub use expand::expand;
