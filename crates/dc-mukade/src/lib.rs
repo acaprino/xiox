@@ -214,7 +214,20 @@ impl SessionSource for MukadeSessions {
             Agent::Opencode => {
                 self.roots.opencode_db.as_deref().map(opencode_worktrees).unwrap_or_default()
             }
-            Agent::Claude | Agent::Pi => Vec::new(),
+            Agent::Claude => {
+                if self.store_root().is_none_or(|p| !p.exists()) {
+                    return Vec::new();
+                }
+                let cwds: Vec<PathBuf> = self
+                    .list()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|i| i.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()))
+                    .map(PathBuf::from)
+                    .collect();
+                claude_worktrees(&cwds)
+            }
+            Agent::Pi => Vec::new(),
         }
     }
 }
@@ -364,6 +377,152 @@ fn dedupe_sorted(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = paths.into_iter().filter(|p| seen.insert(path_key(p))).collect();
     out.sort_by_key(|p| path_key(p));
     out
+}
+
+// ───────────────────────────── archived sessions ─────────────────────────────
+
+/// An archived root session, with what removing it would take away. Nothing here deletes: the
+/// caller removes `file` (never anything else) or, for OpenCode, goes through the CLI.
+#[derive(Clone, Debug)]
+pub struct ArchivedSession {
+    pub agent: Agent,
+    pub id: String,
+    pub title: Option<String>,
+    /// Working folder, normalized (no `\\?\` prefix).
+    pub cwd: Option<PathBuf>,
+    pub updated_ms: Option<i64>,
+    /// The session's own transcript file, the only thing that may be removed for it.
+    pub file: Option<PathBuf>,
+    /// Size of `file`; 0 when there is none.
+    pub bytes: u64,
+    /// Why it cannot be removed (Italian); `None` means removable.
+    pub blocked: Option<String>,
+}
+
+impl MukadeSessions {
+    /// Archived root sessions of this agent. A missing store lists nothing, quietly.
+    pub fn archived(&self) -> Loaded<ArchivedSession> {
+        let mut out = Loaded::default();
+        let Some(store) = self.store_root().filter(|p| p.exists()) else { return out };
+        let listed = match self.agent {
+            // One cached listing; the roots are the sessions with no parent link.
+            Agent::Claude => self.list().map(|all| {
+                let roots = all.iter().filter(|i| i.parent.is_none()).cloned().collect();
+                (roots, all)
+            }),
+            _ => reader::for_harness(self.harness()).and_then(|r| {
+                let roots = r.list(&self.roots)?;
+                let all = r.list_all(&self.roots)?;
+                Ok((roots, all))
+            }),
+        };
+        match listed {
+            Ok((roots, all)) => out.items = select_archived(self.agent, store, roots, &all),
+            Err(e) if is_missing_store(&e) => {}
+            Err(e) => out.warnings.push(format!("{:?}: {e:#}", self.agent)),
+        }
+        out
+    }
+}
+
+/// Is `p` a file that can be a session's own transcript: an existing `.jsonl`, never Claude
+/// Code's `history.jsonl` (shared by every session).
+fn is_transcript_file(p: &Path) -> bool {
+    let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    name.ends_with(".jsonl") && name != "history.jsonl" && p.is_file()
+}
+
+/// The archived roots of `roots`, each with the file that is its own and the reason it cannot be
+/// removed, if any. `all` is every session the store lists (children included).
+pub fn select_archived(
+    agent: Agent,
+    store_root: &Path,
+    roots: Vec<SessionInfo>,
+    all: &[SessionInfo],
+) -> Vec<ArchivedSession> {
+    let store_key = path_key(store_root);
+    let projects = PathBuf::from(path_key(&store_root.join("projects")));
+    roots
+        .into_iter()
+        .filter(|i| i.archived)
+        .map(|i| {
+            let path = PathBuf::from(&i.path);
+            let file = match agent {
+                // Only transcripts under `projects/`: never `history.jsonl` nor `sessions/<pid>.json`.
+                Agent::Claude => (is_transcript_file(&path)
+                    && PathBuf::from(path_key(&path)).starts_with(&projects))
+                .then_some(path.clone()),
+                // Deleted through the CLI, never as a file.
+                Agent::Opencode => None,
+                Agent::Codex | Agent::Pi => is_transcript_file(&path).then_some(path.clone()),
+            };
+            let bytes = file
+                .as_ref()
+                .and_then(|f| std::fs::metadata(f).ok())
+                .map_or(0, |m| m.len());
+            let updated_ms = i.updated.as_deref().and_then(parse_ms).or_else(|| {
+                file.as_ref().and_then(|f| file_mtime_ms(&f.to_string_lossy()))
+            });
+            let has_open_child = all.iter().any(|c| {
+                c.parent.as_deref() == Some(i.id.as_str()) && (!c.archived || c.live == Some(true))
+            });
+            let blocked = if i.live == Some(true) {
+                Some("sessione in uso".to_string())
+            } else if has_open_child {
+                Some("ha una sessione figlia non archiviata o in uso".to_string())
+            } else if agent == Agent::Opencode && path_key(&path) != store_key {
+                Some("la sessione è in un altro database di OpenCode".to_string())
+            } else if agent == Agent::Claude && file.is_none() {
+                Some("nessun file della sessione".to_string())
+            } else {
+                None
+            };
+            ArchivedSession {
+                agent,
+                id: i.id,
+                title: i.title,
+                cwd: i
+                    .cwd
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(|c| normalize_path(Path::new(c))),
+                updated_ms,
+                file,
+                bytes,
+                blocked,
+            }
+        })
+        .collect()
+}
+
+/// Claude Code worktrees (`<repo>/.claude/worktrees/<name>`) the sessions' working folders point
+/// into or sit above: the folder itself or a subfolder of a worktree gives that worktree; a
+/// project folder gives each `.claude/worktrees/<name>` that holds a `.git`.
+pub fn claude_worktrees(cwds: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for cwd in cwds {
+        let cwd = normalize_path(cwd);
+        let parts: Vec<_> = cwd.components().collect();
+        let inside = parts.windows(3).position(|w| {
+            let n = |c: &std::path::Component| c.as_os_str().to_string_lossy().to_lowercase();
+            n(&w[0]) == ".claude" && n(&w[1]) == "worktrees"
+        });
+        if let Some(at) = inside
+            && at + 2 < parts.len()
+        {
+            found.push(parts[..at + 3].iter().collect::<PathBuf>());
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(cwd.join(".claude").join("worktrees")) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && p.join(".git").exists() {
+                found.push(normalize_path(&p));
+            }
+        }
+    }
+    dedupe_sorted(found)
 }
 
 #[cfg(test)]
@@ -570,6 +729,176 @@ mod tests {
         let mut want = vec![path_key(&linked), path_key(&sandbox)];
         want.sort();
         let keys: Vec<String> = got.iter().map(|p| path_key(p)).collect();
+        assert_eq!(keys, want);
+    }
+
+    // ─────────────────────────── archived sessions ───────────────────────────
+
+    fn ainfo(id: &str, path: &Path, archived: bool) -> SessionInfo {
+        SessionInfo {
+            id: id.into(),
+            title: Some(format!("titolo {id}")),
+            cwd: Some(r"C:\dev\x".into()),
+            updated: Some("2026-11-01T10:00:00Z".into()),
+            archived,
+            path: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn touch(p: &Path, body: &str) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    #[test]
+    fn only_archived_roots_are_listed() {
+        let td = tempfile::tempdir().unwrap();
+        let f = |n: &str| {
+            let p = td.path().join("sessions").join(format!("{n}.jsonl"));
+            touch(&p, "x");
+            p
+        };
+        let roots = vec![
+            ainfo("a", &f("a"), false),
+            ainfo("b", &f("b"), true),
+            ainfo("c", &f("c"), false),
+        ];
+        let got = select_archived(Agent::Codex, td.path(), roots.clone(), &roots);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "b");
+        assert_eq!(got[0].agent, Agent::Codex);
+    }
+
+    #[test]
+    fn live_archived_session_is_blocked() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("sessions").join("a.jsonl");
+        touch(&p, "x");
+        let mut a = ainfo("a", &p, true);
+        a.live = Some(true);
+        let got = select_archived(Agent::Codex, td.path(), vec![a.clone()], &[a]);
+        assert_eq!(got[0].blocked.as_deref(), Some("sessione in uso"));
+    }
+
+    #[test]
+    fn archived_parent_with_active_child_is_blocked() {
+        let td = tempfile::tempdir().unwrap();
+        let pp = td.path().join("sessions").join("p.jsonl");
+        let pc = td.path().join("sessions").join("c.jsonl");
+        touch(&pp, "x");
+        touch(&pc, "x");
+        let parent = ainfo("p", &pp, true);
+        let mut child = ainfo("c", &pc, false);
+        child.parent = Some("p".into());
+        let all = vec![parent.clone(), child.clone()];
+        let got = select_archived(Agent::Codex, td.path(), vec![parent.clone()], &all);
+        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+
+        child.archived = true;
+        let all = vec![parent.clone(), child];
+        let got = select_archived(Agent::Codex, td.path(), vec![parent], &all);
+        assert_eq!(got[0].blocked, None);
+    }
+
+    #[test]
+    fn codex_file_is_the_rollout_when_it_exists() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("sessions").join("rollout-a.jsonl");
+        touch(&p, "12345");
+        let a = ainfo("a", &p, true);
+        let got = select_archived(Agent::Codex, td.path(), vec![a.clone()], &[a]);
+        assert_eq!(got[0].file.as_deref(), Some(p.as_path()));
+        assert_eq!(got[0].bytes, 5);
+        assert_eq!(got[0].blocked, None);
+
+        let gone = td.path().join("sessions").join("rollout-gone.jsonl");
+        let b = ainfo("b", &gone, true);
+        let got = select_archived(Agent::Codex, td.path(), vec![b.clone()], &[b]);
+        assert_eq!(got[0].file, None);
+        assert_eq!(got[0].bytes, 0);
+        assert_eq!(got[0].blocked, None);
+    }
+
+    #[test]
+    fn claude_never_targets_history_or_pid_files() {
+        let td = tempfile::tempdir().unwrap();
+        let store = td.path();
+        let history = store.join("history.jsonl");
+        let pid = store.join("sessions").join("123.json");
+        let own = store.join("projects").join("x").join("abc.jsonl");
+        for p in [&history, &pid, &own] {
+            touch(p, "{}");
+        }
+        for p in [&history, &pid] {
+            let a = ainfo("a", p, true);
+            let got = select_archived(Agent::Claude, store, vec![a.clone()], &[a]);
+            assert_eq!(got[0].file, None, "{p:?}");
+            assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"), "{p:?}");
+        }
+        let a = ainfo("a", &own, true);
+        let got = select_archived(Agent::Claude, store, vec![a.clone()], &[a]);
+        assert_eq!(got[0].file.as_deref(), Some(own.as_path()));
+        assert_eq!(got[0].blocked, None);
+    }
+
+    #[test]
+    fn opencode_in_another_database_is_blocked() {
+        let td = tempfile::tempdir().unwrap();
+        let selected = td.path().join("opencode.db");
+        let other = td.path().join("opencode-old.db");
+        touch(&selected, "x");
+        touch(&other, "x");
+        let here = ainfo("a", &selected, true);
+        let there = ainfo("b", &other, true);
+        let all = vec![here.clone(), there.clone()];
+        let got = select_archived(Agent::Opencode, &selected, all.clone(), &all);
+        let a = got.iter().find(|s| s.id == "a").unwrap();
+        let b = got.iter().find(|s| s.id == "b").unwrap();
+        assert_eq!(a.file, None);
+        assert_eq!(a.blocked, None);
+        assert_eq!(b.file, None);
+        assert!(b.blocked.as_deref().unwrap().contains("altro database"), "{:?}", b.blocked);
+    }
+
+    #[test]
+    fn verbatim_prefixed_cwd_is_normalized() {
+        let td = tempfile::tempdir().unwrap();
+        let p = td.path().join("sessions").join("a.jsonl");
+        touch(&p, "x");
+        let mut a = ainfo("a", &p, true);
+        a.cwd = Some(r"\\?\C:\Users\x\.codex\worktrees\a\daodan".into());
+        let got = select_archived(Agent::Codex, td.path(), vec![a.clone()], &[a]);
+        assert_eq!(got[0].cwd, Some(PathBuf::from(r"C:\Users\x\.codex\worktrees\a\daodan")));
+    }
+
+    #[test]
+    fn missing_store_lists_nothing_quietly() {
+        let td = tempfile::tempdir().unwrap();
+        let none = td.path().join("nothing-here");
+        let l = MukadeSessions::with_roots(Agent::Pi, roots_under(&none)).archived();
+        assert!(l.items.is_empty());
+        assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+    }
+
+    #[test]
+    fn claude_worktrees_from_cwds() {
+        let td = tempfile::tempdir().unwrap();
+        let repo = td.path().join("repo");
+        let w1 = repo.join(".claude").join("worktrees").join("w1");
+        let repo2 = td.path().join("repo2");
+        let w2 = repo2.join(".claude").join("worktrees").join("w2");
+        touch(&w2.join(".git"), "gitdir: x");
+        let got = claude_worktrees(&[
+            w1.join("sub"),
+            w1.clone(),
+            repo2.clone(),
+            repo2.clone(),
+            td.path().join("elsewhere"),
+        ]);
+        let keys: Vec<String> = got.iter().map(|p| path_key(p)).collect();
+        let mut want = vec![path_key(&w1), path_key(&w2)];
+        want.sort();
         assert_eq!(keys, want);
     }
 
