@@ -504,6 +504,26 @@ fn new_plan_id() -> String {
 ///
 /// Items with an identical path are emitted once. The plan id is unique per call
 /// (timestamp + process-wide counter).
+/// The main repository to run `git worktree remove` from when [`build_plan`] removes this report
+/// as a whole worktree: an agent worktree, `Inactive` or `Recent`, known clean, with a known
+/// `main_worktree` other than itself. `None`: only its artifacts can go.
+pub fn whole_worktree_repo(report: &ProjectReport) -> Option<&PathBuf> {
+    let whole = report.is_agent_worktree
+        && matches!(report.status, ProjectStatus::Inactive | ProjectStatus::Recent)
+        && report.git.dirty == Some(false);
+    report
+        .git
+        .main_worktree
+        .as_ref()
+        .filter(|m| whole && path_key(m) != report.id)
+}
+
+/// Whether [`build_plan`] gives at least one item for this report once its status and blocks let
+/// it through: the whole worktree ([`whole_worktree_repo`]) or at least one artifact.
+pub fn plans_something(report: &ProjectReport) -> bool {
+    whole_worktree_repo(report).is_some() || !report.artifacts.is_empty()
+}
+
 pub fn build_plan(
     reports: &[ProjectReport],
     selected_ids: &[String],
@@ -550,16 +570,7 @@ pub fn build_plan(
             )));
         }
 
-        let whole_worktree = report.is_agent_worktree
-            && matches!(report.status, ProjectStatus::Inactive | ProjectStatus::Recent)
-            && report.git.dirty == Some(false);
-        let main_repo = report
-            .git
-            .main_worktree
-            .as_ref()
-            .filter(|m| path_key(m) != report.id);
-
-        if let (true, Some(repo)) = (whole_worktree, main_repo) {
+        if let Some(repo) = whole_worktree_repo(report) {
             if seen_paths.insert(report.id.clone()) {
                 items.push(PlanItem {
                     path: report.root.clone(),

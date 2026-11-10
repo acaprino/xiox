@@ -564,6 +564,28 @@ fn plan_worktree_falls_back_to_artifacts_when_unsure() {
 }
 
 #[test]
+fn plans_something_matches_what_build_plan_gives() {
+    let clean = worktree_report(r"C:\wt\a", Some(r"C:\dev\proj"), Some(false), ProjectStatus::Inactive);
+    let mut dirty = worktree_report(r"C:\wt\b", Some(r"C:\dev\proj"), Some(true), ProjectStatus::Inactive);
+    let mut unknown = worktree_report(r"C:\wt\c", Some(r"C:\dev\proj"), None, ProjectStatus::Recent);
+    let mut empty_clean = clean.clone();
+    empty_clean.artifacts.clear();
+    dirty.artifacts.clear();
+    unknown.artifacts.clear();
+    let mut project = report(r"C:\dev\app", ProjectStatus::Inactive, &[]);
+    assert!(project.artifacts.is_empty());
+    for (rep, want) in [(&clean, true), (&empty_clean, true), (&dirty, false), (&unknown, false), (&project, false)] {
+        let plan = build_plan(std::slice::from_ref(rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).unwrap();
+        assert_eq!(plans_something(rep), want, "{}", rep.name);
+        assert_eq!(!plan.items.is_empty(), want, "{}", rep.name);
+    }
+    project.artifacts = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]).artifacts;
+    assert!(plans_something(&project));
+    assert_eq!(whole_worktree_repo(&clean), Some(&PathBuf::from(r"C:\dev\proj")));
+    assert_eq!(whole_worktree_repo(&dirty), None);
+}
+
+#[test]
 fn plan_rejects_unknown_id() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
     let err = build_plan(&[rep], &["c:\\nope".to_string()], RemoveMode::Recycle).unwrap_err();
