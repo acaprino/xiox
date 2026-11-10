@@ -14,7 +14,7 @@
   <option id="packages">
     <label>Pacchetti globali di NuGet</label>
     <description>Rimuove tutti i pacchetti scaricati ed estratti nella cartella globale di NuGet.</description>
-    <warning>Si riscaricano al prossimo restore (`dotnet restore` o build). Chiudi Visual Studio e le build in corso.</warning>
+    <warning>Si riscaricano al prossimo restore (`dotnet restore` o build). Chiudi Visual Studio e le compilazioni in corso.</warning>
     <action command="delete" search="walk.all" path="$$packages$$"/>
   </option>
   <option id="http_cache">

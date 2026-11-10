@@ -5,7 +5,7 @@ use crate::cleanerml::parse_cleaner;
 use crate::model::{Cleaner, Env};
 
 /// Nome e testo di ogni cleaner inglobato.
-const CLEANERS: [(&str, &str); 11] = [
+const CLEANERS: [(&str, &str); 59] = [
     ("ai_claude_code", include_str!("../../../cleaners/ai_claude_code.xml")),
     ("ai_codex", include_str!("../../../cleaners/ai_codex.xml")),
     ("ai_gemini_cli", include_str!("../../../cleaners/ai_gemini_cli.xml")),
@@ -17,9 +17,57 @@ const CLEANERS: [(&str, &str); 11] = [
     ("bbag_npm", include_str!("../../../cleaners/bbag_npm.xml")),
     ("bbag_pip", include_str!("../../../cleaners/bbag_pip.xml")),
     ("bbag_shader", include_str!("../../../cleaners/bbag_shader.xml")),
+    ("android", include_str!("../../../cleaners/android.xml")),
+    ("bazel", include_str!("../../../cleaners/bazel.xml")),
+    ("bun", include_str!("../../../cleaners/bun.xml")),
+    ("bundler", include_str!("../../../cleaners/bundler.xml")),
+    ("cabal", include_str!("../../../cleaners/cabal.xml")),
+    ("ccache", include_str!("../../../cleaners/ccache.xml")),
+    ("composer", include_str!("../../../cleaners/composer.xml")),
+    ("conan", include_str!("../../../cleaners/conan.xml")),
+    ("conda", include_str!("../../../cleaners/conda.xml")),
+    ("cypress", include_str!("../../../cleaners/cypress.xml")),
+    ("deno", include_str!("../../../cleaners/deno.xml")),
+    ("dotnet_bundle", include_str!("../../../cleaners/dotnet_bundle.xml")),
+    ("electron", include_str!("../../../cleaners/electron.xml")),
+    ("firebase", include_str!("../../../cleaners/firebase.xml")),
+    ("gradle", include_str!("../../../cleaners/gradle.xml")),
+    ("hex", include_str!("../../../cleaners/hex.xml")),
+    ("huggingface", include_str!("../../../cleaners/huggingface.xml")),
+    ("julia", include_str!("../../../cleaners/julia.xml")),
+    ("keras", include_str!("../../../cleaners/keras.xml")),
+    ("kotlin_native", include_str!("../../../cleaners/kotlin_native.xml")),
+    ("kubectl", include_str!("../../../cleaners/kubectl.xml")),
+    ("maven", include_str!("../../../cleaners/maven.xml")),
+    ("minikube", include_str!("../../../cleaners/minikube.xml")),
+    ("nuget", include_str!("../../../cleaners/nuget.xml")),
+    ("ollama", include_str!("../../../cleaners/ollama.xml")),
+    ("pipenv", include_str!("../../../cleaners/pipenv.xml")),
+    ("platformio", include_str!("../../../cleaners/platformio.xml")),
+    ("playwright", include_str!("../../../cleaners/playwright.xml")),
+    ("pnpm", include_str!("../../../cleaners/pnpm.xml")),
+    ("poetry", include_str!("../../../cleaners/poetry.xml")),
+    ("precommit", include_str!("../../../cleaners/precommit.xml")),
+    ("pub", include_str!("../../../cleaners/pub.xml")),
+    ("puppeteer", include_str!("../../../cleaners/puppeteer.xml")),
+    ("pyenv", include_str!("../../../cleaners/pyenv.xml")),
+    ("pytest", include_str!("../../../cleaners/pytest.xml")),
+    ("pytorch", include_str!("../../../cleaners/pytorch.xml")),
+    ("rustup", include_str!("../../../cleaners/rustup.xml")),
+    ("sbt", include_str!("../../../cleaners/sbt.xml")),
+    ("scoop", include_str!("../../../cleaners/scoop.xml")),
+    ("terraform", include_str!("../../../cleaners/terraform.xml")),
+    ("uv", include_str!("../../../cleaners/uv.xml")),
+    ("vagrant", include_str!("../../../cleaners/vagrant.xml")),
+    ("vcpkg", include_str!("../../../cleaners/vcpkg.xml")),
+    ("virtualenv", include_str!("../../../cleaners/virtualenv.xml")),
+    ("visualstudio", include_str!("../../../cleaners/visualstudio.xml")),
+    ("vscode", include_str!("../../../cleaners/vscode.xml")),
+    ("yarn", include_str!("../../../cleaners/yarn.xml")),
+    ("zig", include_str!("../../../cleaners/zig.xml")),
 ];
 
-/// Legge gli 11 cleaner inglobati. Un XML che non si legge dà un avviso e non
+/// Legge i cleaner inglobati. Un XML che non si legge dà un avviso e non
 /// ferma gli altri.
 pub fn embedded(env: &Env) -> (Vec<Cleaner>, Vec<String>) {
     let mut cleaners = Vec::new();
@@ -46,6 +94,9 @@ mod tests {
             ("userprofile".to_string(), r"C:\Users\t".to_string()),
             ("localappdata".to_string(), r"C:\Users\t\AppData\Local".to_string()),
             ("temp".to_string(), r"C:\Users\t\AppData\Local\Temp".to_string()),
+            ("username".to_string(), "t".to_string()),
+            ("appdata".to_string(), r"C:\Users\t\AppData\Roaming".to_string()),
+            ("programdata".to_string(), r"C:\ProgramData".to_string()),
         ]));
         embedded(&env)
     }
@@ -66,9 +117,10 @@ mod tests {
     }
 
     #[test]
-    fn all_eleven_embedded_cleaners_parse() {
+    fn all_embedded_cleaners_parse() {
         let (cleaners, warnings) = load();
-        assert_eq!(cleaners.len(), 11);
+        assert_eq!(cleaners.len(), CLEANERS.len());
+        assert_eq!(cleaners.len(), 59);
         assert!(warnings.is_empty(), "avvisi: {warnings:?}");
         assert!(cleaners.iter().all(|c| c.group == "Sviluppo e AI"));
     }
@@ -134,9 +186,9 @@ mod tests {
         assert!(running(c, &["notepad.exe".to_string()]).is_empty());
     }
 
-    /// Le correzioni ai testi non toccano opzioni né azioni: numero di
-    /// opzioni e azioni e id delle opzioni di ogni file restano quelli
-    /// originali.
+    /// I primi 11 file (quelli di partenza) hanno solo le opzioni indicate:
+    /// i testi corretti non tolgono opzioni né azioni, e le aggiunte della
+    /// Parte B (cargo, go, npm, shader) sono contate qui.
     #[test]
     fn xml_structure_unchanged() {
         let expected: [(&str, usize, usize, &[&str]); 11] = [
@@ -144,15 +196,15 @@ mod tests {
             ("ai_codex", 7, 9, &[]),
             ("ai_gemini_cli", 4, 5, &[]),
             ("ai_opencode", 3, 3, &[]),
-            ("bbag_cargo", 1, 1, &[]),
+            ("bbag_cargo", 5, 5, &[]),
             ("bbag_crash", 1, 1, &[]),
-            ("bbag_go", 1, 1, &["build"]),
+            ("bbag_go", 2, 2, &["build"]),
             ("bbag_jetbrains", 1, 1, &[]),
-            ("bbag_npm", 3, 3, &[]),
+            ("bbag_npm", 4, 6, &[]),
             ("bbag_pip", 1, 3, &[]),
-            ("bbag_shader", 3, 5, &[]),
+            ("bbag_shader", 4, 6, &[]),
         ];
-        for ((name, xml), (want, options, actions, ids)) in CLEANERS.iter().zip(expected) {
+        for ((name, xml), (want, options, actions, ids)) in CLEANERS.iter().take(11).zip(expected) {
             assert_eq!(*name, want);
             let doc = roxmltree::Document::parse(xml).unwrap();
             let count = |tag: &str| doc.descendants().filter(|n| n.has_tag_name(tag)).count();
