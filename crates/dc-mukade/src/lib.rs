@@ -23,7 +23,7 @@ use mukade::reader::{self, SessionInfo};
 use mukade::roots::StoreRoots;
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 pub struct MukadeSessions {
@@ -406,10 +406,13 @@ impl MukadeSessions {
         let Some(store) = self.store_root().filter(|p| p.exists()) else { return out };
         let listed = match self.agent {
             // One cached listing; the roots are the sessions with no parent link.
+            // NOTE: Pi records no parent link, so its forks are all roots here.
             Agent::Claude => self.list().map(|all| {
                 let roots = all.iter().filter(|i| i.parent.is_none()).cloned().collect();
                 (roots, all)
             }),
+            // NOTE: Codex `threads` rows may be paginated by the reader; a long catalogue could
+            // be truncated and hide children from `all`.
             _ => reader::for_harness(self.harness()).and_then(|r| {
                 let roots = r.list(&self.roots)?;
                 let all = r.list_all(&self.roots)?;
@@ -432,6 +435,13 @@ fn is_transcript_file(p: &Path) -> bool {
     name.ends_with(".jsonl") && name != "history.jsonl" && p.is_file()
 }
 
+/// Is `p` inside `root`: no `..` component, and `root` is a prefix of `p` once both are
+/// normalized (verbatim `\\?\` prefix, separators, case). Does not touch the filesystem.
+fn within(root: &Path, p: &Path) -> bool {
+    !p.components().any(|c| matches!(c, Component::ParentDir))
+        && PathBuf::from(path_key(p)).starts_with(PathBuf::from(path_key(root)))
+}
+
 /// The archived roots of `roots`, each with the file that is its own and the reason it cannot be
 /// removed, if any. `all` is every session the store lists (children included).
 pub fn select_archived(
@@ -441,21 +451,26 @@ pub fn select_archived(
     all: &[SessionInfo],
 ) -> Vec<ArchivedSession> {
     let store_key = path_key(store_root);
-    let projects = PathBuf::from(path_key(&store_root.join("projects")));
     roots
         .into_iter()
         .filter(|i| i.archived)
         .map(|i| {
             let path = PathBuf::from(&i.path);
-            let file = match agent {
-                // Only transcripts under `projects/`: never `history.jsonl` nor `sessions/<pid>.json`.
-                Agent::Claude => (is_transcript_file(&path)
-                    && PathBuf::from(path_key(&path)).starts_with(&projects))
-                .then_some(path.clone()),
-                // Deleted through the CLI, never as a file.
-                Agent::Opencode => None,
-                Agent::Codex | Agent::Pi => is_transcript_file(&path).then_some(path.clone()),
+            // The file is later deleted: it must be a transcript lying under the folders where
+            // the agent keeps them, whatever the listing says (`history.jsonl` and
+            // `sessions/<pid>.json` are never one).
+            let own = |dirs: &[&str]| {
+                is_transcript_file(&path)
+                    && dirs.iter().any(|d| within(&store_root.join(d), &path))
             };
+            let file = match agent {
+                Agent::Claude => own(&["projects"]),
+                Agent::Codex => own(&["sessions", "archived_sessions"]),
+                Agent::Pi => own(&["sessions"]),
+                // Deleted through the CLI, never as a file.
+                Agent::Opencode => false,
+            }
+            .then(|| path.clone());
             let bytes = file
                 .as_ref()
                 .and_then(|f| std::fs::metadata(f).ok())
@@ -463,6 +478,8 @@ pub fn select_archived(
             let updated_ms = i.updated.as_deref().and_then(parse_ms).or_else(|| {
                 file.as_ref().and_then(|f| file_mtime_ms(&f.to_string_lossy()))
             });
+            // NOTE: only direct children are checked; a grandchild kept open under an archived
+            // child is not seen (non-transitive).
             let has_open_child = all.iter().any(|c| {
                 c.parent.as_deref() == Some(i.id.as_str()) && (!c.archived || c.live == Some(true))
             });
@@ -499,6 +516,9 @@ pub fn select_archived(
 /// Claude Code worktrees (`<repo>/.claude/worktrees/<name>`) the sessions' working folders point
 /// into or sit above: the folder itself or a subfolder of a worktree gives that worktree; a
 /// project folder gives each `.claude/worktrees/<name>` that holds a `.git`.
+///
+/// The first case (a cwd inside `.claude/worktrees/<name>`) does NOT check that the folder exists
+/// or is a worktree: the caller must verify existence and `.git` before planning any deletion.
 pub fn claude_worktrees(cwds: &[PathBuf]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for cwd in cwds {
@@ -508,9 +528,7 @@ pub fn claude_worktrees(cwds: &[PathBuf]) -> Vec<PathBuf> {
             let n = |c: &std::path::Component| c.as_os_str().to_string_lossy().to_lowercase();
             n(&w[0]) == ".claude" && n(&w[1]) == "worktrees"
         });
-        if let Some(at) = inside
-            && at + 2 < parts.len()
-        {
+        if let Some(at) = inside {
             found.push(parts[..at + 3].iter().collect::<PathBuf>());
             continue;
         }
@@ -900,6 +918,80 @@ mod tests {
         let mut want = vec![path_key(&w1), path_key(&w2)];
         want.sort();
         assert_eq!(keys, want);
+    }
+
+    #[test]
+    fn files_outside_the_agents_session_folders_are_not_targeted() {
+        let td = tempfile::tempdir().unwrap();
+        let store = td.path().join("store");
+        let elsewhere = td.path().join("elsewhere");
+        let one = |agent: Agent, p: &Path| {
+            let a = ainfo("a", p, true);
+            select_archived(agent, &store, vec![a.clone()], &[a]).remove(0)
+        };
+
+        // Codex: outside the store, and inside it but not under sessions/ or archived_sessions/.
+        let out = elsewhere.join("rollout.jsonl");
+        touch(&out, "123");
+        let other = store.join("other").join("rollout.jsonl");
+        touch(&other, "123");
+        for p in [&out, &other] {
+            let s = one(Agent::Codex, p);
+            assert_eq!((s.file, s.bytes, s.blocked), (None, 0, None), "{p:?}");
+        }
+        let arch = store.join("archived_sessions").join("rollout.jsonl");
+        touch(&arch, "123");
+        assert_eq!(one(Agent::Codex, &arch).file.as_deref(), Some(arch.as_path()));
+
+        // Pi: outside sessions/.
+        let pi_out = store.join("auth").join("x.jsonl");
+        touch(&pi_out, "1");
+        let s = one(Agent::Pi, &pi_out);
+        assert_eq!((s.file, s.bytes, s.blocked), (None, 0, None));
+        let pi_in = store.join("sessions").join("--c--x").join("x.jsonl");
+        touch(&pi_in, "1");
+        assert_eq!(one(Agent::Pi, &pi_in).file.as_deref(), Some(pi_in.as_path()));
+
+        // Claude: a `..` that climbs out of projects/ is refused even though the file exists.
+        let victim = store.join("secret.jsonl");
+        touch(&victim, "1");
+        let sneaky = store.join("projects").join("..").join("secret.jsonl");
+        let s = one(Agent::Claude, &sneaky);
+        assert_eq!((s.file, s.bytes), (None, 0));
+        assert_eq!(s.blocked.as_deref(), Some("nessun file della sessione"));
+
+        // Claude: a .jsonl under sessions/ (outside projects/): the projects guard alone.
+        let reg = store.join("sessions").join("x.jsonl");
+        touch(&reg, "1");
+        let s = one(Agent::Claude, &reg);
+        assert_eq!(s.file, None);
+        assert_eq!(s.blocked.as_deref(), Some("nessun file della sessione"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_variants_still_count_as_inside() {
+        let td = tempfile::tempdir().unwrap();
+        let store = td.path().join("Store");
+        let real = store.join("sessions").join("Roll.jsonl");
+        touch(&real, "123");
+        let raw = real.to_string_lossy().into_owned();
+        let variants = [
+            raw.replace('\\', "/"),
+            raw.to_uppercase(),
+            format!(r"\\?\{raw}"),
+        ];
+        for v in variants {
+            let a = ainfo("a", Path::new(&v), true);
+            let got = select_archived(Agent::Codex, &store, vec![a.clone()], &[a]);
+            assert_eq!(got[0].file.as_deref(), Some(Path::new(&v)), "{v}");
+            assert_eq!(got[0].bytes, 3, "{v}");
+        }
+        // The store itself may be given in another spelling too.
+        let store_alt = PathBuf::from(store.to_string_lossy().replace('\\', "/").to_lowercase());
+        let a = ainfo("a", &real, true);
+        let got = select_archived(Agent::Pi, &store_alt, vec![a.clone()], &[a]);
+        assert_eq!(got[0].file.as_deref(), Some(real.as_path()));
     }
 
     /// Real stores on the developer machine: `cargo test -p dc-mukade -- --ignored --nocapture`
