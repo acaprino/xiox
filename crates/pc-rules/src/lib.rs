@@ -4,6 +4,7 @@
 pub mod model;
 pub mod expand;
 pub mod guard;
+pub mod collect;
 pub mod cleanerml;
 pub mod updater;
 
