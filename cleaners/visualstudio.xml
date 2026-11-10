@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da learn.microsoft.com/visualstudio (managed-extensibility-framework-in-the-editor e troubleshooting di Visual Studio Tools for Unity): %localappdata%\Microsoft\VisualStudio\versione\ComponentModelCache. -->
+<cleaner id="visualstudio" os="windows">
+  <label>Visual Studio</label>
+  <description>Cache dei componenti (MEF) di Visual Studio. Non tocca impostazioni, estensioni e progetti.</description>
+  <running type="exe" os="windows" same_user="true">devenv.exe</running>
+  <option id="component_cache">
+    <label>Cache dei componenti di Visual Studio</label>
+    <description>Rimuove ComponentModelCache di ogni versione di Visual Studio installata.</description>
+    <warning>Chiudi Visual Studio. Viene ricostruita al prossimo avvio, che sarà più lento.</warning>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Microsoft\VisualStudio\*\ComponentModelCache"/>
+  </option>
+</cleaner>
