@@ -375,6 +375,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dc-disktree"
+version = "0.1.0"
+dependencies = [
+ "dc-cleaner",
+ "dc-model",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dc-engine"
 version = "0.1.0"
 dependencies = [
