@@ -442,6 +442,24 @@ fn within(root: &Path, p: &Path) -> bool {
         && PathBuf::from(path_key(p)).starts_with(PathBuf::from(path_key(root)))
 }
 
+/// Every session below `root` (children, their children, ...) through the parent links in
+/// `children` (parent id -> sessions naming it). Each session is visited once, so a cycle in the
+/// links ends the walk instead of looping.
+fn descendants<'a>(root: &str, children: &HashMap<&str, Vec<&'a SessionInfo>>) -> Vec<&'a SessionInfo> {
+    let mut seen: HashSet<String> = HashSet::from([root.to_string()]);
+    let mut todo = vec![root.to_string()];
+    let mut out = Vec::new();
+    while let Some(id) = todo.pop() {
+        for c in children.get(id.as_str()).into_iter().flatten() {
+            if seen.insert(c.id.clone()) {
+                out.push(*c);
+                todo.push(c.id.clone());
+            }
+        }
+    }
+    out
+}
+
 /// The archived roots of `roots`, each with the file that is its own and the reason it cannot be
 /// removed, if any. `all` is every session the store lists (children included).
 pub fn select_archived(
@@ -451,6 +469,12 @@ pub fn select_archived(
     all: &[SessionInfo],
 ) -> Vec<ArchivedSession> {
     let store_key = path_key(store_root);
+    let mut children: HashMap<&str, Vec<&SessionInfo>> = HashMap::new();
+    for c in all {
+        if let Some(p) = c.parent.as_deref() {
+            children.entry(p).or_default().push(c);
+        }
+    }
     roots
         .into_iter()
         .filter(|i| i.archived)
@@ -478,11 +502,11 @@ pub fn select_archived(
             let updated_ms = i.updated.as_deref().and_then(parse_ms).or_else(|| {
                 file.as_ref().and_then(|f| file_mtime_ms(&f.to_string_lossy()))
             });
-            // NOTE: only direct children are checked; a grandchild kept open under an archived
-            // child is not seen (non-transitive).
-            let has_open_child = all.iter().any(|c| {
-                c.parent.as_deref() == Some(i.id.as_str()) && (!c.archived || c.live == Some(true))
-            });
+            // Every descendant counts, not only the children: the harness deletes the whole
+            // subtree with the root (`opencode session delete`).
+            let has_open_child = descendants(&i.id, &children)
+                .iter()
+                .any(|c| !c.archived || c.live == Some(true));
             let blocked = if i.live == Some(true) {
                 Some("sessione in uso".to_string())
             } else if has_open_child {
@@ -817,6 +841,66 @@ mod tests {
         let all = vec![parent.clone(), child];
         let got = select_archived(Agent::Codex, td.path(), vec![parent], &all);
         assert_eq!(got[0].blocked, None);
+    }
+
+    #[test]
+    fn an_open_grandchild_blocks_the_archived_root() {
+        let td = tempfile::tempdir().unwrap();
+        let f = |n: &str| {
+            let p = td.path().join("sessions").join(format!("{n}.jsonl"));
+            touch(&p, "x");
+            p
+        };
+        let root = ainfo("r", &f("r"), true);
+        let mut child = ainfo("c", &f("c"), true);
+        child.parent = Some("r".into());
+        let mut grandchild = ainfo("g", &f("g"), false);
+        grandchild.parent = Some("c".into());
+        let all = vec![root.clone(), child.clone(), grandchild.clone()];
+        let got = select_archived(Agent::Codex, td.path(), vec![root.clone()], &all);
+        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+
+        // Archived but live, two levels down: still blocked.
+        grandchild.archived = true;
+        grandchild.live = Some(true);
+        let all = vec![root.clone(), child.clone(), grandchild.clone()];
+        let got = select_archived(Agent::Codex, td.path(), vec![root.clone()], &all);
+        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+
+        grandchild.live = None;
+        let all = vec![root.clone(), child, grandchild];
+        let got = select_archived(Agent::Codex, td.path(), vec![root], &all);
+        assert_eq!(got[0].blocked, None);
+    }
+
+    #[test]
+    fn a_cycle_in_the_parent_links_ends_the_walk() {
+        let td = tempfile::tempdir().unwrap();
+        let f = |n: &str| {
+            let p = td.path().join("sessions").join(format!("{n}.jsonl"));
+            touch(&p, "x");
+            p
+        };
+        let root = ainfo("r", &f("r"), true);
+        let mut a = ainfo("a", &f("a"), true);
+        a.parent = Some("r".into());
+        let mut b = ainfo("b", &f("b"), true);
+        b.parent = Some("a".into());
+        // `a` and `b` name each other through `r`'s subtree: r -> a -> b -> a ...
+        let mut back = ainfo("a", &f("a2"), true);
+        back.parent = Some("b".into());
+        let mut self_loop = ainfo("r", &f("r2"), true);
+        self_loop.parent = Some("r".into());
+        let all = vec![root.clone(), a, b, back, self_loop];
+        let got = select_archived(Agent::Codex, td.path(), vec![root.clone()], &all);
+        assert_eq!(got[0].blocked, None);
+
+        let mut open = ainfo("o", &f("o"), false);
+        open.parent = Some("b".into());
+        let mut all = all;
+        all.push(open);
+        let got = select_archived(Agent::Codex, td.path(), vec![root], &all);
+        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
     }
 
     #[test]
