@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ccache: si toccano solo le cartelle di una cifra esadecimale (0-f) della cache; ccache.conf, lock e tmp restano.
+     sccache: cartella della cache su disco (SCCACHE_DIR o %LocalAppData%\Mozilla\sccache\cache). -->
+<cleaner id="ccache" os="windows">
+  <label>Cache dei compilatori (ccache e sccache)</label>
+  <description>Cache degli oggetti compilati da ccache e sccache, ricostruibili. Non tocca le impostazioni di ccache.</description>
+  <running type="exe" os="windows" same_user="true">sccache.exe</running>
+  <var id="ccache_dir">
+    <value>%CCACHE_DIR%</value>
+    <value>%LOCALAPPDATA%\ccache</value>
+  </var>
+  <var id="sccache_dir">
+    <value>%SCCACHE_DIR%</value>
+    <value>%LOCALAPPDATA%\Mozilla\sccache\cache</value>
+  </var>
+  <option id="ccache">
+    <label>Cache di ccache</label>
+    <description>Rimuove gli oggetti compilati salvati da ccache. Il file ccache.conf con le impostazioni resta.</description>
+    <action command="delete" search="glob" path="$$ccache_dir$$\?"/>
+  </option>
+  <option id="sccache">
+    <label>Cache di sccache</label>
+    <description>Rimuove gli oggetti compilati salvati da sccache su disco.</description>
+    <warning>Chiudi il server sccache (`sccache --stop-server`) prima di pulire. Le compilazioni successive saranno più lente finché la cache non si riempie.</warning>
+    <action command="delete" search="walk.all" path="$$sccache_dir$$"/>
+  </option>
+</cleaner>

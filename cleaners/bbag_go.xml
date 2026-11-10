@@ -1,12 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- GOCACHE predefinita di Go su Windows. Non tocca GOPATH né la cache dei moduli. -->
+<!-- Cache di Go: compilazione (GOCACHE, predefinita %LocalAppData%\go-build) e moduli
+     (GOMODCACHE, predefinita %GOPATH%\pkg\mod o %USERPROFILE%\go\pkg\mod). Non tocca go\bin né i sorgenti. -->
 <cleaner id="bbag_go" os="windows">
-  <label>Cache di compilazione di Go</label>
-  <description>Cache degli artefatti di compilazione Go, ricostruibili alla successiva compilazione.</description>
+  <label>Cache di Go</label>
+  <description>Cache di compilazione e moduli scaricati da Go, ricostruibili. Non tocca GOPATH\bin né i sorgenti.</description>
   <running type="exe" os="windows" same_user="true">go.exe</running>
+  <var id="build_cache">
+    <value>%GOCACHE%</value>
+    <value>%LocalAppData%\go-build</value>
+  </var>
+  <var id="module_cache">
+    <value>%GOMODCACHE%</value>
+    <value>%GOPATH%\pkg\mod</value>
+    <value>%USERPROFILE%\go\pkg\mod</value>
+  </var>
   <option id="build">
     <label>Cache di compilazione di Go</label>
     <description>Rimuove la cache di compilazione di Go. Attendi che le compilazioni in corso finiscano; le successive compilazioni impiegheranno più tempo.</description>
-    <action command="delete" search="walk.files" path="%LocalAppData%\go-build"/>
+    <action command="delete" search="walk.files" path="$$build_cache$$"/>
+  </option>
+  <option id="modules">
+    <label>Moduli scaricati di Go</label>
+    <description>Rimuove la cache dei moduli (pkg\mod): sorgenti e archivi dei moduli scaricati. I file della cache sono in sola lettura: la pulizia li rimuove comunque.</description>
+    <warning>I moduli si riscaricano al prossimo `go build` o `go mod download`: serve la rete. I file della cache sono in sola lettura.</warning>
+    <action command="delete" search="walk.all" path="$$module_cache$$"/>
   </option>
 </cleaner>

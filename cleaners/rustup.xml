@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Solo downloads e tmp di rustup (RUSTUP_HOME, predefinita %USERPROFILE%\.rustup).
+     toolchains, update-hashes e settings.toml non si toccano: la toolchain predefinita è in uso. -->
+<cleaner id="rustup" os="windows">
+  <label>Cache di rustup</label>
+  <description>File scaricati e temporanei di rustup. Non tocca le toolchain installate né le impostazioni.</description>
+  <var id="rustup_downloads">
+    <value>%RUSTUP_HOME%\downloads</value>
+    <value>%USERPROFILE%\.rustup\downloads</value>
+  </var>
+  <var id="rustup_tmp">
+    <value>%RUSTUP_HOME%\tmp</value>
+    <value>%USERPROFILE%\.rustup\tmp</value>
+  </var>
+  <option id="downloads">
+    <label>Componenti scaricati da rustup</label>
+    <description>Rimuove gli archivi di toolchain e componenti rimasti nella cartella dei download di rustup.</description>
+    <warning>Chiudi rustup prima di pulire: un aggiornamento in corso fallirebbe. I componenti si riscaricano al prossimo `rustup update` o `rustup component add`.</warning>
+    <action command="delete" search="walk.all" path="$$rustup_downloads$$"/>
+  </option>
+  <option id="tmp">
+    <label>File temporanei di rustup</label>
+    <description>Rimuove i file temporanei lasciati da installazioni e aggiornamenti di rustup.</description>
+    <warning>Chiudi rustup prima di pulire: un aggiornamento in corso fallirebbe.</warning>
+    <action command="delete" search="walk.all" path="$$rustup_tmp$$"/>
+  </option>
+</cleaner>

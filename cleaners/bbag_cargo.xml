@@ -1,13 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Solo gli archivi compressi scaricati da Cargo: nessun binario, sorgente o progetto. -->
+<!-- Cache di Cargo. Percorsi: prima %CARGO_HOME%, poi il predefinito %USERPROFILE%\.cargo.
+     Si toccano solo registry\cache, registry\src, registry\index, git\checkouts e git\db.
+     Mai bin, config.toml, credentials.toml, .crates.toml, .crates2.json. -->
 <cleaner id="bbag_cargo" os="windows">
-  <label>Download di Cargo</label>
-  <description>Archivi .crate scaricati; nessuna modifica a binari, registry/src o repository Rust.</description>
+  <label>Cache di Cargo</label>
+  <description>Archivi, sorgenti e indici scaricati da Cargo, tutti ricostruibili. Non tocca i binari installati, la configurazione né le credenziali.</description>
   <running type="exe" os="windows" same_user="true">cargo.exe</running>
   <running type="exe" os="windows" same_user="true">rustc.exe</running>
+  <var id="crate_archives">
+    <value>%CARGO_HOME%\registry\cache</value>
+    <value>%USERPROFILE%\.cargo\registry\cache</value>
+  </var>
+  <var id="crate_sources">
+    <value>%CARGO_HOME%\registry\src</value>
+    <value>%USERPROFILE%\.cargo\registry\src</value>
+  </var>
+  <var id="registry_indexes">
+    <value>%CARGO_HOME%\registry\index</value>
+    <value>%USERPROFILE%\.cargo\registry\index</value>
+  </var>
+  <var id="git_checkout_dirs">
+    <value>%CARGO_HOME%\git\checkouts</value>
+    <value>%USERPROFILE%\.cargo\git\checkouts</value>
+  </var>
+  <var id="git_db_dirs">
+    <value>%CARGO_HOME%\git\db</value>
+    <value>%USERPROFILE%\.cargo\git\db</value>
+  </var>
   <option id="downloaded_crates">
     <label>Download compressi Cargo</label>
-    <description>Rimuove i download Cargo compressi; le dipendenze potranno essere riscaricate, quindi evita se lavori offline.</description>
-    <action command="delete" search="walk.files" path="%UserProfile%\.cargo\registry\cache"/>
+    <description>Rimuove gli archivi .crate compressi scaricati da Cargo (registry\cache).</description>
+    <warning>Gli archivi si riscaricano al prossimo `cargo build` o `cargo fetch`: evita se lavori offline.</warning>
+    <action command="delete" search="walk.files" path="$$crate_archives$$"/>
+  </option>
+  <option id="registry_src">
+    <label>Sorgenti estratti delle dipendenze</label>
+    <description>Rimuove i sorgenti estratti dagli archivi .crate (registry\src). Cargo li estrae di nuovo al prossimo uso.</description>
+    <action command="delete" search="walk.all" path="$$crate_sources$$"/>
+  </option>
+  <option id="registry_index">
+    <label>Indice dei registri</label>
+    <description>Rimuove l'indice locale dei registri (registry\index): metadati di versioni e dipendenze dei crate.</description>
+    <warning>L'indice si riscarica al prossimo `cargo fetch` o `cargo update`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="$$registry_indexes$$"/>
+  </option>
+  <option id="git_checkouts">
+    <label>Copie di lavoro delle dipendenze git</label>
+    <description>Rimuove le copie estratte delle dipendenze git (git\checkouts). Cargo le ricrea dal database git al prossimo uso.</description>
+    <action command="delete" search="walk.all" path="$$git_checkout_dirs$$"/>
+  </option>
+  <option id="git_db">
+    <label>Database delle dipendenze git</label>
+    <description>Rimuove i cloni dei repository git usati come dipendenze (git\db).</description>
+    <warning>I repository si riscaricano al prossimo `cargo fetch`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="$$git_db_dirs$$"/>
   </option>
 </cleaner>
