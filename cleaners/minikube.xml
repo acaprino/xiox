@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Minikube: cartella cache della home di minikube (MINIKUBE_HOME\.minikube o %USERPROFILE%\.minikube).
+     profiles, machines e config non si toccano. -->
+<cleaner id="minikube" os="windows">
+  <label>Cache di Minikube</label>
+  <description>Immagini, ISO e binari scaricati da Minikube. Non tocca profili, macchine e configurazione.</description>
+  <var id="minikube_cache">
+    <value>%MINIKUBE_HOME%\.minikube\cache</value>
+    <value>%USERPROFILE%\.minikube\cache</value>
+  </var>
+  <option id="cache">
+    <label>Cache di Minikube</label>
+    <description>Rimuove ISO, immagini dei container, archivi precaricati e binari di Kubernetes dalla cache.</description>
+    <warning>I file si riscaricano al prossimo `minikube start`: serve la rete e può richiedere diversi minuti.</warning>
+    <action command="delete" search="walk.all" path="$$minikube_cache$$"/>
+  </option>
+</cleaner>

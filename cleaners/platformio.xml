@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PlatformIO: cartella core %USERPROFILE%\.platformio; si toccano .cache (cache) e, come opzioni separate,
+     packages e platforms. Le librerie globali e gli altri dati della cartella core non si toccano. -->
+<cleaner id="platformio" os="windows">
+  <label>Cache di PlatformIO</label>
+  <description>Cache di PlatformIO e, come opzioni separate, toolchain e piattaforme installate. Non tocca le librerie globali.</description>
+  <option id="cache">
+    <label>Cache di PlatformIO</label>
+    <description>Rimuove le richieste al registro e i pacchetti scaricati tenuti nella cache.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.platformio\.cache"/>
+  </option>
+  <option id="packages">
+    <label>Pacchetti installati (toolchain e SDK)</label>
+    <description>Rimuove toolchain, framework, SDK e strumenti di caricamento installati da PlatformIO.</description>
+    <warning>Le toolchain si riscaricano alla prossima compilazione (`pio run`): serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.platformio\packages"/>
+  </option>
+  <option id="platforms">
+    <label>Piattaforme di sviluppo installate</label>
+    <description>Rimuove le piattaforme di sviluppo installate da PlatformIO.</description>
+    <warning>Le piattaforme si reinstallano alla prossima compilazione (`pio run`) o con `pio pkg install`: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.platformio\platforms"/>
+  </option>
+</cleaner>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Julia: solo compiled nel deposito utente %USERPROFILE%\.julia. packages, registries, environments
+     e config non si toccano. -->
+<cleaner id="julia" os="windows">
+  <label>Cache di Julia</label>
+  <description>Immagini precompilate dei pacchetti Julia. Non tocca pacchetti, registri, ambienti e configurazione.</description>
+  <option id="compiled">
+    <label>Pacchetti precompilati di Julia</label>
+    <description>Rimuove le immagini precompilate (.ji) dei pacchetti.</description>
+    <warning>Julia ricompila i pacchetti al prossimo uso: il primo caricamento sarà più lento.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.julia\compiled"/>
+  </option>
+</cleaner>

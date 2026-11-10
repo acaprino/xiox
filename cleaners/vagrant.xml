@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vagrant: solo la cartella boxes della home (VAGRANT_HOME o %USERPROFILE%\.vagrant.d).
+     data, tmp, gems e le impostazioni della home non si toccano. -->
+<cleaner id="vagrant" os="windows">
+  <label>Box di Vagrant</label>
+  <description>Immagini (box) scaricate da Vagrant. Non tocca le macchine già create né le impostazioni.</description>
+  <var id="vagrant_boxes">
+    <value>%VAGRANT_HOME%\boxes</value>
+    <value>%USERPROFILE%\.vagrant.d\boxes</value>
+  </var>
+  <option id="boxes">
+    <label>Box scaricate di Vagrant</label>
+    <description>Rimuove le box scaricate nella home di Vagrant (cartella boxes).</description>
+    <warning>Le box si riscaricano con `vagrant box add` (o al prossimo `vagrant up`): serve la rete e possono pesare molti GB.</warning>
+    <action command="delete" search="walk.all" path="$$vagrant_boxes$$"/>
+  </option>
+</cleaner>
