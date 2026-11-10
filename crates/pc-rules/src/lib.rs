@@ -7,6 +7,7 @@ pub mod guard;
 pub mod collect;
 pub mod cleanerml;
 pub mod updater;
+pub mod winapp2;
 
 pub use expand::expand;
 pub use guard::protected;
