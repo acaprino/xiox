@@ -17,6 +17,8 @@ PulisciPC è un prodotto da vendere, usabile da tutti, rivale di CCleaner. CClea
 6. "L'utente sceglie cosa eliminare o cosa no: l'app propone, l'utente seleziona, come in CCleaner." In particolare non vanno bene due esclusioni della bozza: i programmi installati che altri usano (toolchain di rustup, Python di uv, versioni di nvm, `.cargo\bin`) e Docker, WSL e macchine virtuali. Entrano anche quelli.
 7. "La pulizia deve essere veloce e multithreading, con worker che si dividono il lavoro, e dare un resoconto finale."
 
+8. "La UI deve essere quella di ccleaner64 di base": conferma la decisione 10 della spec principale. Tutte le parti nuove (livelli e avvisi, selezione per cartella, Parte D, avanzamento, resoconto finale) usano barra laterale, card, colori e componenti di `src/main.rs`; nessuna schermata con uno stile proprio.
+
 ## Cosa cambia nella spec principale
 
 Le decisioni 5 sostituiscono, in `2026-11-10-dev-mode-design.md`, "la modalità dev no (lavora nel profilo utente)" e "senza admin cammina le cartelle":
