@@ -1,4 +1,21 @@
 //! Lettura dei file CleanerML (il formato dei cleaner di BleachBit).
+//!
+//! Significato dei `Search` nelle azioni prodotte (lo applica `collect`):
+//! - `File`: il file indicato; `Glob`: i file che corrispondono al modello nel
+//!   percorso (anche con `*` e `?` nei segmenti); nessuna ricorsione.
+//! - `WalkAll`: si tolgono i figli della cartella, **file e sottocartelle**
+//!   (ricorsivo); la cartella radice resta (`remove_self` è sempre `false`).
+//! - `WalkFiles`: solo i **file** sotto la cartella (ricorsivo), le cartelle
+//!   restano.
+//! - `WalkTop`: solo i figli diretti della cartella, **non ricorsivo**.
+//!
+//! `patterns` (da `regex`) filtra i nomi dei file; vuoto = tutti.
+//!
+//! Regola di sicurezza: un filtro che non si capisce non allarga mai l'azione.
+//! Ogni attributo di `<action>` fuori da `command`, `search`, `path`, `regex`,
+//! `nregex`, `type`, `os`, `name` rende l'azione non supportata; `nregex`,
+//! `wholeregex` e `nwholeregex` sono riconosciuti ma non supportati. L'azione si
+//! scarta e l'opzione compare con `unsupported`.
 
 use std::collections::HashMap;
 use std::iter::Peekable;
@@ -35,6 +52,15 @@ pub fn parse_cleaner(xml: &str, origin: &'static str, env: &Env) -> Result<Clean
         .to_string();
 
     let vars = read_vars(root, env);
+    // Una guardia di sicurezza non sparisce in silenzio: un `<running>` di un tipo
+    // che non si gestisce (es. `pathname`) rende non supportate tutte le opzioni.
+    let bad_running: Option<String> = root
+        .descendants()
+        .filter(|n| n.has_tag_name("running") && os_ok(n.attribute("os")))
+        .find_map(|n| match n.attribute("type").map(str::trim) {
+            Some("exe") => None,
+            other => Some(format!("tipo di processo «{}»", other.unwrap_or(""))),
+        });
     let running = root
         .descendants()
         .filter(|n| n.has_tag_name("running"))
@@ -50,7 +76,7 @@ pub fn parse_cleaner(xml: &str, origin: &'static str, env: &Env) -> Result<Clean
     let options = root
         .children()
         .filter(|n| n.has_tag_name("option"))
-        .filter_map(|n| parse_option(n, &vars))
+        .filter_map(|n| parse_option(n, &vars, bad_running.as_deref()))
         .collect();
 
     Ok(Cleaner {
@@ -104,13 +130,17 @@ fn read_vars(root: Node, env: &Env) -> HashMap<String, Vec<String>> {
     vars
 }
 
-fn parse_option(node: Node, vars: &HashMap<String, Vec<String>>) -> Option<Opt> {
+fn parse_option(
+    node: Node,
+    vars: &HashMap<String, Vec<String>>,
+    extra_reason: Option<&str>,
+) -> Option<Opt> {
     if !os_ok(node.attribute("os")) {
         return None;
     }
     let id = node.attribute("id").map(str::trim).filter(|s| !s.is_empty())?;
     let mut actions = Vec::new();
-    let mut reasons: Vec<String> = Vec::new();
+    let mut reasons: Vec<String> = extra_reason.map(str::to_string).into_iter().collect();
     for action in node
         .children()
         .filter(|n| n.has_tag_name("action") && os_ok(n.attribute("os")))
@@ -143,6 +173,21 @@ fn parse_option(node: Node, vars: &HashMap<String, Vec<String>>) -> Option<Opt> 
 /// `Err(motivo)`: l'azione non è supportata; il motivo è il comando, il
 /// `search` o la caratteristica non gestita.
 fn parse_action(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Action>, String> {
+    // Whitelist: un attributo che non si capisce potrebbe essere un filtro, e
+    // ignorarlo allargherebbe l'azione.
+    const KNOWN: [&str; 8] = [
+        "command", "search", "path", "regex", "nregex", "type", "os", "name",
+    ];
+    for attr in a.attributes() {
+        let name = attr.name();
+        if KNOWN.contains(&name) {
+            continue;
+        }
+        return Err(match name {
+            "wholeregex" | "nwholeregex" => name.to_string(),
+            _ => format!("attributo {name}"),
+        });
+    }
     match a.attribute("command").map(str::trim).unwrap_or("") {
         "delete" => parse_delete(a, vars),
         "winreg" => parse_winreg(a, vars),
@@ -206,6 +251,9 @@ fn parse_winreg(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Acti
         .filter(|p| !p.is_empty())
         .ok_or("azione senza percorso")?;
     let (root_name, rest) = full.split_once('\\').unwrap_or((full, ""));
+    if rest.trim_matches('\\').is_empty() {
+        return Err("winreg senza chiave".into());
+    }
     let root = match root_name.to_ascii_uppercase().as_str() {
         "HKCU" | "HKEY_CURRENT_USER" => RegRoot::Hkcu,
         "HKLM" | "HKEY_LOCAL_MACHINE" => RegRoot::Hklm,
@@ -296,6 +344,10 @@ fn translate_regex(re: &str) -> Result<Vec<String>, String> {
         while pattern.contains("**") {
             pattern = pattern.replace("**", "*");
         }
+        // `*.*` vuol dire «tutto ciò che ha un punto»: una regex come `\.` non lo chiede
+        if pattern == "*.*" {
+            return Err("tradotta in *.* (troppo larga)".into());
+        }
         if !out.contains(&pattern) {
             out.push(pattern);
         }
@@ -369,6 +421,8 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
             '*' | '+' | '?' | '{' | '}' | '[' | ']' => {
                 return Err(format!("operatore «{c}» non gestito"));
             }
+            // il raccoglitore separa i modelli con `;`
+            ';' => return Err("«;» letterale non traducibile".into()),
             c => push_all(&mut current, Tok::Lit(c)),
         }
     }
@@ -589,6 +643,77 @@ mod tests {
     }
 
     #[test]
+    fn unknown_filter_attributes_are_never_ignored() {
+        // un filtro che non si capisce non deve allargare l'azione (fail-open)
+        let xml = r#"<cleaner id="x" os="windows"><label>X</label>
+          <option id="w"><label>W</label>
+            <action command="delete" search="walk.files" path="%TEMP%\a" wholeregex=".*\.log"/>
+          </option>
+          <option id="n"><label>N</label>
+            <action command="delete" search="walk.files" path="%TEMP%\a" nwholeregex=".*\.keep"/>
+          </option>
+          <option id="f"><label>F</label>
+            <action command="delete" search="walk.files" path="%TEMP%\a" foo="1"/>
+          </option>
+          <option id="r"><label>R</label>
+            <action command="winreg" path="HKCU\Software\X" foo="1"/>
+          </option>
+          <option id="ok"><label>OK</label>
+            <action command="delete" os="windows" search="walk.files" path="%TEMP%\a" regex="\.log$" type="f"/>
+          </option>
+        </cleaner>"#;
+        let c = parse_cleaner(xml, "x", &env(&[("temp", r"C:\T")])).unwrap();
+        for (id, reason) in [
+            ("w", "non supportato: wholeregex"),
+            ("n", "non supportato: nwholeregex"),
+            ("f", "non supportato: attributo foo"),
+            ("r", "non supportato: attributo foo"),
+        ] {
+            let o = opt(&c, id);
+            assert_eq!(o.unsupported.as_deref(), Some(reason), "{id}");
+            assert!(o.actions.is_empty(), "{id}: l'azione non deve restare");
+        }
+        let ok = opt(&c, "ok");
+        assert!(ok.unsupported.is_none());
+        assert_eq!(ok.actions.len(), 1);
+    }
+
+    #[test]
+    fn winreg_without_a_key_path_is_unsupported() {
+        let xml = r#"<cleaner id="x"><label>X</label>
+          <option id="a"><label>A</label><action command="winreg" path="HKCU"/></option>
+          <option id="b"><label>B</label><action command="winreg" path="HKCU\"/></option>
+        </cleaner>"#;
+        let c = parse_cleaner(xml, "x", &env(&[])).unwrap();
+        for id in ["a", "b"] {
+            let o = opt(&c, id);
+            assert!(o.unsupported.is_some(), "{id}");
+            assert!(o.actions.is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn running_of_another_type_flags_the_options() {
+        let xml = r#"<cleaner id="x"><label>X</label>
+          <running type="pathname" os="windows">%TEMP%\x.lock</running>
+          <running type="exe" os="windows">x.exe</running>
+          <option id="a"><label>A</label><action command="delete" search="file" path="%TEMP%\a"/></option>
+        </cleaner>"#;
+        let c = parse_cleaner(xml, "x", &env(&[])).unwrap();
+        assert_eq!(c.running, vec!["x.exe"]);
+        let reason = opt(&c, "a").unsupported.as_deref().unwrap();
+        assert!(reason.starts_with("non supportato: "), "{reason}");
+        assert!(reason.contains("tipo di processo"), "{reason}");
+        // un `running` di un altro sistema operativo non conta
+        let xml = r#"<cleaner id="x"><label>X</label>
+          <running type="pathname" os="linux">/tmp/x</running>
+          <option id="a"><label>A</label><action command="delete" search="file" path="%TEMP%\a"/></option>
+        </cleaner>"#;
+        let c = parse_cleaner(xml, "x", &env(&[])).unwrap();
+        assert!(opt(&c, "a").unsupported.is_none());
+    }
+
+    #[test]
     fn walk_all_with_type_f_becomes_walk_files() {
         let xml = r#"<cleaner id="x"><label>X</label><option id="a"><label>A</label>
             <action command="delete" search="walk.all" path="%TEMP%\a" type="f"/>
@@ -679,6 +804,11 @@ mod tests {
         assert!(t("[ab]").is_err());
         assert!(t("a+").is_err());
         assert!(t("a$b").is_err());
+        // `;` separa i modelli nel raccoglitore: un `;` letterale non si traduce
+        assert!(t("a;b").is_err());
+        // `*.*` vorrebbe dire «qualsiasi cosa con un punto»: mai da una regex come `\.`
+        assert!(t(r"\.").is_err());
+        assert!(t(r"\.(log|tmp)").is_ok());
     }
 
     /// I file veri dell'utente: sola lettura della cartella in `PC_RULES_CLEANERS`.
