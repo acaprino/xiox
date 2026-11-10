@@ -133,7 +133,28 @@ const INSIDE: &[(&str, &str)] = &[
     (r"software\classes\.pif", EXEC),
     (r"software\classes\scrfile", EXEC),
     (r"software\classes\.scr", EXEC),
+    (r"software\classes\htafile", EXEC),
+    (r"software\classes\.hta", EXEC),
+    (r"software\classes\vbsfile", EXEC),
+    (r"software\classes\.vbs", EXEC),
+    (r"software\classes\jsfile", EXEC),
+    (r"software\classes\.js", EXEC),
+    (r"software\classes\wsffile", EXEC),
+    (r"software\classes\.wsf", EXEC),
+    (r"software\classes\.ps1", EXEC),
+    (r"software\classes\microsoft.powershellscript.1", EXEC),
+    // `*` alla lettera: i gestori di tutti i file (menu, anteprime, proprietà).
+    (r"software\classes\*", EXEC),
+    // Programmi predefiniti e installazioni di Windows Installer.
+    (r"software\clients", DEFAULTS),
+    (r"software\registeredapplications", DEFAULTS),
+    (r"software\classes\installer", INSTALLER),
+    (r"software\microsoft\windows\currentversion\installer", INSTALLER),
+    (r"software\microsoft\windows\currentversion\explorer\startupapproved", AUTORUN),
 ];
+
+const DEFAULTS: &str = "programmi predefiniti di Windows";
+const INSTALLER: &str = "programmi installati (Windows Installer)";
 
 const AUTORUN: &str = "avvio automatico dei programmi";
 const POLICIES: &str = "criteri di sistema";
@@ -148,7 +169,6 @@ const WHOLE: &[&str] = &[
     r"software\microsoft\windows nt\currentversion",
     r"software\microsoft\windows\shell",
     r"software\microsoft\internet explorer",
-    r"software\classes\*",
     r"software\classes\clsid",
     r"software\classes\interface",
     r"software\classes\typelib",
@@ -314,7 +334,6 @@ mod tests {
             (Hklm, r"Software\Classes\.mpf"),
             (Hklm, r"Software\Classes\MPR.DocHostUIHandler"),
             (Hklm, r"Software\Classes\CLSID\{3F2BBC05-40DF-11D2-9455-00104BC936FF}"),
-            (Hkcu, r"Software\Classes\*\shellex\ContextMenuHandlers\OldTool"),
             (Hkcu, r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU"),
             (Hkcu, r"Software\Classes\Wow6432Node\Local Settings\Software\Microsoft\Windows\Shell\Bags"),
             (Hklm, r"Software\Microsoft\Tracing"),
@@ -337,6 +356,31 @@ mod tests {
         }
     }
 
+    /// M3: altre chiavi critiche, intere, con le sottochiavi e i valori.
+    #[test]
+    fn more_critical_keys_are_refused() {
+        for (root, path, value) in [
+            (Hklm, r"Software\Clients", None),
+            (Hklm, r"Software\Clients\StartMenuInternet\Firefox", None),
+            (Hkcu, r"Software\RegisteredApplications", Some("Firefox")),
+            (Hklm, r"Software\Classes\Installer\Products\ABC", None),
+            (Hklm, r"Software\Microsoft\Windows\CurrentVersion\Installer\UserData", None),
+            (Hklm, r"Software\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18", None),
+            (Hkcu, r"Software\Classes\htafile\shell\open\command", None),
+            (Hkcu, r"Software\Classes\VBSFile", None),
+            (Hkcu, r"Software\Classes\.ps1", None),
+            (Hkcu, r"Software\Classes\*\shellex\ContextMenuHandlers\OldTool", None),
+            (Hkcu, r"Software\Classes\*\shell\x", Some("y")),
+            (Hkcu, r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run", Some("OneDrive")),
+            (Hkcu, r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32", Some("x")),
+        ] {
+            assert!(reg_allowed(root, path, value).is_err(), "{root:?}\\{path}|{value:?} accettato");
+        }
+        // Le chiavi vicine restano.
+        assert_eq!(key(Hkcu, r"Software\Classes\.mpf"), Ok(()));
+        assert_eq!(key(Hkcu, r"Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs"), Ok(()));
+    }
+
     #[test]
     fn reasons_are_italian_and_specific() {
         assert_eq!(
@@ -347,6 +391,6 @@ mod tests {
         assert_eq!(key(Hklm, r"System\Setup"), Err("chiave di registro fuori da Software"));
         assert_eq!(key(Hklm, r"Software\Microsoft"), Err(AUTORUN)); // antenato di Run
         assert_eq!(key(Hklm, r"Software\Classes"), Err(EXEC));
-        assert_eq!(key(Hklm, r"Software\Classes\*"), Err("chiave di sistema presa per intero (o un suo antenato)"));
+        assert_eq!(key(Hklm, r"Software\Classes\*"), Err(EXEC));
     }
 }
