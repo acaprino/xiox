@@ -1,2 +1,7 @@
 target/
 .superpowers/
+# Screenshots with real project and session names
+shots/dev-*.png
+shots/check-*.png
+shots/before-*.png
+shots/after-*.png

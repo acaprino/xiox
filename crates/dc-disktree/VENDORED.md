@@ -15,8 +15,9 @@ Copied: 2026-11-10 10:05:05 +0100
 From `mft.rs`:
 - volume access: `\\.\X:` opened read-only (`CreateFileW`, share read/write),
   `FSCTL_GET_NTFS_VOLUME_DATA`, `SetFilePointerEx` + `ReadFile` (`Volume::read_at`);
-- `fixup` (update sequence array), `data_runs` (non-resident run list), `u16_at`/`u32_at`/`u64_at`
-  — unchanged;
+- `fixup` (update sequence array) — unchanged; `data_runs` (non-resident run list) and
+  `u16_at`/`u32_at`/`u64_at` — taken, then hardened in 4dbb89f (see "What changed": the
+  readers return zeros past the end of a slice, `data_runs` returns a `Result`);
 - reading record 0 to find the `$DATA` runs of the MFT, and the read loop in 131072-byte
   chunks (`READ_CHUNK`), sparse runs skipped;
 - `parse_record`: base/extension record handling, `$STANDARD_INFORMATION` (0x10),
