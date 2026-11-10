@@ -259,7 +259,7 @@ Decisione 7. Vale per Pulizia file e per Sviluppatori.
 3. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
 4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4).
 5. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 2 ore.
-6. Parte D: dopo la Fase 3. Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
+6. Parte D: dopo la Fase 3, **nello stesso rilascio** (decisione dell'utente, 2026-11-10: "ora", non in un secondo rilascio). Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
 
 Totale: circa 34 ore e mezza.
 
