@@ -4,6 +4,7 @@
 pub mod model;
 pub mod expand;
 pub mod guard;
+pub mod updater;
 
 pub use expand::expand;
 pub use guard::protected;
