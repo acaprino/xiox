@@ -9,9 +9,9 @@
 //! refuses the whole request before a single file is touched.
 
 use dc_model::{
-    Agent, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, Loaded, ProjectCandidate,
-    ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions, SessionRecord, SessionSource, Settings,
-    normalize_path, path_key,
+    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, Loaded,
+    PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions,
+    SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
 use dc_mukade::{ArchivedSession, MukadeSessions};
 use dc_sessions::{HarnessCli, SessionOutcome, Trash};
@@ -32,35 +32,50 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn home_dir() -> PathBuf {
+/// The user's profile folder (`%USERPROFILE%`, else `$HOME`); `None` when neither is set.
+fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:\\"))
-}
-
-fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
-    std::env::var_os(var)
         .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()))
         .map(PathBuf::from)
-        .unwrap_or_else(|| fallback.iter().fold(home_dir(), |p, c| p.join(c)))
 }
 
-/// Projects from the agents' sessions; the usual project folders are listed as extra folders,
-/// walked in full only when the user switches `scan_roots` on. Removal goes to the Recycle Bin.
+/// `%<var>%`, else `<home>\<fallback...>` (the temp folder stands in for a missing home).
+fn env_dir(var: &str, fallback: &[&str]) -> PathBuf {
+    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| {
+        let base = home_dir().unwrap_or_else(std::env::temp_dir);
+        fallback.iter().fold(base, |p, c| p.join(c))
+    })
+}
+
+/// Conventional project folders under the home, in this order, kept only if they exist.
+const HOME_PROJECT_DIRS: &[&[&str]] = &[
+    &["source", "repos"],
+    &["source"],
+    &["repos"],
+    &["Projects"],
+    &["dev"],
+    &["code"],
+    &["Documents", "GitHub"],
+];
+
+/// Projects from the agents' sessions; the conventional project folders under the home that
+/// exist are listed as extra folders, walked in full only when the user switches `scan_roots`
+/// on (none found: the list is empty). Removal goes to the Recycle Bin.
 pub fn default_settings() -> Settings {
-    let home = home_dir();
-    let candidates = [
-        PathBuf::from(r"D:\Projects"),
-        home.join("Projects"),
-        home.join("source"),
-        home.join("dev"),
-        home.join("Documents").join("GitHub"),
-    ];
-    let mut roots: Vec<PathBuf> = candidates.into_iter().filter(|p| p.is_dir()).collect();
-    if roots.is_empty() {
-        roots.push(home);
-    }
+    default_settings_for(home_dir().as_deref())
+}
+
+fn default_settings_for(home: Option<&Path>) -> Settings {
+    let roots = home
+        .map(|h| {
+            HOME_PROJECT_DIRS
+                .iter()
+                .map(|parts| parts.iter().fold(h.to_path_buf(), |p, c| p.join(c)))
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
     Settings {
         session_projects: true,
         roots,
@@ -266,6 +281,30 @@ impl ProjectScanner for SplitScanner<'_> {
     }
 }
 
+const FAST_READ_FAILED: &str = "Lettura veloce del disco non riuscita: uso la scansione normale.";
+const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
+
+/// Runs the MFT index build; a panic becomes a warning and no index (the walker does it all).
+fn guarded_index<I>(build: impl FnOnce() -> (Option<I>, Vec<String>), warnings: &mut Vec<String>) -> Option<I> {
+    match catch_unwind(AssertUnwindSafe(build)) {
+        Ok((index, w)) => {
+            warnings.extend(w);
+            index
+        }
+        Err(_) => {
+            warnings.push(FAST_READ_FAILED.into());
+            None
+        }
+    }
+}
+
+/// Runs the analysis; a panic becomes an empty result with a warning instead of unwinding
+/// into the caller (the UI thread).
+fn guarded_analysis(run: impl FnOnce() -> AnalysisResult) -> AnalysisResult {
+    catch_unwind(AssertUnwindSafe(run))
+        .unwrap_or_else(|_| AnalysisResult { reports: Vec::new(), warnings: vec![ANALYSIS_FAILED.into()] })
+}
+
 /// `(projects, agent worktrees, other linked worktrees)`, in the input order.
 pub fn split_reports(reports: Vec<ProjectReport>) -> (Vec<ProjectReport>, Vec<ProjectReport>, Vec<ProjectReport>) {
     let (mut projects, mut worktrees, mut others) = (Vec::new(), Vec::new(), Vec::new());
@@ -285,15 +324,17 @@ pub fn split_reports(reports: Vec<ProjectReport>) -> (Vec<ProjectReport>, Vec<Pr
 ///
 /// `admin`: the MFT index (`dc-disktree`) is built for ALL the roots and handed to the scanner,
 /// which takes the artifact sizes from it (roots it does not cover are walked). Without `admin`
-/// there is no index and the `dc-scanner` walker does everything. Nothing is written except
-/// mukade's listing cache in [`cache_dir`].
+/// there is no index and the `dc-scanner` walker does everything. The four steps are always
+/// reported. A panic while building the index falls back to the walker; a panic in the analysis
+/// gives no reports and a warning (the archived sessions are still listed). Nothing is written
+/// except mukade's listing cache in [`cache_dir`].
 pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> DevScan {
     let started = Instant::now();
     let cache = Some(cache_dir());
 
     step("Lettura delle sessioni…", 0.05);
     let (sessions, mut warnings) = load_sessions(cache.clone());
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+    let home = home_dir();
     let plan = plan_roots(settings, &sessions, home.as_deref());
     if plan.roots.is_empty() {
         warnings.push(if settings.session_projects {
@@ -303,13 +344,16 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
         });
     }
 
-    let mut index = None;
-    if admin && !plan.roots.is_empty() {
-        step("Lettura veloce del disco…", 0.25);
-        let (ix, w) = dc_disktree::build_for_roots(&plan.roots, true, &dc_disktree::Progress::default());
-        warnings.extend(w);
-        index = ix;
-    }
+    // Always reported, so the UI shows the same four steps; without admin nothing is read here.
+    step("Lettura veloce del disco…", 0.25);
+    let index = if admin && !plan.roots.is_empty() {
+        guarded_index(
+            || dc_disktree::build_for_roots(&plan.roots, true, &dc_disktree::Progress::default()),
+            &mut warnings,
+        )
+    } else {
+        None
+    };
     let backend = index.as_ref().map_or("walker", |i| i.backend_name()).to_string();
 
     step("Analisi dei progetti…", 0.45);
@@ -322,13 +366,9 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     };
     let sources: Vec<&dyn SessionSource> = sessions.iter().map(|s| s as &dyn SessionSource).collect();
     let scanner = SplitScanner { inner: &dc_scanner::DefaultScanner };
-    let analysis = dc_engine::analyze(
-        &cfg,
-        &scanner,
-        index.as_ref().map(|i| i as &dyn DirIndex),
-        &sources,
-        &dc_git::GitCli,
-    );
+    let analysis = guarded_analysis(|| {
+        dc_engine::analyze(&cfg, &scanner, index.as_ref().map(|i| i as &dyn DirIndex), &sources, &dc_git::GitCli)
+    });
     drop(index);
     warnings.extend(analysis.warnings);
     let (projects, worktrees, other_worktrees) = split_reports(analysis.reports);
@@ -355,16 +395,44 @@ fn selectable(scan: &DevScan) -> impl Iterator<Item = &ProjectReport> {
     scan.projects.iter().chain(&scan.worktrees)
 }
 
-pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
-    let reports: Vec<ProjectReport> = selectable(scan).cloned().collect();
-    dc_engine::build_plan(&reports, selected_ids, mode).map_err(|e| e.to_string())
+fn selectable_reports(scan: &DevScan) -> Vec<ProjectReport> {
+    selectable(scan).cloned().collect()
 }
 
-/// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after checking
-/// every item against `scan`: an artifact of a project or agent worktree, or the root of an
-/// agent worktree. The root of an ordinary project and anything of the other worktrees are
-/// refused, like any path the scan never saw.
+pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
+    dc_engine::build_plan(&selectable_reports(scan), selected_ids, mode).map_err(|e| e.to_string())
+}
+
+/// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after
+/// [`checked_plan`]: only items the scan itself would plan are executed.
 pub fn execute_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanResult, String> {
+    let checked = checked_plan(scan, plan)?;
+    Ok(dc_cleaner::DefaultRemover.execute(&checked, false))
+}
+
+fn same_action(a: &PlanAction, b: &PlanAction) -> bool {
+    match (a, b) {
+        (PlanAction::RemoveDir, PlanAction::RemoveDir) => true,
+        (PlanAction::GitWorktreeRemove { repo: x }, PlanAction::GitWorktreeRemove { repo: y }) => {
+            path_key(x) == path_key(y)
+        }
+        _ => false,
+    }
+}
+
+/// The plan to execute, never the caller's items themselves:
+///
+/// 1. allow-list: every path must be an artifact of a project or agent worktree of `scan`, or
+///    the root of an agent worktree (an ordinary project's root, anything of the other
+///    worktrees and any path the scan never saw are refused);
+/// 2. the canonical plan is rebuilt with `dc_engine::build_plan` from the scan's reports for the
+///    distinct `project_id`s of the items (so an `InUse` or blocked project is refused), and
+///    every item must match a canonical one on `path_key(path)`, `kind` and `action` (for
+///    `GitWorktreeRemove`, `repo` compared with `path_key`).
+///
+/// The result holds the matching canonical items, once each, in the caller's order (a subset of
+/// the canonical plan is fine), with the caller's plan id and mode.
+fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
     let allowed: HashSet<String> = selectable(scan)
         .flat_map(|r| r.artifacts.iter().map(|a| path_key(&a.path)))
         .chain(scan.worktrees.iter().map(|r| path_key(&r.root)))
@@ -372,12 +440,41 @@ pub fn execute_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanResult, Str
     if let Some(bad) = plan.items.iter().find(|i| !allowed.contains(&path_key(&i.path))) {
         return Err(format!("Percorso non presente nell'ultima analisi, rifiutato: {}", bad.path.display()));
     }
-    Ok(dc_cleaner::DefaultRemover.execute(plan, false))
+
+    let mut ids: Vec<String> = Vec::new();
+    for i in &plan.items {
+        if !ids.contains(&i.project_id) {
+            ids.push(i.project_id.clone());
+        }
+    }
+    let canonical = dc_engine::build_plan(&selectable_reports(scan), &ids, plan.mode)
+        .map_err(|e| format!("Piano rifiutato: {e}"))?;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items: Vec<PlanItem> = Vec::new();
+    for i in &plan.items {
+        let key = path_key(&i.path);
+        let Some(c) = canonical
+            .items
+            .iter()
+            .find(|c| path_key(&c.path) == key && c.kind == i.kind && same_action(&c.action, &i.action))
+        else {
+            return Err(format!(
+                "Piano rifiutato: l'elemento non corrisponde all'ultima analisi: {}",
+                i.path.display()
+            ));
+        };
+        if seen.insert(key) {
+            items.push(c.clone());
+        }
+    }
+    let expected_bytes = items.iter().fold(0u64, |acc, i| acc.saturating_add(i.expected_bytes));
+    Ok(CleanPlan { id: plan.id.clone(), mode: plan.mode, items, expected_bytes })
 }
 
 /// Removes the picked archived sessions (`dc_sessions::delete_sessions`). Every pick must be a
 /// session `scan` listed for that harness with `blocked == None`; otherwise nothing is removed.
-/// A session picked twice is removed once.
+/// A session picked twice is removed once; one the scan lists twice is refused (ambiguous).
 pub fn delete_archived(
     scan: &DevScan,
     picked: &[(Agent, String)],
@@ -391,9 +488,15 @@ pub fn delete_archived(
         if !seen.insert((*agent, id.as_str())) {
             continue;
         }
-        let Some(s) = scan.archived.iter().find(|s| s.agent == *agent && s.id == *id) else {
+        let mut found = scan.archived.iter().filter(|s| s.agent == *agent && s.id == *id);
+        let Some(s) = found.next() else {
             return Err(format!("Sessione non presente nell'ultima analisi, rifiutata: {agent:?} {id}"));
         };
+        if found.next().is_some() {
+            return Err(format!(
+                "Sessione presente più volte nell'ultima analisi, rifiutata per sicurezza: {agent:?} {id}"
+            ));
+        }
         if let Some(why) = &s.blocked {
             return Err(format!("Sessione non cancellabile, rifiutata ({why}): {agent:?} {id}"));
         }

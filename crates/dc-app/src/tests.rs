@@ -45,6 +45,20 @@ fn item(path: &Path, kind: ArtifactKind) -> PlanItem {
     }
 }
 
+/// A plan item as a caller would send it for `project` (by root).
+fn item_for(project: &Path, path: &Path, kind: ArtifactKind, action: PlanAction) -> PlanItem {
+    PlanItem { action, project_id: path_key(project), ..item(path, kind) }
+}
+
+/// An agent worktree the engine plans as a whole (`GitWorktreeRemove { repo }`): inactive,
+/// known clean, with a main worktree other than itself.
+fn whole_worktree(root: &str, repo: &str) -> ProjectReport {
+    let mut r = report(root, true, true);
+    r.git.dirty = Some(false);
+    r.git.main_worktree = Some(PathBuf::from(repo));
+    r
+}
+
 fn plan_of(items: Vec<PlanItem>) -> CleanPlan {
     CleanPlan { id: "t".into(), mode: RemoveMode::Permanent, items, expected_bytes: 0 }
 }
@@ -84,18 +98,117 @@ fn execute_plan_passes_scanned_paths_to_the_remover() {
     let base = tmp.path().join("missing");
     let proj = base.join("proj");
     let wt = base.join("wt");
+    let repo = base.join("repo");
     let scan = DevScan {
         projects: vec![report(proj.to_str().unwrap(), false, false)],
-        worktrees: vec![report(wt.to_str().unwrap(), true, true)],
+        worktrees: vec![whole_worktree(wt.to_str().unwrap(), repo.to_str().unwrap())],
         ..Default::default()
     };
     // Different case and a trailing separator: compared through `path_key`.
     let upper = PathBuf::from(format!("{}\\", proj.join("TARGET").display()));
-    let plan = plan_of(vec![item(&upper, ArtifactKind::RustTarget), item(&wt, ArtifactKind::WorktreeDir)]);
+    let repo_upper = PathBuf::from(repo.to_string_lossy().to_uppercase());
+    let plan = plan_of(vec![
+        item_for(&proj, &upper, ArtifactKind::RustTarget, PlanAction::RemoveDir),
+        item_for(&wt, &wt, ArtifactKind::WorktreeDir, PlanAction::GitWorktreeRemove { repo: repo_upper }),
+    ]);
     let res = execute_plan(&scan, &plan).expect("allowed");
-    assert_eq!(res.items.len(), 2);
     assert!(!res.dry_run);
+    // The canonical paths are executed, not the caller's spelling.
+    let paths: Vec<_> = res.items.iter().map(|i| i.path.clone()).collect();
+    assert_eq!(paths, vec![proj.join("target"), wt.clone()]);
     assert!(res.items.iter().all(|i| matches!(i.outcome, ItemOutcome::Skipped { .. })), "{res:?}");
+}
+
+/// Agent worktree planned whole + ordinary project; all under a folder that does not exist.
+fn canonical_scan() -> (DevScan, PathBuf, PathBuf) {
+    let base = PathBuf::from(r"C:\dc-app-test-missing");
+    let (proj, wt, repo) = (base.join("proj"), base.join("wt"), base.join("repo"));
+    let scan = DevScan {
+        projects: vec![report(proj.to_str().unwrap(), false, false)],
+        worktrees: vec![whole_worktree(wt.to_str().unwrap(), repo.to_str().unwrap())],
+        ..Default::default()
+    };
+    (scan, proj, wt)
+}
+
+/// Refused by both `checked_plan` and `execute_plan`, with the same "rifiutato" error.
+fn refused(scan: &DevScan, items: Vec<PlanItem>) -> String {
+    let err = checked_plan(scan, &plan_of(items.clone())).expect_err("must be refused");
+    assert!(err.contains("rifiutato"), "{err}");
+    assert_eq!(execute_plan(scan, &plan_of(items)).unwrap_err(), err);
+    err
+}
+
+#[test]
+fn a_canonical_plan_and_any_subset_of_it_are_accepted() {
+    let (scan, proj, wt) = canonical_scan();
+    let ids = [path_key(&proj), path_key(&wt)];
+    let canonical = build_plan(&scan, &ids, RemoveMode::Recycle).unwrap();
+    assert_eq!(canonical.items.len(), 2);
+    let checked = checked_plan(&scan, &canonical).unwrap();
+    assert_eq!(checked.id, canonical.id);
+    assert_eq!(checked.mode, RemoveMode::Recycle);
+    assert_eq!(checked.expected_bytes, canonical.expected_bytes);
+    let key = |v: &[PlanItem]| v.iter().map(|i| (path_key(&i.path), i.kind, i.action.clone())).collect::<Vec<_>>();
+    assert_eq!(key(&checked.items), key(&canonical.items));
+    // Only the worktree, sent twice: executed once.
+    let wt_item = canonical.items.iter().find(|i| i.path == wt).unwrap().clone();
+    let one = checked_plan(&scan, &plan_of(vec![wt_item.clone(), wt_item])).unwrap();
+    assert_eq!(one.items.len(), 1);
+}
+
+#[test]
+fn execute_plan_refuses_a_swapped_action_or_kind() {
+    let (scan, proj, wt) = canonical_scan();
+    // The worktree root as a plain delete: git would keep a dangling worktree entry.
+    let err = refused(&scan, vec![item_for(&wt, &wt, ArtifactKind::WorktreeDir, PlanAction::RemoveDir)]);
+    assert!(err.contains("non corrisponde all'ultima analisi"), "{err}");
+    let target = proj.join("target");
+    // Another kind for a real artifact (the remover checks the folder name against the kind).
+    refused(&scan, vec![item_for(&proj, &target, ArtifactKind::NodeModules, PlanAction::RemoveDir)]);
+    // A worktree removal on an artifact path.
+    let repo = PathBuf::from(r"C:\dc-app-test-missing\repo");
+    let action = PlanAction::GitWorktreeRemove { repo };
+    refused(&scan, vec![item_for(&proj, &target, ArtifactKind::RustTarget, action)]);
+    // The artifact of a worktree planned whole is not a canonical item.
+    refused(&scan, vec![item_for(&wt, &wt.join("target"), ArtifactKind::RustTarget, PlanAction::RemoveDir)]);
+}
+
+#[test]
+fn execute_plan_refuses_a_wrong_repo() {
+    let (scan, _, wt) = canonical_scan();
+    let action = PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"C:\dc-app-test-missing\other-repo") };
+    let err = refused(&scan, vec![item_for(&wt, &wt, ArtifactKind::WorktreeDir, action)]);
+    assert!(err.contains("non corrisponde all'ultima analisi"), "{err}");
+}
+
+#[test]
+fn execute_plan_refuses_artifacts_of_projects_in_use_or_blocked() {
+    let (mut scan, _, _) = canonical_scan();
+    let mut busy = report(r"C:\dc-app-test-missing\busy", false, false);
+    busy.status = ProjectStatus::InUse;
+    busy.preselected = false;
+    let mut locked = report(r"C:\dc-app-test-missing\locked", false, false);
+    locked.status = ProjectStatus::Blocked;
+    locked.blocked_by = vec![dc_model::BlockReason::TrackedArtifact];
+    locked.preselected = false;
+    scan.projects.extend([busy.clone(), locked.clone()]);
+    for r in [&busy, &locked] {
+        let a = &r.artifacts[0];
+        refused(&scan, vec![item_for(&r.root, &a.path, a.kind, PlanAction::RemoveDir)]);
+    }
+}
+
+#[test]
+fn execute_plan_refuses_a_child_path_or_a_forged_project_id() {
+    let (scan, proj, wt) = canonical_scan();
+    let child = proj.join("target").join("debug");
+    let err = refused(&scan, vec![item_for(&proj, &child, ArtifactKind::RustTarget, PlanAction::RemoveDir)]);
+    assert!(err.contains(&child.display().to_string()), "{err}");
+    // A real artifact filed under another project, or under no known project.
+    let target = proj.join("target");
+    refused(&scan, vec![item_for(&wt, &target, ArtifactKind::RustTarget, PlanAction::RemoveDir)]);
+    refused(&scan, vec![item(&target, ArtifactKind::RustTarget)]);
 }
 
 // ───────────────────────────── archived sessions ─────────────────────────────
@@ -172,6 +285,21 @@ fn delete_archived_refuses_unknown_or_blocked_ids() {
         let res = delete_archived(&scan, &picked, RemoveMode::Permanent, &cli, &trash);
         assert!(res.is_err(), "{picked:?}");
     }
+    assert!(cli.calls.lock().unwrap().is_empty());
+    assert!(trash.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn delete_archived_refuses_a_session_listed_twice() {
+    let scan = DevScan {
+        archived: vec![archived(Agent::Opencode, "twin", None), archived(Agent::Opencode, "twin", None)],
+        ..Default::default()
+    };
+    let cli = FakeCli::default();
+    let trash = FakeTrash::default();
+    let picked = [pick(Agent::Opencode, "twin")];
+    let err = delete_archived(&scan, &picked, RemoveMode::Permanent, &cli, &trash).unwrap_err();
+    assert!(err.contains("rifiutata"), "{err}");
     assert!(cli.calls.lock().unwrap().is_empty());
     assert!(trash.calls.lock().unwrap().is_empty());
 }
@@ -360,7 +488,51 @@ fn default_settings_recycle_and_sessions_only() {
     assert!(s.session_projects);
     assert!(!s.scan_roots);
     assert_eq!(s.inactive_days, dc_model::DEFAULT_INACTIVE_DAYS);
-    assert!(!s.roots.is_empty());
+    // Only folders under the user's home, never a fixed drive path.
+    let home = path_key(&home_dir().expect("USERPROFILE"));
+    assert!(s.roots.iter().all(|r| key_within(&path_key(r), &home) && path_key(r) != home), "{:?}", s.roots);
+}
+
+#[test]
+fn default_roots_are_the_conventional_home_folders_that_exist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    assert!(default_settings_for(Some(home)).roots.is_empty(), "no home fallback");
+    assert!(default_settings_for(None).roots.is_empty());
+    let dirs: [&[&str]; 4] = [&["code"], &["source", "repos"], &["Documents", "GitHub"], &["Downloads"]];
+    for d in dirs {
+        std::fs::create_dir_all(d.iter().fold(home.to_path_buf(), |p, c| p.join(c))).unwrap();
+    }
+    std::fs::write(home.join("dev"), "a file, not a folder").unwrap();
+    let want = vec![
+        home.join("source").join("repos"),
+        home.join("source"),
+        home.join("code"),
+        home.join("Documents").join("GitHub"),
+    ];
+    assert_eq!(default_settings_for(Some(home)).roots, want);
+}
+
+// ───────────────────────────── panics ─────────────────────────────
+
+#[test]
+fn a_panicking_index_build_falls_back_to_the_walker() {
+    let mut warnings = vec!["before".to_string()];
+    let ix: Option<u8> = guarded_index(|| panic!("mft"), &mut warnings);
+    assert!(ix.is_none());
+    assert_eq!(warnings, ["before", "Lettura veloce del disco non riuscita: uso la scansione normale."]);
+    let ok = guarded_index(|| (Some(7u8), vec!["Unità E: non disponibile".to_string()]), &mut warnings);
+    assert_eq!(ok, Some(7));
+    assert_eq!(warnings.last().unwrap(), "Unità E: non disponibile");
+}
+
+#[test]
+fn a_panicking_analysis_gives_no_reports_and_a_warning() {
+    let r = guarded_analysis(|| panic!("engine"));
+    assert!(r.reports.is_empty());
+    assert_eq!(r.warnings, ["Errore interno durante l'analisi dei progetti."]);
+    let ok = guarded_analysis(|| AnalysisResult { reports: vec![report(r"C:\x\p", false, false)], warnings: vec![] });
+    assert_eq!(ok.reports.len(), 1);
 }
 
 #[test]
