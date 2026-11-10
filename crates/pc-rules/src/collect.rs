@@ -172,6 +172,98 @@ pub fn running(cleaner: &Cleaner, processes: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// `true` se il cleaner è «installato»: esiste la cartella di base di almeno
+/// un'azione su file, o almeno una chiave o un valore di registro (secondo
+/// `reg_exists`, di solito [`reg_exists_real`]). Serve per i cleaner
+/// inglobati, che non hanno `Detect`.
+///
+/// La cartella di base è la parte del percorso espanso prima del primo
+/// componente con jolly (il percorso intero se non ne ha). Una base protetta
+/// (`%UserProfile%`, la radice del disco, un percorso di rete…) non conta:
+/// esisterebbe sempre o non si deve toccare.
+pub fn present(cleaner: &Cleaner, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bool) -> bool {
+    let guard = Guard::new(env);
+    cleaner.options.iter().flat_map(|o| &o.actions).any(|a| match a {
+        Action::Files { path, .. } => expand(path, env).iter().any(|p| {
+            let base: PathBuf = p
+                .components()
+                .take_while(|c| !has_wildcard(&c.as_os_str().to_string_lossy()))
+                .collect();
+            !base.as_os_str().is_empty()
+                && guard.protected(&base).is_none()
+                && std::fs::symlink_metadata(&base).is_ok()
+        }),
+        Action::RegKey { root, path } => reg_exists(&RegItem::Key {
+            root: *root,
+            path: path.clone(),
+        }),
+        Action::RegValue { root, path, value } => reg_exists(&RegItem::Value {
+            root: *root,
+            path: path.clone(),
+            value: value.clone(),
+        }),
+    })
+}
+
+/// Esistenza vera di una chiave o di un valore di registro (sola lettura).
+/// HKLM si guarda nella vista a 64 bit e, per `Software\…`, anche in
+/// `Software\Wow6432Node\…` (la vista a 32 bit).
+#[cfg(windows)]
+pub fn reg_exists_real(item: &RegItem) -> bool {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+    let (root, path, value) = match item {
+        RegItem::Key { root, path } => (*root, path.as_str(), None),
+        RegItem::Value { root, path, value } => (*root, path.as_str(), Some(value.as_str())),
+    };
+    let check = |hive, path: &str, flags| {
+        RegKey::predef(hive)
+            .open_subkey_with_flags(path, flags)
+            .is_ok_and(|k| value.is_none_or(|v| k.get_raw_value(v).is_ok()))
+    };
+    match root {
+        RegRoot::Hkcu => check(HKEY_CURRENT_USER, path, KEY_READ),
+        RegRoot::Hklm => {
+            check(HKEY_LOCAL_MACHINE, path, KEY_READ | KEY_WOW64_64KEY)
+                || wow6432_path(path)
+                    .is_some_and(|alt| check(HKEY_LOCAL_MACHINE, &alt, KEY_READ | KEY_WOW64_64KEY))
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn reg_exists_real(_item: &RegItem) -> bool {
+    false
+}
+
+/// `Software\X` → `Software\Wow6432Node\X`; `None` se non è sotto `Software`
+/// o è già nella vista a 32 bit.
+fn wow6432_path(path: &str) -> Option<String> {
+    let (first, rest) = path.split_once('\\')?;
+    let second = rest.split('\\').next().unwrap_or("");
+    (first.eq_ignore_ascii_case("software") && !second.eq_ignore_ascii_case("wow6432node"))
+        .then(|| format!(r"{first}\Wow6432Node\{rest}"))
+}
+
+/// `true` se due percorsi di regola (con `%Variabili%`, `*` e `?`) possono
+/// indicare la stessa cosa o l'uno stare dentro l'altro: dopo l'espansione,
+/// i componenti in comune (fino al più corto) si corrispondono uno a uno, con
+/// i jolly di ciascuno dei due. Maiuscole, `/` e `\` finali ignorati. Un
+/// percorso con una variabile non definita non si sovrappone a nulla.
+pub fn overlaps(a: &str, b: &str, env: &Env) -> bool {
+    let a: Vec<Vec<String>> = expand(a, env).iter().map(|p| key_comps(p)).collect();
+    let b: Vec<Vec<String>> = expand(b, env).iter().map(|p| key_comps(p)).collect();
+    a.iter().any(|x| {
+        b.iter().any(|y| {
+            !x.is_empty()
+                && !y.is_empty()
+                && x.iter()
+                    .zip(y)
+                    .all(|(p, q)| wildcard_match(p, q) || wildcard_match(q, p))
+        })
+    })
+}
+
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 struct Ctx<'a> {
@@ -1345,5 +1437,85 @@ mod tests {
             "{:?}",
             c.skipped_reasons
         );
+    }
+
+    fn cleaner(actions: Vec<Action>) -> Cleaner {
+        Cleaner {
+            id: "c".into(),
+            label: "c".into(),
+            group: "g".into(),
+            origin: Origin::CleanerMl("c"),
+            description: String::new(),
+            running: vec![],
+            options: vec![opt(actions)],
+        }
+    }
+
+    #[test]
+    fn present_checks_base_folders_and_registry() {
+        let t = tempfile::tempdir().unwrap();
+        let profile = t.path().join("u");
+        fs::create_dir_all(profile.join(".tool").join("cache")).unwrap();
+        let e = env(&[("userprofile", &profile.to_string_lossy())]);
+        let files = |p: &str, search| Action::Files {
+            path: p.into(),
+            patterns: vec![],
+            recurse: true,
+            remove_self: false,
+            search,
+        };
+        // La cartella c'è (anche con un jolly dopo la base).
+        assert!(present(&cleaner(vec![files(r"%UserProfile%\.tool\cache", Search::WalkAll)]), &e, &never));
+        assert!(present(&cleaner(vec![files(r"%UserProfile%\.tool\*.log", Search::Glob)]), &e, &never));
+        // Non c'è, o la base sarebbe il profilo intero (sempre presente).
+        assert!(!present(&cleaner(vec![files(r"%UserProfile%\.other\cache", Search::WalkAll)]), &e, &never));
+        assert!(!present(&cleaner(vec![files(r"%UserProfile%\*\cache", Search::WalkAll)]), &e, &never));
+        assert!(!present(&cleaner(vec![files(r"%Nope%\x", Search::WalkAll)]), &e, &never));
+        // Registro: decide `reg_exists`.
+        let key = Action::RegKey {
+            root: RegRoot::Hkcu,
+            path: r"Software\Tool".into(),
+        };
+        assert!(present(&cleaner(vec![key.clone()]), &e, &|_| true));
+        assert!(!present(&cleaner(vec![key]), &e, &never));
+    }
+
+    #[test]
+    fn overlaps_is_wildcard_aware_and_two_way() {
+        let e = env(&[("localappdata", r"C:\Users\u\AppData\Local")]);
+        assert!(overlaps(r"%LocalAppData%\Google\Chrome", r"C:\USERS\u\appdata\local\google", &e));
+        assert!(overlaps(r"C:\Users\u\AppData\Local\Google", r"%LocalAppData%\Google\Chrome\Cache", &e));
+        assert!(overlaps(r"%LocalAppData%\Google\Chrome*\Cache", r"%LocalAppData%\Google\Chrome Beta", &e));
+        assert!(overlaps(r"%LocalAppData%\*\Cache", r"%LocalAppData%\Google\Cache\x", &e));
+        assert!(overlaps(r"%LocalAppData%\Google\", r"%LocalAppData%/google", &e));
+        assert!(!overlaps(r"%LocalAppData%\Google\Chrome", r"%LocalAppData%\Google\Edge", &e));
+        assert!(!overlaps(r"%LocalAppData%\Mozilla", r"%LocalAppData%\Google", &e));
+        assert!(!overlaps(r"%Nope%\x", r"%LocalAppData%", &e));
+    }
+
+    /// Sola lettura del registro vero: chiavi che esistono su ogni Windows.
+    #[cfg(windows)]
+    #[test]
+    fn reg_exists_real_reads_keys_and_values() {
+        assert!(reg_exists_real(&RegItem::Key {
+            root: RegRoot::Hklm,
+            path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
+        }));
+        assert!(reg_exists_real(&RegItem::Value {
+            root: RegRoot::Hklm,
+            path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
+            value: "ProductName".into(),
+        }));
+        assert!(!reg_exists_real(&RegItem::Value {
+            root: RegRoot::Hklm,
+            path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
+            value: "pc-rules-no-such-value".into(),
+        }));
+        assert!(!reg_exists_real(&RegItem::Key {
+            root: RegRoot::Hkcu,
+            path: r"Software\pc-rules-no-such-key".into(),
+        }));
+        assert_eq!(wow6432_path(r"Software\A\B").as_deref(), Some(r"Software\Wow6432Node\A\B"));
+        assert_eq!(wow6432_path(r"Software\Wow6432Node\A"), None);
     }
 }
