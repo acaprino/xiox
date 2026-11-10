@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso da pptr.dev (guida alla configurazione): ~/.cache/puppeteer, sostituibile con PUPPETEER_CACHE_DIR (pptr.dev/troubleshooting). -->
+<cleaner id="puppeteer" os="windows">
+  <label>Puppeteer</label>
+  <description>Browser scaricati da Puppeteer. Non tocca progetti o script.</description>
+  <var id="cache">
+    <value>%PUPPETEER_CACHE_DIR%</value>
+    <value>%UserProfile%\.cache\puppeteer</value>
+  </var>
+  <option id="browsers">
+    <label>Browser di Puppeteer</label>
+    <description>Rimuove i browser scaricati da Puppeteer.</description>
+    <warning>Per riaverli rifai `npm install`.</warning>
+    <action command="delete" search="walk.all" path="$$cache$$"/>
+  </option>
+</cleaner>

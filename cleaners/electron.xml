@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da electronjs.org (installazione: %LOCALAPPDATA%/electron/Cache; ELECTRON_CACHE nella documentazione di Electron 8) e da electron.build (%LOCALAPPDATA%\electron-builder\Cache). -->
+<cleaner id="electron" os="windows">
+  <label>Electron</label>
+  <description>Binari di Electron scaricati e cache degli strumenti di electron-builder. Non tocca progetti o app già impacchettate.</description>
+  <var id="download">
+    <value>%ELECTRON_CACHE%</value>
+    <value>%LocalAppData%\electron\Cache</value>
+  </var>
+  <option id="download">
+    <label>Binari di Electron scaricati</label>
+    <description>Rimuove gli archivi di Electron scaricati da @electron/get.</description>
+    <warning>Si riscaricano al prossimo `npm install` di electron o alla prossima impacchettatura.</warning>
+    <action command="delete" search="walk.all" path="$$download$$"/>
+  </option>
+  <option id="builder">
+    <label>Cache di electron-builder</label>
+    <description>Rimuove gli strumenti che electron-builder scarica per impacchettare le app.</description>
+    <warning>Si riscaricano alla prossima esecuzione di electron-builder.</warning>
+    <action command="delete" search="walk.all" path="%LocalAppData%\electron-builder\Cache"/>
+  </option>
+</cleaner>

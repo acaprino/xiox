@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cartella dei dati utente di Windows: %APPDATA%\Code (code.visualstudio.com, disinstallazione), Code - Insiders (profili), VSCodium (documentazione di migrazione), Cursor (forum ufficiale), Windsurf (documentazione, percorso precedente). Solo le sottocartelle di cache e i log; User\History, Local Storage, Workspaces, Backups e le impostazioni non si toccano. -->
+<cleaner id="vscode" os="windows">
+  <label>VS Code e derivati</label>
+  <description>Cache e log di Visual Studio Code, Code - Insiders, VSCodium, Cursor e Windsurf. Non tocca impostazioni, cronologia locale, Local Storage, aree di lavoro ed estensioni installate.</description>
+  <running type="exe" os="windows" same_user="true">Code.exe</running>
+  <running type="exe" os="windows" same_user="true">Code - Insiders.exe</running>
+  <running type="exe" os="windows" same_user="true">VSCodium.exe</running>
+  <running type="exe" os="windows" same_user="true">Cursor.exe</running>
+  <running type="exe" os="windows" same_user="true">Windsurf.exe</running>
+  <var id="editors">
+    <value>%AppData%\Code</value>
+    <value>%AppData%\Code - Insiders</value>
+    <value>%AppData%\VSCodium</value>
+    <value>%AppData%\Cursor</value>
+    <value>%AppData%\Windsurf</value>
+  </var>
+  <option id="cache">
+    <label>Cache degli editor</label>
+    <description>Rimuove Cache, CachedData, Code Cache, GPUCache e i pacchetti di estensioni scaricati (CachedExtensionVSIXs).</description>
+    <warning>Chiudi l'editor: alla riapertura il primo avvio può essere più lento.</warning>
+    <action command="delete" search="walk.all" path="$$editors$$\Cache"/>
+    <action command="delete" search="walk.all" path="$$editors$$\CachedData"/>
+    <action command="delete" search="walk.all" path="$$editors$$\Code Cache"/>
+    <action command="delete" search="walk.all" path="$$editors$$\GPUCache"/>
+    <action command="delete" search="walk.all" path="$$editors$$\CachedExtensionVSIXs"/>
+  </option>
+  <option id="logs">
+    <label>Log degli editor</label>
+    <description>Rimuove i log delle sessioni dell'editor.</description>
+    <warning>Chiudi l'editor. Si perdono i log utili a diagnosticare problemi recenti.</warning>
+    <action command="delete" search="walk.all" path="$$editors$$\logs"/>
+  </option>
+</cleaner>
