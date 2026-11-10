@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "values": [
+    {"name": "temp folders minimum age", "group": "cleaner", "value": 24, "unit": "hours", "source": "string 0x141ab7df8"},
+    {"name": "user temp folder", "group": "cleaner", "value": "%TEMP%", "source": "function 0x140412ce0"},
+    {"name": "windows temp folder", "group": "cleaner", "value": "%WINDIR%\\Temp", "source": "string 0x141afe990"},
+    {"name": "prefetch folder", "group": "cleaner", "value": "%WINDIR%\\Prefetch", "source": "string 0x141ae1210"},
+    {"name": "old prefetch age", "group": "cleaner", "value": 14, "unit": "days", "estimated": true},
+    {"name": "registry categories", "group": "registry", "value": 12, "source": "function 0x140206850"},
+    {"name": "shared dlls key", "group": "registry", "value": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDlls", "source": "string 0x141aea040"},
+    {"name": "mui cache key", "group": "registry", "value": "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache", "source": "string 0x141ae9df0"},
+    {"name": "registry check rule", "group": "registry", "value": "path missing on a present drive", "estimated": true},
+    {"name": "backup before fix", "group": "registry", "value": true, "estimated": true},
+    {"name": "service disabled start value", "group": "services", "value": 4, "source": "Windows SERVICE_DISABLED; import ChangeServiceConfigW 0x141f51728"},
+    {"name": "service manual start value", "group": "services", "value": 3, "source": "Windows SERVICE_DEMAND_START; import ChangeServiceConfigW 0x141f51728"},
+    {"name": "suggested services list", "group": "services", "value": "own safe list", "estimated": true}
+  ]
+}
