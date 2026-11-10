@@ -243,6 +243,14 @@ Entrano per decisione dell'utente (decisione 6). Lo spazio liberato dentro un di
 - Dischi orfani: file `.vdi`, `.vmdk`, `.vhd`, `.vhdx`, `.qcow2` che nessuna VM registrata usa, trovati dalla MFT (`dc-disktree` tiene anche queste estensioni). Attenzione: possono essere l'unica copia. Esclusi i dischi di WSL e Docker (sezioni sopra) e i dischi montati.
 - ISO dentro le cartelle delle VM: Facoltativo.
 
+## Fase 3: processi in background e programmi all'avvio
+
+Decisione dell'utente (2026-11-10): "va implementato in una Fase 3". Oggi la scheda "Servizi e RAM" gestisce solo i servizi (`src/services.rs`: `set_start` disattiva e ferma, `restore_all` ripristina). Mancano, e si aggiungono nella stessa scheda con gli stessi componenti:
+
+- **Processi in esecuzione**: elenco con nome, RAM e CPU; "Termina" sul processo scelto. *Scelta mia:* i processi di sistema e quelli protetti (stessa idea di `PROTECTED` per i servizi) non si possono terminare; l'avviso dice che il lavoro non salvato si perde.
+- **Programmi all'avvio**: chiavi `Run` e `RunOnce` (`HKCU`, `HKLM`, `WOW6432Node`), cartelle Esecuzione automatica, attività pianificate all'accesso. Disattiva e riattiva, senza cancellare: *scelta mia*, si usa lo stesso meccanismo di Gestione attività (`StartupApproved`), così Windows e PulisciPC mostrano lo stesso stato, con backup e "Ripristina tutto" come per i servizi.
+- Fuori: la sospensione automatica dei programmi in background (come "Performance Optimizer" di CCleaner). È un prodotto a sé; se serve, documento suo.
+
 ## Esecuzione della pulizia: worker e resoconto
 
 Decisione 7. Vale per Pulizia file e per Sviluppatori.
@@ -261,9 +269,10 @@ Decisione 7. Vale per Pulizia file e per Sviluppatori.
 3. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
 4. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4).
 5. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 2 ore.
-6. Parte D: dopo la Fase 3, **nello stesso rilascio** (decisione dell'utente, 2026-11-10: "ora", non in un secondo rilascio). Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
+6. Processi e programmi all'avvio: con la Fase 3. Circa 4 ore.
+7. Parte D: dopo la Fase 3, **nello stesso rilascio** (decisione dell'utente, 2026-11-10: "ora", non in un secondo rilascio). Docker e Podman circa 4 ore, WSL circa 6 ore, macchine virtuali circa 4 ore.
 
-Totale: circa 34 ore e mezza.
+Totale: circa 38 ore e mezza.
 
 ## Verifica
 
