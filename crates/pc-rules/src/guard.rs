@@ -13,6 +13,9 @@ use crate::wildcard::wildcard_match;
 
 /// [`Guard::protected`] con un `Guard` costruito per la sola chiamata. Chi
 /// controlla molti percorsi costruisce un [`Guard`] una volta.
+///
+/// Si applica al percorso grezzo della regola (variabili espanse, prima della
+/// risoluzione dei jolly) **e** a ogni percorso concreto che ne risulta.
 pub fn protected(path: &Path, env: &Env) -> Option<&'static str> {
     Guard::new(env).protected(path)
 }
