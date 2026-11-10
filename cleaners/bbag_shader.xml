@@ -3,6 +3,10 @@
 <cleaner id="bbag_shader" os="windows">
   <label>Cache shader GPU</label>
   <description>Cache shader e driver grafici ricostruibili. Chiudi giochi e software 3D.</description>
+  <var id="cuda_cache">
+    <value>%CUDA_CACHE_PATH%</value>
+    <value>%AppData%\NVIDIA\ComputeCache</value>
+  </var>
   <option id="directx">
     <label>Cache shader DirectX</label>
     <description>Rimuove la cache DirectX. Chiudi giochi e programmi 3D: gli shader saranno ricompilati e potrebbero rallentare temporaneamente.</description>
@@ -19,5 +23,10 @@
     <description>Rimuove le cache AMD: chiudi giochi e app GPU; le cache saranno rigenerate e il prossimo avvio può rallentare.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\AMD\DxCache"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\AMD\GLCache"/>
+  </option>
+  <option id="cuda">
+    <label>Cache di compilazione CUDA</label>
+    <description>Rimuove la cache di compilazione JIT di CUDA (ComputeCache). Chiudi i programmi che usano CUDA: i kernel saranno ricompilati e il primo avvio può rallentare.</description>
+    <action command="delete" search="walk.files" path="$$cuda_cache$$"/>
   </option>
 </cleaner>

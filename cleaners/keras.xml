@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da keras.io: ~/.keras/datasets (get_file) e ~/.keras/models (pesi delle applicazioni). Il file di configurazione keras.json non si tocca. -->
+<cleaner id="keras" os="windows">
+  <label>Keras</label>
+  <description>Dataset e pesi dei modelli scaricati da Keras. Non tocca il file di configurazione keras.json.</description>
+  <option id="datasets">
+    <label>Dataset di Keras</label>
+    <description>Rimuove i dataset scaricati nella cartella datasets.</description>
+    <warning>Si riscaricano al prossimo uso (per esempio con `keras.datasets`).</warning>
+    <action command="delete" search="walk.all" path="%UserProfile%\.keras\datasets"/>
+  </option>
+  <option id="models">
+    <label>Pesi dei modelli di Keras</label>
+    <description>Rimuove i pesi preaddestrati scaricati nella cartella models.</description>
+    <warning>Si riscaricano al prossimo uso dei modelli preaddestrati.</warning>
+    <action command="delete" search="walk.all" path="%UserProfile%\.keras\models"/>
+  </option>
+</cleaner>
