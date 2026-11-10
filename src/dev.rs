@@ -78,8 +78,9 @@ enum View {
     Cleaned,
 }
 
-/// Il dialogo di conferma: il piano esatto che verrà eseguito.
+/// Il dialogo di conferma: il piano esatto che verrà eseguito, solo per la sezione visibile.
 struct Confirm {
+    section: Section,
     plan: Option<CleanPlan>,
     sessions: Vec<(Agent, String)>,
     /// (elemento, dimensione) per l'elenco nel dialogo.
@@ -233,22 +234,27 @@ impl DevState {
         });
     }
 
-    fn totals(&self) -> Totals {
+    /// (selezionati, totale, byte selezionati) della sezione visibile.
+    fn selection(&self) -> (usize, usize, u64) {
         match &self.scan {
-            Some(scan) => totals(scan, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions),
-            None => Totals::default(),
+            Some(scan) => section_stats(scan, self.section, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions),
+            None => (0, 0, 0),
         }
     }
 
-    /// Costruisce il piano dalla selezione (lo stesso che verrà eseguito) e apre la conferma.
+    /// Costruisce il piano dalla selezione della sezione visibile (lo stesso che verrà
+    /// eseguito) e apre la conferma. Le righe scelte nelle altre sezioni non ci entrano.
     fn open_confirm(&mut self) {
         let Some(scan) = self.scan.clone() else { return };
         let mode = self.settings.remove_mode;
-        let ids: Vec<String> = chosen_reports(&scan.projects, &self.sel_projects)
-            .chain(chosen_reports(&scan.worktrees, &self.sel_worktrees))
-            .map(|r| r.id.clone())
+        let section = self.section;
+        let action = section_action(&scan, section, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions);
+        let ids = action.ids;
+        let sessions: Vec<&ArchivedSession> = scan
+            .archived
+            .iter()
+            .filter(|s| action.sessions.iter().any(|(a, id)| *a == s.agent && *id == s.id))
             .collect();
-        let sessions: Vec<&ArchivedSession> = chosen_sessions(&scan.archived, &self.sel_sessions).collect();
         let mut rows = Vec::new();
         let mut summary = Vec::new();
         let mut plan = None;
@@ -283,7 +289,7 @@ impl DevState {
             }
         }
         let sessions = sessions.iter().map(|s| (s.agent, s.id.clone())).collect();
-        self.confirm = Some(Confirm { plan, sessions, rows, summary, error, mode });
+        self.confirm = Some(Confirm { section, plan, sessions, rows, summary, error, mode });
     }
 
     fn start_clean(&mut self, ctx: &egui::Context, c: Confirm) {
@@ -477,11 +483,7 @@ impl DevState {
 
     fn scanned_view(&mut self, ui: &mut Ui) {
         let Some(scan) = self.scan.clone() else { return };
-        let (selected, total, bytes) = match self.section {
-            Section::Projects => report_stats(&scan.projects, &self.sel_projects),
-            Section::Worktrees => report_stats(&scan.worktrees, &self.sel_worktrees),
-            Section::Sessions => session_stats(&scan.archived, &self.sel_sessions),
-        };
+        let (selected, total, bytes) = self.selection();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Analisi completata").size(20.0).strong().color(TEXT));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -574,15 +576,15 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
         .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                let t = state.totals();
+                let (selected, _, bytes) = state.selection();
                 if state.scan.is_some() {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(format!("Selezionati: {}", sys::fmt_size(t.bytes))).color(TEXT));
-                        ui.label(RichText::new(t.counts_text()).size(12.0).color(MUTED));
+                        ui.label(RichText::new(format!("Selezionati: {}", sys::fmt_size(bytes))).color(TEXT));
+                        ui.label(RichText::new(selection_text(state.section, selected)).size(12.0).color(MUTED));
                     });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if primary(ui, "Avvia pulizia", !busy && t.any()).clicked() {
+                    if primary(ui, "Avvia pulizia", !busy && selected > 0).clicked() {
                         state.open_confirm();
                     }
                     if secondary(ui, "Analizza", !busy).clicked() {
@@ -611,9 +613,9 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
     let mut close = false;
     egui::Modal::new(egui::Id::new("dev_confirm")).show(ctx, |ui| {
         ui.set_width(460.0);
-        ui.label(RichText::new("Avviare la pulizia?").size(18.0).strong());
+        ui.label(RichText::new(confirm_title(c.section)).size(18.0).strong());
         ui.add_space(6.0);
-        ui.add(egui::Label::new(confirm_text(c.mode)).wrap());
+        ui.add(egui::Label::new(confirm_text(c.section, c.mode)).wrap());
         ui.add_space(8.0);
         if let Some(e) = &c.error {
             ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
@@ -640,7 +642,7 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if primary(ui, "Continua", c.error.is_none() && !c.rows.is_empty()).clicked() {
+            if primary(ui, &confirm_button(c), c.error.is_none() && !c.rows.is_empty()).clicked() {
                 go = true;
             }
             if secondary(ui, "Annulla", true).clicked() {
@@ -657,10 +659,27 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
     }
 }
 
-fn confirm_text(mode: RemoveMode) -> &'static str {
-    match mode {
-        RemoveMode::Recycle => "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git.",
-        RemoveMode::Permanent => "Gli elementi selezionati verranno eliminati definitivamente.",
+fn confirm_title(section: Section) -> &'static str {
+    match section {
+        Section::Projects => "Pulire i progetti selezionati?",
+        Section::Worktrees => "Rimuovere i worktree selezionati?",
+        Section::Sessions => "Cancellare le sessioni archiviate selezionate?",
+    }
+}
+
+fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
+    match (section, mode) {
+        (Section::Sessions, RemoveMode::Recycle) => "Una copia viene messa nel Cestino prima della cancellazione, quando il file esiste.",
+        (Section::Sessions, RemoveMode::Permanent) => "Le sessioni vengono cancellate definitivamente.",
+        (_, RemoveMode::Recycle) => "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git.",
+        (_, RemoveMode::Permanent) => "Gli elementi selezionati verranno eliminati definitivamente.",
+    }
+}
+
+fn confirm_button(c: &Confirm) -> String {
+    match c.section {
+        Section::Sessions => format!("Cancella {}", plural(c.sessions.len(), "sessione", "sessioni")),
+        Section::Projects | Section::Worktrees => "Continua".into(),
     }
 }
 
@@ -900,34 +919,42 @@ fn session_stats(sessions: &[ArchivedSession], sel: &[bool]) -> (usize, usize, u
     (chosen.len(), sessions.len(), chosen.iter().map(|s| s.bytes).sum())
 }
 
-#[derive(Default, Debug, PartialEq)]
-struct Totals {
-    projects: usize,
-    worktrees: usize,
-    sessions: usize,
-    bytes: u64,
-}
-
-impl Totals {
-    fn any(&self) -> bool {
-        self.projects + self.worktrees + self.sessions > 0
-    }
-
-    fn counts_text(&self) -> String {
-        format!(
-            "{} · {} · {}",
-            plural(self.projects, "progetto", "progetti"),
-            plural(self.worktrees, "worktree", "worktree"),
-            plural(self.sessions, "sessione", "sessioni")
-        )
+/// (selezionati, totale, byte selezionati) di una sola sezione.
+fn section_stats(scan: &DevScan, section: Section, sp: &[bool], sw: &[bool], ss: &[bool]) -> (usize, usize, u64) {
+    match section {
+        Section::Projects => report_stats(&scan.projects, sp),
+        Section::Worktrees => report_stats(&scan.worktrees, sw),
+        Section::Sessions => session_stats(&scan.archived, ss),
     }
 }
 
-fn totals(scan: &DevScan, sp: &[bool], sw: &[bool], ss: &[bool]) -> Totals {
-    let (projects, _, pb) = report_stats(&scan.projects, sp);
-    let (worktrees, _, wb) = report_stats(&scan.worktrees, sw);
-    let (sessions, _, sb) = session_stats(&scan.archived, ss);
-    Totals { projects, worktrees, sessions, bytes: pb + wb + sb }
+/// Cosa farebbe «Avvia pulizia» nella sezione visibile: i progetti o worktree da passare a
+/// `build_plan`, le sessioni da passare a `delete_archived`. Mai righe di un'altra sezione.
+#[derive(Debug, Default, PartialEq)]
+struct Action {
+    ids: Vec<String>,
+    sessions: Vec<(Agent, String)>,
+}
+
+fn section_action(scan: &DevScan, section: Section, sp: &[bool], sw: &[bool], ss: &[bool]) -> Action {
+    let ids = |reports: &[ProjectReport], sel: &[bool]| chosen_reports(reports, sel).map(|r| r.id.clone()).collect::<Vec<_>>();
+    match section {
+        Section::Projects => Action { ids: ids(&scan.projects, sp), sessions: vec![] },
+        Section::Worktrees => Action { ids: ids(&scan.worktrees, sw), sessions: vec![] },
+        Section::Sessions => Action {
+            ids: vec![],
+            sessions: chosen_sessions(&scan.archived, ss).map(|s| (s.agent, s.id.clone())).collect(),
+        },
+    }
+}
+
+/// Seconda riga della barra in basso: il conteggio della sola sezione visibile.
+fn selection_text(section: Section, n: usize) -> String {
+    match section {
+        Section::Projects => plural(n, "progetto", "progetti"),
+        Section::Worktrees => plural(n, "worktree", "worktree"),
+        Section::Sessions => plural(n, "sessione", "sessioni"),
+    }
 }
 
 fn analysis_failed(scan: &DevScan) -> bool {
@@ -1143,19 +1170,103 @@ mod tests {
         assert_eq!(ssel, vec![false, true]);
     }
 
-    #[test]
-    fn totals_count_only_selectable_rows() {
-        let scan = DevScan {
+    /// Un progetto (più uno bloccato), un worktree d'agente e due sessioni.
+    fn three_sections() -> DevScan {
+        let mut wt = report("w", ProjectStatus::Recent, false, 30);
+        wt.is_agent_worktree = true;
+        DevScan {
             projects: vec![report("a", ProjectStatus::Inactive, true, 100), report("b", ProjectStatus::Blocked, false, 50)],
-            worktrees: vec![report("w", ProjectStatus::Recent, false, 30)],
+            worktrees: vec![wt],
             archived: vec![session("1", None, false, 0), session("2", None, true, 4)],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stats_count_only_the_selectable_rows_of_one_section() {
+        let scan = three_sections();
+        let (sp, sw, ss) = ([true, true], [true], [true, true]);
+        assert_eq!(section_stats(&scan, Section::Projects, &sp, &sw, &ss), (1, 2, 100));
+        assert_eq!(section_stats(&scan, Section::Worktrees, &sp, &sw, &ss), (1, 1, 30));
+        assert_eq!(section_stats(&scan, Section::Sessions, &sp, &sw, &ss), (2, 2, 4));
+        assert_eq!(section_stats(&scan, Section::Projects, &[false, true], &sw, &ss), (0, 2, 0));
+        assert_eq!(selection_text(Section::Projects, 1), "1 progetto");
+        assert_eq!(selection_text(Section::Worktrees, 3), "3 worktree");
+        assert_eq!(selection_text(Section::Sessions, 665), "665 sessioni");
+    }
+
+    #[test]
+    fn the_action_list_holds_only_the_visible_section() {
+        let scan = three_sections();
+        let (sp, sw, ss) = ([true, false], [true], [true, true]);
+        let p = section_action(&scan, Section::Projects, &sp, &sw, &ss);
+        assert_eq!(p, Action { ids: vec!["a".into()], sessions: vec![] });
+        let w = section_action(&scan, Section::Worktrees, &sp, &sw, &ss);
+        assert_eq!(w, Action { ids: vec!["w".into()], sessions: vec![] });
+        let s = section_action(&scan, Section::Sessions, &sp, &sw, &ss);
+        assert_eq!(s, Action { ids: vec![], sessions: vec![(Agent::Codex, "1".into()), (Agent::Codex, "2".into())] });
+        // Nulla scelto nella sezione visibile: niente da fare, qualunque cosa ci sia nelle altre.
+        assert_eq!(section_action(&scan, Section::Worktrees, &sp, &[false], &ss), Action::default());
+        assert_eq!(section_action(&scan, Section::Sessions, &sp, &sw, &[false, false]), Action::default());
+    }
+
+    #[test]
+    fn the_confirmation_names_the_section_and_lists_only_its_items() {
+        let mut st = state();
+        st.set_scan(three_sections());
+        assert_eq!((&st.sel_projects, &st.sel_worktrees, &st.sel_sessions), (&vec![true, false], &vec![false], &vec![true, true]));
+        st.sel_worktrees = vec![true];
+
+        st.section = Section::Sessions;
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert!(c.plan.is_none(), "nessun progetto né worktree nella conferma delle sessioni");
+        assert_eq!(c.sessions.len(), 2);
+        assert!(c.rows.iter().all(|(label, _)| label.starts_with("Codex · ")), "{:?}", c.rows);
+        assert_eq!(confirm_title(c.section), "Cancellare le sessioni archiviate selezionate?");
+        assert_eq!(confirm_button(&c), "Cancella 2 sessioni");
+
+        st.section = Section::Projects;
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert!(c.sessions.is_empty(), "nessuna sessione nella conferma dei progetti");
+        let plan = c.plan.as_ref().unwrap();
+        assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
+        assert_eq!(c.rows.len(), plan.items.len());
+        assert_eq!(confirm_title(c.section), "Pulire i progetti selezionati?");
+        assert_eq!(confirm_button(&c), "Continua");
+
+        st.section = Section::Worktrees;
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert!(c.sessions.is_empty());
+        let plan = c.plan.as_ref().unwrap();
+        assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "w"), "{:?}", plan.items);
+        assert_eq!(confirm_title(c.section), "Rimuovere i worktree selezionati?");
+    }
+
+    #[test]
+    fn confirmation_texts_follow_section_and_mode() {
+        assert_eq!(
+            confirm_text(Section::Sessions, RemoveMode::Recycle),
+            "Una copia viene messa nel Cestino prima della cancellazione, quando il file esiste."
+        );
+        assert_eq!(confirm_text(Section::Sessions, RemoveMode::Permanent), "Le sessioni vengono cancellate definitivamente.");
+        assert_eq!(
+            confirm_text(Section::Worktrees, RemoveMode::Recycle),
+            "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git."
+        );
+        assert_eq!(confirm_text(Section::Projects, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
+        let one = Confirm {
+            section: Section::Sessions,
+            plan: None,
+            sessions: vec![(Agent::Pi, "x".into())],
+            rows: vec![],
+            summary: vec![],
+            error: None,
+            mode: RemoveMode::Recycle,
         };
-        let t = totals(&scan, &[true, true], &[true], &[true, true]);
-        assert_eq!(t, Totals { projects: 1, worktrees: 1, sessions: 2, bytes: 134 });
-        assert!(t.any());
-        assert_eq!(t.counts_text(), "1 progetto · 1 worktree · 2 sessioni");
-        assert!(!totals(&scan, &[false, true], &[false], &[false, false]).any());
+        assert_eq!(confirm_button(&one), "Cancella 1 sessione");
     }
 
     #[test]
@@ -1272,7 +1383,7 @@ mod tests {
         assert_eq!(st.view, View::Scanned);
         assert_eq!(st.sel_projects, vec![true, false]);
         assert_eq!(st.sel_sessions, vec![true, false]);
-        assert_eq!(st.totals().bytes, 10);
+        assert_eq!(st.selection(), (1, 2, 10));
 
         st.release();
         assert!(st.scan.is_none());
@@ -1305,6 +1416,6 @@ mod tests {
         assert!(st.scan.is_none());
         assert_eq!(st.view, View::Cleaned);
         assert_eq!(st.cleaned.as_ref().map(|c| c.freed), Some(10));
-        assert!(!st.totals().any());
+        assert_eq!(st.selection(), (0, 0, 0));
     }
 }
