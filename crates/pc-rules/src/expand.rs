@@ -57,16 +57,20 @@ fn push_all(partial: &mut [String], s: &str) {
     }
 }
 
+/// Valori di una variabile; vuoto se non è definita o vale solo spazi (un
+/// percorso con una radice vuota diventerebbe relativo alla cartella corrente
+/// o alla radice del disco).
 fn values_of<'a>(name: &str, env: &'a Env) -> Vec<&'a str> {
+    let defined = |n: &str| env.get(n).filter(|v| !v.trim().is_empty());
     if name.eq_ignore_ascii_case("programfiles") {
         let mut v: Vec<&str> = ["programfiles", "programfiles(x86)"]
             .iter()
-            .filter_map(|n| env.get(n))
+            .filter_map(|n| defined(n))
             .collect();
         v.dedup();
         v
     } else {
-        env.get(name).into_iter().collect()
+        defined(name).into_iter().collect()
     }
 }
 
@@ -133,5 +137,45 @@ mod tests {
     fn path_without_variables_is_kept() {
         let e = env(&[]);
         assert_eq!(expand(r"C:\Foo\Bar", &e), vec![PathBuf::from(r"C:\Foo\Bar")]);
+    }
+
+    #[test]
+    fn empty_or_blank_value_counts_as_undefined() {
+        let e = env(&[("empty", ""), ("blank", "  "), ("programfiles", "")]);
+        assert!(expand(r"%Empty%\Windows\System32", &e).is_empty());
+        assert!(expand(r"%Blank%\x", &e).is_empty());
+        assert!(expand(r"%ProgramFiles%\Foo", &e).is_empty());
+    }
+
+    #[test]
+    fn blank_programfiles_x86_is_skipped_but_main_root_kept() {
+        let e = env(&[("programfiles", r"C:\Program Files"), ("programfiles(x86)", "")]);
+        assert_eq!(
+            expand(r"%ProgramFiles%\Foo", &e),
+            vec![PathBuf::from(r"C:\Program Files\Foo")]
+        );
+    }
+
+    #[test]
+    fn forward_slashes_become_backslashes() {
+        let e = env(&[("localappdata", r"C:\U\L")]);
+        assert_eq!(
+            expand("%LOCALAPPDATA%/Foo/Bar", &e),
+            vec![PathBuf::from(r"C:\U\L\Foo\Bar")]
+        );
+    }
+
+    #[test]
+    fn double_percent_and_unmatched_percent_stay_literal() {
+        let e = env(&[("a", "X")]);
+        assert_eq!(expand(r"C:\100%%\x", &e), vec![PathBuf::from(r"C:\100%%\x")]);
+        assert_eq!(expand(r"C:\100%\x", &e), vec![PathBuf::from(r"C:\100%\x")]);
+        assert_eq!(expand(r"C:\a%b\c%d", &e), vec![PathBuf::from(r"C:\a%b\c%d")]);
+    }
+
+    #[test]
+    fn values_are_not_expanded_again() {
+        let e = env(&[("a", r"%b%\x"), ("b", r"C:\B")]);
+        assert_eq!(expand("%A%", &e), vec![PathBuf::from(r"%b%\x")]);
     }
 }
