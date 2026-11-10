@@ -756,6 +756,25 @@ fn plan_worktree_falls_back_to_artifacts_when_unsure() {
 }
 
 #[test]
+fn plan_worktree_fallback_plans_only_recommended_folders() {
+    // Not removable whole (unknown main worktree): a worktree tick must not plan folders that need
+    // a tick of their own (Optional/Caution).
+    let mut rep = worktree_report(r"C:\wt\a", None, Some(false), ProjectStatus::Inactive);
+    let mut nm = node_modules(r"C:\wt\a", 900);
+    nm.level = Level::Optional;
+    let mut tracked = art("C:\\wt\\a", "build", 40, true);
+    tracked.level = Level::Caution;
+    rep.artifacts.extend([nm.clone(), tracked.clone()]);
+    let plan = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 2, "{:?}", plan.items);
+    assert!(plan.items.iter().all(|i| i.path != nm.path && i.path != tracked.path));
+    // Ticked folder by folder they are planned.
+    let sel = Selection { artifacts: vec![nm.id.clone(), tracked.id.clone()], ..Default::default() };
+    let plan = build_plan(std::slice::from_ref(&rep), &sel, RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 2);
+}
+
+#[test]
 fn plan_refuses_a_folder_of_a_worktree_removed_whole() {
     let rep = worktree_report(r"C:\wt\a", Some(r"C:\dev\proj"), Some(false), ProjectStatus::Inactive);
     let err = build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).unwrap_err();

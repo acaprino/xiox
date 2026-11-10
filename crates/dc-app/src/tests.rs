@@ -189,7 +189,7 @@ fn refused(scan: &DevScan, items: Vec<PlanItem>) -> String {
 fn a_canonical_plan_and_any_subset_of_it_are_accepted() {
     let (scan, proj, wt) = canonical_scan();
     let ids = [path_key(&proj), path_key(&wt)];
-    let canonical = build_plan(&scan, &ids, RemoveMode::Recycle).unwrap();
+    let canonical = build_plan(&scan, &selection_for_projects(&scan, &ids), RemoveMode::Recycle).unwrap();
     assert_eq!(canonical.items.len(), 2);
     let checked = checked_plan(&scan, &canonical).unwrap();
     assert_eq!(checked.id, canonical.id);
@@ -465,12 +465,13 @@ fn reports_are_split_into_projects_worktrees_and_other_worktrees() {
     assert_eq!(names(&others), ["user-worktree"]);
 }
 
-#[test]
-fn a_project_tick_plans_only_its_recommended_folders() {
-    let mut proj = report(r"C:\dc-app-test-missing\mixed", false, false);
+/// A project with a `Recommended` folder (`target`), an `Optional` one (`node_modules`) and a
+/// `Caution` one (`build`, e.g. tracked by git).
+fn mixed_project(root: &Path) -> (ProjectReport, Artifact, Artifact) {
+    let mut proj = report(root.to_str().unwrap(), false, false);
     let folder = |name: &str, kind, class: Class, level| Artifact {
-        id: path_key(&proj.root.join(name)),
-        path: proj.root.join(name),
+        id: path_key(&root.join(name)),
+        path: root.join(name),
         kind,
         label: name.into(),
         class,
@@ -481,19 +482,39 @@ fn a_project_tick_plans_only_its_recommended_folders() {
     let nm = folder("node_modules", ArtifactKind::NodeModules, Class::Dependency, Level::Optional);
     let tracked = folder("build", ArtifactKind::CMake, Class::Build, Level::Caution);
     proj.artifacts.extend([nm.clone(), tracked.clone()]);
+    (proj, nm, tracked)
+}
+
+fn picked(artifacts: &[&Artifact]) -> Selection {
+    Selection { artifacts: artifacts.iter().map(|a| a.id.clone()).collect(), worktrees: vec![] }
+}
+
+#[test]
+fn a_project_tick_plans_only_its_recommended_folders() {
+    let (proj, nm, _) = mixed_project(Path::new(r"C:\dc-app-test-missing\mixed"));
     let scan = DevScan { projects: vec![proj.clone()], scanned_at_ms: now_ms(), ..Default::default() };
 
-    let plan = build_plan(&scan, std::slice::from_ref(&proj.id), RemoveMode::Recycle).unwrap();
+    let sel = selection_for_projects(&scan, std::slice::from_ref(&proj.id));
+    assert_eq!(sel.artifacts, vec![proj.artifacts[0].id.clone()]);
+    assert!(sel.worktrees.is_empty());
+    let plan = build_plan(&scan, &sel, RemoveMode::Recycle).unwrap();
     assert_eq!(plan.items.len(), 1);
     assert_eq!(plan.items[0].path, proj.root.join("target"));
-    for a in [&nm, &tracked] {
-        refused(&scan, vec![item_for(&proj.root, &a.path, a.kind, PlanAction::RemoveDir)]);
-    }
     // Nothing Recommended: nothing to plan.
     let mut only_deps = proj.clone();
     only_deps.artifacts = vec![nm];
     assert!(!plans_something(&only_deps));
     assert!(plans_something(&proj));
+}
+
+#[test]
+fn selection_for_projects_sends_whole_worktrees_aside_and_keeps_unknown_ids_to_be_refused() {
+    let (scan, proj, wt) = canonical_scan();
+    let sel = selection_for_projects(&scan, &[path_key(&proj), path_key(&wt)]);
+    assert_eq!(sel.worktrees, vec![path_key(&wt)]);
+    assert_eq!(sel.artifacts, vec![path_key(&proj.join("target"))]);
+    let sel = selection_for_projects(&scan, &[path_key(Path::new(r"C:\dc-app-test-missing\nope"))]);
+    assert!(build_plan(&scan, &sel, RemoveMode::Recycle).is_err());
 }
 
 #[test]
@@ -504,11 +525,79 @@ fn build_plan_ignores_worktrees_that_are_not_the_agents() {
         ..Default::default()
     };
     let plain = path_key(Path::new(r"C:\x\plain"));
-    let plan = build_plan(&scan, std::slice::from_ref(&plain), RemoveMode::Recycle).unwrap();
+    let plan =
+        build_plan(&scan, &selection_for_projects(&scan, std::slice::from_ref(&plain)), RemoveMode::Recycle).unwrap();
     assert_eq!(plan.items.len(), 1);
     assert_eq!(plan.mode, RemoveMode::Recycle);
+    // Neither the project id of a user worktree nor its folder id is selectable.
     let other = path_key(Path::new(r"C:\x\user-worktree"));
-    assert!(build_plan(&scan, &[other], RemoveMode::Recycle).is_err());
+    assert!(build_plan(&scan, &selection_for_projects(&scan, &[other]), RemoveMode::Recycle).is_err());
+    let folder = path_key(Path::new(r"C:\x\user-worktree\target"));
+    let sel = Selection { artifacts: vec![folder], ..Default::default() };
+    assert!(build_plan(&scan, &sel, RemoveMode::Recycle).is_err());
+}
+
+// ───────────────────────────── plans by folder ─────────────────────────────
+
+#[test]
+fn one_folder_of_a_project_with_two_is_accepted_and_only_it_is_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    let (target, nm) = (root.join("target"), root.join("node_modules"));
+    for d in [&target, &nm] {
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub").join("f.bin"), b"x").unwrap();
+    }
+    let (proj, nm_art, _) = mixed_project(&root);
+    let scan = DevScan { projects: vec![proj.clone()], scanned_at_ms: now_ms(), ..Default::default() };
+
+    // Only node_modules (Optional): picked by id, planned, accepted, removed; target stays.
+    let plan = build_plan(&scan, &picked(&[&nm_art]), RemoveMode::Permanent).unwrap();
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].path, nm);
+    assert_eq!(checked_plan(&scan, &plan).unwrap().items.len(), 1);
+    let res = execute_plan(&scan, &plan).expect("accepted");
+    assert_eq!(res.items.len(), 1);
+    assert!(matches!(res.items[0].outcome, ItemOutcome::Removed { .. }), "{res:?}");
+    assert!(!nm.exists(), "the picked folder is gone");
+    assert!(target.join("sub").join("f.bin").exists(), "the other folder stays");
+}
+
+#[test]
+fn caution_and_optional_folders_picked_by_id_are_planned_and_accepted() {
+    let (proj, nm, tracked) = mixed_project(Path::new(r"C:\dc-app-test-missing\mixed"));
+    let scan = DevScan { projects: vec![proj.clone()], scanned_at_ms: now_ms(), ..Default::default() };
+    let plan = build_plan(&scan, &picked(&[&nm, &tracked]), RemoveMode::Recycle).unwrap();
+    let paths: Vec<_> = plan.items.iter().map(|i| i.path.clone()).collect();
+    assert_eq!(paths, vec![nm.path.clone(), tracked.path.clone()]);
+    let checked = checked_plan(&scan, &plan).unwrap();
+    assert_eq!(checked.items.len(), 2);
+    assert_eq!(checked.mode, RemoveMode::Recycle);
+    // Each of them alone, too.
+    for a in [&nm, &tracked] {
+        let one = build_plan(&scan, &picked(&[a]), RemoveMode::Recycle).unwrap();
+        assert_eq!(checked_plan(&scan, &one).unwrap().items[0].path, a.path);
+    }
+}
+
+#[test]
+fn a_forged_child_of_a_picked_folder_or_a_changed_kind_is_refused() {
+    let (proj, _, _) = mixed_project(Path::new(r"C:\dc-app-test-missing\mixed"));
+    let scan = DevScan { projects: vec![proj.clone()], scanned_at_ms: now_ms(), ..Default::default() };
+    let plan = build_plan(&scan, &picked(&[&proj.artifacts[0]]), RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 1);
+
+    let mut child = plan.clone();
+    child.items[0].path = proj.root.join("target").join("debug");
+    let err = checked_plan(&scan, &child).unwrap_err();
+    assert!(err.contains("Percorso non presente nell'ultima analisi, rifiutato"), "{err}");
+    assert_eq!(execute_plan(&scan, &child).unwrap_err(), err);
+
+    let mut kind = plan.clone();
+    kind.items[0].kind = ArtifactKind::NodeModules;
+    let err = checked_plan(&scan, &kind).unwrap_err();
+    assert!(err.contains("Piano rifiutato: l'elemento non corrisponde all'ultima analisi"), "{err}");
+    assert_eq!(execute_plan(&scan, &kind).unwrap_err(), err);
 }
 
 // ───────────────────────────── roots ─────────────────────────────

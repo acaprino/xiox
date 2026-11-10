@@ -304,7 +304,7 @@ impl DevState {
         let mut plan = None;
         let mut error = None;
         if !ids.is_empty() {
-            match dc_app::build_plan(&scan, &ids, mode) {
+            match dc_app::build_plan(&scan, &dc_app::selection_for_projects(&scan, &ids), mode) {
                 Ok(p) => {
                     for it in &p.items {
                         rows.push((plan_label(&scan, it), sys::fmt_size(it.expected_bytes)));
@@ -1300,7 +1300,8 @@ mod tests {
 
     fn dc_engine_plan_len(r: &ProjectReport) -> usize {
         let scan = DevScan { worktrees: vec![r.clone()], ..Default::default() };
-        dc_app::build_plan(&scan, &[r.id.clone()], RemoveMode::Recycle).unwrap().items.len()
+        let sel = dc_app::selection_for_projects(&scan, &[r.id.clone()]);
+        dc_app::build_plan(&scan, &sel, RemoveMode::Recycle).unwrap().items.len()
     }
 
     #[test]

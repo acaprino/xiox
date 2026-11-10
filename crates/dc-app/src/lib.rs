@@ -18,7 +18,7 @@ use dc_model::{
 };
 use dc_mukade::{ArchivedSession, MukadeSessions};
 use dc_sessions::{HarnessCli, SessionOutcome, Trash};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -421,42 +421,38 @@ fn selectable_reports(scan: &DevScan) -> Vec<ProjectReport> {
     selectable(scan).cloned().collect()
 }
 
-/// Whether [`build_plan`] gives this report at least one item: the whole agent worktree, or one
-/// of its `Recommended` artifacts (see [`selection_of`]). Status and blocks are not looked at.
+/// Whether [`selection_for_projects`] gives this report at least one item: the whole agent
+/// worktree, or one of its `Recommended` artifacts. Status and blocks are not looked at.
 pub fn plans_something(report: &ProjectReport) -> bool {
     dc_engine::whole_worktree_repo(report).is_some()
         || report.artifacts.iter().any(|a| a.level == Level::Recommended)
 }
 
+/// INTERIM (the per-project checkbox of `src/dev.rs`; Task 10 deletes this together with it).
+///
 /// Report ids (one checkbox per project/worktree) -> the engine's [`Selection`]: an agent
 /// worktree removed whole goes in `worktrees`; any other report gives only its `Recommended`
 /// artifacts, so a per-project tick never plans a git-tracked, unverified or dependency folder
-/// (those need a tick of their own). An unknown id is refused.
-fn selection_of(reports: &[ProjectReport], ids: &[String]) -> Result<Selection, String> {
+/// (those need a pick of their own). An id that is not a project or agent worktree of `scan` is
+/// kept as an artifact id, so that [`build_plan`] refuses it.
+pub fn selection_for_projects(scan: &DevScan, project_ids: &[String]) -> Selection {
     let mut sel = Selection::default();
-    for id in ids {
-        let r = reports
-            .iter()
-            .find(|r| &r.id == id)
-            .ok_or_else(|| format!("Progetto non trovato nell'analisi: {id}"))?;
-        if dc_engine::whole_worktree_repo(r).is_some() {
-            sel.worktrees.push(id.clone());
-        } else {
-            sel.artifacts
-                .extend(r.artifacts.iter().filter(|a| a.level == Level::Recommended).map(|a| a.id.clone()));
+    for id in project_ids {
+        match selectable(scan).find(|r| &r.id == id) {
+            None => sel.artifacts.push(id.clone()),
+            Some(r) if dc_engine::whole_worktree_repo(r).is_some() => sel.worktrees.push(id.clone()),
+            Some(r) => sel
+                .artifacts
+                .extend(r.artifacts.iter().filter(|a| a.level == Level::Recommended).map(|a| a.id.clone())),
         }
     }
-    Ok(sel)
+    sel
 }
 
-/// [`dc_engine::build_plan`] for whole reports, through [`selection_of`].
-fn plan_reports(reports: &[ProjectReport], ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
-    let sel = selection_of(reports, ids)?;
-    dc_engine::build_plan(reports, &sel, mode).map_err(|e| e.to_string())
-}
-
-pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
-    plan_reports(&selectable_reports(scan), selected_ids, mode)
+/// [`dc_engine::build_plan`] over the projects and agent worktrees of `scan`: the user picks
+/// folders by [`Artifact::id`] (any level) and agent worktrees to remove whole by project id.
+pub fn build_plan(scan: &DevScan, sel: &Selection, mode: RemoveMode) -> Result<CleanPlan, String> {
+    dc_engine::build_plan(&selectable_reports(scan), sel, mode).map_err(|e| e.to_string())
 }
 
 /// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after
@@ -499,30 +495,39 @@ fn same_action(a: &PlanAction, b: &PlanAction) -> bool {
 /// 1. allow-list: every path must be an artifact of a project or agent worktree of `scan`, or
 ///    the root of an agent worktree (an ordinary project's root, anything of the other
 ///    worktrees and any path the scan never saw are refused);
-/// 2. the canonical plan is rebuilt with `dc_engine::build_plan` (through `selection_of`) from
-///    the scan's reports for the distinct `project_id`s of the items (so an `InUse` or blocked project is refused), and
-///    every item must match a canonical one on `path_key(path)`, `kind` and `action` (for
+/// 2. the [`Selection`] is rebuilt from the items (`RemoveDir` -> the id of the artifact at that
+///    path; `GitWorktreeRemove` -> its `project_id`), the canonical plan is rebuilt with
+///    [`build_plan`] (so an `InUse` or blocked project is refused), and every item must match a
+///    canonical one on `path_key(path)`, `project_id`, `kind` and `action` (for
 ///    `GitWorktreeRemove`, `repo` compared with `path_key`).
 ///
 /// The result holds the matching canonical items, once each, in the caller's order (a subset of
-/// the canonical plan is fine), with the caller's plan id and mode.
+/// the canonical plan is fine, and so is any folder of any level: picking it is the consent),
+/// with the caller's plan id and mode.
 fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
-    let allowed: HashSet<String> = selectable(scan)
-        .flat_map(|r| r.artifacts.iter().map(|a| path_key(&a.path)))
-        .chain(scan.worktrees.iter().map(|r| path_key(&r.root)))
+    let artifact_ids: HashMap<String, &str> = selectable(scan)
+        .flat_map(|r| r.artifacts.iter().map(|a| (path_key(&a.path), a.id.as_str())))
         .collect();
+    let allowed: HashSet<String> =
+        artifact_ids.keys().cloned().chain(scan.worktrees.iter().map(|r| path_key(&r.root))).collect();
     if let Some(bad) = plan.items.iter().find(|i| !allowed.contains(&path_key(&i.path))) {
         return Err(format!("Percorso non presente nell'ultima analisi, rifiutato: {}", bad.path.display()));
     }
 
-    let mut ids: Vec<String> = Vec::new();
+    let mut sel = Selection::default();
     for i in &plan.items {
-        if !ids.contains(&i.project_id) {
-            ids.push(i.project_id.clone());
+        match i.action {
+            // A path that is no artifact (a worktree root as a plain delete) selects nothing: it
+            // then matches no canonical item below.
+            PlanAction::RemoveDir => {
+                if let Some(id) = artifact_ids.get(&path_key(&i.path)) {
+                    sel.artifacts.push((*id).to_string());
+                }
+            }
+            PlanAction::GitWorktreeRemove { .. } => sel.worktrees.push(i.project_id.clone()),
         }
     }
-    let canonical = plan_reports(&selectable_reports(scan), &ids, plan.mode)
-        .map_err(|e| format!("Piano rifiutato: {e}"))?;
+    let canonical = build_plan(scan, &sel, plan.mode).map_err(|e| format!("Piano rifiutato: {e}"))?;
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut items: Vec<PlanItem> = Vec::new();
@@ -531,7 +536,12 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
         let Some(c) = canonical
             .items
             .iter()
-            .find(|c| path_key(&c.path) == key && c.kind == i.kind && same_action(&c.action, &i.action))
+            .find(|c| {
+                path_key(&c.path) == key
+                    && c.project_id == i.project_id
+                    && c.kind == i.kind
+                    && same_action(&c.action, &i.action)
+            })
         else {
             return Err(format!(
                 "Piano rifiutato: l'elemento non corrisponde all'ultima analisi: {}",

@@ -578,7 +578,8 @@ fn artifact_item(report: &ProjectReport, a: &Artifact) -> PlanItem {
 ///   (`dirty == Some(false)`) and with a known `main_worktree` different from itself -> ONE
 ///   `WorktreeDir` item with `GitWorktreeRemove { repo: main_worktree }` and `expected_bytes =
 ///   reclaimable_bytes` (so git deregisters the worktree instead of leaving a dangling entry).
-///   Anything less certain falls back to removing all its artifacts.
+///   Anything less certain falls back to removing its `Recommended` artifacts only: a worktree
+///   tick never plans a folder that needs a tick of its own.
 ///
 /// Any error fails the whole call (Italian `Error::Other`) and nothing is planned. Duplicate
 /// ids, and items with an identical `path_key`, are planned once. The plan id is unique per
@@ -634,7 +635,7 @@ pub fn build_plan(reports: &[ProjectReport], sel: &Selection, mode: RemoveMode) 
                 });
             }
         } else {
-            for a in &report.artifacts {
+            for a in report.artifacts.iter().filter(|a| a.level == Level::Recommended) {
                 if seen_paths.insert(path_key(&a.path)) {
                     items.push(artifact_item(report, a));
                 }
