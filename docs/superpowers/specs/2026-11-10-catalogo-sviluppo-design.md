@@ -214,9 +214,12 @@ Un XML per strumento in `cleaners/`, scritto da zero (nessuna derivazione da Ble
 
 ## Ordine e stime
 
-1. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`). Circa 3 ore.
-2. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4).
-3. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 1 ora.
+1. Avvio sempre da amministratore (manifest, avviso sull'account): circa 30 minuti, subito, è indipendente.
+2. Parte A: dopo la Fase 1, in un task proprio (tocca `dc-scanner`, `dc-git`, `dc-cleaner`, `dc-disktree`). Circa 3 ore per la tabella, più 2 ore per la ricerca dei marcatori dalla MFT.
+3. Parte B: dentro la Fase 2, dopo il motore `pc-rules`. Circa 4 ore: la maggior parte è verificare i percorsi sulla documentazione (regola 4). Più 2 ore per il rilevamento degli strumenti installati.
+4. Parte C: con la Fase 3 (codice nativo in `cleaner.rs`). Circa 1 ora.
+
+Totale: circa 12 ore e mezza.
 
 ## Verifica
 
