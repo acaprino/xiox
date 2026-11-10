@@ -63,6 +63,7 @@ struct Found {
     path: PathBuf,
     kind: ArtifactKind,
     label: &'static str,
+    class: Class,
     verified: bool,
     size: Option<SizeInfo>,
 }
@@ -145,6 +146,7 @@ fn walk(ctx: &Ctx, dir: &Path, depth: usize, inherited: Option<Arc<Owner>>) {
                 path: sd.path.clone(),
                 kind: spec.kind,
                 label: spec.label,
+                class: spec.class,
                 verified,
                 size: None,
             });
@@ -277,6 +279,7 @@ fn discover_indexed(ctx: &Ctx, ix: &dyn DirIndex, roots: &[PathBuf]) {
                 path: sd.path.clone(),
                 kind: spec.kind,
                 label: spec.label,
+                class: spec.class,
                 verified,
                 size: Some(e.size.clone()),
             });
@@ -343,12 +346,20 @@ impl ProjectScanner for DefaultScanner {
             if size.effective_bytes() < opts.min_artifact_bytes {
                 continue;
             }
+            // `level`, `note` and `preselected` are placeholders: the engine assesses each folder.
+            // The 7 ecosystems of the marker table verify their identity: none is ambiguous.
             by_owner.entry(Arc::as_ptr(&f.owner)).or_default().push(Artifact {
+                id: path_key(&f.path),
                 path: f.path,
                 kind: f.kind,
                 label: f.label.to_string(),
                 size,
                 verified: f.verified,
+                class: f.class,
+                level: f.class.base_level(),
+                note: String::new(),
+                ambiguous: false,
+                preselected: false,
             });
         }
 

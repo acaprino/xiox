@@ -12,9 +12,9 @@
 //! hours old.
 
 use dc_model::{
-    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Loaded,
-    PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions,
-    SessionRecord, SessionSource, Settings, normalize_path, path_key,
+    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Level,
+    Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions,
+    Selection, SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
 use dc_mukade::{ArchivedSession, MukadeSessions};
 use dc_sessions::{HarnessCli, SessionOutcome, Trash};
@@ -421,14 +421,42 @@ fn selectable_reports(scan: &DevScan) -> Vec<ProjectReport> {
     selectable(scan).cloned().collect()
 }
 
-/// Whether [`build_plan`] gives this report at least one item: the whole agent worktree, or its
-/// artifacts. Status and blocks are not looked at (see `dc_engine::plans_something`).
+/// Whether [`build_plan`] gives this report at least one item: the whole agent worktree, or one
+/// of its `Recommended` artifacts (see [`selection_of`]). Status and blocks are not looked at.
 pub fn plans_something(report: &ProjectReport) -> bool {
-    dc_engine::plans_something(report)
+    dc_engine::whole_worktree_repo(report).is_some()
+        || report.artifacts.iter().any(|a| a.level == Level::Recommended)
+}
+
+/// Report ids (one checkbox per project/worktree) -> the engine's [`Selection`]: an agent
+/// worktree removed whole goes in `worktrees`; any other report gives only its `Recommended`
+/// artifacts, so a per-project tick never plans a git-tracked, unverified or dependency folder
+/// (those need a tick of their own). An unknown id is refused.
+fn selection_of(reports: &[ProjectReport], ids: &[String]) -> Result<Selection, String> {
+    let mut sel = Selection::default();
+    for id in ids {
+        let r = reports
+            .iter()
+            .find(|r| &r.id == id)
+            .ok_or_else(|| format!("Progetto non trovato nell'analisi: {id}"))?;
+        if dc_engine::whole_worktree_repo(r).is_some() {
+            sel.worktrees.push(id.clone());
+        } else {
+            sel.artifacts
+                .extend(r.artifacts.iter().filter(|a| a.level == Level::Recommended).map(|a| a.id.clone()));
+        }
+    }
+    Ok(sel)
+}
+
+/// [`dc_engine::build_plan`] for whole reports, through [`selection_of`].
+fn plan_reports(reports: &[ProjectReport], ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
+    let sel = selection_of(reports, ids)?;
+    dc_engine::build_plan(reports, &sel, mode).map_err(|e| e.to_string())
 }
 
 pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
-    dc_engine::build_plan(&selectable_reports(scan), selected_ids, mode).map_err(|e| e.to_string())
+    plan_reports(&selectable_reports(scan), selected_ids, mode)
 }
 
 /// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after
@@ -471,8 +499,8 @@ fn same_action(a: &PlanAction, b: &PlanAction) -> bool {
 /// 1. allow-list: every path must be an artifact of a project or agent worktree of `scan`, or
 ///    the root of an agent worktree (an ordinary project's root, anything of the other
 ///    worktrees and any path the scan never saw are refused);
-/// 2. the canonical plan is rebuilt with `dc_engine::build_plan` from the scan's reports for the
-///    distinct `project_id`s of the items (so an `InUse` or blocked project is refused), and
+/// 2. the canonical plan is rebuilt with `dc_engine::build_plan` (through `selection_of`) from
+///    the scan's reports for the distinct `project_id`s of the items (so an `InUse` or blocked project is refused), and
 ///    every item must match a canonical one on `path_key(path)`, `kind` and `action` (for
 ///    `GitWorktreeRemove`, `repo` compared with `path_key`).
 ///
@@ -493,7 +521,7 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
             ids.push(i.project_id.clone());
         }
     }
-    let canonical = dc_engine::build_plan(&selectable_reports(scan), &ids, plan.mode)
+    let canonical = plan_reports(&selectable_reports(scan), &ids, plan.mode)
         .map_err(|e| format!("Piano rifiutato: {e}"))?;
 
     let mut seen: HashSet<String> = HashSet::new();

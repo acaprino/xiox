@@ -42,6 +42,8 @@ fn name_plausible(kind: ArtifactKind, name: &str) -> bool {
         }
         // Whole worktree directories can have any name (the deny list above still applies).
         ArtifactKind::WorktreeDir => true,
+        // Catalog entries are not planned yet: refused until the catalog gives their names.
+        ArtifactKind::Catalog => false,
         // `Other` has no fixed name: only the deny list protects it.
         ArtifactKind::Other => true,
     }

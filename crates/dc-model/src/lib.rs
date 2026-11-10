@@ -139,20 +139,76 @@ pub enum ArtifactKind {
     CMake,
     /// A whole agent-managed git worktree directory.
     WorktreeDir,
+    /// An entry of the folder catalog (the catalog says what it is through `label`/`class`).
+    Catalog,
     Other,
+}
+
+/// What an artifact folder holds (C B D L P of the catalog spec).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Class {
+    Cache,
+    Build,
+    Dependency,
+    Log,
+    Personal,
+}
+
+impl Class {
+    /// Level before any per-folder check: Cache, Build, Log -> Recommended; Dependency ->
+    /// Optional; Personal -> Caution.
+    pub fn base_level(self) -> Level {
+        match self {
+            Class::Cache | Class::Build | Class::Log => Level::Recommended,
+            Class::Dependency => Level::Optional,
+            Class::Personal => Level::Caution,
+        }
+    }
+}
+
+/// How strongly the app proposes removing a folder. Only `Recommended` folders are ever
+/// preselected; `Caution` ones carry a warning (`Artifact::note`) the user confirms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Level {
+    Recommended,
+    Optional,
+    Caution,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Artifact {
+    /// Stable id = `path_key(path)`.
+    pub id: String,
     pub path: PathBuf,
     pub kind: ArtifactKind,
     /// Human label, e.g. "Rust target/".
     pub label: String,
     pub size: SizeInfo,
     /// Identity check passed (CACHEDIR.TAG / .rustc_info.json, .modules.yaml, pyvenv.cfg ...).
-    /// Unverified artifacts are never preselected and block removal.
+    /// Unverified artifacts are `Caution` and never preselected.
     pub verified: bool,
+    pub class: Class,
+    /// Set by the engine (`class.base_level()` until then).
+    pub level: Level,
+    /// Warning shown in the UI (Italian); "" when none.
+    pub note: String,
+    /// The name can also be a source folder (the † names of the catalog): `Caution` unless git
+    /// ignores it.
+    pub ambiguous: bool,
+    /// Set by the engine.
+    pub preselected: bool,
+}
+
+/// What the user ticked: artifact ids (`Artifact::id`) and agent-worktree report ids
+/// (`ProjectReport::id`, removed as a whole when possible).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Selection {
+    pub artifacts: Vec<String>,
+    pub worktrees: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -249,11 +305,12 @@ pub trait GitProbe: Send + Sync {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProjectStatus {
-    /// No activity for >= inactive_days, clean. Preselected.
+    /// No activity for >= inactive_days. Its `Recommended` folders are preselected.
     Inactive,
     /// Activity within inactive_days. Selectable, not preselected.
     Recent,
-    /// No session data at all; only file/git age known. Selectable, not preselected.
+    /// No session data at all; only file/git age known. Selectable; its `Recommended` folders
+    /// are preselected when that age is >= inactive_days.
     NoSessions,
     /// A live agent process is using it. Not selectable.
     InUse,
@@ -269,7 +326,9 @@ pub enum BlockReason {
     LiveSession,
     DirtyGit,
     UnpushedCommits,
+    /// No longer emitted by the engine (a tracked folder is `Level::Caution`).
     TrackedArtifact,
+    /// No longer emitted by the engine (an unverified folder is `Level::Caution`).
     UnverifiedArtifact,
     Unreachable,
 }
@@ -482,5 +541,16 @@ mod tests {
         let a = ItemOutcome::Removed { bytes_freed: 5 };
         assert_eq!(serde_json::to_string(&a).unwrap(), r#"{"type":"removed","bytesFreed":5}"#);
         assert_eq!(serde_json::to_string(&ProjectStatus::InUse).unwrap(), r#""in-use""#);
+        assert_eq!(serde_json::to_string(&Level::Recommended).unwrap(), r#""recommended""#);
+        assert_eq!(serde_json::to_string(&Class::Dependency).unwrap(), r#""dependency""#);
+    }
+
+    #[test]
+    fn class_base_levels() {
+        for c in [Class::Cache, Class::Build, Class::Log] {
+            assert_eq!(c.base_level(), Level::Recommended, "{c:?}");
+        }
+        assert_eq!(Class::Dependency.base_level(), Level::Optional);
+        assert_eq!(Class::Personal.base_level(), Level::Caution);
     }
 }

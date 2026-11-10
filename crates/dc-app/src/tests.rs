@@ -1,7 +1,7 @@
 use super::*;
 use dc_model::{
-    Artifact, ArtifactKind, GitState, IndexedDir, ItemOutcome, PlanAction, PlanItem, ProjectCandidate, ProjectStatus,
-    SizeInfo,
+    Artifact, ArtifactKind, Class, GitState, IndexedDir, ItemOutcome, Level, PlanAction, PlanItem, ProjectCandidate,
+    ProjectStatus, SizeInfo,
 };
 use std::path::Path;
 use std::sync::Mutex;
@@ -20,11 +20,17 @@ fn report(root: &str, agent_worktree: bool, linked: bool) -> ProjectReport {
         blocked_by: vec![],
         reason: "Inattivo da 100 giorni".into(),
         artifacts: vec![Artifact {
+            id: path_key(&root.join("target")),
             path: root.join("target"),
             kind: ArtifactKind::RustTarget,
             label: "Rust target/".into(),
             size: SizeInfo { logical_bytes: 10 << 20, allocated_bytes: None, file_count: 3 },
             verified: true,
+            class: Class::Build,
+            level: Level::Recommended,
+            note: String::new(),
+            ambiguous: false,
+            preselected: true,
         }],
         reclaimable_bytes: 10 << 20,
         preselected: true,
@@ -457,6 +463,37 @@ fn reports_are_split_into_projects_worktrees_and_other_worktrees() {
     assert_eq!(names(&projects), ["plain"]);
     assert_eq!(names(&worktrees), ["agent-linked", "agent-unlinked"]);
     assert_eq!(names(&others), ["user-worktree"]);
+}
+
+#[test]
+fn a_project_tick_plans_only_its_recommended_folders() {
+    let mut proj = report(r"C:\dc-app-test-missing\mixed", false, false);
+    let folder = |name: &str, kind, class: Class, level| Artifact {
+        id: path_key(&proj.root.join(name)),
+        path: proj.root.join(name),
+        kind,
+        label: name.into(),
+        class,
+        level,
+        preselected: false,
+        ..proj.artifacts[0].clone()
+    };
+    let nm = folder("node_modules", ArtifactKind::NodeModules, Class::Dependency, Level::Optional);
+    let tracked = folder("build", ArtifactKind::CMake, Class::Build, Level::Caution);
+    proj.artifacts.extend([nm.clone(), tracked.clone()]);
+    let scan = DevScan { projects: vec![proj.clone()], scanned_at_ms: now_ms(), ..Default::default() };
+
+    let plan = build_plan(&scan, std::slice::from_ref(&proj.id), RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].path, proj.root.join("target"));
+    for a in [&nm, &tracked] {
+        refused(&scan, vec![item_for(&proj.root, &a.path, a.kind, PlanAction::RemoveDir)]);
+    }
+    // Nothing Recommended: nothing to plan.
+    let mut only_deps = proj.clone();
+    only_deps.artifacts = vec![nm];
+    assert!(!plans_something(&only_deps));
+    assert!(plans_something(&proj));
 }
 
 #[test]

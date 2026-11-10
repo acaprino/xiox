@@ -9,8 +9,9 @@
 //!   inside it (component-aware: `C:\a\b` does NOT contain `C:\a\bc`).
 //! * Last activity is the newest of session activity, last git commit and newest source
 //!   file mtime; the winner is reported as `last_activity_source`.
-//! * Anything that could lose work or break a live process blocks removal; anything that
-//!   is merely "recent" or "unknown" stays selectable but is never preselected.
+//! * Anything that could break a live process, or lose the work of an agent worktree, blocks
+//!   removal; a folder that is merely doubtful (tracked, unverified, ambiguous name) stays
+//!   selectable with a `Caution` level and a note, and is never preselected.
 
 use dc_model::*;
 use std::collections::HashSet;
@@ -61,28 +62,6 @@ fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
                 _ => return None,
             },
         }
-    }
-}
-
-/// `target/` style label of a directory, for messages.
-fn dir_label(path: &Path) -> String {
-    match path.file_name() {
-        Some(n) => format!("{}/", n.to_string_lossy()),
-        None => path.display().to_string(),
-    }
-}
-
-fn labels(artifacts: &[&Artifact]) -> String {
-    let mut seen = HashSet::new();
-    let names: Vec<String> = artifacts
-        .iter()
-        .map(|a| dir_label(&a.path))
-        .filter(|n| seen.insert(n.clone()))
-        .collect();
-    if names.len() > 3 {
-        format!("{}, ...", names[..3].join(", "))
-    } else {
-        names.join(", ")
     }
 }
 
@@ -157,8 +136,6 @@ const MAX_WORKSPACE_PROJECTS: usize = 8;
 ///
 /// **Blocking (`blocked_by`, all applicable reasons are listed).**
 /// * a matching session with `live == true` -> `LiveSession`, status `InUse`;
-/// * an artifact tracked by git (`GitProbe::is_tracked`) -> `TrackedArtifact`;
-/// * an artifact with `verified == false` -> `UnverifiedArtifact`;
 /// * dirty git (`dirty == Some(true)`) or unpushed commits (`> 0`) block ONLY agent
 ///   worktrees, because removing a whole worktree loses that work. For ordinary projects
 ///   only rebuildable artifacts are removed, so dirty git does not block (it is noted in
@@ -168,9 +145,17 @@ const MAX_WORKSPACE_PROJECTS: usize = 8;
 ///
 /// **Status (when nothing blocks).** A session exists and `inactive_days >=
 /// cfg.inactive_days` -> `Inactive`; session exists but newer -> `Recent`; no session at
-/// all -> `NoSessions` (selectable, never preselected).
+/// all -> `NoSessions` (selectable).
 ///
-/// **Preselection.** `preselected = status == Inactive && blocked_by.is_empty()`.
+/// **Folders.** Each artifact gets its `level`, `note` and `preselected` from `assess`: a
+/// folder tracked by git (`GitProbe::is_tracked`), not verified, or with an ambiguous name git
+/// does not ignore (`GitProbe::is_ignored`) is `Caution`; none of these blocks the project
+/// any more (`TrackedArtifact`/`UnverifiedArtifact` are not emitted). A folder is preselected
+/// when it is `Recommended`, the project is inactive (`inactive_days >= cfg.inactive_days`,
+/// with or without sessions), nothing blocks it and git has no uncommitted changes.
+///
+/// **Preselection.** Ordinary project: `preselected` = any of its folders is. Agent worktree
+/// (removed as a whole): `status == Inactive && blocked_by.is_empty() && dirty != Some(true)`.
 ///
 /// **Size.** `reclaimable_bytes` sums `effective_bytes()` of ALL artifacts, even when the
 /// project is blocked, so the UI can still show what is locked.
@@ -337,18 +322,6 @@ fn analyze_one(
     });
 
     // Blocking.
-    let tracked: Vec<&Artifact> = cand
-        .artifacts
-        .iter()
-        .filter(|a| {
-            let rel = relative_to(&cand.root, &a.path).unwrap_or_else(|| a.path.clone());
-            // An artifact equal to the root (e.g. a whole worktree dir) has no meaningful
-            // "tracked" answer: the project's own files are tracked by definition.
-            !rel.as_os_str().is_empty() && git.is_tracked(&cand.root, &rel)
-        })
-        .collect();
-    let unverified: Vec<&Artifact> = cand.artifacts.iter().filter(|a| !a.verified).collect();
-
     let mut blocked_by: Vec<BlockReason> = Vec::new();
     let mut block_msgs: Vec<String> = Vec::new();
     if !live_agents.is_empty() {
@@ -358,26 +331,6 @@ fn analyze_one(
             format!("Sessione {} attiva ora", names[0])
         } else {
             format!("Sessioni attive ora ({})", names.join(", "))
-        });
-    }
-    if !tracked.is_empty() {
-        blocked_by.push(BlockReason::TrackedArtifact);
-        block_msgs.push(if tracked.len() == 1 {
-            format!("Un {} è tracciato da git", labels(&tracked))
-        } else {
-            format!("{} cartelle ({}) sono tracciate da git", tracked.len(), labels(&tracked))
-        });
-    }
-    if !unverified.is_empty() {
-        blocked_by.push(BlockReason::UnverifiedArtifact);
-        block_msgs.push(if unverified.len() == 1 {
-            format!("{} non è stato verificato come cartella rigenerabile", labels(&unverified))
-        } else {
-            format!(
-                "{} cartelle ({}) non verificate come rigenerabili",
-                unverified.len(),
-                labels(&unverified)
-            )
         });
     }
     let dirty = gs.dirty == Some(true);
@@ -450,10 +403,30 @@ fn analyze_one(
         .artifacts
         .iter()
         .fold(0u64, |acc, a| acc.saturating_add(a.size.effective_bytes()));
-    // Preselect only inactive projects with no block and a clean (or unknown) git tree.
-    let preselected = status == ProjectStatus::Inactive
-        && blocked_by.is_empty()
-        && gs.dirty != Some(true);
+
+    // Levels, notes and per-folder preselection. Uncommitted changes keep every folder
+    // unticked, as before (they do not block an ordinary project).
+    let project_inactive = inactive_days.is_some_and(|d| d >= cfg.inactive_days);
+    let hold = !blocked_by.is_empty() || dirty;
+    let mut artifacts = cand.artifacts;
+    for a in &mut artifacts {
+        let rel = relative_to(&cand.root, &a.path).unwrap_or_else(|| a.path.clone());
+        // An artifact equal to the root (e.g. a whole worktree dir) has no meaningful
+        // "tracked"/"ignored" answer: the project's own files are tracked by definition.
+        let inside = !rel.as_os_str().is_empty();
+        let tracked = inside && git.is_tracked(&cand.root, &rel);
+        // `git check-ignore` is only asked for the names that need it.
+        let ignored = if a.ambiguous && inside { git.is_ignored(&cand.root, &rel) } else { None };
+        assess(a, tracked, ignored, project_inactive, hold);
+    }
+
+    // Agent worktrees keep the project rule (they are removed as a whole): inactive, nothing
+    // blocking, clean (or unknown) git tree. Ordinary projects: any preselected folder.
+    let preselected = if is_agent_worktree {
+        status == ProjectStatus::Inactive && blocked_by.is_empty() && gs.dirty != Some(true)
+    } else {
+        artifacts.iter().any(|a| a.preselected)
+    };
 
     ProjectReport {
         id,
@@ -467,12 +440,52 @@ fn analyze_one(
         status,
         blocked_by,
         reason,
-        artifacts: cand.artifacts,
+        artifacts,
         reclaimable_bytes,
         preselected,
         is_agent_worktree,
         git: gs,
     }
+}
+
+fn add_note(a: &mut Artifact, note: &str) {
+    if !a.note.is_empty() {
+        a.note.push_str("; ");
+    }
+    a.note.push_str(note);
+}
+
+/// Level, note and preselection of one folder. The first rule that applies sets the level; every
+/// applicable note is appended to the catalog's one (`; ` between them).
+///
+/// 1. `level = class.base_level()`;
+/// 2. tracked by git -> `Caution`;
+/// 3. identity not verified -> `Caution`;
+/// 4. ambiguous name (`†`) that git does not ignore (`Some(false)`, or `None` outside a
+///    repository) -> `Caution`;
+/// 5. `preselected = project_inactive && !project_blocked && level == Recommended`.
+fn assess(a: &mut Artifact, tracked: bool, ignored: Option<bool>, project_inactive: bool, project_blocked: bool) {
+    a.level = a.class.base_level();
+    if tracked {
+        a.level = Level::Caution;
+        add_note(a, "Contiene file tracciati da git");
+    }
+    if !a.verified {
+        a.level = Level::Caution;
+        add_note(a, "Cartella non riconosciuta con certezza");
+    }
+    if a.ambiguous && ignored != Some(true) {
+        a.level = Level::Caution;
+        add_note(
+            a,
+            if ignored == Some(false) {
+                "Potrebbe contenere sorgenti: git non la ignora"
+            } else {
+                "Potrebbe contenere sorgenti: non è in un repository git"
+            },
+        );
+    }
+    a.preselected = project_inactive && !project_blocked && a.level == Level::Recommended;
 }
 
 // ─────────────────────────────────── build_plan ─────────────────────────────────
@@ -488,22 +501,6 @@ fn new_plan_id() -> String {
     format!("plan-{ms}-{n}")
 }
 
-/// Turn a user selection into a [`CleanPlan`].
-///
-/// Every id must exist in `reports` and must not be `InUse`, `Blocked` or `Unreachable`
-/// (nor carry any `blocked_by` reason); otherwise the whole call fails with an Italian
-/// `Error::Other` and nothing is planned. Duplicate ids are planned once.
-///
-/// * Ordinary project -> one `RemoveDir` item per artifact (`expected_bytes` =
-///   `effective_bytes`).
-/// * Agent worktree that is `Inactive` or `Recent`, known clean (`dirty == Some(false)`)
-///   and with a known `main_worktree` different from itself -> ONE `WorktreeDir` item with
-///   `GitWorktreeRemove { repo: main_worktree }` and `expected_bytes = reclaimable_bytes`
-///   (so git deregisters the worktree instead of leaving a dangling entry). Anything less
-///   certain falls back to removing only the artifacts.
-///
-/// Items with an identical path are emitted once. The plan id is unique per call
-/// (timestamp + process-wide counter).
 /// The main repository to run `git worktree remove` from when [`build_plan`] removes this report
 /// as a whole worktree: an agent worktree, `Inactive` or `Recent`, known clean, with a known
 /// `main_worktree` other than itself. `None`: only its artifacts can go.
@@ -524,16 +521,96 @@ pub fn plans_something(report: &ProjectReport) -> bool {
     whole_worktree_repo(report).is_some() || !report.artifacts.is_empty()
 }
 
-pub fn build_plan(
-    reports: &[ProjectReport],
-    selected_ids: &[String],
-    mode: RemoveMode,
-) -> Result<CleanPlan> {
+/// The errors of today for a report whose folders cannot be touched: `InUse`, `Blocked`,
+/// `Unreachable`, or any `blocked_by` reason.
+fn check_cleanable(report: &ProjectReport) -> Result<()> {
+    match report.status {
+        ProjectStatus::InUse => {
+            return Err(Error::Other(format!(
+                "«{}» è in uso da una sessione attiva e non può essere pulito",
+                report.name
+            )));
+        }
+        ProjectStatus::Blocked => {
+            return Err(Error::Other(format!(
+                "«{}» è bloccato e non può essere pulito: {}",
+                report.name, report.reason
+            )));
+        }
+        ProjectStatus::Unreachable => {
+            return Err(Error::Other(format!(
+                "«{}» non è raggiungibile e non può essere pulito",
+                report.name
+            )));
+        }
+        ProjectStatus::Inactive | ProjectStatus::Recent | ProjectStatus::NoSessions => {}
+    }
+    if !report.blocked_by.is_empty() {
+        return Err(Error::Other(format!(
+            "«{}» ha dei blocchi attivi e non può essere pulito: {}",
+            report.name, report.reason
+        )));
+    }
+    Ok(())
+}
+
+fn artifact_item(report: &ProjectReport, a: &Artifact) -> PlanItem {
+    PlanItem {
+        path: a.path.clone(),
+        kind: a.kind,
+        action: PlanAction::RemoveDir,
+        expected_bytes: a.size.effective_bytes(),
+        project_id: report.id.clone(),
+        reason: report.reason.clone(),
+    }
+}
+
+/// Turn a user selection into a [`CleanPlan`].
+///
+/// * `sel.artifacts`: every id must be the [`Artifact::id`] of an artifact of some report
+///   (otherwise `Cartella non trovata nell'analisi: {id}`), and that report must not be `InUse`,
+///   `Blocked` or `Unreachable` nor carry any `blocked_by` reason. One `RemoveDir` item each
+///   (`expected_bytes` = `effective_bytes`), whatever its level: the level only decides the
+///   preselection. A folder of an agent worktree that is removed whole
+///   ([`whole_worktree_repo`]) is refused: such a worktree goes as a whole or not at all.
+/// * `sel.worktrees`: ids of agent-worktree reports (an ordinary project is refused), with the
+///   same status checks. A worktree that is `Inactive` or `Recent`, known clean
+///   (`dirty == Some(false)`) and with a known `main_worktree` different from itself -> ONE
+///   `WorktreeDir` item with `GitWorktreeRemove { repo: main_worktree }` and `expected_bytes =
+///   reclaimable_bytes` (so git deregisters the worktree instead of leaving a dangling entry).
+///   Anything less certain falls back to removing all its artifacts.
+///
+/// Any error fails the whole call (Italian `Error::Other`) and nothing is planned. Duplicate
+/// ids, and items with an identical `path_key`, are planned once. The plan id is unique per
+/// call (timestamp + process-wide counter).
+pub fn build_plan(reports: &[ProjectReport], sel: &Selection, mode: RemoveMode) -> Result<CleanPlan> {
     let mut items: Vec<PlanItem> = Vec::new();
-    let mut seen_ids: HashSet<&str> = HashSet::new();
     let mut seen_paths: HashSet<String> = HashSet::new();
 
-    for id in selected_ids {
+    let mut seen_ids: HashSet<&str> = HashSet::new();
+    for id in &sel.artifacts {
+        if !seen_ids.insert(id.as_str()) {
+            continue;
+        }
+        let (report, a) = reports
+            .iter()
+            .find_map(|r| r.artifacts.iter().find(|a| &a.id == id).map(|a| (r, a)))
+            .ok_or_else(|| Error::Other(format!("Cartella non trovata nell'analisi: {id}")))?;
+        check_cleanable(report)?;
+        if whole_worktree_repo(report).is_some() {
+            return Err(Error::Other(format!(
+                "«{}» è un worktree che si rimuove solo per intero: {}",
+                report.name,
+                a.path.display()
+            )));
+        }
+        if seen_paths.insert(path_key(&a.path)) {
+            items.push(artifact_item(report, a));
+        }
+    }
+
+    let mut seen_ids: HashSet<&str> = HashSet::new();
+    for id in &sel.worktrees {
         if !seen_ids.insert(id.as_str()) {
             continue;
         }
@@ -541,35 +618,10 @@ pub fn build_plan(
             .iter()
             .find(|r| &r.id == id)
             .ok_or_else(|| Error::Other(format!("Progetto non trovato nell'analisi: {id}")))?;
-
-        match report.status {
-            ProjectStatus::InUse => {
-                return Err(Error::Other(format!(
-                    "«{}» è in uso da una sessione attiva e non può essere pulito",
-                    report.name
-                )));
-            }
-            ProjectStatus::Blocked => {
-                return Err(Error::Other(format!(
-                    "«{}» è bloccato e non può essere pulito: {}",
-                    report.name, report.reason
-                )));
-            }
-            ProjectStatus::Unreachable => {
-                return Err(Error::Other(format!(
-                    "«{}» non è raggiungibile e non può essere pulito",
-                    report.name
-                )));
-            }
-            ProjectStatus::Inactive | ProjectStatus::Recent | ProjectStatus::NoSessions => {}
+        if !report.is_agent_worktree {
+            return Err(Error::Other(format!("«{}» non è un worktree di un agente", report.name)));
         }
-        if !report.blocked_by.is_empty() {
-            return Err(Error::Other(format!(
-                "«{}» ha dei blocchi attivi e non può essere pulito: {}",
-                report.name, report.reason
-            )));
-        }
-
+        check_cleanable(report)?;
         if let Some(repo) = whole_worktree_repo(report) {
             if seen_paths.insert(report.id.clone()) {
                 items.push(PlanItem {
@@ -584,14 +636,7 @@ pub fn build_plan(
         } else {
             for a in &report.artifacts {
                 if seen_paths.insert(path_key(&a.path)) {
-                    items.push(PlanItem {
-                        path: a.path.clone(),
-                        kind: a.kind,
-                        action: PlanAction::RemoveDir,
-                        expected_bytes: a.size.effective_bytes(),
-                        project_id: report.id.clone(),
-                        reason: report.reason.clone(),
-                    });
+                    items.push(artifact_item(report, a));
                 }
             }
         }

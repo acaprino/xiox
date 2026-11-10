@@ -69,7 +69,6 @@ impl FakeGit {
         self.tracked.insert((path_key(Path::new(root)), rel.to_lowercase()));
         self
     }
-    #[allow(dead_code)]
     fn with_ignored(mut self, root: &str, rel: &str, ignored: bool) -> Self {
         self.ignored.insert((path_key(Path::new(root)), rel.to_lowercase()), ignored);
         self
@@ -96,13 +95,29 @@ impl GitProbe for FakeGit {
 // ──────────────────────────────── builders ────────────────────────────────
 
 fn art(root: &str, name: &str, bytes: u64, verified: bool) -> Artifact {
+    art_of(root, name, bytes, verified, ArtifactKind::RustTarget, Class::Build)
+}
+
+/// As the scanner gives it: placeholder `level` (`class.base_level()`), no note, not preselected.
+fn art_of(root: &str, name: &str, bytes: u64, verified: bool, kind: ArtifactKind, class: Class) -> Artifact {
+    let path = PathBuf::from(root).join(name);
     Artifact {
-        path: PathBuf::from(root).join(name),
-        kind: ArtifactKind::RustTarget,
-        label: format!("Rust {name}/"),
+        id: path_key(&path),
+        path,
+        kind,
+        label: format!("{name}/"),
         size: SizeInfo { logical_bytes: bytes, allocated_bytes: None, file_count: 1 },
         verified,
+        class,
+        level: class.base_level(),
+        note: String::new(),
+        ambiguous: false,
+        preselected: false,
     }
+}
+
+fn node_modules(root: &str, bytes: u64) -> Artifact {
+    art_of(root, "node_modules", bytes, true, ArtifactKind::NodeModules, Class::Dependency)
 }
 
 fn cand(root: &str, bytes: u64, mtime: Option<i64>) -> ProjectCandidate {
@@ -217,27 +232,125 @@ fn live_session_means_in_use() {
 }
 
 #[test]
-fn tracked_artifact_blocks() {
+fn dependency_is_optional_and_build_is_recommended() {
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(30), false)]);
+    let mut c = cand(r"C:\dev\app", 500, None);
+    c.artifacts.push(node_modules(r"C:\dev\app", 900));
+    let r = run(vec![c], &[&src], &FakeGit::default().with_state(r"C:\dev\app", clean_state()));
+    let p = only(&r);
+    assert_eq!(p.status, ProjectStatus::Inactive);
+    let by = |n: &str| p.artifacts.iter().find(|a| a.path.ends_with(n)).unwrap();
+    assert_eq!(by("node_modules").level, Level::Optional);
+    assert!(!by("node_modules").preselected, "Dependency: never preselected");
+    assert_eq!(by("node_modules").note, "");
+    assert_eq!(by("target").level, Level::Recommended);
+    assert!(by("target").preselected);
+    assert!(p.preselected, "a project is preselected when one of its folders is");
+    assert_eq!(by("target").id, path_key(Path::new(r"C:\dev\app\target")));
+}
+
+#[test]
+fn project_with_only_optional_folders_is_not_preselected() {
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(30), false)]);
+    let mut c = cand(r"C:\dev\app", 500, None);
+    c.artifacts = vec![node_modules(r"C:\dev\app", 900)];
+    let r = run(vec![c], &[&src], &FakeGit::default());
+    let p = only(&r);
+    assert_eq!(p.status, ProjectStatus::Inactive);
+    assert!(!p.preselected);
+}
+
+#[test]
+fn tracked_artifact_is_caution_not_blocked() {
     let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), false)]);
     let git = FakeGit::default().with_tracked(r"C:\dev\app", "target");
     let r = run(vec![cand(r"C:\dev\app", 500, None)], &[&src], &git);
     let p = only(&r);
-    assert_eq!(p.status, ProjectStatus::Blocked);
-    assert_eq!(p.blocked_by, vec![BlockReason::TrackedArtifact]);
-    assert_eq!(p.reason, "Un target/ è tracciato da git");
+    assert_eq!(p.status, ProjectStatus::Inactive, "a tracked folder no longer blocks the project");
+    assert!(p.blocked_by.is_empty());
+    let a = &p.artifacts[0];
+    assert_eq!(a.level, Level::Caution);
+    assert!(a.note.contains("tracciati da git"), "{}", a.note);
+    assert_eq!(a.note, "Contiene file tracciati da git");
+    assert!(!a.preselected);
     assert!(!p.preselected);
-    assert_eq!(p.reclaimable_bytes, 500, "blocked projects still show reclaimable bytes");
+    assert_eq!(p.reclaimable_bytes, 500);
 }
 
 #[test]
-fn unverified_artifact_blocks() {
+fn unverified_artifact_is_caution_not_blocked() {
     let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), false)]);
     let mut c = cand(r"C:\dev\app", 500, None);
     c.artifacts[0].verified = false;
     let r = run(vec![c], &[&src], &FakeGit::default());
     let p = only(&r);
-    assert_eq!(p.status, ProjectStatus::Blocked);
-    assert_eq!(p.blocked_by, vec![BlockReason::UnverifiedArtifact]);
+    assert_eq!(p.status, ProjectStatus::Inactive);
+    assert!(p.blocked_by.is_empty());
+    assert_eq!(p.artifacts[0].level, Level::Caution);
+    assert_eq!(p.artifacts[0].note, "Cartella non riconosciuta con certezza");
+    assert!(!p.preselected);
+}
+
+#[test]
+fn notes_add_up_after_the_catalog_one() {
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), false)]);
+    let mut c = cand(r"C:\dev\app", 500, None);
+    c.artifacts[0].verified = false;
+    c.artifacts[0].note = "Nota del catalogo".into();
+    let git = FakeGit::default().with_tracked(r"C:\dev\app", "target");
+    let r = run(vec![c], &[&src], &git);
+    let a = &only(&r).artifacts[0];
+    assert_eq!(a.level, Level::Caution);
+    assert_eq!(
+        a.note,
+        "Nota del catalogo; Contiene file tracciati da git; Cartella non riconosciuta con certezza"
+    );
+}
+
+#[test]
+fn ambiguous_name_is_caution_unless_git_ignores_it() {
+    let root = r"C:\dev\app";
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, root, ago(60), false)]);
+    let ambiguous = || {
+        let mut c = cand(root, 500, None);
+        c.artifacts[0].ambiguous = true;
+        c
+    };
+
+    let r = run(vec![ambiguous()], &[&src], &FakeGit::default().with_ignored(root, "target", false));
+    let a = &only(&r).artifacts[0];
+    assert_eq!(a.level, Level::Caution);
+    assert_eq!(a.note, "Potrebbe contenere sorgenti: git non la ignora");
+    assert!(!a.preselected);
+
+    let r = run(vec![ambiguous()], &[&src], &FakeGit::default());
+    let a = &only(&r).artifacts[0];
+    assert_eq!(a.level, Level::Caution);
+    assert_eq!(a.note, "Potrebbe contenere sorgenti: non è in un repository git");
+
+    let r = run(vec![ambiguous()], &[&src], &FakeGit::default().with_ignored(root, "target", true));
+    let a = &only(&r).artifacts[0];
+    assert_eq!(a.level, Level::Recommended, "ignored by git: the level of its class");
+    assert_eq!(a.note, "");
+    assert!(a.preselected);
+
+    // Not ambiguous: git's answer does not matter.
+    let r = run(vec![cand(root, 500, None)], &[&src], &FakeGit::default().with_ignored(root, "target", false));
+    assert_eq!(only(&r).artifacts[0].level, Level::Recommended);
+}
+
+#[test]
+fn live_session_never_preselects_folders() {
+    let src = FakeSource::new(
+        Agent::Claude,
+        vec![sess(Agent::Claude, r"C:\dev\app", ago(60), true)],
+    );
+    // Old activity, but the process is alive: the project is blocked, nothing is preselected.
+    let r = run(vec![cand(r"C:\dev\app", 500, None)], &[&src], &FakeGit::default());
+    let p = only(&r);
+    assert_eq!(p.status, ProjectStatus::InUse);
+    assert_eq!(p.inactive_days, Some(60));
+    assert!(!p.artifacts[0].preselected);
     assert!(!p.preselected);
 }
 
@@ -253,6 +366,7 @@ fn dirty_ordinary_project_is_not_blocked() {
     assert_eq!(p.status, ProjectStatus::Inactive);
     assert!(p.blocked_by.is_empty());
     assert!(!p.preselected, "dirty git: selectable but never preselected");
+    assert!(p.artifacts.iter().all(|a| !a.preselected && a.level == Level::Recommended));
     assert!(p.reason.contains("modifiche git non committate"), "{}", p.reason);
     assert!(!p.is_agent_worktree);
 }
@@ -301,7 +415,7 @@ fn worktree_dir_itself_counts_as_managed() {
 }
 
 #[test]
-fn no_sessions_is_selectable_but_not_preselected() {
+fn no_sessions_old_project_is_preselected() {
     let r = run(
         vec![cand(r"C:\dev\app", 100, Some(ago(61)))],
         &[],
@@ -309,10 +423,35 @@ fn no_sessions_is_selectable_but_not_preselected() {
     );
     let p = only(&r);
     assert_eq!(p.status, ProjectStatus::NoSessions);
-    assert!(!p.preselected);
+    assert!(p.preselected, "inactivity counts with or without sessions");
+    assert!(p.artifacts[0].preselected);
     assert!(p.blocked_by.is_empty());
     assert_eq!(p.last_activity_source, Some(ActivitySource::Files));
     assert_eq!(p.reason, "Nessuna sessione trovata; ultima modifica ai file 61 giorni fa");
+}
+
+#[test]
+fn no_sessions_preselection_follows_the_last_commit() {
+    let at = |days: i64| {
+        FakeGit::default().with_state(
+            r"C:\dev\app",
+            GitState { last_commit_ms: Some(ago(days)), ..clean_state() },
+        )
+    };
+    let r = run(vec![cand(r"C:\dev\app", 100, None)], &[], &at(30));
+    let p = only(&r);
+    assert_eq!(p.status, ProjectStatus::NoSessions);
+    assert!(p.artifacts[0].preselected, "target of a project last committed 30 days ago");
+    assert!(p.preselected);
+
+    let r = run(vec![cand(r"C:\dev\app", 100, None)], &[], &at(3));
+    let p = only(&r);
+    assert!(!p.artifacts[0].preselected, "3 days ago: recent");
+    assert!(!p.preselected);
+
+    // No date at all: never preselected.
+    let r = run(vec![cand(r"C:\dev\app", 100, None)], &[], &FakeGit::default());
+    assert!(!only(&r).preselected);
 }
 
 #[test]
@@ -344,6 +483,7 @@ fn inactive_threshold_boundary() {
     let r = run(vec![cand(r"C:\dev\a", 1, None)], &[&at], &FakeGit::default());
     assert_eq!(only(&r).status, ProjectStatus::Inactive);
     assert!(only(&r).preselected);
+    assert!(only(&r).artifacts[0].preselected);
 
     let short = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\a", NOW - 14 * DAY_MS + 1, false)]);
     let r = run(vec![cand(r"C:\dev\a", 1, None)], &[&short], &FakeGit::default());
@@ -351,6 +491,13 @@ fn inactive_threshold_boundary() {
     assert_eq!(p.status, ProjectStatus::Recent);
     assert_eq!(p.inactive_days, Some(13));
     assert!(!p.preselected);
+    assert!(!p.artifacts[0].preselected);
+
+    // Same boundary without sessions (age from the files).
+    let r = run(vec![cand(r"C:\dev\a", 1, Some(NOW - 14 * DAY_MS))], &[], &FakeGit::default());
+    assert!(only(&r).preselected);
+    let r = run(vec![cand(r"C:\dev\a", 1, Some(NOW - 14 * DAY_MS + 1))], &[], &FakeGit::default());
+    assert!(!only(&r).preselected);
     assert!(p.reason.starts_with("Attività recente: 13 giorni fa"), "{}", p.reason);
 }
 
@@ -509,10 +656,19 @@ fn worktree_report(root: &str, main: Option<&str>, dirty: Option<bool>, status: 
     r
 }
 
+/// Every artifact of `rep`, as ticked folder by folder.
+fn folders(rep: &ProjectReport) -> Selection {
+    Selection { artifacts: rep.artifacts.iter().map(|a| a.id.clone()).collect(), worktrees: vec![] }
+}
+
+fn whole(rep: &ProjectReport) -> Selection {
+    Selection { artifacts: vec![], worktrees: vec![rep.id.clone()] }
+}
+
 #[test]
 fn plan_normal_project_has_one_item_per_artifact() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[100, 50]);
-    let plan = build_plan(std::slice::from_ref(&rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).unwrap();
+    let plan = build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).unwrap();
     assert_eq!(plan.mode, RemoveMode::Recycle);
     assert_eq!(plan.items.len(), 2);
     assert_eq!(plan.expected_bytes, 150);
@@ -524,10 +680,31 @@ fn plan_normal_project_has_one_item_per_artifact() {
 }
 
 #[test]
+fn plan_takes_only_the_ticked_folders() {
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(30), false)]);
+    let mut c = cand(r"C:\dev\app", 500, None);
+    c.artifacts.push(node_modules(r"C:\dev\app", 900));
+    let r = run(vec![c], &[&src], &FakeGit::default());
+    let target = r.reports[0].artifacts.iter().find(|a| a.path.ends_with("target")).unwrap();
+    let sel = Selection { artifacts: vec![target.id.clone()], ..Default::default() };
+    let plan = build_plan(&r.reports, &sel, RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].path, PathBuf::from(r"C:\dev\app\target"));
+    assert_eq!(plan.expected_bytes, 500);
+    // An Optional (or Caution) folder is planned when the user ticks it.
+    let nm = r.reports[0].artifacts.iter().find(|a| a.path.ends_with("node_modules")).unwrap();
+    let sel = Selection { artifacts: vec![nm.id.clone()], ..Default::default() };
+    let plan = build_plan(&r.reports, &sel, RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].kind, ArtifactKind::NodeModules);
+}
+
+#[test]
 fn plan_recent_and_no_sessions_are_selectable() {
     let a = report(r"C:\dev\a", ProjectStatus::Recent, &[10]);
     let b = report(r"C:\dev\b", ProjectStatus::NoSessions, &[20]);
-    let plan = build_plan(&[a.clone(), b.clone()], &[a.id, b.id], RemoveMode::Permanent).unwrap();
+    let sel = Selection { artifacts: vec![a.artifacts[0].id.clone(), b.artifacts[0].id.clone()], ..Default::default() };
+    let plan = build_plan(&[a, b], &sel, RemoveMode::Permanent).unwrap();
     assert_eq!(plan.items.len(), 2);
     assert_eq!(plan.expected_bytes, 30);
     assert_eq!(plan.mode, RemoveMode::Permanent);
@@ -541,7 +718,7 @@ fn plan_worktree_is_single_git_worktree_remove() {
         Some(false),
         ProjectStatus::Inactive,
     );
-    let plan = build_plan(std::slice::from_ref(&rep), std::slice::from_ref(&rep.id), RemoveMode::Permanent).unwrap();
+    let plan = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Permanent).unwrap();
     assert_eq!(plan.items.len(), 1);
     let item = &plan.items[0];
     assert_eq!(item.kind, ArtifactKind::WorktreeDir);
@@ -554,7 +731,7 @@ fn plan_worktree_is_single_git_worktree_remove() {
 #[test]
 fn plan_recent_clean_worktree_also_uses_git_worktree_remove() {
     let rep = worktree_report(r"C:\wt\x", Some(r"C:\dev\proj"), Some(false), ProjectStatus::Recent);
-    let plan = build_plan(std::slice::from_ref(&rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).unwrap();
+    let plan = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Recycle).unwrap();
     assert!(matches!(plan.items[0].action, PlanAction::GitWorktreeRemove { .. }));
 }
 
@@ -569,10 +746,30 @@ fn plan_worktree_falls_back_to_artifacts_when_unsure() {
     // no sessions: not eligible for whole-worktree removal
     let d = worktree_report(r"C:\wt\d", Some(r"C:\dev\proj"), Some(false), ProjectStatus::NoSessions);
     for rep in [a, b, c, d] {
-        let plan = build_plan(std::slice::from_ref(&rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).unwrap();
+        let plan = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Recycle).unwrap();
         assert_eq!(plan.items.len(), 2, "{}", rep.name);
         assert!(plan.items.iter().all(|i| i.action == PlanAction::RemoveDir), "{}", rep.name);
+        // Folder by folder works too for these.
+        let plan = build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).unwrap();
+        assert_eq!(plan.items.len(), 2, "{}", rep.name);
     }
+}
+
+#[test]
+fn plan_refuses_a_folder_of_a_worktree_removed_whole() {
+    let rep = worktree_report(r"C:\wt\a", Some(r"C:\dev\proj"), Some(false), ProjectStatus::Inactive);
+    let err = build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).unwrap_err();
+    assert!(err.to_string().contains("solo per intero"), "{err}");
+}
+
+#[test]
+fn plan_worktrees_must_be_agent_worktrees() {
+    let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
+    let err = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Recycle).unwrap_err();
+    assert!(err.to_string().contains("non è un worktree"), "{err}");
+    let sel = Selection { worktrees: vec!["c:\\nope".into()], ..Default::default() };
+    let err = build_plan(std::slice::from_ref(&rep), &sel, RemoveMode::Recycle).unwrap_err();
+    assert!(err.to_string().contains("non trovato"), "{err}");
 }
 
 #[test]
@@ -584,15 +781,19 @@ fn plans_something_matches_what_build_plan_gives() {
     empty_clean.artifacts.clear();
     dirty.artifacts.clear();
     unknown.artifacts.clear();
-    let mut project = report(r"C:\dev\app", ProjectStatus::Inactive, &[]);
-    assert!(project.artifacts.is_empty());
-    for (rep, want) in [(&clean, true), (&empty_clean, true), (&dirty, false), (&unknown, false), (&project, false)] {
-        let plan = build_plan(std::slice::from_ref(rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).unwrap();
+    for (rep, want) in [(&clean, true), (&empty_clean, true), (&dirty, false), (&unknown, false)] {
+        let plan = build_plan(std::slice::from_ref(rep), &whole(rep), RemoveMode::Recycle).unwrap();
         assert_eq!(plans_something(rep), want, "{}", rep.name);
         assert_eq!(!plan.items.is_empty(), want, "{}", rep.name);
     }
+    let mut project = report(r"C:\dev\app", ProjectStatus::Inactive, &[]);
+    assert!(!plans_something(&project));
+    let plan = build_plan(std::slice::from_ref(&project), &folders(&project), RemoveMode::Recycle).unwrap();
+    assert!(plan.items.is_empty());
     project.artifacts = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]).artifacts;
     assert!(plans_something(&project));
+    let plan = build_plan(std::slice::from_ref(&project), &folders(&project), RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 1);
     assert_eq!(whole_worktree_repo(&clean), Some(&PathBuf::from(r"C:\dev\proj")));
     assert_eq!(whole_worktree_repo(&dirty), None);
 }
@@ -600,8 +801,10 @@ fn plans_something_matches_what_build_plan_gives() {
 #[test]
 fn plan_rejects_unknown_id() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
-    let err = build_plan(&[rep], &["c:\\nope".to_string()], RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("non trovato"), "{err}");
+    let sel = Selection { artifacts: vec!["c:\\nope".into()], ..Default::default() };
+    let err = build_plan(&[rep], &sel, RemoveMode::Recycle).unwrap_err();
+    assert!(err.to_string().contains("Cartella non trovata nell'analisi"), "{err}");
+    assert_eq!(err.to_string(), "Cartella non trovata nell'analisi: c:\\nope");
 }
 
 #[test]
@@ -613,33 +816,55 @@ fn plan_rejects_in_use_blocked_and_unreachable() {
     ] {
         let rep = report(r"C:\dev\app", status, &[1]);
         let ok = report(r"C:\dev\ok", ProjectStatus::Inactive, &[1]);
-        let err = build_plan(&[ok.clone(), rep.clone()], &[ok.id, rep.id], RemoveMode::Recycle)
-            .unwrap_err();
+        let ids = vec![ok.artifacts[0].id.clone(), rep.artifacts[0].id.clone()];
+        let sel = Selection { artifacts: ids, ..Default::default() };
+        let err = build_plan(&[ok.clone(), rep.clone()], &sel, RemoveMode::Recycle).unwrap_err();
+        assert!(err.to_string().contains(needle), "{status:?}: {err}");
+        // The same through the worktree list.
+        let mut wt = rep.clone();
+        wt.is_agent_worktree = true;
+        let err = build_plan(std::slice::from_ref(&wt), &whole(&wt), RemoveMode::Recycle).unwrap_err();
         assert!(err.to_string().contains(needle), "{status:?}: {err}");
     }
+}
+
+#[test]
+fn plan_rejects_a_folder_of_a_project_with_a_live_session() {
+    let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), true)]);
+    let r = run(vec![cand(r"C:\dev\app", 500, None)], &[&src], &FakeGit::default());
+    let err = build_plan(&r.reports, &folders(&r.reports[0]), RemoveMode::Recycle).unwrap_err();
+    assert!(err.to_string().contains("in uso"), "{err}");
 }
 
 #[test]
 fn plan_rejects_report_with_blocked_by_even_if_status_looks_fine() {
     let mut rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
     rep.blocked_by = vec![BlockReason::TrackedArtifact];
-    assert!(build_plan(std::slice::from_ref(&rep), std::slice::from_ref(&rep.id), RemoveMode::Recycle).is_err());
+    assert!(build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).is_err());
 }
 
 #[test]
 fn plan_dedups_ids_and_paths_and_ids_are_unique() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[100]);
-    let sel = vec![rep.id.clone(), rep.id.clone()];
+    let id = rep.artifacts[0].id.clone();
+    let sel = Selection { artifacts: vec![id.clone(), id], ..Default::default() };
     let p1 = build_plan(std::slice::from_ref(&rep), &sel, RemoveMode::Recycle).unwrap();
     let p2 = build_plan(std::slice::from_ref(&rep), &sel, RemoveMode::Recycle).unwrap();
     assert_eq!(p1.items.len(), 1);
     assert_eq!(p1.expected_bytes, 100);
     assert_ne!(p1.id, p2.id);
+
+    // A worktree falling back to its folders, its folders ticked too: each path once.
+    let wt = worktree_report(r"C:\wt\a", None, Some(false), ProjectStatus::Inactive);
+    let sel = Selection { worktrees: vec![wt.id.clone(), wt.id.clone()], ..folders(&wt) };
+    let plan = build_plan(std::slice::from_ref(&wt), &sel, RemoveMode::Recycle).unwrap();
+    assert_eq!(plan.items.len(), 2);
+    assert_eq!(plan.expected_bytes, 1000);
 }
 
 #[test]
 fn plan_empty_selection_is_empty_plan() {
-    let plan = build_plan(&[], &[], RemoveMode::Recycle).unwrap();
+    let plan = build_plan(&[], &Selection::default(), RemoveMode::Recycle).unwrap();
     assert!(plan.items.is_empty());
     assert_eq!(plan.expected_bytes, 0);
 }
@@ -649,15 +874,39 @@ fn plan_empty_selection_is_empty_plan() {
 #[test]
 fn analyze_then_plan_roundtrip() {
     let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\old", ago(100), false)]);
+    let mut old = cand(r"C:\dev\old", 900, None);
+    old.artifacts.push(node_modules(r"C:\dev\old", 300));
     let r = run(
-        vec![cand(r"C:\dev\old", 900, None), cand(r"C:\dev\fresh", 5, Some(ago(1)))],
+        vec![old, cand(r"C:\dev\fresh", 5, Some(ago(1)))],
         &[&src],
         &FakeGit::default().with_state(r"C:\dev\old", clean_state()),
     );
-    let pre: Vec<String> = r.reports.iter().filter(|p| p.preselected).map(|p| p.id.clone()).collect();
-    assert_eq!(pre.len(), 1);
-    let plan = build_plan(&r.reports, &pre, RemoveMode::Recycle).unwrap();
+    let pre: Vec<String> =
+        r.reports.iter().flat_map(|p| &p.artifacts).filter(|a| a.preselected).map(|a| a.id.clone()).collect();
+    assert_eq!(pre.len(), 1, "target of the old project only, not its node_modules");
+    let sel = Selection { artifacts: pre, ..Default::default() };
+    let plan = build_plan(&r.reports, &sel, RemoveMode::Recycle).unwrap();
     assert_eq!(plan.expected_bytes, 900);
+}
+
+#[test]
+fn clean_agent_worktree_keeps_the_project_preselection_rule() {
+    // Its only folder is Optional, but an inactive clean agent worktree is preselected as a whole.
+    let root = r"C:\Users\u\.codex\worktrees\ab12\proj";
+    let mut src = FakeSource::new(Agent::Codex, vec![sess(Agent::Codex, root, ago(40), false)]);
+    src.worktrees = vec![PathBuf::from(r"C:\Users\u\.codex\worktrees")];
+    let mut c = cand(root, 100, None);
+    c.artifacts = vec![node_modules(root, 100)];
+    let git = FakeGit::default().with_state(
+        root,
+        GitState { is_linked_worktree: true, main_worktree: Some(PathBuf::from(r"C:\dev\proj")), ..clean_state() },
+    );
+    let r = run(vec![c], &[&src], &git);
+    let p = only(&r);
+    assert!(p.is_agent_worktree);
+    assert_eq!(p.status, ProjectStatus::Inactive);
+    assert!(p.preselected);
+    assert!(!p.artifacts[0].preselected);
 }
 
 // ─────────────────────── session inheritance between candidates ──────────────

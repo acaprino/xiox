@@ -133,6 +133,37 @@ fn several_markers_one_root_merge() {
         assert!(kinds.contains(&k), "missing {k:?} in {kinds:?}");
     }
     assert!(c.artifacts.iter().all(|a| a.verified));
+    // Class from the marker table; the engine assesses level/note/preselected later.
+    for a in &c.artifacts {
+        let want = match a.kind {
+            ArtifactKind::RustTarget => Class::Build,
+            ArtifactKind::NodeModules | ArtifactKind::PythonVenv => Class::Dependency,
+            ArtifactKind::PythonCache => Class::Cache,
+            k => panic!("unexpected {k:?}"),
+        };
+        assert_eq!(a.class, want, "{:?}", a.path);
+        assert_eq!(a.id, path_key(&a.path));
+        assert_eq!(a.level, a.class.base_level());
+        assert!(!a.ambiguous && !a.preselected && a.note.is_empty());
+    }
+}
+
+#[test]
+fn marker_table_classes() {
+    let mut seen = 0;
+    for m in markers::MARKERS {
+        for s in m.artifacts {
+            let want = match s.dir {
+                "target" | "build" | "bin" | "obj" => Class::Build,
+                "node_modules" | ".venv" | "venv" => Class::Dependency,
+                "__pycache__" | ".pytest_cache" | ".mypy_cache" | ".ruff_cache" | ".gradle" => Class::Cache,
+                d => panic!("no class expected for {d}"),
+            };
+            assert_eq!(s.class, want, "{} ({})", s.dir, m.ecosystem);
+            seen += 1;
+        }
+    }
+    assert!(seen >= 15, "{seen}");
 }
 
 #[test]

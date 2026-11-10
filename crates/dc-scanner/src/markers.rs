@@ -4,7 +4,7 @@
 //! `kondo-lib/src/lib.rs` of kondo (MIT) by Trent Billington, https://github.com/tbillington/kondo.
 //! Adding an ecosystem = adding one entry here; nothing else in the crate is ecosystem-specific.
 
-use dc_model::ArtifactKind;
+use dc_model::{ArtifactKind, Class};
 
 /// How a marker file name is matched (always ASCII case-insensitive, like NTFS).
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +45,7 @@ pub struct ArtifactSpec {
     pub kind: ArtifactKind,
     pub label: &'static str,
     pub identity: Identity,
+    pub class: Class,
 }
 
 #[derive(Debug)]
@@ -54,31 +55,37 @@ pub struct Marker {
     pub artifacts: &'static [ArtifactSpec],
 }
 
-const fn spec(dir: &'static str, kind: ArtifactKind, label: &'static str, identity: Identity) -> ArtifactSpec {
-    ArtifactSpec { dir, kind, label, identity }
+const fn spec(
+    dir: &'static str,
+    kind: ArtifactKind,
+    label: &'static str,
+    identity: Identity,
+    class: Class,
+) -> ArtifactSpec {
+    ArtifactSpec { dir, kind, label, identity, class }
 }
 
-static RUST: &[ArtifactSpec] = &[spec("target", ArtifactKind::RustTarget, "Rust target/", Identity::RustTarget)];
+static RUST: &[ArtifactSpec] = &[spec("target", ArtifactKind::RustTarget, "Rust target/", Identity::RustTarget, Class::Build)];
 static NODE: &[ArtifactSpec] =
-    &[spec("node_modules", ArtifactKind::NodeModules, "node_modules", Identity::NodeModules)];
+    &[spec("node_modules", ArtifactKind::NodeModules, "node_modules", Identity::NodeModules, Class::Dependency)];
 static PYTHON: &[ArtifactSpec] = &[
-    spec(".venv", ArtifactKind::PythonVenv, "Python venv (.venv)", Identity::PythonVenv),
-    spec("venv", ArtifactKind::PythonVenv, "Python venv (venv)", Identity::PythonVenv),
-    spec("__pycache__", ArtifactKind::PythonCache, "Python __pycache__", Identity::ParentMarker),
-    spec(".pytest_cache", ArtifactKind::PythonCache, "pytest cache", Identity::ParentMarker),
-    spec(".mypy_cache", ArtifactKind::PythonCache, "mypy cache", Identity::ParentMarker),
-    spec(".ruff_cache", ArtifactKind::PythonCache, "ruff cache", Identity::ParentMarker),
+    spec(".venv", ArtifactKind::PythonVenv, "Python venv (.venv)", Identity::PythonVenv, Class::Dependency),
+    spec("venv", ArtifactKind::PythonVenv, "Python venv (venv)", Identity::PythonVenv, Class::Dependency),
+    spec("__pycache__", ArtifactKind::PythonCache, "Python __pycache__", Identity::ParentMarker, Class::Cache),
+    spec(".pytest_cache", ArtifactKind::PythonCache, "pytest cache", Identity::ParentMarker, Class::Cache),
+    spec(".mypy_cache", ArtifactKind::PythonCache, "mypy cache", Identity::ParentMarker, Class::Cache),
+    spec(".ruff_cache", ArtifactKind::PythonCache, "ruff cache", Identity::ParentMarker, Class::Cache),
 ];
 static GRADLE: &[ArtifactSpec] = &[
-    spec("build", ArtifactKind::Gradle, "Gradle build/", Identity::ParentMarker),
-    spec(".gradle", ArtifactKind::Gradle, "Gradle .gradle/", Identity::ParentMarker),
+    spec("build", ArtifactKind::Gradle, "Gradle build/", Identity::ParentMarker, Class::Build),
+    spec(".gradle", ArtifactKind::Gradle, "Gradle .gradle/", Identity::ParentMarker, Class::Cache),
 ];
-static MAVEN: &[ArtifactSpec] = &[spec("target", ArtifactKind::Maven, "Maven target/", Identity::ParentMarker)];
+static MAVEN: &[ArtifactSpec] = &[spec("target", ArtifactKind::Maven, "Maven target/", Identity::ParentMarker, Class::Build)];
 static DOTNET: &[ArtifactSpec] = &[
-    spec("bin", ArtifactKind::DotNet, ".NET bin/", Identity::ParentMarker),
-    spec("obj", ArtifactKind::DotNet, ".NET obj/", Identity::ParentMarker),
+    spec("bin", ArtifactKind::DotNet, ".NET bin/", Identity::ParentMarker, Class::Build),
+    spec("obj", ArtifactKind::DotNet, ".NET obj/", Identity::ParentMarker, Class::Build),
 ];
-static CMAKE: &[ArtifactSpec] = &[spec("build", ArtifactKind::CMake, "CMake build/", Identity::ParentMarker)];
+static CMAKE: &[ArtifactSpec] = &[spec("build", ArtifactKind::CMake, "CMake build/", Identity::ParentMarker, Class::Build)];
 
 /// Order matters: it is the order of `ProjectCandidate::ecosystems`.
 pub static MARKERS: &[Marker] = &[
