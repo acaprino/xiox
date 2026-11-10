@@ -43,3 +43,13 @@ Not copied: `app.rs`, `treemap.rs`, `fmt.rs`, `model.rs`, `scan.rs`, the rest of
   `RawEntry`/`Raw` model and `Progress` of the original are replaced by `dc_disktree::Node`
   and `dc_disktree::Progress` (`records` counter, `cancel` flag).
 - windows-sys 0.61 (the version already in this workspace) instead of 0.59.
+- Hardened against garbage (no panic, no partial table): `u16_at`/`u32_at`/`u64_at` read
+  zeros past the end of a slice; attributes shorter than 0x18 bytes end the record; a
+  non-resident `$DATA` needs its 0x40-byte header; `data_runs` returns an error for field
+  sizes above 8, a run list outside the attribute, a negative or overflowing cluster number
+  (8-byte offsets are not sign-extended by `<< 64`). The read itself (`read_mft`, behind a
+  `ReadAt` trait so tests can feed an in-memory volume) checks the geometry, uses checked
+  arithmetic for every offset, caps the record count with `MftValidDataLength`, fails when
+  the runs of record 0 do not cover the whole table (MFT continued in an `$ATTRIBUTE_LIST`),
+  when a run does not hold whole records, and on any short read (the source stopped on a
+  0-byte read and kept going after a short one).

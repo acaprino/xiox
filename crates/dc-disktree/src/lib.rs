@@ -150,8 +150,8 @@ impl DiskIndex {
             let p = node.parent as usize;
             if p < n && slot[p] != NONE {
                 let e = &mut ix.entries[slot[p] as usize];
-                e.logical += node.size;
-                e.alloc += node.alloc;
+                e.logical = e.logical.saturating_add(node.size);
+                e.alloc = e.alloc.saturating_add(node.alloc);
                 e.files += 1;
             }
         }
@@ -167,9 +167,9 @@ impl DiskIndex {
             let (p, logical, alloc, files) = (e.parent, e.logical, e.alloc, e.files);
             if p != NONE {
                 let pe = &mut ix.entries[p as usize];
-                pe.logical += logical;
-                pe.alloc += alloc;
-                pe.files += files;
+                pe.logical = pe.logical.saturating_add(logical);
+                pe.alloc = pe.alloc.saturating_add(alloc);
+                pe.files = pe.files.saturating_add(files);
             }
         }
 
@@ -259,8 +259,16 @@ impl DirIndex for DiskIndex {
         "mft"
     }
 
+    /// Totals of an indexed folder. `None` for a reparse-point folder (junction, mount point,
+    /// directory symlink): the MFT has nothing under it, so the caller has to walk it.
+    ///
+    /// Hard links: a file is counted once, under the folder of the one name the MFT reader
+    /// kept (best namespace, first seen). A `node_modules` made of hard links into a shared
+    /// store (pnpm) may therefore look much smaller here than its files add up to, when the
+    /// kept names are those in the store.
     fn size_of(&self, dir: &Path) -> Option<SizeInfo> {
-        self.by_key.get(path_key(dir).as_str()).map(|&i| self.size_info(i))
+        let &i = self.by_key.get(path_key(dir).as_str())?;
+        (!self.entries[i as usize].reparse).then(|| self.size_info(i))
     }
 
     /// Folders whose name equals one of `names` (case-insensitive), at or below one of
@@ -423,6 +431,25 @@ mod tests {
         let (ix, w) = build_for_roots(&[PathBuf::from(r"Q:\nowhere")], true, &Progress::default());
         assert!(ix.is_none());
         assert!(w.iter().any(|m| m.contains("Q:")));
+    }
+
+    #[test]
+    fn size_of_reparse_folder_is_none() {
+        let ix = sample();
+        assert!(ix.size_of(Path::new(r"C:\Projects\target")).is_none());
+        assert!(ix.size_of(Path::new(r"C:\Projects\app\target")).is_some());
+    }
+
+    #[test]
+    fn huge_sizes_saturate_instead_of_overflowing() {
+        let mut n = nodes();
+        n.push(file(3, u64::MAX, u64::MAX));
+        n.push(file(2, u64::MAX - 1, 1)); // in app
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let t = ix.size_of(Path::new(r"C:\Projects\app\target")).unwrap();
+        assert_eq!((t.logical_bytes, t.allocated_bytes, t.file_count), (u64::MAX, Some(u64::MAX), 3));
+        let root = ix.size_of(Path::new(r"C:\")).unwrap();
+        assert_eq!((root.logical_bytes, root.allocated_bytes, root.file_count), (u64::MAX, Some(u64::MAX), 5));
     }
 
     #[test]
