@@ -39,6 +39,12 @@ pub fn protected(path: &Path, env: &Env) -> Option<&'static str> {
             return Some("cartella di sistema o del profilo presa per intero");
         }
     }
+    // Cartelle dei documenti dell'utente prese per intero (le sottocartelle sì).
+    for dir in user_content_dirs(env) {
+        if covers_whole(&comps, &dir) {
+            return Some("cartella dei documenti dell'utente presa per intero");
+        }
+    }
     // Cartelle di sistema e il loro contenuto.
     for win in windows_dirs(env) {
         for sub in SYSTEM_SUBDIRS {
@@ -75,6 +81,10 @@ const WHOLE_DIRS: &[&str] = &[
     "localappdata",
     "systemdrive",
 ];
+
+const USER_CONTENT: &[&str] = &["documents", "desktop", "pictures", "videos", "music", "downloads"];
+
+const CLOUD_ROOTS: &[&str] = &["onedrive*", "dropbox", "google drive"];
 
 const SYSTEM_SUBDIRS: &[&str] = &["system32", "syswow64", "winsxs"];
 
@@ -148,6 +158,30 @@ fn whole_dirs(env: &Env) -> Vec<Vec<String>> {
     dirs
 }
 
+/// Cartelle con i file personali: documenti, desktop, immagini, download e
+/// cloud nel profilo, e le cartelle pubbliche. `onedrive*` vale per ogni
+/// cartella OneDrive (anche "OneDrive - Azienda").
+fn user_content_dirs(env: &Env) -> Vec<Vec<String>> {
+    let mut dirs = Vec::new();
+    if let Some(profile) = env_dir(env, "userprofile") {
+        for name in USER_CONTENT.iter().chain(CLOUD_ROOTS) {
+            let mut d = profile.clone();
+            d.push((*name).to_string());
+            dirs.push(d);
+        }
+    }
+    let public = env_dir(env, "public").unwrap_or_else(|| vec!["c:".to_string(), "users".to_string(), "public".to_string()]);
+    for p in [public, vec!["c:".to_string(), "users".to_string(), "public".to_string()]] {
+        for name in USER_CONTENT {
+            let mut d = p.clone();
+            d.push((*name).to_string());
+            dirs.push(d);
+        }
+        dirs.push(p);
+    }
+    dirs
+}
+
 /// Cartella di Windows: `windir`/`systemroot`, o `C:\Windows` se mancano.
 fn windows_dirs(env: &Env) -> Vec<Vec<String>> {
     let dirs: Vec<Vec<String>> = ["windir", "systemroot"]
@@ -178,7 +212,7 @@ fn covers_whole(path: &[String], dir: &[String]) -> bool {
 /// I componenti di `path` corrispondono, uno a uno (jolly compresi), ai primi
 /// componenti di `dir`.
 fn prefix_matches(path: &[String], dir: &[String]) -> bool {
-    path.iter().zip(dir).all(|(p, d)| glob(p, d))
+    path.iter().zip(dir).all(|(p, d)| glob(p, d) || glob(d, p))
 }
 
 /// Componente fatto solo di `*`, `?` e `.` con almeno un jolly (`*`, `*.*`).
@@ -450,5 +484,71 @@ mod tests {
         let mut e = env();
         e.0.insert("userprofile".into(), r"C:\Users\USERNA~1".into());
         assert!(protected(Path::new(r"D:\proj\target"), &e).is_none());
+    }
+
+    #[test]
+    fn user_content_folders_are_refused_whole() {
+        assert_refused(&[
+            r"C:\Users\u\Documents",
+            r"C:\Users\u\Desktop",
+            r"C:\Users\u\Pictures",
+            r"C:\Users\u\Videos",
+            r"C:\Users\u\Music",
+            r"C:\Users\u\Downloads",
+            r"C:\Users\u\OneDrive",
+            r"C:\Users\u\OneDrive - Contoso",
+            r"C:\Users\u\Dropbox",
+            r"C:\Users\u\Google Drive",
+            r"c:/users/U/DOCUMENTS",
+            r"C:\Users\u\Documents.",
+            r"C:\Users\u\Documents\",
+            r"\\?\C:\Users\u\Downloads",
+            r"C:\Users\u\Doc*",
+            r"C:\Users\u\Down?oads",
+            r"C:\Users\Public",
+            r"C:\Users\Public\Documents",
+            r"C:\Users\Public\Downloads",
+            r"C:\Users\Public\Desktop",
+        ]);
+    }
+
+    #[test]
+    fn wildcard_files_directly_in_user_content_folders_are_refused() {
+        assert_refused(&[
+            r"C:\Users\u\Downloads\*.*",
+            r"C:\Users\u\Downloads\*",
+            r"C:\Users\u\Documents\*",
+            r"C:\Users\u\Desktop\*.*",
+            r"C:\Users\u\OneDrive\*",
+            r"C:\Users\u\OneDrive - Contoso\*.*",
+            r"C:\Users\u\Dropbox\*",
+            r"C:\Users\Public\*",
+            r"C:\Users\Public\Documents\*",
+            r"C:\Users\u\Documents\*\*",
+        ]);
+    }
+
+    #[test]
+    fn subfolders_of_user_content_folders_are_allowed() {
+        assert_allowed(&[
+            r"C:\Users\u\Documents\My Games\X\logs",
+            r"C:\Users\u\Downloads\Foo\cache\*",
+            r"C:\Users\u\Downloads\Foo",
+            r"C:\Users\u\Documents\My Games\X\logs\*.log",
+            r"C:\Users\u\OneDrive\Cache",
+            r"C:\Users\u\Dropbox\.dropbox.cache",
+            r"C:\Users\u\Videos\Captures\tmp\*.tmp",
+            r"C:\Users\u\AppData\Local\Foo",
+        ]);
+    }
+
+    #[test]
+    fn public_environment_variable_moves_the_public_folders() {
+        let mut e = env();
+        e.0.insert("public".into(), r"D:\Pub".into());
+        for p in [r"D:\Pub", r"D:\Pub\Documents", r"D:\Pub\Pictures\*", r"C:\Users\Public"] {
+            assert!(protected(Path::new(p), &e).is_some(), "{p}");
+        }
+        assert!(protected(Path::new(r"D:\Pub\Documents\App\cache"), &e).is_none());
     }
 }
