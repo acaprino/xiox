@@ -23,6 +23,8 @@
 - **UI di ccleaner64 di base** (decisione 8 della spec): barra laterale, `card()`, `primary()`, `secondary()`, colori di `src/theme.rs`. Nessuna schermata con uno stile proprio.
 - **L'app propone, l'utente sceglie** (decisione 6): ogni cartella ha la sua casella; il livello decide solo preselezione e avviso. Unica esclusione: file di credenziali e configurazione (non toccati da questo piano).
 - Livelli: **Consigliato** = classi C, B, L, preselezionato solo nei progetti inattivi; **Facoltativo** = D, mai preselezionato, avviso con il comando per riaverla; **Attenzione** = P, cartelle tracciate da git, identità non verificata, nomi † non ignorati da git: mai preselezionato, avviso da confermare.
+- `node_modules`, `.venv`, `venv` sono Dependency, quindi Facoltativo: non preselezionati nemmeno nei progetti inattivi (approvato dall'utente il 2026-11-10).
+- Esecuzione: subagent-driven (scelta dell'utente il 2026-11-10).
 - Inattività: `DEFAULT_INACTIVE_DAYS` (14). Vale anche per i progetti senza sessioni (ultimo commit git o ultima modifica dei file), approvato dall'utente.
 - Sempre amministratore (`requireAdministrator`), lettura MFT su tutti i dischi fissi NTFS; i dischi fissi non NTFS si camminano.
 - Esclusi sempre dalla ricerca: cartelle artefatto e `NEVER_ENTER`, `Windows`, `Program Files*`, `ProgramData` alla radice, `AppData` ovunque, `$Recycle.Bin`, `System Volume Information`.
