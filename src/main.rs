@@ -170,15 +170,17 @@ impl App {
     fn start_rules(&mut self, ctx: &egui::Context) {
         let (tx, rx) = channel();
         self.rules_rx = Some(rx);
-        // Con --screenshot si usa l'ambiente del processo, così un profilo finto
-        // (USERPROFILE, LOCALAPPDATA…) vale anche per le regole.
+        // Con --screenshot non si aggiorna Winapp2; solo nella build di debug le
+        // regole usano l'ambiente del processo, così un profilo finto
+        // (USERPROFILE, LOCALAPPDATA…) vale anche per loro.
         let fake_profile = self.screenshot.is_some();
+        let from_process = rules::rules_env_from_process(fake_profile);
         let update = rules::should_update(fake_profile).then(rules::real_update);
         let ctx = ctx.clone();
         rules::start(
             pc_rules::updater::data_dir(),
             rules::own_folders,
-            move || if fake_profile { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() },
+            move || if from_process { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() },
             rules::load,
             update,
             move |m| {
@@ -212,7 +214,6 @@ impl App {
         self.rule_cleaned.clear();
         self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
         let only_old = self.only_old;
-        let processes = self.processes.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let verb = if also_clean { "Pulizia" } else { "Analisi" };
@@ -229,33 +230,26 @@ impl App {
                     let _ = tx.send(CleanMsg::Analyzed(i, f));
                 }
             }
-            // Opzioni dinamiche: in sequenza, un solo Guard per tutta la pulizia.
+            // Opzioni dinamiche: in sequenza, un solo Guard per tutta la pulizia;
+            // i processi si rileggono prima dell'analisi e della pulizia di ognuna.
             let guard = pc_rules::Guard::new(&env);
             let cancel = AtomicBool::new(false);
-            let processes = if also_clean { rules::processes() } else { processes };
-            for (k, (c, o)) in dynamic.iter().enumerate() {
-                let label = rules::row_label(c, o);
-                let step = (cats.len() + k) as f32 / total;
-                let _ = tx.send(CleanMsg::Progress(format!("{verb} – {label}"), step));
+            let processes = rules::processes;
+            let run = rules::RunCtx {
+                env: &env,
+                guard: &guard,
+                reg: &rules::RealRegistry,
+                reg_exists: &rules::reg_exists,
+                processes: &processes,
+                cancel: &cancel,
+            };
+            let progress = |k: usize, text: String| {
+                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
                 ctx.request_repaint();
-                let key = rules::key(c, o);
-                if let Some(why) = rules::blocked(c, o, &processes) {
-                    let mut skipped = rules::RuleCleaned::default();
-                    skipped.notes.push(format!("Saltata: {why}"));
-                    let _ = tx.send(CleanMsg::Rule(key, label, rules::RuleFound::default(), also_clean.then_some(skipped)));
-                    continue;
-                }
-                let tick = |n: u64| {
-                    let _ = tx.send(CleanMsg::Progress(format!("{verb} – {label} ({n} voci)"), step));
-                    ctx.request_repaint();
-                };
-                let ctl = pc_rules::CollectCtl { cancel: &cancel, tick: &tick };
-                let f = rules::analyze_option(o, &env, &pc_rules::reg_exists_real, &ctl);
-                let done = also_clean.then(|| {
-                    rules::clean_checked(c, o, &f, &processes, &guard, &rules::RealRegistry, &cancel)
-                });
+            };
+            rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
                 let _ = tx.send(CleanMsg::Rule(key, label, f, done));
-            }
+            });
             let _ = tx.send(CleanMsg::Done);
             ctx.request_repaint();
         });
@@ -581,7 +575,7 @@ impl App {
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let any = self.clean_sel.iter().any(|&b| b) || !self.rule_sel.is_empty();
+                    let any = self.clean_sel.iter().any(|&b| b) || self.rules.as_ref().is_some_and(|rs| !rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes).is_empty());
                     if primary(ui, "Avvia pulizia", !busy && any).clicked() {
                         self.confirm_clean = true;
                     }
@@ -654,15 +648,11 @@ impl App {
         }
     }
 
-    /// "<cleaner> – <opzione>: <avviso>" per ogni opzione dinamica spuntata con un avviso.
+    /// "<cleaner> – <opzione>: <avviso>" per ogni opzione dinamica spuntata, non bloccata, con un avviso.
     fn rule_warnings(&self) -> Vec<String> {
         let Some(rs) = &self.rules else { return vec![] };
-        rs.cleaners
-            .iter()
-            .flat_map(|c| c.options.iter().map(move |o| (c, o)))
-            .filter(|(c, o)| self.rule_sel.contains(&rules::key(c, o)))
-            .filter_map(|(c, o)| o.warning.as_ref().map(|w| format!("{}: {w}", rules::row_label(c, o))))
-            .collect()
+        // Solo le opzioni che si pulirebbero davvero (non quelle bloccate).
+        rules::choice_warnings(&rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes))
     }
 
     fn analysis_table(&self, ui: &mut Ui) {

@@ -8,15 +8,18 @@
 //! pulizia; registro ricontrollato con `reg_allowed`, backup `.reg` prima,
 //! chiavi aperte senza seguire i collegamenti.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pc_rules::model::PROTECT_TREE_PREFIX;
 use pc_rules::updater::UpdateOutcome;
 use pc_rules::{
-    collect_ctl, overlaps, present, reg_allowed, running, updater, winapp2, Action, Cleaner,
+    collect_ctl, present, within, reg_allowed, running, updater, winapp2, Action, Cleaner,
     CollectCtl, Env, Guard, Opt, Origin, RegItem, RegRoot,
 };
+
+use crate::sys;
 
 /// Titolo del gruppo dei cleaner inglobati.
 pub const EMBEDDED_GROUP: &str = "Sviluppo e AI";
@@ -89,11 +92,13 @@ impl RuleCleaned {
 
 /// Registro usato dalla pulizia, sostituibile nei test.
 pub trait RuleRegistry: Sync {
-    /// Scrive un `.reg` con le chiavi di `items`. `Err` se anche una sola
-    /// chiave esistente non si salva.
-    fn backup(&self, items: &[RegItem]) -> Result<PathBuf, String>;
-    /// Cancella una chiave (con le sottochiavi) o un valore.
-    fn delete(&self, item: &RegItem) -> Result<(), String>;
+    /// Scrive un `.reg` con le chiavi esistenti di `items` (nessun file se non
+    /// ne esiste nessuna) e dice quali voci esistevano. `Err` se anche una sola
+    /// chiave esistente non si salva o non si sa se esista.
+    fn backup(&self, items: &[RegItem]) -> Result<Backup, String>;
+    /// Cancella una chiave (con le sottochiavi) o un valore: `Ok(true)` se
+    /// eliminata, `Ok(false)` se non c'era più.
+    fn delete(&self, item: &RegItem) -> Result<bool, String>;
 }
 
 /// Chiave di selezione e di risultato: `"<cleaner.id>/<opt.id>"`.
@@ -107,7 +112,7 @@ pub type ReadWinapp2 = dyn Fn(&Path) -> Result<(String, String), String>;
 /// Carica le regole dalla cartella dati (`updater::data_dir()`), con la copia
 /// di Winapp2 letta da `updater::read_valid` e il registro vero (sola lettura).
 pub fn load(dir: &Path, env: &Env) -> RuleSet {
-    load_with(dir, env, &|d| updater::read_valid(d), &pc_rules::reg_exists_real)
+    load_with(dir, env, &|d| updater::read_valid(d), &reg_exists)
 }
 
 /// Come [`load`], con lettura di Winapp2 e registro iniettati.
@@ -145,15 +150,11 @@ pub fn load_with(
                     report.skipped_excludes
                 ));
             }
-            // Regola 9: una voce che tocca le stesse cartelle di un inglobato
-            // presente si nasconde; vince l'inglobato.
-            let embedded_paths: Vec<&str> = cleaners.iter().flat_map(file_paths).collect();
+            // Regola 9: vince l'inglobato presente (vedi `covered_by_embedded`).
             let before = found.len();
             winapp = found
                 .into_iter()
-                .filter(|w| {
-                    !file_paths(w).any(|a| embedded_paths.iter().any(|b| overlaps(a, b, env)))
-                })
+                .filter(|w| !covered_by_embedded(w, &cleaners, env))
                 .collect();
             let hidden = before - winapp.len();
             if hidden > 0 {
@@ -323,6 +324,21 @@ pub fn protect_own_folders(env: &mut Env, dirs: &[PathBuf]) {
     }
 }
 
+/// Regola 9: una voce di Winapp2 si nasconde solo se è **tutta** coperta da
+/// cleaner inglobati presenti: ha almeno un'azione su file, nessuna azione di
+/// registro (un inglobato non le copre), e ogni azione su file coincide con,
+/// o sta dentro, un'azione su file di un inglobato ([`pc_rules::within`], a
+/// senso unico: un antenato non basta).
+pub fn covered_by_embedded(entry: &Cleaner, embedded: &[Cleaner], env: &Env) -> bool {
+    let actions: Vec<&Action> = entry.options.iter().flat_map(|o| &o.actions).collect();
+    let outer: Vec<&str> = embedded.iter().filter(|c| is_embedded(c)).flat_map(file_paths).collect();
+    !actions.is_empty()
+        && actions.iter().all(|a| match a {
+            Action::Files { path, .. } => outer.iter().any(|o| within(path, o, env)),
+            _ => false,
+        })
+}
+
 /// Percorsi (non espansi) delle azioni su file di un cleaner.
 fn file_paths(c: &Cleaner) -> impl Iterator<Item = &str> {
     c.options.iter().flat_map(|o| &o.actions).filter_map(|a| match a {
@@ -388,13 +404,47 @@ pub fn analyze_option(
     }
 }
 
+/// Opzioni spuntate che si possono davvero pulire adesso (né non supportate
+/// né bloccate da un processo): abilitano «Avvia pulizia» e danno gli avvisi
+/// della conferma.
+pub fn active_choices<'a>(
+    cleaners: &'a [Cleaner],
+    sel: &HashSet<String>,
+    processes: &[String],
+) -> Vec<(&'a Cleaner, &'a Opt)> {
+    cleaners
+        .iter()
+        .flat_map(|c| c.options.iter().map(move |o| (c, o)))
+        .filter(|(c, o)| sel.contains(&key(c, o)) && blocked(c, o, processes).is_none())
+        .collect()
+}
+
+/// "<cleaner> – <opzione>: <avviso>" per ogni scelta con un avviso.
+pub fn choice_warnings(choices: &[(&Cleaner, &Opt)]) -> Vec<String> {
+    choices
+        .iter()
+        .filter_map(|(c, o)| o.warning.as_ref().map(|w| format!("{}: {w}", row_label(c, o))))
+        .collect()
+}
+
+/// `true` se le regole si leggono con le variabili del processo invece che
+/// con le cartelle note: solo con `--screenshot` e solo nella build di debug
+/// (il profilo finto delle prove); in release `--screenshot` usa
+/// `Env::for_rules` come il resto.
+pub fn rules_env_from_process(screenshot: bool) -> bool {
+    cfg!(debug_assertions) && screenshot
+}
+
 /// Pulisce ciò che `analyze_option` ha raccolto: i file, poi le cartelle
 /// svuotate (nell'ordine dato), poi il registro (backup `.reg` prima; se il
-/// backup non riesce nessuna voce di registro si cancella). Non conosce la
-/// UI né i processi: chi chiama usa [`clean_checked`].
+/// backup non riesce nessuna voce di registro si cancella; si cancellano solo
+/// le voci che il backup ha trovato). Un file o una cartella che non sta
+/// sotto una cartella di base delle azioni di `opt` (espanse con `env`) non
+/// si tocca. Non conosce la UI né i processi: chi chiama usa [`clean_checked`].
 pub fn clean_option(
     found: &RuleFound,
     opt: &Opt,
+    env: &Env,
     guard: &Guard,
     reg: &dyn RuleRegistry,
     cancel: &AtomicBool,
@@ -408,10 +458,16 @@ pub fn clean_option(
         out.note("Analisi interrotta: niente pulito".to_string());
         return out;
     }
+    let bases = rule_bases(opt, env);
     for (path, size) in &found.files {
         if cancel.load(Ordering::Relaxed) {
             out.note("Pulizia interrotta".to_string());
             return out;
+        }
+        if !under_any(path, &bases) {
+            out.failed += 1;
+            out.note(format!("Non toccato, fuori dalle cartelle della regola: {}", path.display()));
+            continue;
         }
         match delete_path(path, guard) {
             Ok(()) => {
@@ -428,6 +484,10 @@ pub fn clean_option(
         if cancel.load(Ordering::Relaxed) {
             out.note("Pulizia interrotta".to_string());
             return out;
+        }
+        if !under_any(dir, &bases) {
+            out.note(format!("Non toccata, fuori dalle cartelle della regola: {}", dir.display()));
+            continue;
         }
         // Una cartella che non si è svuotata (file in uso) resta: non è un errore.
         let _ = delete_path(dir, guard);
@@ -446,8 +506,8 @@ pub fn clean_option(
     if items.is_empty() || cancel.load(Ordering::Relaxed) {
         return out;
     }
-    match reg.backup(&items) {
-        Ok(path) => out.backup = Some(path),
+    let backup = match reg.backup(&items) {
+        Ok(b) => b,
         Err(e) => {
             out.failed += items.len() as u64;
             out.note(format!(
@@ -455,10 +515,18 @@ pub fn clean_option(
             ));
             return out;
         }
-    }
-    for item in &items {
+    };
+    out.backup = backup.path;
+    for (i, item) in items.iter().enumerate() {
+        // Una voce che non c'era al backup non si cancella (potrebbe nascere
+        // dopo, senza copia).
+        if !backup.present.get(i).copied().unwrap_or(false) {
+            out.note(format!("Già assente: {}", reg_text(item)));
+            continue;
+        }
         match reg.delete(item) {
-            Ok(()) => out.removed += 1,
+            Ok(true) => out.removed += 1,
+            Ok(false) => out.note(format!("Già assente: {}", reg_text(item))),
             Err(e) => {
                 out.failed += 1;
                 out.note(format!("{}: {e}", reg_text(item)));
@@ -468,14 +536,52 @@ pub fn clean_option(
     out
 }
 
+/// Cartelle di base delle azioni su file di `opt` (percorsi espansi fino al
+/// primo componente con jolly), come componenti confrontabili.
+fn rule_bases(opt: &Opt, env: &Env) -> Vec<Vec<String>> {
+    opt.actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Files { path, .. } => Some(path),
+            _ => None,
+        })
+        .flat_map(|p| pc_rules::expand(p, env))
+        .map(|p| {
+            comps(&p)
+                .into_iter()
+                .take_while(|c| !c.contains(['*', '?']))
+                .collect::<Vec<_>>()
+        })
+        .filter(|b| b.len() >= 2)
+        .collect()
+}
+
+/// `path` coincide con una delle basi o sta sotto.
+fn under_any(path: &Path, bases: &[Vec<String>]) -> bool {
+    let c = comps(path);
+    bases.iter().any(|b| c.starts_with(b))
+}
+
+/// Componenti in minuscolo, senza `\\?\`, vuoti e `.`.
+fn comps(path: &Path) -> Vec<String> {
+    let s = path.to_string_lossy().replace('/', "\\");
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    s.split('\\')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .map(str::to_lowercase)
+        .collect()
+}
+
 /// Come [`clean_option`], ma prima ricontrolla [`blocked`] con l'elenco dei
 /// processi preso subito prima della pulizia: un'opzione bloccata si salta e
 /// lo si scrive nel resoconto.
+#[allow(clippy::too_many_arguments)]
 pub fn clean_checked(
     cleaner: &Cleaner,
     opt: &Opt,
     found: &RuleFound,
     processes: &[String],
+    env: &Env,
     guard: &Guard,
     reg: &dyn RuleRegistry,
     cancel: &AtomicBool,
@@ -485,7 +591,55 @@ pub fn clean_checked(
         out.note(format!("Saltata: {why}"));
         return out;
     }
-    clean_option(found, opt, guard, reg, cancel)
+    clean_option(found, opt, env, guard, reg, cancel)
+}
+
+/// Ciò che serve al ciclo delle opzioni dinamiche (tutto iniettabile).
+pub struct RunCtx<'a> {
+    pub env: &'a Env,
+    /// Un solo `Guard` per tutta la pulizia.
+    pub guard: &'a Guard,
+    pub reg: &'a dyn RuleRegistry,
+    pub reg_exists: &'a (dyn Fn(&RegItem) -> bool + Sync),
+    /// Elenco dei processi attivi, riletto prima di ogni analisi e di ogni pulizia.
+    pub processes: &'a (dyn Fn() -> Vec<String> + Sync),
+    pub cancel: &'a AtomicBool,
+}
+
+/// Analizza (e con `also_clean` pulisce) le opzioni scelte, in sequenza.
+/// I processi si rileggono subito prima dell'analisi e subito prima della
+/// pulizia di **ogni** opzione. `progress(indice, testo)` riceve l'avanzamento;
+/// `emit(chiave, etichetta, raccolta, esito)` una riga per opzione.
+pub fn run_options(
+    chosen: &[(Cleaner, Opt)],
+    also_clean: bool,
+    run: &RunCtx,
+    progress: &(dyn Fn(usize, String) + Sync),
+    emit: &mut dyn FnMut(String, String, RuleFound, Option<RuleCleaned>),
+) {
+    let verb = if also_clean { "Pulizia" } else { "Analisi" };
+    for (k, (c, o)) in chosen.iter().enumerate() {
+        if run.cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let label = row_label(c, o);
+        progress(k, format!("{verb} – {label}"));
+        let key = key(c, o);
+        if let Some(why) = blocked(c, o, &(run.processes)()) {
+            let mut skipped = RuleCleaned::default();
+            skipped.note(format!("Saltata: {why}"));
+            emit(key, label, RuleFound::default(), also_clean.then_some(skipped));
+            continue;
+        }
+        let tick = |n: u64| progress(k, format!("{verb} – {label} ({n} voci)"));
+        let ctl = CollectCtl { cancel: run.cancel, tick: &tick };
+        let found = analyze_option(o, run.env, run.reg_exists, &ctl);
+        let done = also_clean.then(|| {
+            let now = (run.processes)();
+            clean_checked(c, o, &found, &now, run.env, run.guard, run.reg, run.cancel)
+        });
+        emit(key, label, found, done);
+    }
 }
 
 /// L'unica via con cui questo modulo cancella file e cartelle.
@@ -516,16 +670,153 @@ pub fn reg_text(item: &RegItem) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Backup del registro.
+
+/// Esito di un backup: il file scritto (`None` se nessuna chiave esisteva) e,
+/// per ogni voce passata, se esisteva (solo quelle si cancellano).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backup {
+    pub path: Option<PathBuf>,
+    pub present: Vec<bool>,
+}
+
+/// Accesso al registro per il backup, sostituibile nei test.
+pub trait RegBackend {
+    /// `Ok(true)` se la voce (chiave, o valore della chiave) esiste; `Err` se
+    /// non si sa (accesso negato, collegamento): allora il backup fallisce.
+    fn exists(&self, item: &RegItem) -> Result<bool, String>;
+    /// Esporta la chiave `root\path` in `out` (formato di `reg export`, UTF-16).
+    fn export(&self, root: RegRoot, path: &str, out: &Path) -> Result<(), String>;
+}
+
+/// Quanti nomi `<stem>_N.reg` si provano prima di arrendersi.
+const MAX_BACKUP_NAMES: u32 = 1000;
+
+/// Scrive in `dest` un `.reg` con tutte le chiavi esistenti di `items`.
+///
+/// - Una voce che non si sa se esista fa fallire tutto (nessuna cancellazione).
+/// - Nessuna voce esistente: nessun file (`path: None`).
+/// - `dest` dev'essere una cartella vera, non un collegamento o una giunzione.
+/// - Le esportazioni vanno in una cartella di lavoro nuova data da `work`
+///   (in produzione solo per amministratori, nome casuale); se non si ottiene
+///   il backup fallisce. La cartella e i suoi file si tolgono alla fine.
+/// - Il file finale si crea con `create_new`: `<stem>.reg`, poi `<stem>_2.reg`,
+///   `<stem>_3.reg`… (mai sovrascritto).
+pub fn backup_to(
+    dest: &Path,
+    stem: &str,
+    work: &dyn Fn() -> Result<PathBuf, String>,
+    be: &dyn RegBackend,
+    items: &[RegItem],
+) -> Result<Backup, String> {
+    let present = items
+        .iter()
+        .map(|i| be.exists(i).map_err(|e| format!("{}: {e}", reg_text(i))))
+        .collect::<Result<Vec<bool>, String>>()?;
+    let mut keys: Vec<(RegRoot, String)> = items
+        .iter()
+        .zip(&present)
+        .filter(|(_, p)| **p)
+        .map(|(i, _)| {
+            let (root, path, _) = reg_parts(i);
+            (root, path.to_string())
+        })
+        .collect();
+    keys.sort_by_key(|(r, p)| (root_name(*r), p.to_lowercase()));
+    keys.dedup_by(|a, b| a.0 == b.0 && a.1.eq_ignore_ascii_case(&b.1));
+    if keys.is_empty() {
+        return Ok(Backup { path: None, present });
+    }
+    check_real_dir(dest)?;
+    let dir = work()?;
+    let mut tmp_files = Vec::new();
+    let text = export_all(&keys, &dir, be, &mut tmp_files);
+    for f in &tmp_files {
+        // `remove_file` toglie un collegamento come collegamento.
+        let _ = std::fs::remove_file(f);
+    }
+    let _ = std::fs::remove_dir(&dir);
+    let text = text?;
+    let mut data = vec![0xFF, 0xFE];
+    for w in text.encode_utf16() {
+        data.extend_from_slice(&w.to_le_bytes());
+    }
+    check_real_dir(dest)?;
+    let path = write_new(dest, stem, &data)?;
+    Ok(Backup { path: Some(path), present })
+}
+
+fn export_all(
+    keys: &[(RegRoot, String)],
+    dir: &Path,
+    be: &dyn RegBackend,
+    tmp_files: &mut Vec<PathBuf>,
+) -> Result<String, String> {
+    let mut text = String::from("Windows Registry Editor Version 5.00\r\n");
+    for (n, (root, path)) in keys.iter().enumerate() {
+        let tmp = dir.join(format!("{n}.reg"));
+        tmp_files.push(tmp.clone());
+        let full = format!("{}\\{path}", root_name(*root));
+        be.export(*root, path, &tmp).map_err(|e| format!("{full} non esportata: {e}"))?;
+        let bytes = std::fs::read(&tmp).map_err(|e| format!("{full}: {e}"))?;
+        let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        let s = String::from_utf16_lossy(&words);
+        let s = s.trim_start_matches('\u{feff}');
+        let body = s.split_once('\n').map(|x| x.1).unwrap_or("");
+        text.push_str(body);
+    }
+    Ok(text)
+}
+
+/// `Ok` se `dir` è una cartella vera (non un collegamento né una giunzione).
+fn check_real_dir(dir: &Path) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let md = std::fs::symlink_metadata(dir).map_err(|e| format!("cartella dei backup {}: {e}", dir.display()))?;
+    if md.file_type().is_symlink() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !md.is_dir() {
+        return Err(format!("cartella dei backup non valida (collegamento?): {}", dir.display()));
+    }
+    Ok(())
+}
+
+/// Crea `<stem>.reg` (o `<stem>_N.reg`) in `dir` senza mai sovrascrivere.
+fn write_new(dir: &Path, stem: &str, data: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    for n in 1..=MAX_BACKUP_NAMES {
+        let name = if n == 1 { format!("{stem}.reg") } else { format!("{stem}_{n}.reg") };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                f.write_all(data).map_err(|e| format!("{}: {e}", path.display()))?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
+    }
+    Err("troppi backup con lo stesso nome".into())
+}
+
 /// Il registro vero.
 pub struct RealRegistry;
 
 impl RuleRegistry for RealRegistry {
-    fn backup(&self, items: &[RegItem]) -> Result<PathBuf, String> {
-        win::backup(items)
+    fn backup(&self, items: &[RegItem]) -> Result<Backup, String> {
+        let stem = format!("backup_regole_{}", sys::stamp());
+        backup_to(&sys::data_dir(), &stem, &win::admin_work_dir, &win::RealBackend, items)
     }
-    fn delete(&self, item: &RegItem) -> Result<(), String> {
+    fn delete(&self, item: &RegItem) -> Result<bool, String> {
         win::delete(item)
     }
+}
+
+/// Esistenza di una chiave o di un valore con la stessa apertura della
+/// pulizia (`REG_OPTION_OPEN_LINK`, vista a 64 bit, solo il collegamento di
+/// `HKCU\Software\Classes` seguito): analisi e pulizia vedono lo stesso
+/// registro. Un errore conta come «non c'è» (la voce non si raccoglie).
+pub fn reg_exists(item: &RegItem) -> bool {
+    win::exists(item).unwrap_or(false)
 }
 
 /// Nomi degli eseguibili in esecuzione (`claude.exe`, …), via ToolHelp.
@@ -533,22 +824,63 @@ pub fn processes() -> Vec<String> {
     win::processes()
 }
 
+/// `true` se, aprendo `comps` (i componenti fin qui, l'ultimo è un
+/// collegamento) sotto `root`, il collegamento si può seguire: solo
+/// `HKCU\Software\Classes` verso esattamente `\REGISTRY\USER\<sid>_Classes`,
+/// con `sid` quello del token del processo.
+pub fn classes_link_ok(root: RegRoot, comps: &[&str], target: &str, sid: &str) -> bool {
+    root == RegRoot::Hkcu
+        && !sid.is_empty()
+        && comps.len() == 2
+        && comps[0].eq_ignore_ascii_case("software")
+        && comps[1].eq_ignore_ascii_case("classes")
+        && target.eq_ignore_ascii_case(&format!(r"\REGISTRY\USER\{sid}_Classes"))
+}
+
+/// Padre e nome di una chiave dai componenti normalizzati (`None` se non ha
+/// almeno due componenti): niente `RegDeleteTreeW(padre, "")`.
+pub fn split_parent(path: &str) -> Option<(String, String)> {
+    let comps: Vec<&str> = path.split('\\').filter(|c| !c.is_empty()).collect();
+    let (name, parent) = comps.split_last()?;
+    if parent.is_empty() {
+        return None;
+    }
+    Some((parent.join("\\"), (*name).to_string()))
+}
+
+/// Esito di `RegEnumKeyExW` nell'esame di un albero: `None` = continua,
+/// `Some(false)` = fine dell'elenco, `Some(true)` = errore (si rifiuta).
+pub fn enum_verdict(rc: u32) -> Option<bool> {
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    match rc {
+        ERROR_SUCCESS => None,
+        ERROR_NO_MORE_ITEMS => Some(false),
+        _ => Some(true),
+    }
+}
+
 mod win {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
 
     use pc_rules::{RegItem, RegRoot};
-    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY,
-        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE,
-        KEY_WOW64_64KEY, REG_LINK, REG_OPTION_OPEN_LINK,
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_READ,
+        KEY_SET_VALUE, KEY_WOW64_64KEY, REG_LINK, REG_OPTION_OPEN_LINK,
     };
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    use super::{reg_parts, reg_text, root_name};
-    use crate::sys;
+    use super::{classes_link_ok, enum_verdict, reg_parts, reg_text, root_name, split_parent, RegBackend};
 
     /// Diritto standard `DELETE` (serve a `RegDeleteTreeW` sulla chiave padre).
     const DELETE: u32 = 0x0001_0000;
@@ -584,16 +916,33 @@ mod win {
         }
     }
 
-    /// `true` se la chiave (aperta con `REG_OPTION_OPEN_LINK`) è un
-    /// collegamento simbolico del registro.
-    fn is_link(key: &Key) -> bool {
+    /// Destinazione del collegamento (`SymbolicLinkValue` di tipo `REG_LINK`)
+    /// se la chiave, aperta con `REG_OPTION_OPEN_LINK`, è un collegamento.
+    /// `Err` se il valore c'è ma non si legge.
+    fn link_target(key: &Key) -> Result<Option<String>, String> {
         let name = wide("SymbolicLinkValue");
         let mut ty = 0u32;
-        // SAFETY: si chiede solo il tipo, nessun buffer di dati.
-        let rc = unsafe {
-            RegQueryValueExW(key.0, name.as_ptr(), std::ptr::null(), &mut ty, std::ptr::null_mut(), std::ptr::null_mut())
-        };
-        rc == ERROR_SUCCESS && ty == REG_LINK
+        let mut len = 0u32;
+        // SAFETY: prima solo tipo e lunghezza.
+        let rc = unsafe { RegQueryValueExW(key.0, name.as_ptr(), std::ptr::null(), &mut ty, std::ptr::null_mut(), &mut len) };
+        if rc == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        if rc != ERROR_SUCCESS {
+            return Err(format!("collegamento illeggibile (errore {rc})"));
+        }
+        if ty != REG_LINK {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; len as usize];
+        // SAFETY: buffer della lunghezza appena letta.
+        let rc = unsafe { RegQueryValueExW(key.0, name.as_ptr(), std::ptr::null(), &mut ty, buf.as_mut_ptr(), &mut len) };
+        if rc != ERROR_SUCCESS || ty != REG_LINK {
+            return Err(format!("collegamento illeggibile (errore {rc})"));
+        }
+        let words: Vec<u16> = buf[..len as usize].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        let s = String::from_utf16_lossy(&words);
+        Ok(Some(s.trim_end_matches('\0').to_string()))
     }
 
     fn hive(root: RegRoot) -> HKEY {
@@ -603,9 +952,52 @@ mod win {
         }
     }
 
-    /// Apre `path` un componente alla volta, ognuno senza seguire collegamenti
-    /// e rifiutando un componente che è un collegamento. L'ultimo si apre con
-    /// `last_access`. `Ok(None)` se la chiave non esiste.
+    /// SID (stringa) dell'utente del token del processo; vuoto se non si legge.
+    fn user_sid() -> &'static str {
+        static SID: OnceLock<String> = OnceLock::new();
+        SID.get_or_init(|| read_user_sid().unwrap_or_default())
+    }
+
+    fn read_user_sid() -> Option<String> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: pseudo-handle del processo; `token` valido.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return None;
+        }
+        let mut len = 0u32;
+        // SAFETY: prima chiamata per la lunghezza.
+        unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len) };
+        // Allineato a 8 byte per la struttura TOKEN_USER.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
+        // SAFETY: buffer di almeno `len` byte.
+        let ok = unsafe { GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) } != 0;
+        // SAFETY: handle aperto sopra, chiuso una volta.
+        unsafe { CloseHandle(token) };
+        if !ok {
+            return None;
+        }
+        // SAFETY: il buffer contiene una TOKEN_USER valida.
+        let user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
+        let mut s: *mut u16 = std::ptr::null_mut();
+        // SAFETY: SID del token; `s` allocata dal sistema e liberata con LocalFree.
+        if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut s) } == 0 || s.is_null() {
+            return None;
+        }
+        // SAFETY: stringa terminata da 0 restituita dal sistema.
+        let len = (0..).take_while(|&i| unsafe { *s.add(i) } != 0).count();
+        // SAFETY: `len` caratteri validi.
+        let out = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(s, len) });
+        // SAFETY: memoria allocata da ConvertSidToStringSidW.
+        unsafe { LocalFree(s.cast()) };
+        Some(out)
+    }
+
+    /// Apre `path` un componente alla volta, ognuno senza seguire collegamenti.
+    /// Un componente che è un collegamento si rifiuta, tranne
+    /// `HKCU\Software\Classes` verso `\REGISTRY\USER\<SID del processo>_Classes`
+    /// (vedi [`classes_link_ok`]): lì si continua da `HKEY_USERS\<SID>_Classes`,
+    /// aperta allo stesso modo. L'ultimo componente si apre con `last_access`.
+    /// `Ok(None)` se la chiave non esiste.
     fn open_chain(root: RegRoot, path: &str, last_access: u32) -> Result<Option<Key>, String> {
         let comps: Vec<&str> = path.split('\\').filter(|c| !c.is_empty()).collect();
         if comps.is_empty() {
@@ -624,20 +1016,54 @@ mod win {
                 Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
                 Err(rc) => return Err(format!("non si apre (errore {rc})")),
             };
-            if is_link(&key) {
-                return Err("collegamento del registro: non si segue".into());
-            }
+            let key = match link_target(&key)? {
+                None => key,
+                Some(target) if classes_link_ok(root, &comps[..=i], &target, user_sid()) => {
+                    drop(key);
+                    let classes = format!("{}_Classes", user_sid());
+                    let k = match open_one(HKEY_USERS, &classes, access) {
+                        Ok(k) => k,
+                        Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
+                        Err(rc) => return Err(format!("non si apre (errore {rc})")),
+                    };
+                    if link_target(&k)?.is_some() {
+                        return Err("collegamento del registro: non si segue".into());
+                    }
+                    k
+                }
+                Some(_) => return Err("collegamento del registro: non si segue".into()),
+            };
             cur = Some(key);
         }
         Ok(cur)
     }
 
+    #[cfg(test)]
     pub fn key_exists(root: RegRoot, path: &str) -> bool {
         matches!(open_chain(root, path, KEY_READ), Ok(Some(_)))
     }
 
+    /// Esistenza di una chiave o di un valore con [`open_chain`]; `Err` se non
+    /// si sa (accesso negato, collegamento non ammesso).
+    pub fn exists(item: &RegItem) -> Result<bool, String> {
+        let (root, path, value) = reg_parts(item);
+        let Some(key) = open_chain(root, path, KEY_READ)? else {
+            return Ok(false);
+        };
+        let Some(v) = value else { return Ok(true) };
+        let w = wide(v);
+        let mut ty = 0u32;
+        // SAFETY: solo il tipo, nessun buffer.
+        let rc = unsafe { RegQueryValueExW(key.0, w.as_ptr(), std::ptr::null(), &mut ty, std::ptr::null_mut(), std::ptr::null_mut()) };
+        match rc {
+            ERROR_SUCCESS => Ok(true),
+            ERROR_FILE_NOT_FOUND => Ok(false),
+            rc => Err(format!("valore illeggibile (errore {rc})")),
+        }
+    }
+
     /// `true` se sotto `key` c'è un collegamento, una sottochiave che non si
-    /// apre o più sottochiavi del budget.
+    /// apre, un errore di elenco o più sottochiavi del budget.
     fn tree_has_link(key: &Key, budget: &mut usize) -> bool {
         let mut index = 0u32;
         loop {
@@ -656,8 +1082,8 @@ mod win {
                     std::ptr::null_mut(),
                 )
             };
-            if rc != ERROR_SUCCESS {
-                return false;
+            if let Some(verdict) = enum_verdict(rc) {
+                return verdict;
             }
             index += 1;
             if *budget == 0 {
@@ -667,7 +1093,7 @@ mod win {
             let name = String::from_utf16_lossy(&buf[..len as usize]);
             match open_one(key.0, &name, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS) {
                 Ok(child) => {
-                    if is_link(&child) || tree_has_link(&child, budget) {
+                    if !matches!(link_target(&child), Ok(None)) || tree_has_link(&child, budget) {
                         return true;
                     }
                 }
@@ -676,93 +1102,122 @@ mod win {
         }
     }
 
-    pub fn delete(item: &RegItem) -> Result<(), String> {
+    /// Cancella una chiave (con l'albero) o un valore. `Ok(true)` se eliminata,
+    /// `Ok(false)` se non c'era più.
+    pub fn delete(item: &RegItem) -> Result<bool, String> {
         let (root, path, value) = reg_parts(item);
         // Contratto di pc-rules: si ricontrolla subito prima di cancellare.
         pc_rules::reg_allowed(root, path, value).map_err(|why| format!("{} ({why})", reg_text(item)))?;
         match value {
             Some(v) => {
                 let Some(key) = open_chain(root, path, KEY_SET_VALUE)? else {
-                    return Ok(());
+                    return Ok(false);
                 };
                 let w = wide(v);
                 // SAFETY: chiave aperta con KEY_SET_VALUE, nome terminato da 0.
                 let rc = unsafe { RegDeleteValueW(key.0, w.as_ptr()) };
-                if rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND {
-                    Ok(())
-                } else {
-                    Err(format!("valore non eliminato (errore {rc})"))
+                match rc {
+                    ERROR_SUCCESS => Ok(true),
+                    ERROR_FILE_NOT_FOUND => Ok(false),
+                    rc => Err(format!("valore non eliminato (errore {rc})")),
                 }
             }
             None => {
-                let (parent_path, name) = path.rsplit_once('\\').ok_or("chiave senza padre")?;
-                let Some(parent) = open_chain(root, parent_path, KEY_READ | KEY_SET_VALUE | DELETE)? else {
-                    return Ok(());
+                let (parent_path, name) = split_parent(path).ok_or("chiave senza padre")?;
+                let Some(parent) = open_chain(root, &parent_path, KEY_READ | KEY_SET_VALUE | DELETE)? else {
+                    return Ok(false);
                 };
-                let target = match open_one(parent.0, name, KEY_READ) {
+                let target = match open_one(parent.0, &name, KEY_READ) {
                     Ok(k) => k,
-                    Err(ERROR_FILE_NOT_FOUND) => return Ok(()),
+                    Err(ERROR_FILE_NOT_FOUND) => return Ok(false),
                     Err(rc) => return Err(format!("non si apre (errore {rc})")),
                 };
                 let mut budget = TREE_BUDGET;
-                if is_link(&target) || tree_has_link(&target, &mut budget) {
+                if !matches!(link_target(&target), Ok(None)) || tree_has_link(&target, &mut budget) {
                     return Err("contiene un collegamento del registro o è troppo grande: non toccata".into());
                 }
                 drop(target);
-                let w = wide(name);
-                // SAFETY: padre aperto con DELETE e lettura, nome terminato da 0.
+                let w = wide(&name);
+                // SAFETY: padre aperto con DELETE e lettura, nome non vuoto terminato da 0.
                 let rc = unsafe { RegDeleteTreeW(parent.0, w.as_ptr()) };
-                if rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND {
-                    Ok(())
-                } else {
-                    Err(format!("chiave non eliminata (errore {rc})"))
+                match rc {
+                    ERROR_SUCCESS => Ok(true),
+                    ERROR_FILE_NOT_FOUND => Ok(false),
+                    rc => Err(format!("chiave non eliminata (errore {rc})")),
                 }
             }
         }
     }
 
-    /// Un `.reg` con tutte le chiavi toccate (`reg export`, vista a 64 bit),
-    /// nella stessa cartella dei backup del Registro. Una chiave che esiste e
-    /// non si esporta fa fallire tutto.
-    pub fn backup(items: &[RegItem]) -> Result<PathBuf, String> {
-        let mut keys: Vec<(RegRoot, String)> = items
-            .iter()
-            .map(|i| {
-                let (root, path, _) = reg_parts(i);
-                (root, path.to_string())
-            })
-            .collect();
-        keys.sort_by_key(|(r, p)| (root_name(*r), p.to_lowercase()));
-        keys.dedup_by(|a, b| a.0 == b.0 && a.1.eq_ignore_ascii_case(&b.1));
-        let dir = sys::data_dir();
-        let out = dir.join(format!("backup_regole_{}.reg", sys::stamp()));
-        let tmp = dir.join("export_regole_tmp.reg");
-        let mut text = String::from("Windows Registry Editor Version 5.00\r\n");
-        for (root, path) in keys {
-            if !key_exists(root, &path) {
-                continue; // niente da salvare e niente da cancellare
-            }
-            let _ = std::fs::remove_file(&tmp);
-            let full = format!("{}\\{}", root_name(root), path);
-            let st = sys::hidden_cmd("reg").args(["export", &full]).arg(&tmp).args(["/y", "/reg:64"]).status();
-            if !matches!(st, Ok(s) if s.success()) {
-                let _ = std::fs::remove_file(&tmp);
-                return Err(format!("{full} non esportata"));
-            }
-            let bytes = std::fs::read(&tmp).map_err(|e| format!("{full}: {e}"))?;
-            let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
-            let s = String::from_utf16_lossy(&words);
-            let s = s.trim_start_matches('\u{feff}');
-            let body = s.split_once('\n').map(|x| x.1).unwrap_or("");
-            text.push_str(body);
+    /// `%SystemRoot%\System32` da `GetSystemDirectoryW`.
+    fn system_dir() -> Option<PathBuf> {
+        let mut buf = [0u16; 520];
+        // SAFETY: buffer e dimensione validi.
+        let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        (n > 0 && n < buf.len()).then(|| PathBuf::from(String::from_utf16_lossy(&buf[..n])))
+    }
+
+    /// Il registro vero per il backup: esistenza con [`open_chain`] (la
+    /// stessa apertura della pulizia), esportazione con il `reg.exe` di sistema
+    /// (percorso assoluto), vista a 64 bit.
+    pub struct RealBackend;
+
+    impl RegBackend for RealBackend {
+        fn exists(&self, item: &RegItem) -> Result<bool, String> {
+            exists(item)
         }
-        let _ = std::fs::remove_file(&tmp);
-        let mut data = vec![0xFF, 0xFE];
-        for w in text.encode_utf16() {
-            data.extend_from_slice(&w.to_le_bytes());
+        fn export(&self, root: RegRoot, path: &str, out: &Path) -> Result<(), String> {
+            let reg = system_dir().map(|d| d.join("reg.exe")).filter(|p| p.is_file()).ok_or("reg.exe non trovato")?;
+            let full = format!("{}\\{path}", root_name(root));
+            let mut cmd = std::process::Command::new(&reg);
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            }
+            let st = cmd
+                .args(["export", &full])
+                .arg(out)
+                .args(["/y", "/reg:64"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_err(|e| e.to_string())?;
+            if st.success() {
+                Ok(())
+            } else {
+                Err(format!("reg.exe terminato con codice {}", st.code().unwrap_or(-1)))
+            }
         }
-        std::fs::write(&out, data).map_err(|e| e.to_string())?;
-        Ok(out)
+    }
+
+    /// Cartella di lavoro nuova per l'esportazione: `%ProgramData%\PulisciPC\tmp\<casuale>`,
+    /// modificabile solo dagli amministratori (`updater::secure_dir`, che
+    /// rifiuta collegamenti nel percorso e verifica l'ACL). Se non si riesce
+    /// il backup fallisce: niente esportazioni in una cartella dell'utente.
+    pub fn admin_work_dir() -> Result<PathBuf, String> {
+        let app = pc_rules::updater::data_dir();
+        let base = app.parent().ok_or("cartella dati senza padre")?.join("tmp");
+        pc_rules::updater::secure_dir(&base).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+        let dir = base.join(random_name());
+        if dir.exists() {
+            return Err("cartella di lavoro già esistente".into());
+        }
+        pc_rules::updater::secure_dir(&dir).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+        Ok(dir)
+    }
+
+    /// Nome difficile da indovinare (hash casuale della libreria standard,
+    /// processo e ora).
+    fn random_name() -> String {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(std::process::id());
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let a = h.finish();
+        let mut h2 = std::collections::hash_map::RandomState::new().build_hasher();
+        h2.write_u64(a);
+        format!("reg-{a:016x}{:016x}", h2.finish())
     }
 
     pub fn processes() -> Vec<String> {
@@ -865,11 +1320,15 @@ mod tests {
         analyze_option(opt, env, &never, &CollectCtl { cancel: &cancel, tick: &tick })
     }
 
-    /// Registro finto: registra le chiamate, il backup può fallire.
+    /// Registro finto: registra le chiamate, il backup può fallire; `absent`
+    /// sono le voci che non esistono al backup, `gone` quelle che spariscono
+    /// fra il backup e la cancellazione (`delete` → `Ok(false)`).
     #[derive(Default)]
     struct FakeReg {
         log: Mutex<Vec<String>>,
         fail_backup: bool,
+        absent: Vec<String>,
+        gone: Vec<String>,
     }
 
     fn item_text(item: &RegItem) -> String {
@@ -880,17 +1339,18 @@ mod tests {
     }
 
     impl RuleRegistry for FakeReg {
-        fn backup(&self, items: &[RegItem]) -> Result<PathBuf, String> {
+        fn backup(&self, items: &[RegItem]) -> Result<Backup, String> {
             self.log.lock().unwrap().push(format!("backup:{}", items.len()));
             if self.fail_backup {
-                Err("reg export non riuscito".into())
-            } else {
-                Ok(PathBuf::from(r"C:\finto\backup.reg"))
+                return Err("reg export non riuscito".into());
             }
+            let present: Vec<bool> = items.iter().map(|i| !self.absent.contains(&item_text(i))).collect();
+            let path = present.iter().any(|&p| p).then(|| PathBuf::from(r"C:\finto\backup.reg"));
+            Ok(Backup { path, present })
         }
-        fn delete(&self, item: &RegItem) -> Result<(), String> {
+        fn delete(&self, item: &RegItem) -> Result<bool, String> {
             self.log.lock().unwrap().push(format!("delete:{}", item_text(item)));
-            Ok(())
+            Ok(!self.gone.contains(&item_text(item)))
         }
     }
 
@@ -923,7 +1383,7 @@ mod tests {
         write(&t.path().join(r"profile\.cargo\registry\cache\index\a.crate"), "x");
         write(&t.path().join(r"profile\.otherapp\cache\b.tmp"), "x");
         let ini = "; Version: 260915\r\n\
-                   [Cargo Registry *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry|*.*|RECURSE\r\n\r\n\
+                   [Cargo Registry *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry\\cache|*.*|RECURSE\r\n\r\n\
                    [Other App *]\r\nSection=Utilities\r\nFileKey1=%UserProfile%\\.otherapp\\cache|*.*|RECURSE\r\n";
         let read = |_: &Path| Ok((ini.to_string(), "260915".to_string()));
         let rs = load_with(&t.path().join("rules"), &env, &read, &never);
@@ -949,7 +1409,7 @@ mod tests {
         assert_eq!(found.bytes, 6);
         let guard = Guard::new(&env);
         let reg = FakeReg::default();
-        let done = clean_option(&found, &o, &guard, &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &o, &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!((done.removed, done.failed, done.freed), (2, 0, 6), "{:?}", done.notes);
         assert!(!app.join(r"cache\a.tmp").exists());
         assert!(!app.join(r"cache\sub\b.tmp").exists());
@@ -978,7 +1438,7 @@ mod tests {
         let found = reg_found(items);
         let o = opt(vec![]);
         let reg = FakeReg::default();
-        let done = clean_option(&found, &o, &guard, &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &o, &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!(
             *reg.log.lock().unwrap(),
             vec!["backup:2", r"delete:Software\FakeApp\Recent", r"delete:Software\FakeApp|LastFile"]
@@ -987,7 +1447,7 @@ mod tests {
         assert_eq!(done.backup, Some(PathBuf::from(r"C:\finto\backup.reg")));
         // Backup non riuscito: nessuna cancellazione, e lo si dice.
         let reg = FakeReg { fail_backup: true, ..Default::default() };
-        let done = clean_option(&found, &o, &guard, &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &o, &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!(*reg.log.lock().unwrap(), vec!["backup:2"]);
         assert_eq!((done.removed, done.failed), (0, 2));
         assert!(done.notes.iter().any(|n| n.contains("Backup del registro non riuscito")), "{:?}", done.notes);
@@ -1015,6 +1475,7 @@ mod tests {
             &o,
             &found,
             &["claude.exe".into()],
+            &env,
             &Guard::new(&env),
             &reg,
             &AtomicBool::new(false),
@@ -1045,10 +1506,10 @@ mod tests {
         };
         let reg = FakeReg::default();
         let guard = Guard::new(&env);
-        let done = clean_option(&found, &o, &guard, &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &o, &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!(done.removed, 0);
         assert!(dir.join("a.tmp").exists());
-        let done = clean_checked(&c, &o, &found, &[], &guard, &reg, &AtomicBool::new(false));
+        let done = clean_checked(&c, &o, &found, &[], &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!(done.removed, 0);
         assert!(dir.join("a.tmp").exists());
     }
@@ -1064,7 +1525,7 @@ mod tests {
             RegItem::Key { root: RegRoot::Hkcu, path: r"Software\FakeApp".into() },
         ]);
         let reg = FakeReg::default();
-        let done = clean_option(&found, &opt(vec![]), &Guard::new(&env), &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &opt(vec![]), &env, &Guard::new(&env), &reg, &AtomicBool::new(false));
         assert_eq!(*reg.log.lock().unwrap(), vec!["backup:1", r"delete:Software\FakeApp"]);
         assert_eq!((done.removed, done.failed), (1, 3));
     }
@@ -1089,10 +1550,448 @@ mod tests {
             ..Default::default()
         };
         let reg = FakeReg::default();
-        let done = clean_option(&found, &o, &Guard::new(&env), &reg, &AtomicBool::new(false));
+        let done = clean_option(&found, &o, &env, &Guard::new(&env), &reg, &AtomicBool::new(false));
         assert_eq!(done.removed, 0);
         assert!(dir.join("a.tmp").exists());
         assert!(reg.log.lock().unwrap().is_empty());
+    }
+
+    // ---------- correzioni della revisione del Task 7 ----------
+
+    /// I3: una voce si nasconde solo se OGNI sua azione su file sta dentro
+    /// (o coincide con) un'azione di un inglobato presente.
+    #[test]
+    fn winapp2_entry_wider_than_an_embedded_tool_stays() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        write(&t.path().join(r"profile\.cargo\registry\cache\index\a.crate"), "x");
+        write(&t.path().join(r"profile\.claude\cache\x.txt"), "x");
+        write(&t.path().join(r"profile\AppData\Local\Temp\a.tmp"), "x");
+        write(&t.path().join(r"profile\.otherapp\cache\b.tmp"), "x");
+        let ini = "; Version: 260915\r\n\
+                   [Cargo Whole *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry|*.*|RECURSE\r\n\r\n\
+                   [Windows Temp *]\r\nSection=Windows\r\nFileKey1=%Temp%|*.tmp\r\n\r\n\
+                   [Mixed *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry\\cache|*.*|RECURSE\r\nFileKey2=%UserProfile%\\.otherapp\\cache|*.*|RECURSE\r\n\r\n\
+                   [Cargo Cache *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry\\cache|*.*|RECURSE\r\nFileKey2=%UserProfile%\\.cargo\\registry\\src\\x|*.*|RECURSE\r\n";
+        let read = |_: &Path| Ok((ini.to_string(), "260915".to_string()));
+        let rs = load_with(&t.path().join("rules"), &env, &read, &never);
+        let mut winapp: Vec<String> = ids(&rs).into_iter().filter(|i| i.starts_with("winapp2:")).collect();
+        winapp.sort();
+        assert_eq!(winapp, vec!["winapp2:Cargo Whole", "winapp2:Mixed", "winapp2:Windows Temp"]);
+        assert!(rs.warnings.iter().any(|w| w.contains("1 voce")), "{:?}", rs.warnings);
+    }
+
+    /// Una voce con chiavi di registro non si nasconde: l'inglobato non le copre.
+    #[test]
+    fn winapp2_entry_with_registry_rules_is_not_hidden() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        write(&t.path().join(r"profile\.cargo\registry\cache\index\a.crate"), "x");
+        let ini = "; Version: 260915\r\n\
+                   [Cargo Reg *]\r\nSection=Development\r\nFileKey1=%UserProfile%\\.cargo\\registry\\cache|*.*|RECURSE\r\nRegKey1=HKCU\\Software\\CargoGui\\Recent\r\n";
+        let read = |_: &Path| Ok((ini.to_string(), "260915".to_string()));
+        let rs = load_with(&t.path().join("rules"), &env, &read, &never);
+        assert!(ids(&rs).contains(&"winapp2:Cargo Reg".to_string()), "{:?}", ids(&rs));
+    }
+
+    /// Misura sul Winapp2 vero (sola lettura): quali voci nasconde la regola 9
+    /// con tutti gli inglobati presenti e ogni `Detect` considerato vero.
+    /// `PULISCI_WINAPP2=<percorso> cargo test -p pulisci-pc real_winapp2_rule_9 -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn real_winapp2_rule_9_keeps_broad_entries() {
+        let path = std::env::var("PULISCI_WINAPP2").expect("PULISCI_WINAPP2 non impostata");
+        let text = fs::read_to_string(path).unwrap();
+        let env = Env(HashMap::from([
+            ("userprofile".to_string(), r"C:\Users\u".to_string()),
+            ("localappdata".to_string(), r"C:\Users\u\AppData\Local".to_string()),
+            ("appdata".to_string(), r"C:\Users\u\AppData\Roaming".to_string()),
+            ("temp".to_string(), r"C:\Users\u\AppData\Local\Temp".to_string()),
+            ("tmp".to_string(), r"C:\Users\u\AppData\Local\Temp".to_string()),
+            ("username".to_string(), "u".to_string()),
+            ("programdata".to_string(), r"C:\ProgramData".to_string()),
+            ("windir".to_string(), r"C:\Windows".to_string()),
+            ("systemroot".to_string(), r"C:\Windows".to_string()),
+            ("systemdrive".to_string(), "C:".to_string()),
+            ("programfiles".to_string(), r"C:\Program Files".to_string()),
+            ("programfiles(x86)".to_string(), r"C:\Program Files (x86)".to_string()),
+            ("commonappdata".to_string(), r"C:\ProgramData".to_string()),
+            ("locallowappdata".to_string(), r"C:\Users\u\AppData\LocalLow".to_string()),
+            ("documents".to_string(), r"C:\Users\u\Documents".to_string()),
+            ("public".to_string(), r"C:\Users\Public".to_string()),
+        ]));
+        let (mut w, _) = winapp2::parse(&text);
+        for e in &mut w.entries {
+            e.detect = vec![winapp2::Detect::RegKey { root: RegRoot::Hkcu, path: "Software".into() }];
+        }
+        let (entries, _) = winapp2::to_cleaners_with(&w, &env, &|_, _| true);
+        let (embedded, _) = pc_rules::embedded(&env);
+        let hidden: Vec<&str> = entries
+            .iter()
+            .filter(|c| covered_by_embedded(c, &embedded, &env))
+            .map(|c| c.label.as_str())
+            .collect();
+        eprintln!("voci: {}, nascoste: {} {:?}", entries.len(), hidden.len(), hidden);
+        for name in [
+            "Windows Temporary Files",
+            "Windows Error Reporting",
+            "AMD",
+            "Universal Windows Platform",
+            "Android Studio",
+            "Microsoft Visual Studio",
+        ] {
+            assert!(!hidden.contains(&name), "{name} nascosta");
+        }
+    }
+
+    /// I2: una voce che non c'era più non conta come eliminata.
+    #[test]
+    fn absent_registry_items_are_not_counted_as_removed() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let found = reg_found(vec![
+            RegItem::Key { root: RegRoot::Hkcu, path: r"Software\FakeApp\A".into() },
+            RegItem::Key { root: RegRoot::Hkcu, path: r"Software\FakeApp\B".into() },
+            RegItem::Key { root: RegRoot::Hkcu, path: r"Software\FakeApp\C".into() },
+        ]);
+        let reg = FakeReg {
+            absent: vec![r"Software\FakeApp\B".into()],
+            gone: vec![r"Software\FakeApp\C".into()],
+            ..Default::default()
+        };
+        let done = clean_option(&found, &opt(vec![]), &env, &Guard::new(&env), &reg, &AtomicBool::new(false));
+        // B non c'era al backup: non si prova nemmeno a cancellarla.
+        assert_eq!(
+            *reg.log.lock().unwrap(),
+            vec!["backup:3", r"delete:Software\FakeApp\A", r"delete:Software\FakeApp\C"]
+        );
+        assert_eq!((done.removed, done.failed), (1, 0), "{:?}", done.notes);
+        assert_eq!(done.notes.iter().filter(|n| n.starts_with("Già assente")).count(), 2, "{:?}", done.notes);
+    }
+
+    /// M10: nessuna chiave esistente → niente file di backup, niente nota.
+    #[test]
+    fn no_existing_key_means_no_backup_and_no_note() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let found = reg_found(vec![RegItem::Key { root: RegRoot::Hkcu, path: r"Software\FakeApp\A".into() }]);
+        let reg = FakeReg { absent: vec![r"Software\FakeApp\A".into()], ..Default::default() };
+        let done = clean_option(&found, &opt(vec![]), &env, &Guard::new(&env), &reg, &AtomicBool::new(false));
+        assert_eq!(done.backup, None);
+        assert!(done.notes.iter().all(|n| !n.contains("ackup")), "{:?}", done.notes);
+        assert_eq!(*reg.log.lock().unwrap(), vec!["backup:1"]);
+    }
+
+    /// M5: un file fuori dalle cartelle delle azioni dell'opzione non si tocca,
+    /// anche se un `RuleFound` costruito a mano lo contiene.
+    #[test]
+    fn clean_refuses_files_outside_the_rule_folders() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let dir = t.path().join(r"profile\.tool\cache");
+        write(&dir.join("a.tmp"), "x");
+        let outside = t.path().join(r"profile\Documents\tesi.docx");
+        write(&outside, "important");
+        let sibling = t.path().join(r"profile\.tool\cache-old\b.tmp");
+        write(&sibling, "x");
+        let o = opt(vec![files_rule(&dir, &["*"])]);
+        let found = RuleFound {
+            files: vec![(dir.join("a.tmp"), 1), (outside.clone(), 9), (sibling.clone(), 1)],
+            dirs_to_remove: vec![t.path().join(r"profile\Documents")],
+            count: 3,
+            bytes: 11,
+            ..Default::default()
+        };
+        let reg = FakeReg::default();
+        let done = clean_option(&found, &o, &env, &Guard::new(&env), &reg, &AtomicBool::new(false));
+        assert!(!dir.join("a.tmp").exists());
+        assert!(outside.exists());
+        assert!(sibling.exists());
+        assert!(t.path().join(r"profile\Documents").exists());
+        assert_eq!((done.removed, done.failed), (1, 2), "{:?}", done.notes);
+        assert!(done.notes.iter().any(|n| n.contains("fuori dalle cartelle")), "{:?}", done.notes);
+    }
+
+    /// I4: la lista dei processi si rilegge subito prima dell'analisi e subito
+    /// prima della pulizia di ogni opzione.
+    #[test]
+    fn processes_are_read_again_before_each_option() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let a_dir = t.path().join(r"profile\.a\cache");
+        let b_dir = t.path().join(r"profile\.b\cache");
+        write(&a_dir.join("a.tmp"), "x");
+        write(&b_dir.join("b.tmp"), "x");
+        let mut a = cleaner(&["a.exe"], vec![opt(vec![files_rule(&a_dir, &["*"])])]);
+        a.id = "a".into();
+        let mut b = cleaner(&["b.exe"], vec![opt(vec![files_rule(&b_dir, &["*"])])]);
+        b.id = "b".into();
+        let chosen = vec![(a.clone(), a.options[0].clone()), (b.clone(), b.options[0].clone())];
+        // b.exe parte dopo l'analisi di B, prima della sua pulizia (4ª lettura).
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let procs = || {
+            let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if n >= 4 { vec!["b.exe".to_string()] } else { vec!["explorer.exe".to_string()] }
+        };
+        let reg = FakeReg::default();
+        let guard = Guard::new(&env);
+        let cancel = AtomicBool::new(false);
+        let run = RunCtx { env: &env, guard: &guard, reg: &reg, reg_exists: &never, processes: &procs, cancel: &cancel };
+        let mut rows = Vec::new();
+        run_options(&chosen, true, &run, &|_, _| {}, &mut |key, _, f, c| rows.push((key, f, c)));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert!(!a_dir.join("a.tmp").exists());
+        assert!(b_dir.join("b.tmp").exists());
+        assert_eq!(rows.len(), 2);
+        let b_done = rows[1].2.as_ref().unwrap();
+        assert_eq!(b_done.removed, 0);
+        assert!(b_done.notes.iter().any(|n| n.contains("Chiudi b.exe")), "{:?}", b_done.notes);
+        // Solo analisi: una lettura per opzione.
+        calls.store(0, Ordering::SeqCst);
+        let mut rows = Vec::new();
+        run_options(&chosen, false, &run, &|_, _| {}, &mut |key, _, f, c| rows.push((key, f, c)));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(rows.iter().all(|r| r.2.is_none()));
+    }
+
+    /// M9: le opzioni bloccate non abilitano «Avvia pulizia» e non mostrano avvisi.
+    #[test]
+    fn blocked_choices_do_not_enable_cleaning_or_warn() {
+        let mut free = opt(vec![]);
+        free.id = "free".into();
+        free.warning = Some("perdi la cronologia".into());
+        let mut busy = cleaner(&["claude.exe"], vec![free.clone()]);
+        busy.id = "busy".into();
+        let mut ok = cleaner(&[], vec![free.clone()]);
+        ok.id = "ok".into();
+        ok.label = "Altro".into();
+        let cleaners = vec![busy.clone(), ok.clone()];
+        let running = vec!["claude.exe".to_string()];
+        let only_busy: std::collections::HashSet<String> = [key(&busy, &free)].into();
+        assert!(active_choices(&cleaners, &only_busy, &running).is_empty());
+        assert!(choice_warnings(&active_choices(&cleaners, &only_busy, &running)).is_empty());
+        let both: std::collections::HashSet<String> = [key(&busy, &free), key(&ok, &free)].into();
+        let active = active_choices(&cleaners, &both, &running);
+        assert_eq!(active.len(), 1);
+        assert_eq!(choice_warnings(&active), vec!["Altro – Opzione: perdi la cronologia"]);
+    }
+
+    /// M6: l'ambiente del processo per le regole solo con --screenshot e solo
+    /// nella build di debug.
+    #[test]
+    fn process_env_only_for_debug_screenshots() {
+        assert!(!rules_env_from_process(false));
+        assert_eq!(rules_env_from_process(true), cfg!(debug_assertions));
+    }
+
+    // ---------- backup del registro (C1, I5, M2, M10) ----------
+
+    /// Registro finto per `backup_to`: `exists` dalla lista, `export` scrive un
+    /// `.reg` UTF-16 come `reg.exe`.
+    struct FakeBackend {
+        existing: Vec<&'static str>,
+        broken: Vec<&'static str>,
+        exports: Mutex<Vec<PathBuf>>,
+    }
+
+    impl FakeBackend {
+        fn new(existing: Vec<&'static str>) -> FakeBackend {
+            FakeBackend { existing, broken: vec![], exports: Mutex::new(vec![]) }
+        }
+    }
+
+    impl RegBackend for FakeBackend {
+        fn exists(&self, item: &RegItem) -> Result<bool, String> {
+            let p = item_text(item);
+            if self.broken.iter().any(|b| *b == p) {
+                return Err("accesso negato".into());
+            }
+            Ok(self.existing.iter().any(|e| *e == p))
+        }
+        fn export(&self, root: RegRoot, path: &str, out: &Path) -> Result<(), String> {
+            let text = format!(
+                "Windows Registry Editor Version 5.00\r\n\r\n[{}\\{path}]\r\n\"x\"=\"1\"\r\n",
+                root_name(root)
+            );
+            let mut data = vec![0xFF, 0xFE];
+            for w in text.encode_utf16() {
+                data.extend_from_slice(&w.to_le_bytes());
+            }
+            fs::write(out, data).map_err(|e| e.to_string())?;
+            self.exports.lock().unwrap().push(out.to_path_buf());
+            Ok(())
+        }
+    }
+
+    fn key_item(path: &str) -> RegItem {
+        RegItem::Key { root: RegRoot::Hkcu, path: path.into() }
+    }
+
+    /// Cartella di lavoro finta (in produzione: solo amministratori, nome casuale).
+    fn work_in(root: &Path) -> impl Fn() -> Result<PathBuf, String> + '_ {
+        move || {
+            let d = root.join(format!("work{}", std::process::id()));
+            let mut n = 0;
+            loop {
+                let cand = d.with_extension(n.to_string());
+                if fs::create_dir(&cand).is_ok() {
+                    return Ok(cand);
+                }
+                n += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn two_backups_in_the_same_second_get_two_files() {
+        let t = tempfile::tempdir().unwrap();
+        let dest = t.path().join("Documenti");
+        fs::create_dir_all(&dest).unwrap();
+        let work_root = t.path().join("admin");
+        fs::create_dir_all(&work_root).unwrap();
+        let be = FakeBackend::new(vec![r"Software\FakeApp\A", r"Software\FakeApp\B"]);
+        let work = work_in(&work_root);
+        let first = backup_to(&dest, "backup_regole_20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\A")]).unwrap();
+        let second = backup_to(&dest, "backup_regole_20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\B")]).unwrap();
+        let (p1, p2) = (first.path.unwrap(), second.path.unwrap());
+        assert_ne!(p1, p2);
+        assert!(p1.exists() && p2.exists());
+        assert_eq!(p2.file_name().unwrap(), "backup_regole_20261111_120000_2.reg");
+        let text = |p: &Path| {
+            let b = fs::read(p).unwrap();
+            let w: Vec<u16> = b[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+            String::from_utf16(&w).unwrap()
+        };
+        assert!(text(&p1).contains(r"[HKCU\Software\FakeApp\A]"));
+        assert!(text(&p2).contains(r"[HKCU\Software\FakeApp\B]"));
+        // I file temporanei e le cartelle di lavoro non restano.
+        assert_eq!(fs::read_dir(&work_root).unwrap().count(), 0);
+        assert!(be.exports.lock().unwrap().iter().all(|p| !p.exists()));
+    }
+
+    #[test]
+    fn backup_fails_closed_without_an_admin_work_folder() {
+        let t = tempfile::tempdir().unwrap();
+        let dest = t.path().join("Documenti");
+        fs::create_dir_all(&dest).unwrap();
+        let be = FakeBackend::new(vec![r"Software\FakeApp\A"]);
+        let no_work = || Err::<PathBuf, String>("cartella di lavoro non protetta".into());
+        let r = backup_to(&dest, "b", &no_work, &be, &[key_item(r"Software\FakeApp\A")]);
+        assert!(r.is_err());
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+        assert!(be.exports.lock().unwrap().is_empty());
+    }
+
+    /// M2: una chiave che non si apre per errore non è «assente»: il backup fallisce.
+    #[test]
+    fn a_key_that_cannot_be_opened_fails_the_backup() {
+        let t = tempfile::tempdir().unwrap();
+        let dest = t.path().join("Documenti");
+        fs::create_dir_all(&dest).unwrap();
+        let mut be = FakeBackend::new(vec![r"Software\FakeApp\A"]);
+        be.broken = vec![r"Software\FakeApp\B"];
+        let work = work_in(t.path());
+        let r = backup_to(&dest, "b", &work, &be, &[key_item(r"Software\FakeApp\A"), key_item(r"Software\FakeApp\B")]);
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    /// M10 in `backup_to`: nessuna chiave esistente → nessun file.
+    #[test]
+    fn backup_of_absent_keys_writes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let dest = t.path().join("Documenti");
+        fs::create_dir_all(&dest).unwrap();
+        let be = FakeBackend::new(vec![]);
+        let work = work_in(t.path());
+        let b = backup_to(&dest, "b", &work, &be, &[key_item(r"Software\FakeApp\A")]).unwrap();
+        assert_eq!(b.path, None);
+        assert_eq!(b.present, vec![false]);
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    /// I5: la cartella di destinazione che è un collegamento (giunzione) si rifiuta.
+    #[test]
+    fn backup_refuses_a_destination_that_is_a_link() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("altrove");
+        fs::create_dir_all(&target).unwrap();
+        let dest = t.path().join("Documenti");
+        let ok = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&dest)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("giunzione non creata: test saltato");
+            return;
+        }
+        let be = FakeBackend::new(vec![r"Software\FakeApp\A"]);
+        let work = work_in(t.path());
+        let r = backup_to(&dest, "b", &work, &be, &[key_item(r"Software\FakeApp\A")]);
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    }
+
+    // ---------- registro vero: logica pura e sola lettura ----------
+
+    /// I1: solo il collegamento `HKCU\Software\Classes` → `\REGISTRY\USER\<SID>_Classes`
+    /// del SID del processo si segue.
+    #[test]
+    fn only_the_user_classes_link_is_followed() {
+        let sid = "S-1-5-21-1-2-3-1001";
+        let target = r"\REGISTRY\USER\S-1-5-21-1-2-3-1001_Classes";
+        assert!(classes_link_ok(RegRoot::Hkcu, &["Software", "Classes"], target, sid));
+        assert!(classes_link_ok(RegRoot::Hkcu, &["SOFTWARE", "classes"], &target.to_lowercase(), sid));
+        assert!(!classes_link_ok(RegRoot::Hklm, &["Software", "Classes"], target, sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Classes", "X"], target, sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Other"], target, sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Classes"], r"\REGISTRY\USER\S-1-5-18_Classes", sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Classes"], r"\REGISTRY\MACHINE\SOFTWARE\Classes", sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Classes"], &format!("{target}\\x"), sid));
+        assert!(!classes_link_ok(RegRoot::Hkcu, &["Software", "Classes"], target, ""));
+    }
+
+    /// M4: padre e nome dai componenti normalizzati.
+    #[test]
+    fn registry_parent_and_name_come_from_normalized_components() {
+        assert_eq!(split_parent(r"Software\Foo\"), Some((r"Software".to_string(), "Foo".to_string())));
+        assert_eq!(split_parent(r"\Software\\Foo\Bar"), Some((r"Software\Foo".to_string(), "Bar".to_string())));
+        assert_eq!(split_parent(r"Software\"), None);
+        assert_eq!(split_parent(""), None);
+    }
+
+    /// M1: solo la fine dell'elenco ferma l'esame dell'albero senza rifiuto.
+    #[test]
+    fn subkey_enumeration_errors_refuse_the_tree() {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_KEY_DELETED, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+        assert_eq!(enum_verdict(ERROR_SUCCESS), None);
+        assert_eq!(enum_verdict(ERROR_NO_MORE_ITEMS), Some(false));
+        for rc in [ERROR_ACCESS_DENIED, ERROR_KEY_DELETED, ERROR_MORE_DATA] {
+            assert_eq!(enum_verdict(rc), Some(true));
+        }
+    }
+
+    /// Sola lettura del registro vero: `HKCU\Software\Classes` (collegamento
+    /// verso `HKU\<SID>_Classes`) si apre, come le sue sottochiavi; analisi e
+    /// pulizia usano la stessa apertura.
+    #[test]
+    fn real_registry_opens_user_classes_through_its_link() {
+        assert!(win::key_exists(RegRoot::Hkcu, r"Software\Classes"));
+        assert!(win::key_exists(RegRoot::Hkcu, r"Software\Classes\Local Settings"));
+        assert!(reg_exists(&RegItem::Key { root: RegRoot::Hkcu, path: r"Software\Classes\Local Settings".into() }));
+        assert!(reg_exists(&RegItem::Value {
+            root: RegRoot::Hklm,
+            path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
+            value: "ProductName".into(),
+        }));
+        assert!(!reg_exists(&RegItem::Value {
+            root: RegRoot::Hklm,
+            path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
+            value: "pulisci-pc-no-such-value".into(),
+        }));
     }
 
     // ---------- aggiornamento di Winapp2 e cartelle dell'app (Task 8) ----------
@@ -1339,7 +2238,7 @@ mod tests {
             count: files.len() as u64,
             ..Default::default()
         };
-        let done = clean_option(&forged, &o, &Guard::new(&env), &FakeReg::default(), &AtomicBool::new(false));
+        let done = clean_option(&forged, &o, &env, &Guard::new(&env), &FakeReg::default(), &AtomicBool::new(false));
         assert_eq!((done.removed, done.failed), (0, files.len() as u64), "{:?}", done.notes);
         for f in &files {
             assert!(f.exists(), "cancellato: {}", f.display());
