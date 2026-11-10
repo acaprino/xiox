@@ -18,9 +18,13 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+
+/// Longest we wait for stderr to be collected after the child ended or was killed.
+const DRAIN_WAIT: Duration = Duration::from_secs(2);
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -63,17 +67,8 @@ fn find_in_path(names: &[&str]) -> Option<PathBuf> {
     None
 }
 
-/// Session ids end up on a command line (and `.cmd` shims go through cmd.exe), so
-/// accept only the characters real ids contain.
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-        && !id.starts_with('-')
-}
-
 fn check_id(id: &str) -> Result<(), String> {
-    if valid_id(id) { Ok(()) } else { Err(format!("identificativo di sessione non valido: {id}")) }
+    if crate::valid_id(id) { Ok(()) } else { Err(format!("identificativo di sessione non valido: {id}")) }
 }
 
 impl crate::HarnessCli for SystemCli {
@@ -112,6 +107,10 @@ impl crate::HarnessCli for SystemCli {
             self.timeout,
         )
     }
+
+    fn codex_available(&self) -> bool {
+        self.codex.is_some()
+    }
 }
 
 /// Runs `exe args` with null stdin, no console window, the parent's environment
@@ -127,43 +126,51 @@ fn run(exe: &Path, args: &[OsString], stdout: Stdio, timeout: Duration) -> Resul
     let name = exe.file_name().unwrap_or(OsStr::new("cli")).to_string_lossy().into_owned();
     let mut child = cmd.spawn().map_err(|e| format!("{name}: avvio non riuscito: {e}"))?;
 
+    // stderr is drained on a thread (a full pipe would block the child). The result is
+    // awaited with a bounded wait: a grandchild (node behind a .cmd shim) can keep the
+    // pipe open after the shim exits or was killed, and that must never hang us.
     let mut stderr = child.stderr.take();
-    let drain = thread::spawn(move || {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(s) = stderr.as_mut() {
             let _ = s.take(256 * 1024).read_to_end(&mut buf);
         }
-        buf
+        let _ = tx.send(buf);
     });
+    let collect_stderr = || rx.recv_timeout(DRAIN_WAIT).unwrap_or_default();
 
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
-            Ok(Some(st)) => break Ok(st),
+            Ok(Some(st)) => break st,
             Ok(None) if start.elapsed() >= timeout => {
                 kill_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = drain.join();
+                let _ = collect_stderr();
                 return Err(format!("{name}: tempo scaduto dopo {} s", timeout.as_secs()));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(e) => break Err(e),
-        }
-    };
-    let err_text = String::from_utf8_lossy(&drain.join().unwrap_or_default()).into_owned();
-    match status {
-        Ok(st) if st.success() => Ok(()),
-        Ok(st) => {
-            let tail = last_lines(&err_text, 5);
-            let code = st.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
-            if tail.is_empty() {
-                Err(format!("{name}: uscita con codice {code}"))
-            } else {
-                Err(format!("{name}: uscita con codice {code}: {tail}"))
+            Err(e) => {
+                kill_tree(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = collect_stderr();
+                return Err(format!("{name}: {e}"));
             }
         }
-        Err(e) => Err(format!("{name}: {e}")),
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let err_text = String::from_utf8_lossy(&collect_stderr()).into_owned();
+    let tail = last_lines(&err_text, 5);
+    let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+    if tail.is_empty() {
+        Err(format!("{name}: uscita con codice {code}"))
+    } else {
+        Err(format!("{name}: uscita con codice {code}: {tail}"))
     }
 }
 

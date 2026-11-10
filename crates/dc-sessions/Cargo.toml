@@ -8,6 +8,7 @@ license = "MIT"
 dc-model = { path = "../dc-model" }
 dc-mukade = { path = "../dc-mukade" }
 trash = "5.3.0"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
