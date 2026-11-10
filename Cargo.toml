@@ -16,6 +16,7 @@ dc-app = { path = "crates/dc-app" }
 dc-model = { path = "crates/dc-model" }
 dc-mukade = { path = "crates/dc-mukade" }
 dc-sessions = { path = "crates/dc-sessions" }
+pc-rules = { path = "crates/pc-rules" }
 rfd = "0.15"
 # Same version and features as dc-mukade (already in the build): local dates in the Sviluppatori tables.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
@@ -28,7 +29,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemInformation",
     "Win32_System_RemoteDesktop",
     "Win32_System_WindowsProgramming",
+    "Win32_System_Registry",
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [build-dependencies]
 embed-resource = "3"

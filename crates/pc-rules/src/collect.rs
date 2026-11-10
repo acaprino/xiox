@@ -180,7 +180,10 @@ pub fn running(cleaner: &Cleaner, processes: &[String]) -> Vec<String> {
 /// La cartella di base è la parte del percorso espanso prima del primo
 /// componente con jolly (il percorso intero se non ne ha). Una base protetta
 /// (`%UserProfile%`, la radice del disco, un percorso di rete…) non conta:
-/// esisterebbe sempre o non si deve toccare.
+/// esisterebbe sempre o non si deve toccare. Con un jolly nel percorso
+/// (`%TEMP%\pytest-of-*`) la base non basta: serve almeno una corrispondenza
+/// vera, cercata senza seguire collegamenti, fuori dai percorsi protetti e
+/// leggendo al più [`PRESENT_BUDGET`] voci di cartella per percorso.
 pub fn present(cleaner: &Cleaner, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bool) -> bool {
     let guard = Guard::new(env);
     cleaner.options.iter().flat_map(|o| &o.actions).any(|a| match a {
@@ -189,9 +192,16 @@ pub fn present(cleaner: &Cleaner, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bo
                 .components()
                 .take_while(|c| !has_wildcard(&c.as_os_str().to_string_lossy()))
                 .collect();
-            !base.as_os_str().is_empty()
-                && guard.protected(&base).is_none()
-                && std::fs::symlink_metadata(&base).is_ok()
+            if base.as_os_str().is_empty() || guard.protected(&base).is_some() {
+                return false;
+            }
+            let wild = p
+                .components()
+                .any(|c| has_wildcard(&c.as_os_str().to_string_lossy()));
+            if !wild {
+                return std::fs::symlink_metadata(&base).is_ok();
+            }
+            has_real_match(p, &guard, env)
         }),
         Action::RegKey { root, path } => reg_exists(&RegItem::Key {
             root: *root,
@@ -203,6 +213,69 @@ pub fn present(cleaner: &Cleaner, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bo
             value: value.clone(),
         }),
     })
+}
+
+/// Voci di cartella che [`present`] legge al più per un percorso con jolly.
+pub const PRESENT_BUDGET: usize = 4096;
+
+/// `true` se `path` (espanso, con jolly) ha almeno una corrispondenza vera:
+/// le cartelle intermedie sono cartelle vere (non collegamenti), l'ultima voce
+/// esiste e non è un collegamento, niente è protetto. Si ferma alla prima
+/// corrispondenza o dopo [`PRESENT_BUDGET`] voci lette (allora `false`).
+fn has_real_match(path: &Path, guard: &Guard, env: &Env) -> bool {
+    let comps: Vec<Component> = path.components().collect();
+    let Some(first) = comps
+        .iter()
+        .position(|c| matches!(c, Component::Normal(s) if has_wildcard(&s.to_string_lossy())))
+    else {
+        return false;
+    };
+    let prefix: PathBuf = comps[..first].iter().collect();
+    if prefix.as_os_str().is_empty() || chain_has_link(&prefix, env) || !is_real_dir(&prefix) {
+        return false;
+    }
+    let mut budget = PRESENT_BUDGET;
+    let mut stack = vec![(prefix, first)];
+    while let Some((dir, i)) = stack.pop() {
+        let last = i + 1 == comps.len();
+        let name = comps[i].as_os_str().to_string_lossy().into_owned();
+        let candidates: Vec<PathBuf> = if has_wildcard(&name) {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut out = Vec::new();
+            for e in rd.flatten() {
+                if budget == 0 {
+                    return false;
+                }
+                budget -= 1;
+                if wildcard_match(&name, &e.file_name().to_string_lossy()) {
+                    out.push(e.path());
+                }
+            }
+            out
+        } else {
+            vec![dir.join(comps[i])]
+        };
+        for p in candidates {
+            if guard.protected(&p).is_some() {
+                continue;
+            }
+            let Ok(md) = std::fs::symlink_metadata(&p) else {
+                continue;
+            };
+            if is_link(&md) {
+                continue;
+            }
+            if last {
+                return true;
+            }
+            if md.is_dir() {
+                stack.push((p, i + 1));
+            }
+        }
+    }
+    false
 }
 
 /// Esistenza vera di una chiave o di un valore di registro (sola lettura).
@@ -1464,7 +1537,8 @@ mod tests {
             remove_self: false,
             search,
         };
-        // La cartella c'è (anche con un jolly dopo la base).
+        // La cartella c'è (con un jolly serve anche una corrispondenza vera).
+        write(&profile.join(".tool").join("a.log"), "x");
         assert!(present(&cleaner(vec![files(r"%UserProfile%\.tool\cache", Search::WalkAll)]), &e, &never));
         assert!(present(&cleaner(vec![files(r"%UserProfile%\.tool\*.log", Search::Glob)]), &e, &never));
         // Non c'è, o la base sarebbe il profilo intero (sempre presente).
@@ -1478,6 +1552,58 @@ mod tests {
         };
         assert!(present(&cleaner(vec![key.clone()]), &e, &|_| true));
         assert!(!present(&cleaner(vec![key]), &e, &never));
+    }
+
+    fn walk_all(p: &str) -> Action {
+        Action::Files {
+            path: p.into(),
+            patterns: vec![],
+            recurse: true,
+            remove_self: false,
+            search: Search::WalkAll,
+        }
+    }
+
+    /// pytest (`%TEMP%\pytest-of-*`) e Android Studio
+    /// (`%LocalAppData%\Google\AndroidStudio*\caches`): la base esiste su ogni
+    /// PC, ma senza una corrispondenza vera lo strumento non è installato.
+    #[test]
+    fn present_needs_a_real_match_for_wildcard_actions() {
+        let t = tempfile::tempdir().unwrap();
+        let temp = t.path().join("Temp");
+        let local = t.path().join("Local");
+        fs::create_dir_all(temp.join("other")).unwrap();
+        fs::create_dir_all(local.join("Google").join("Chrome")).unwrap();
+        // Il nome giusto ma senza la cartella finale.
+        fs::create_dir_all(local.join("Google").join("AndroidStudio2024.1")).unwrap();
+        write(&temp.join("pytest.log"), "x");
+        let e = env(&[
+            ("temp", &temp.to_string_lossy()),
+            ("localappdata", &local.to_string_lossy()),
+        ]);
+        assert!(!present(&cleaner(vec![walk_all(r"%TEMP%\pytest-of-*")]), &e, &never));
+        assert!(!present(&cleaner(vec![walk_all(r"%LocalAppData%\Google\AndroidStudio*\caches")]), &e, &never));
+        // Una corrispondenza che è un collegamento non conta.
+        let target = t.path().join("elsewhere");
+        fs::create_dir_all(&target).unwrap();
+        if std::os::windows::fs::symlink_dir(&target, temp.join("pytest-of-link")).is_ok() {
+            assert!(!present(&cleaner(vec![walk_all(r"%TEMP%\pytest-of-link*")]), &e, &never));
+        }
+    }
+
+    #[test]
+    fn present_accepts_a_wildcard_action_with_a_real_match() {
+        let t = tempfile::tempdir().unwrap();
+        let temp = t.path().join("Temp");
+        let local = t.path().join("Local");
+        fs::create_dir_all(temp.join("pytest-of-u").join("pytest-1")).unwrap();
+        fs::create_dir_all(local.join("Google").join("AndroidStudio2024.1").join("caches")).unwrap();
+        let e = env(&[
+            ("temp", &temp.to_string_lossy()),
+            ("localappdata", &local.to_string_lossy()),
+        ]);
+        assert!(present(&cleaner(vec![walk_all(r"%TEMP%\pytest-of-*")]), &e, &never));
+        assert!(present(&cleaner(vec![walk_all(r"%LocalAppData%\Google\AndroidStudio*\caches")]), &e, &never));
     }
 
     #[test]

@@ -582,6 +582,7 @@ name = "dc-cleaner"
 version = "0.1.0"
 dependencies = [
  "dc-model",
+ "dc-scanner",
  "tempfile",
  "trash",
  "windows-sys 0.61.2",
@@ -2200,7 +2201,9 @@ dependencies = [
  "eframe",
  "embed-resource",
  "image",
+ "pc-rules",
  "rfd",
+ "tempfile",
  "windows-sys 0.61.2",
  "winreg",
 ]

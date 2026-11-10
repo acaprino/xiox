@@ -3,12 +3,15 @@
 mod cleaner;
 mod dev;
 mod registry;
+mod rules;
 mod services;
 mod sys;
 mod theme;
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use theme::*;
@@ -25,6 +28,8 @@ enum CleanMsg {
     Progress(String, f32),
     Analyzed(usize, cleaner::Found),
     Cleaned(usize, cleaner::Found, cleaner::Cleaned),
+    /// Opzione dinamica: chiave `"<cleaner>/<opzione>"`, etichetta, raccolta e (in pulizia) esito.
+    Rule(String, String, rules::RuleFound, Option<rules::RuleCleaned>),
     Done,
 }
 
@@ -69,6 +74,15 @@ struct App {
     clean_view: CleanView,
     confirm_clean: bool,
 
+    rules: Option<rules::RuleSet>,
+    rules_rx: Option<Receiver<rules::RulesMsg>>,
+    rule_sel: HashSet<String>,
+    rule_found: Vec<(String, String, rules::RuleFound)>,
+    rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
+    rule_search: String,
+    /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
+    processes: Vec<String>,
+
     reg_sel: Vec<bool>,
     issues: Vec<registry::Issue>,
     reg_job: Option<Receiver<RegMsg>>,
@@ -111,6 +125,13 @@ impl App {
             cleaned: vec![None; n],
             clean_view: CleanView::Empty,
             confirm_clean: false,
+            rules: None,
+            rules_rx: None,
+            rule_sel: HashSet::new(),
+            rule_found: vec![],
+            rule_cleaned: vec![],
+            rule_search: String::new(),
+            processes: rules::processes(),
             reg_sel: registry::CATEGORIES.iter().map(|c| c.default_on).collect(),
             issues: vec![],
             reg_job: None,
@@ -136,20 +157,54 @@ impl App {
 
     // ---------- background jobs ----------
 
+    /// Carica le regole esterne in un thread; finché non arrivano, i gruppi dinamici non ci sono.
+    fn start_rules(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        self.rules_rx = Some(rx);
+        // Con --screenshot si usa l'ambiente del processo, così un profilo finto
+        // (USERPROFILE, LOCALAPPDATA…) vale anche per le regole.
+        let fake_profile = self.screenshot.is_some();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let env = if fake_profile { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() };
+            let set = rules::load(&pc_rules::updater::data_dir(), &env);
+            let _ = tx.send(rules::RulesMsg::Loaded(set));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Opzioni dinamiche spuntate (cleaner e opzione clonati per il job).
+    fn chosen_rules(&self) -> Vec<(pc_rules::Cleaner, pc_rules::Opt)> {
+        let Some(rs) = &self.rules else { return vec![] };
+        rs.cleaners
+            .iter()
+            .flat_map(|c| c.options.iter().map(move |o| (c, o)))
+            .filter(|(c, o)| self.rule_sel.contains(&rules::key(c, o)))
+            .map(|(c, o)| (c.clone(), o.clone()))
+            .collect()
+    }
+
     fn start_clean(&mut self, also_clean: bool, ctx: &egui::Context) {
         let cats: Vec<usize> = (0..self.clean_sel.len()).filter(|&i| self.clean_sel[i]).collect();
+        self.processes = rules::processes();
+        let dynamic = self.chosen_rules();
+        let env = self.rules.as_ref().map(|r| r.env.clone()).unwrap_or_default();
         let (tx, rx) = channel();
         self.clean_job = Some(rx);
         self.found = vec![None; self.clean_sel.len()];
         self.cleaned = vec![None; self.clean_sel.len()];
+        self.rule_found.clear();
+        self.rule_cleaned.clear();
         self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
         let only_old = self.only_old;
+        let processes = self.processes.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let total = cats.len().max(1) as f32;
+            let verb = if also_clean { "Pulizia" } else { "Analisi" };
+            let total = (cats.len() + dynamic.len()).max(1) as f32;
             for (k, &i) in cats.iter().enumerate() {
                 let name = cleaner::CATEGORIES[i].name;
-                let _ = tx.send(CleanMsg::Progress(format!("{} – {}", if also_clean { "Pulizia" } else { "Analisi" }, name), k as f32 / total));
+                let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
                 ctx.request_repaint();
                 let f = cleaner::analyze(i, only_old);
                 if also_clean {
@@ -158,6 +213,33 @@ impl App {
                 } else {
                     let _ = tx.send(CleanMsg::Analyzed(i, f));
                 }
+            }
+            // Opzioni dinamiche: in sequenza, un solo Guard per tutta la pulizia.
+            let guard = pc_rules::Guard::new(&env);
+            let cancel = AtomicBool::new(false);
+            let processes = if also_clean { rules::processes() } else { processes };
+            for (k, (c, o)) in dynamic.iter().enumerate() {
+                let label = rules::row_label(c, o);
+                let step = (cats.len() + k) as f32 / total;
+                let _ = tx.send(CleanMsg::Progress(format!("{verb} – {label}"), step));
+                ctx.request_repaint();
+                let key = rules::key(c, o);
+                if let Some(why) = rules::blocked(c, o, &processes) {
+                    let mut skipped = rules::RuleCleaned::default();
+                    skipped.notes.push(format!("Saltata: {why}"));
+                    let _ = tx.send(CleanMsg::Rule(key, label, rules::RuleFound::default(), also_clean.then_some(skipped)));
+                    continue;
+                }
+                let tick = |n: u64| {
+                    let _ = tx.send(CleanMsg::Progress(format!("{verb} – {label} ({n} voci)"), step));
+                    ctx.request_repaint();
+                };
+                let ctl = pc_rules::CollectCtl { cancel: &cancel, tick: &tick };
+                let f = rules::analyze_option(o, &env, &pc_rules::reg_exists_real, &ctl);
+                let done = also_clean.then(|| {
+                    rules::clean_checked(c, o, &f, &processes, &guard, &rules::RealRegistry, &cancel)
+                });
+                let _ = tx.send(CleanMsg::Rule(key, label, f, done));
             }
             let _ = tx.send(CleanMsg::Done);
             ctx.request_repaint();
@@ -234,6 +316,12 @@ impl App {
     }
 
     fn poll(&mut self) {
+        if let Some(rx) = &self.rules_rx {
+            if let Ok(rules::RulesMsg::Loaded(set)) = rx.try_recv() {
+                self.rules = Some(set);
+                self.rules_rx = None;
+            }
+        }
         if let Some(rx) = &self.clean_job {
             let mut done = false;
             while let Ok(m) = rx.try_recv() {
@@ -246,6 +334,12 @@ impl App {
                     CleanMsg::Cleaned(i, f, c) => {
                         self.found[i] = Some(f);
                         self.cleaned[i] = Some(c);
+                    }
+                    CleanMsg::Rule(key, label, f, c) => {
+                        if let Some(c) = c {
+                            self.rule_cleaned.push((key.clone(), label.clone(), c));
+                        }
+                        self.rule_found.push((key, label, f));
                     }
                     CleanMsg::Done => done = true,
                 }
@@ -404,6 +498,9 @@ impl App {
                             ui.checkbox(&mut self.clean_sel[i], label).on_hover_text(c.help);
                         });
                     }
+                    if let Some(rs) = &self.rules {
+                        rules_panel(ui, rs, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
+                    }
                     ui.add_space(12.0);
                     ui.label(RichText::new("Opzioni").strong().color(ACCENT));
                     ui.separator();
@@ -416,7 +513,7 @@ impl App {
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let any = self.clean_sel.iter().any(|&b| b);
+                    let any = self.clean_sel.iter().any(|&b| b) || !self.rule_sel.is_empty();
                     if primary(ui, "Avvia pulizia", !busy && any).clicked() {
                         self.confirm_clean = true;
                     }
@@ -451,11 +548,26 @@ impl App {
         });
         if self.confirm_clean {
             let mut close = false;
+            let warnings = self.rule_warnings();
             egui::Modal::new(egui::Id::new("confirm_clean")).show(ui.ctx(), |ui| {
                 ui.set_width(380.0);
                 ui.label(RichText::new("Avviare la pulizia?").size(18.0).strong());
                 ui.add_space(6.0);
                 ui.label("I file selezionati verranno eliminati definitivamente. I file in uso vengono lasciati dove sono.");
+                if !warnings.is_empty() {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Avvisi delle opzioni scelte").strong());
+                    let list = |ui: &mut Ui| {
+                        for w in &warnings {
+                            ui.label(RichText::new(w).color(RED));
+                        }
+                    };
+                    if warnings.len() > 4 {
+                        egui::ScrollArea::vertical().max_height(160.0).show(ui, list);
+                    } else {
+                        list(ui);
+                    }
+                }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Continua", true).clicked() {
@@ -474,9 +586,20 @@ impl App {
         }
     }
 
+    /// "<cleaner> – <opzione>: <avviso>" per ogni opzione dinamica spuntata con un avviso.
+    fn rule_warnings(&self) -> Vec<String> {
+        let Some(rs) = &self.rules else { return vec![] };
+        rs.cleaners
+            .iter()
+            .flat_map(|c| c.options.iter().map(move |o| (c, o)))
+            .filter(|(c, o)| self.rule_sel.contains(&rules::key(c, o)))
+            .filter_map(|(c, o)| o.warning.as_ref().map(|w| format!("{}: {w}", rules::row_label(c, o))))
+            .collect()
+    }
+
     fn analysis_table(&self, ui: &mut Ui) {
-        let total: u64 = self.found.iter().flatten().map(|f| f.bytes).sum();
-        let files: u64 = self.found.iter().flatten().map(|f| f.count).sum();
+        let total: u64 = self.found.iter().flatten().map(|f| f.bytes).sum::<u64>() + self.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
+        let files: u64 = self.found.iter().flatten().map(|f| f.count).sum::<u64>() + self.rule_found.iter().map(|r| r.2.count).sum::<u64>();
         let title = if self.clean_job.is_some() { "Analisi in corso…".to_string() } else { "Analisi completata".to_string() };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         ui.label(RichText::new(format!("{} da eliminare ({} file)", sys::fmt_size(total), files)).size(15.0).color(ACCENT));
@@ -501,12 +624,24 @@ impl App {
                         ui.end_row();
                     }
                 }
+                for (_, label, f) in &self.rule_found {
+                    ui.label(label);
+                    ui.label(sys::fmt_size(f.bytes));
+                    ui.label(f.count.to_string());
+                    if f.skipped > 0 {
+                        ui.label(RichText::new(format!("{} elementi lasciati (protetti o illeggibili)", f.skipped)).color(MUTED).size(12.0))
+                            .on_hover_text(f.skipped_reasons.join("\n"));
+                    } else {
+                        ui.label("");
+                    }
+                    ui.end_row();
+                }
             });
         });
     }
 
     fn cleaned_table(&self, ui: &mut Ui) {
-        let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum();
+        let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>() + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
         let title = if self.clean_job.is_some() { "Pulizia in corso…" } else { "Pulizia completata" };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(freed))).size(15.0).color(GREEN));
@@ -517,6 +652,7 @@ impl App {
                 ui.label(RichText::new("Liberati").strong());
                 ui.label(RichText::new("Eliminati").strong());
                 ui.label(RichText::new("Lasciati (in uso)").strong());
+                ui.label("");
                 ui.end_row();
                 for (i, c) in self.cleaned.iter().enumerate() {
                     if let Some(c) = c {
@@ -524,8 +660,28 @@ impl App {
                         ui.label(sys::fmt_size(c.freed));
                         ui.label(c.removed.to_string());
                         ui.label(c.failed.to_string());
+                        ui.label("");
                         ui.end_row();
                     }
+                }
+                for (_, label, c) in &self.rule_cleaned {
+                    ui.label(label);
+                    ui.label(sys::fmt_size(c.freed));
+                    ui.label(c.removed.to_string());
+                    ui.label(c.failed.to_string());
+                    let mut notes = c.notes.clone();
+                    if let Some(b) = &c.backup {
+                        notes.push(format!("Backup del registro: {}", b.display()));
+                    }
+                    match notes.first() {
+                        Some(first) => {
+                            ui.label(RichText::new(first).color(MUTED).size(12.0)).on_hover_text(notes.join("\n"));
+                        }
+                        None => {
+                            ui.label("");
+                        }
+                    }
+                    ui.end_row();
                 }
             });
         });
@@ -810,7 +966,7 @@ impl App {
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         let Some(path) = self.screenshot.clone() else { return };
         ctx.request_repaint();
-        let busy = self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy();
+        let busy = self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() || self.rules_rx.is_some();
         // L'analisi Sviluppatori dura circa un minuto senza amministratore: la si aspetta fino a 5 minuti.
         let dev_wait = self.dev.busy() && self.started.elapsed() < Duration::from_secs(300);
         if self.frame >= 120 && (!busy || self.frame >= 900) && !dev_wait && !self.shot_sent {
@@ -867,6 +1023,96 @@ fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u3
         }
     };
     let _ = tx.send(SvcMsg::Message(msg));
+}
+
+/// Gruppi dinamici del pannello sinistro di Pulizia file: "Sviluppo e AI" (un
+/// `CollapsingHeader` per cleaner) e "Applicazioni" (Winapp2, uno per sezione,
+/// con «Cerca»). Il corpo di un `CollapsingHeader` si costruisce solo se aperto.
+fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
+    let mut embedded = rs.cleaners.iter().filter(|c| rules::is_embedded(c)).peekable();
+    if embedded.peek().is_some() {
+        ui.add_space(6.0);
+        ui.label(RichText::new(rules::EMBEDDED_GROUP).strong().color(ACCENT));
+        ui.separator();
+        for c in embedded {
+            let header = egui::CollapsingHeader::new(&c.label).id_salt(("rule", &c.id)).default_open(false).show(ui, |ui| {
+                for o in &c.options {
+                    rule_checkbox(ui, c, o, &o.label, sel, processes, busy);
+                }
+            });
+            if !c.description.is_empty() {
+                header.header_response.on_hover_text(&c.description);
+            }
+        }
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new(rules::WINAPP2_GROUP).strong().color(ACCENT));
+    ui.separator();
+    let status = ui.label(RichText::new(&rs.status).color(MUTED).size(12.0));
+    if !rs.warnings.is_empty() {
+        status.on_hover_text(rs.warnings.join("\n"));
+    }
+    if rs.sections.is_empty() {
+        return;
+    }
+    ui.add(egui::TextEdit::singleline(search).hint_text("Cerca").desired_width(f32::INFINITY));
+    let needle = search.trim().to_lowercase();
+    let hit = |text: &str| text.to_lowercase().contains(&needle);
+    for (section, idx) in &rs.sections {
+        let whole = needle.is_empty() || hit(section);
+        let items: Vec<&pc_rules::Cleaner> = idx
+            .iter()
+            .map(|&i| &rs.cleaners[i])
+            .filter(|c| whole || hit(&c.label) || c.options.iter().any(|o| hit(&o.label)))
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        egui::CollapsingHeader::new(format!("{section} ({})", items.len()))
+            .id_salt(("winapp2", section))
+            .default_open(false)
+            .show(ui, |ui| {
+                for c in items {
+                    for o in &c.options {
+                        rule_checkbox(ui, c, o, &c.label, sel, processes, busy);
+                    }
+                }
+            });
+    }
+}
+
+/// Casella di un'opzione dinamica: disattivata se non supportata (spiegazione al
+/// passaggio del mouse) o se un suo processo è attivo ("Chiudi … per pulire").
+fn rule_checkbox(ui: &mut Ui, c: &pc_rules::Cleaner, o: &pc_rules::Opt, label: &str, sel: &mut HashSet<String>, processes: &[String], busy: bool) {
+    let key = rules::key(c, o);
+    if let Some(why) = rules::blocked(c, o, processes) {
+        let mut off = false;
+        ui.add_enabled(false, egui::Checkbox::new(&mut off, label)).on_disabled_hover_text(&why);
+        if o.unsupported.is_none() {
+            ui.label(RichText::new(why).color(MUTED).size(12.0));
+        }
+        return;
+    }
+    let mut on = sel.contains(&key);
+    let mut help = o.description.clone();
+    if let Some(w) = &o.warning {
+        if !help.is_empty() {
+            help.push_str("\n\n");
+        }
+        help.push_str("Attenzione: ");
+        help.push_str(w);
+    }
+    let mut r = ui.add_enabled(!busy, egui::Checkbox::new(&mut on, label));
+    if !help.is_empty() {
+        r = r.on_hover_text(help);
+    }
+    if r.changed() {
+        if on {
+            sel.insert(key);
+        } else {
+            sel.remove(&key);
+        }
+    }
 }
 
 fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
@@ -968,7 +1214,9 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             style(&cc.egui_ctx);
-            Ok(Box::new(App::new(screenshot, tab, dev::DevState::new(section, analyze))))
+            let mut app = App::new(screenshot, tab, dev::DevState::new(section, analyze));
+            app.start_rules(&cc.egui_ctx);
+            Ok(Box::new(app))
         }),
     )
 }
