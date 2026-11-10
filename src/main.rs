@@ -12,7 +12,7 @@ use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Strok
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 use theme::*;
 
@@ -75,7 +75,12 @@ struct App {
     confirm_clean: bool,
 
     rules: Option<rules::RuleSet>,
+    /// Aperto finché il thread delle regole (caricamento e aggiornamento di Winapp2) vive.
     rules_rx: Option<Receiver<rules::RulesMsg>>,
+    /// Esito dell'aggiornamento di Winapp2 di questo avvio (`None` = in corso o non partito).
+    winapp2_update: Option<pc_rules::updater::UpdateOutcome>,
+    /// Finestra Informazioni aperta.
+    about_open: bool,
     rule_sel: HashSet<String>,
     rule_found: Vec<(String, String, rules::RuleFound)>,
     rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
@@ -104,7 +109,7 @@ struct App {
 }
 
 impl App {
-    fn new(screenshot: Option<PathBuf>, tab: Tab, dev: dev::DevState) -> Self {
+    fn new(screenshot: Option<PathBuf>, tab: Tab, dev: dev::DevState, about_open: bool) -> Self {
         let n = cleaner::CATEGORIES.len();
         let mut app = App {
             tab,
@@ -127,6 +132,8 @@ impl App {
             confirm_clean: false,
             rules: None,
             rules_rx: None,
+            winapp2_update: None,
+            about_open,
             rule_sel: HashSet::new(),
             rule_found: vec![],
             rule_cleaned: vec![],
@@ -158,19 +165,27 @@ impl App {
     // ---------- background jobs ----------
 
     /// Carica le regole esterne in un thread; finché non arrivano, i gruppi dinamici non ci sono.
+    /// Poi, tranne con --screenshot, aggiorna Winapp2 in sottofondo (nessun `join`:
+    /// l'uscita non lo aspetta) e ricarica le regole se è arrivata una copia nuova.
     fn start_rules(&mut self, ctx: &egui::Context) {
         let (tx, rx) = channel();
         self.rules_rx = Some(rx);
         // Con --screenshot si usa l'ambiente del processo, così un profilo finto
         // (USERPROFILE, LOCALAPPDATA…) vale anche per le regole.
         let fake_profile = self.screenshot.is_some();
+        let update = rules::should_update(fake_profile).then(rules::real_update);
         let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let env = if fake_profile { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() };
-            let set = rules::load(&pc_rules::updater::data_dir(), &env);
-            let _ = tx.send(rules::RulesMsg::Loaded(set));
-            ctx.request_repaint();
-        });
+        rules::start(
+            pc_rules::updater::data_dir(),
+            rules::own_folders,
+            move || if fake_profile { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() },
+            rules::load,
+            update,
+            move |m| {
+                let _ = tx.send(m);
+                ctx.request_repaint();
+            },
+        );
     }
 
     /// Opzioni dinamiche spuntate (cleaner e opzione clonati per il job).
@@ -317,8 +332,19 @@ impl App {
 
     fn poll(&mut self) {
         if let Some(rx) = &self.rules_rx {
-            if let Ok(rules::RulesMsg::Loaded(set)) = rx.try_recv() {
-                self.rules = Some(set);
+            let mut ended = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(rules::RulesMsg::Loaded(set)) => self.rules = Some(set),
+                    Ok(rules::RulesMsg::Updated(outcome)) => self.winapp2_update = Some(outcome),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        ended = true;
+                        break;
+                    }
+                }
+            }
+            if ended {
                 self.rules_rx = None;
             }
         }
@@ -463,8 +489,49 @@ impl App {
                         p.circle_filled(r.rect.center(), 4.0, c);
                         ui.label(RichText::new(t).color(c).size(12.0));
                     });
+                    ui.add_space(8.0);
+                    // Stessa forma delle voci in alto; layout dall'alto per avere il testo a sinistra come loro.
+                    ui.allocate_ui_with_layout(Vec2::new(212.0, 46.0), Layout::top_down(Align::Min), |ui| {
+                        let open = self.about_open;
+                        let text = RichText::new("  ℹ   Informazioni").size(15.0).color(if open { Color32::WHITE } else { Color32::from_gray(190) });
+                        let fill = if open { SIDEBAR_SEL } else { SIDEBAR };
+                        if ui.add(egui::Button::new(text).fill(fill).stroke(Stroke::NONE).corner_radius(0).min_size(Vec2::new(212.0, 46.0))).clicked() {
+                            self.about_open = true;
+                        }
+                    });
                 });
             });
+    }
+
+    /// Finestra Informazioni: nome, versione, Winapp2 caricato e attribuzione.
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.about_open {
+            return;
+        }
+        let winapp2 = match self.rules.as_ref() {
+            None => "Winapp2: caricamento in corso".to_string(),
+            Some(rs) => match &rs.winapp2_version {
+                Some(v) => format!("Winapp2: versione {v}"),
+                None => "Winapp2: non ancora scaricato".to_string(),
+            },
+        };
+        let mut close = false;
+        let resp = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.label(RichText::new("PulisciPC").size(18.0).strong());
+            ui.add_space(6.0);
+            ui.label(format!("Versione {}", env!("CARGO_PKG_VERSION")));
+            ui.label(winapp2);
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(rules::ABOUT_RULES).color(MUTED)).wrap());
+            ui.add_space(12.0);
+            if secondary(ui, "Chiudi", true).clicked() {
+                close = true;
+            }
+        });
+        if close || resp.should_close() {
+            self.about_open = false;
+        }
     }
 
     /// Avviso quando l'app gira con un account diverso da quello della sessione (profilo sbagliato).
@@ -499,7 +566,8 @@ impl App {
                         });
                     }
                     if let Some(rs) = &self.rules {
-                        rules_panel(ui, rs, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
+                        let status = rules::status_line(rs, self.winapp2_update.as_ref());
+                        rules_panel(ui, rs, status, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
                     }
                     ui.add_space(12.0);
                     ui.label(RichText::new("Opzioni").strong().color(ACCENT));
@@ -1028,7 +1096,8 @@ fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u3
 /// Gruppi dinamici del pannello sinistro di Pulizia file: "Sviluppo e AI" (un
 /// `CollapsingHeader` per cleaner) e "Applicazioni" (Winapp2, uno per sezione,
 /// con «Cerca»). Il corpo di un `CollapsingHeader` si costruisce solo se aperto.
-fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
+/// `status`: riga di stato di Winapp2 e motivo al passaggio del mouse (`rules::status_line`).
+fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, status: (String, Option<String>), sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
     let mut embedded = rs.cleaners.iter().filter(|c| rules::is_embedded(c)).peekable();
     if embedded.peek().is_some() {
         ui.add_space(6.0);
@@ -1048,9 +1117,11 @@ fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, sel: &mut HashSet<String>, sear
     ui.add_space(6.0);
     ui.label(RichText::new(rules::WINAPP2_GROUP).strong().color(ACCENT));
     ui.separator();
-    let status = ui.label(RichText::new(&rs.status).color(MUTED).size(12.0));
-    if !rs.warnings.is_empty() {
-        status.on_hover_text(rs.warnings.join("\n"));
+    let (text, why) = status;
+    let hover: Vec<&str> = why.as_deref().into_iter().chain(rs.warnings.iter().map(String::as_str)).collect();
+    let status = ui.label(RichText::new(text).color(MUTED).size(12.0));
+    if !hover.is_empty() {
+        status.on_hover_text(hover.join("\n"));
     }
     if rs.sections.is_empty() {
         return;
@@ -1145,6 +1216,7 @@ impl eframe::App for App {
                 dev::dev_tab(&mut self.dev, ui, self.admin)
             }
         });
+        self.about_window(ctx);
         self.handle_screenshot(ctx);
     }
 }
@@ -1175,6 +1247,7 @@ fn main() -> eframe::Result<()> {
     let mut screenshot = None;
     let mut tab = Tab::Cleaner;
     let mut analyze = false;
+    let mut about = false;
     let mut section = dev::Section::Projects;
     let mut i = 1;
     while i < args.len() {
@@ -1193,6 +1266,8 @@ fn main() -> eframe::Result<()> {
                 i += 1;
             }
             "--analyze" => analyze = true,
+            // Come --tab: apre una vista all'avvio (per gli screenshot della finestra Informazioni).
+            "--about" => about = true,
             "--dev-section" if i + 1 < args.len() => {
                 section = dev::Section::parse(&args[i + 1]).unwrap_or(section);
                 i += 1;
@@ -1214,7 +1289,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             style(&cc.egui_ctx);
-            let mut app = App::new(screenshot, tab, dev::DevState::new(section, analyze));
+            let mut app = App::new(screenshot, tab, dev::DevState::new(section, analyze), about);
             app.start_rules(&cc.egui_ctx);
             Ok(Box::new(app))
         }),

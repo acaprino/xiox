@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use pc_rules::model::PROTECT_TREE_PREFIX;
+use pc_rules::updater::UpdateOutcome;
 use pc_rules::{
     collect_ctl, overlaps, present, reg_allowed, running, updater, winapp2, Action, Cleaner,
     CollectCtl, Env, Guard, Opt, Origin, RegItem, RegRoot,
@@ -20,6 +22,9 @@ use pc_rules::{
 pub const EMBEDDED_GROUP: &str = "Sviluppo e AI";
 /// Titolo del gruppo delle voci di Winapp2.
 pub const WINAPP2_GROUP: &str = "Applicazioni";
+/// Attribuzione delle regole nella finestra Informazioni.
+pub const ABOUT_RULES: &str = "Le regole di pulizia delle applicazioni vengono da Winapp2 \
+     (https://github.com/MoscaDotTo/Winapp2), licenza CC-BY-SA-4.0, scaricate a ogni avvio.";
 
 /// Note tenute per un'opzione nel resoconto.
 const MAX_NOTES: usize = 20;
@@ -28,9 +33,9 @@ const MAX_NOTES: usize = 20;
 pub struct RuleSet {
     /// Prima gli inglobati presenti, poi le voci di Winapp2 rilevate.
     pub cleaners: Vec<Cleaner>,
-    /// Per la pagina Informazioni (Task 8); la scheda mostra `status`.
-    #[allow(dead_code)]
+    /// Versione della copia di Winapp2 caricata (finestra Informazioni, riga di stato).
     pub winapp2_version: Option<String>,
+    /// Riga di stato del caricamento; con un esito dell'aggiornamento vale [`status_line`].
     pub status: String,
     pub warnings: Vec<String>,
     /// Ambiente con cui si sono lette le regole: lo stesso per analisi e pulizia.
@@ -41,7 +46,10 @@ pub struct RuleSet {
 }
 
 pub enum RulesMsg {
+    /// Regole caricate (all'avvio, e di nuovo dopo un aggiornamento riuscito).
     Loaded(RuleSet),
+    /// Esito dell'aggiornamento di Winapp2 (uno per avvio).
+    Updated(UpdateOutcome),
 }
 
 /// Ciò che un'opzione toglierebbe.
@@ -152,11 +160,11 @@ pub fn load_with(
                 let what = if hidden == 1 { "1 voce".to_string() } else { format!("{hidden} voci") };
                 warnings.push(format!("Winapp2: {what} nascoste perché già coperte da {EMBEDDED_GROUP}"));
             }
-            (format!("Winapp2 {version} caricato"), Some(version))
+            (status_text(Winapp2Status::Loaded(&version)), Some(version))
         }
         // `read_valid` lo dice così quando il file non c'è ancora.
         Err(e) if e == "nessuna copia locale" => ("Winapp2 non ancora scaricato".to_string(), None),
-        Err(e) => (format!("Winapp2 non letto: {e}"), None),
+        Err(e) => (format!("Winapp2 non letto: {}", reason_it(&e)), None),
     };
     let first = cleaners.len();
     cleaners.extend(winapp);
@@ -175,6 +183,143 @@ pub fn load_with(
         warnings,
         env: env.clone(),
         sections,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Avvio: caricamento, aggiornamento di Winapp2, cartelle dell'app.
+
+/// Da dove viene la riga di stato di Winapp2.
+pub enum Winapp2Status<'a> {
+    /// Copia valida caricata (versione), aggiornamento ancora in corso.
+    Loaded(&'a str),
+    /// Esito dell'aggiornamento.
+    Outcome(&'a UpdateOutcome),
+}
+
+/// Testo della riga di stato sopra "Applicazioni".
+pub fn status_text(s: Winapp2Status) -> String {
+    match s {
+        Winapp2Status::Loaded(version) => format!("Winapp2 {version} caricato"),
+        Winapp2Status::Outcome(UpdateOutcome::Updated { version }) => format!("Winapp2 {version} aggiornato"),
+        Winapp2Status::Outcome(UpdateOutcome::UpToDate) => "Winapp2 già aggiornato".to_string(),
+        Winapp2Status::Outcome(UpdateOutcome::KeptOld(why)) => format!("Winapp2 non aggiornato: {}", reason_it(why)),
+        Winapp2Status::Outcome(UpdateOutcome::NoCopyYet(_)) => "Winapp2 non ancora scaricato".to_string(),
+    }
+}
+
+/// Riga di stato mostrata e testo al passaggio del mouse (il motivo, se non
+/// c'è ancora una copia). Finché il `RuleSet` ricaricato dopo `Updated` non
+/// arriva, resta la riga del caricamento: la versione mostrata è sempre
+/// quella delle regole in uso.
+pub fn status_line(rs: &RuleSet, outcome: Option<&UpdateOutcome>) -> (String, Option<String>) {
+    match outcome {
+        None => (rs.status.clone(), None),
+        Some(UpdateOutcome::Updated { version }) if rs.winapp2_version.as_deref() != Some(version.as_str()) => {
+            (rs.status.clone(), None)
+        }
+        Some(o @ UpdateOutcome::NoCopyYet(why)) => (status_text(Winapp2Status::Outcome(o)), Some(reason_it(why))),
+        Some(o) => (status_text(Winapp2Status::Outcome(o)), None),
+    }
+}
+
+/// Parti dei motivi di `pc_rules::updater` che non sono in italiano: tabella
+/// chiusa (i motivi sono già in italiano, tranne queste).
+const REASON_IT: &[(&str, &str)] = &[("header senza riga di stato", "risposta del server senza riga di stato")];
+
+/// Un motivo di `updater` per la UI, senza parti in inglese.
+pub fn reason_it(reason: &str) -> String {
+    REASON_IT.iter().fold(reason.to_string(), |s, (en, it)| s.replace(en, it))
+}
+
+/// `false` in modalità prova (`--screenshot`): niente rete, niente scritture
+/// in `%ProgramData%`.
+pub fn should_update(screenshot: bool) -> bool {
+    !screenshot
+}
+
+/// Avvia l'aggiornamento di Winapp2 nella cartella data; chiama la callback
+/// una volta sola con l'esito (in produzione `updater::spawn_update`).
+pub type UpdateSpawner = Box<dyn FnOnce(PathBuf, Box<dyn FnOnce(UpdateOutcome) + Send>) + Send>;
+
+/// L'aggiornamento vero: `updater::spawn_update` (thread staccato, curl, ACL).
+pub fn real_update() -> UpdateSpawner {
+    Box::new(updater::spawn_update)
+}
+
+/// Carica le regole in un thread staccato (nessun `join`: l'uscita dal
+/// programma non lo aspetta) e le manda con `notify`. Poi, se `update` c'è,
+/// aggiorna Winapp2 e, sullo stesso thread, ricarica con lo stesso `Env`
+/// quando l'esito è `Updated` (vedi [`after_update`]). L'`Env` riceve le
+/// chiavi `protect-tree:` delle cartelle dell'app (`own`, in produzione
+/// [`own_folders`]) prima di ogni caricamento.
+pub fn start(
+    dir: PathBuf,
+    own: impl FnOnce(&Env) -> Vec<PathBuf> + Send + 'static,
+    make_env: impl FnOnce() -> Env + Send + 'static,
+    load: impl Fn(&Path, &Env) -> RuleSet + Send + 'static,
+    update: Option<UpdateSpawner>,
+    notify: impl Fn(RulesMsg) + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let mut env = make_env();
+        let own = own(&env);
+        protect_own_folders(&mut env, &own);
+        notify(RulesMsg::Loaded(load(&dir, &env)));
+        let Some(spawn) = update else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn(
+            dir.clone(),
+            Box::new(move |outcome| {
+                let _ = tx.send(outcome);
+            }),
+        );
+        // La callback si chiama sempre una volta; se il thread sparisce, `recv` fallisce.
+        if let Ok(outcome) = rx.recv() {
+            after_update(outcome, || load(&dir, &env), &notify);
+        }
+    });
+}
+
+/// Esito dell'aggiornamento → messaggi: sempre `Updated(esito)`; con
+/// `Updated` anche le regole ricaricate (`reload`), negli altri casi si
+/// tengono quelle già caricate.
+pub fn after_update(outcome: UpdateOutcome, reload: impl FnOnce() -> RuleSet, notify: &dyn Fn(RulesMsg)) {
+    let again = matches!(outcome, UpdateOutcome::Updated { .. });
+    notify(RulesMsg::Updated(outcome));
+    if again {
+        notify(RulesMsg::Loaded(reload()));
+    }
+}
+
+/// Cartelle dell'app da proteggere con tutto il contenuto: `%ProgramData%\PulisciPC`
+/// (le regole) e `Documenti\PulisciPC` (backup del registro e dei servizi):
+/// sia `%USERPROFILE%\Documents\PulisciPC`, quella di `sys::data_dir`, sia
+/// `<documents>\PulisciPC` dell'`Env` (Documenti spostati, per esempio in OneDrive).
+pub fn own_folders(env: &Env) -> Vec<PathBuf> {
+    let app_data = updater::data_dir().parent().map(Path::to_path_buf).unwrap_or_else(updater::data_dir);
+    own_folders_with(&app_data, std::env::var("USERPROFILE").ok().as_deref(), env)
+}
+
+/// [`own_folders`] con le cartelle passate da fuori (nei test, finte).
+pub fn own_folders_with(app_data: &Path, profile: Option<&str>, env: &Env) -> Vec<PathBuf> {
+    let mut out = vec![app_data.to_path_buf()];
+    if let Some(p) = profile.filter(|p| !p.trim().is_empty()) {
+        out.push(Path::new(p).join("Documents").join("PulisciPC"));
+    }
+    if let Some(docs) = env.get("documents") {
+        out.push(Path::new(docs).join("PulisciPC"));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Aggiunge all'`Env` una chiave `protect-tree:` per cartella: il `Guard`
+/// (analisi e pulizia) le rifiuta con tutto il contenuto.
+pub fn protect_own_folders(env: &mut Env, dirs: &[PathBuf]) {
+    for (i, d) in dirs.iter().enumerate() {
+        env.0.insert(format!("{PROTECT_TREE_PREFIX}pulisci{i}"), d.to_string_lossy().into_owned());
     }
 }
 
@@ -948,6 +1093,257 @@ mod tests {
         assert_eq!(done.removed, 0);
         assert!(dir.join("a.tmp").exists());
         assert!(reg.log.lock().unwrap().is_empty());
+    }
+
+    // ---------- aggiornamento di Winapp2 e cartelle dell'app (Task 8) ----------
+
+    use pc_rules::updater::{Fetch, Fetched, Protect, UpdateOutcome};
+    use std::cell::RefCell;
+    use std::sync::mpsc::channel;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// Winapp2 finto con una voce sola, per `load_with`.
+    fn ini_reader(version: &'static str) -> impl Fn(&Path) -> Result<(String, String), String> {
+        move |_: &Path| {
+            let ini = format!(
+                "; Version: {version}\r\n[Other App *]\r\nSection=Utilities\r\nFileKey1=%UserProfile%\\.otherapp\\cache|*.*|RECURSE\r\n"
+            );
+            Ok((ini, version.to_string()))
+        }
+    }
+
+    /// Rete finta lenta: dorme e poi fallisce (nessuna scrittura dopo il sonno).
+    struct SlowFetch(Duration);
+
+    impl Fetch for SlowFetch {
+        fn get(&self, _: &str, _: Option<&str>, _: Duration) -> Result<Fetched, String> {
+            std::thread::sleep(self.0);
+            Err("rete finta".into())
+        }
+    }
+
+    /// Protezione finta: crea le cartelle, nessuna ACL vera.
+    struct NoAcl;
+
+    impl Protect for NoAcl {
+        fn secure(&self, dir: &Path) -> Result<(), String> {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())
+        }
+        fn check(&self, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn check_file(&self, _: &fs::File) -> Result<(), String> {
+            Ok(())
+        }
+        fn quarantine(&self, _: &Path) -> Result<(), String> {
+            Err("non nei test".into())
+        }
+    }
+
+    #[test]
+    fn status_text_for_each_outcome() {
+        let text = |o: UpdateOutcome| status_text(Winapp2Status::Outcome(&o));
+        assert_eq!(text(UpdateOutcome::Updated { version: "261001".into() }), "Winapp2 261001 aggiornato");
+        assert_eq!(text(UpdateOutcome::UpToDate), "Winapp2 già aggiornato");
+        assert_eq!(text(UpdateOutcome::KeptOld("tempo scaduto".into())), "Winapp2 non aggiornato: tempo scaduto");
+        assert_eq!(text(UpdateOutcome::NoCopyYet("tempo scaduto".into())), "Winapp2 non ancora scaricato");
+        assert_eq!(status_text(Winapp2Status::Loaded("260915")), "Winapp2 260915 caricato");
+        // Motivi con termini inglesi: tradotti con la tabella chiusa.
+        assert_eq!(
+            text(UpdateOutcome::KeptOld("header senza riga di stato".into())),
+            "Winapp2 non aggiornato: risposta del server senza riga di stato"
+        );
+    }
+
+    #[test]
+    fn status_line_follows_load_and_update() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let old = load_with(&t.path().join("rules"), &env, &ini_reader("260915"), &never);
+        let none = load_with(&t.path().join("rules"), &env, &no_copy, &never);
+        // Aggiornamento in corso: la copia caricata.
+        assert_eq!(status_line(&old, None), ("Winapp2 260915 caricato".to_string(), None));
+        assert_eq!(status_line(&none, None).0, "Winapp2 non ancora scaricato");
+        // Scaricato ma non ancora ricaricato: resta "caricato" finché non arriva il nuovo RuleSet.
+        let updated = UpdateOutcome::Updated { version: "261001".into() };
+        assert_eq!(status_line(&old, Some(&updated)).0, "Winapp2 260915 caricato");
+        let new = load_with(&t.path().join("rules"), &env, &ini_reader("261001"), &never);
+        assert_eq!(status_line(&new, Some(&updated)).0, "Winapp2 261001 aggiornato");
+        assert_eq!(status_line(&old, Some(&UpdateOutcome::UpToDate)).0, "Winapp2 già aggiornato");
+        // Nessuna copia: il motivo al passaggio del mouse.
+        let (text, hover) = status_line(&none, Some(&UpdateOutcome::NoCopyYet("tempo scaduto".into())));
+        assert_eq!(text, "Winapp2 non ancora scaricato");
+        assert_eq!(hover.as_deref(), Some("tempo scaduto"));
+    }
+
+    #[test]
+    fn about_text_is_the_winapp2_attribution() {
+        assert_eq!(
+            ABOUT_RULES,
+            "Le regole di pulizia delle applicazioni vengono da Winapp2 (https://github.com/MoscaDotTo/Winapp2), licenza CC-BY-SA-4.0, scaricate a ogni avvio."
+        );
+        assert!(!ABOUT_RULES.to_lowercase().contains("bleachbit"));
+    }
+
+    #[test]
+    fn no_update_in_screenshot_mode() {
+        assert!(!should_update(true));
+        assert!(should_update(false));
+    }
+
+    #[test]
+    fn update_outcome_updated_triggers_a_reload_message() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let dir = t.path().join("rules");
+        let msgs: RefCell<Vec<RulesMsg>> = RefCell::new(vec![]);
+        let notify = |m: RulesMsg| msgs.borrow_mut().push(m);
+        after_update(
+            UpdateOutcome::Updated { version: "261001".into() },
+            || load_with(&dir, &env, &ini_reader("261001"), &never),
+            &notify,
+        );
+        {
+            let got = msgs.borrow();
+            assert_eq!(got.len(), 2);
+            assert!(matches!(&got[0], RulesMsg::Updated(UpdateOutcome::Updated { version }) if version == "261001"));
+            assert!(matches!(&got[1], RulesMsg::Loaded(rs) if rs.winapp2_version.as_deref() == Some("261001")));
+        }
+        // Gli altri esiti: solo il messaggio, nessun ricaricamento.
+        for o in [
+            UpdateOutcome::UpToDate,
+            UpdateOutcome::KeptOld("tempo scaduto".into()),
+            UpdateOutcome::NoCopyYet("tempo scaduto".into()),
+        ] {
+            msgs.borrow_mut().clear();
+            after_update(o.clone(), || panic!("nessun ricaricamento per {o:?}"), &notify);
+            let got = msgs.borrow();
+            assert_eq!(got.len(), 1);
+            assert!(matches!(&got[0], RulesMsg::Updated(x) if *x == o));
+        }
+    }
+
+    #[test]
+    fn start_reloads_with_the_same_env_after_an_update() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let own = t.path().join(r"ProgramData\PulisciPC");
+        let seen: Arc<std::sync::Mutex<Vec<Env>>> = Arc::default();
+        let seen_in = Arc::clone(&seen);
+        let (tx, rx) = channel();
+        let update: UpdateSpawner = Box::new(|_dir, done| done(UpdateOutcome::Updated { version: "261001".into() }));
+        let own_in = own.clone();
+        start(
+            t.path().join("rules"),
+            move |_: &Env| vec![own_in],
+            move || env,
+            move |d: &Path, e: &Env| {
+                seen_in.lock().unwrap().push(e.clone());
+                load_with(d, e, &ini_reader("261001"), &never)
+            },
+            Some(update),
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        let wait = || rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        assert!(matches!(wait(), RulesMsg::Loaded(_)));
+        assert!(matches!(wait(), RulesMsg::Updated(UpdateOutcome::Updated { .. })));
+        assert!(matches!(wait(), RulesMsg::Loaded(_)));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert!(Guard::new(&seen[0]).protected(&own.join("winapp2").join("Winapp2.ini")).is_some());
+    }
+
+    #[test]
+    fn closing_does_not_wait_for_the_update() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        let dir = t.path().join(r"ProgramData\PulisciPC\winapp2");
+        let (tx, rx) = channel();
+        let begun = Instant::now();
+        let update: UpdateSpawner = Box::new(|dir, done| {
+            pc_rules::updater::spawn_update_with(
+                dir,
+                Arc::new(SlowFetch(Duration::from_secs(5))),
+                Arc::new(NoAcl),
+                "https://example.invalid/Winapp2.ini".into(),
+                done,
+            )
+        });
+        start(
+            dir,
+            |_: &Env| vec![],
+            move || env,
+            |d: &Path, e: &Env| load_with(d, e, &no_copy, &never),
+            Some(update),
+            move |m| {
+                let _ = tx.send(m);
+            },
+        );
+        assert!(begun.elapsed() < Duration::from_secs(1), "start ha aspettato: {:?}", begun.elapsed());
+        // Le regole arrivano senza aspettare la rete; l'esito no.
+        let first = rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        assert!(matches!(first, RulesMsg::Loaded(_)));
+        assert!(rx.try_recv().is_err());
+        assert!(begun.elapsed() < Duration::from_secs(5));
+        // Fine del test senza `join`: il thread dell'aggiornamento resta staccato.
+    }
+
+    #[test]
+    fn own_data_folders_are_protected() {
+        let t = tempfile::tempdir().unwrap();
+        let profile = t.path().join("profile");
+        let mut base = fake_env(t.path());
+        base.0.insert("documents".into(), profile.join("Documents").to_string_lossy().into_owned());
+        let app_data = t.path().join(r"ProgramData\PulisciPC");
+        let backups = profile.join(r"Documents\PulisciPC");
+        let files = [
+            app_data.join(r"winapp2\Winapp2.ini"),
+            app_data.join(r"winapp2\etag.txt"),
+            app_data.join(r"winapp2\tmp\pulisci-curl-1\body.bin"),
+            backups.join("backup_regole_20261110_120000.reg"),
+            backups.join("servizi_originali.txt"),
+        ];
+        for f in &files {
+            write(f, "dati");
+        }
+        let mut o = opt(vec![
+            files_rule(&app_data, &["*.*"]),
+            files_rule(&app_data.join("winapp2"), &["*.*"]),
+            files_rule(&app_data.join(r"winapp2\tmp"), &["*"]),
+            files_rule(&backups, &["*.reg", "*.txt"]),
+        ]);
+        o.actions.push(Action::Files {
+            path: app_data.join("winapp2").to_string_lossy().into_owned(),
+            patterns: vec!["Winapp2.ini".into()],
+            recurse: false,
+            remove_self: true,
+            search: Search::Winapp2,
+        });
+        // Senza la protezione l'opzione finta raccoglierebbe i file.
+        assert!(ctl_run(&o, &base).count > 0);
+
+        let mut env = base.clone();
+        let own = own_folders_with(&app_data, Some(&profile.to_string_lossy()), &env);
+        assert!(own.contains(&app_data) && own.contains(&backups), "{own:?}");
+        protect_own_folders(&mut env, &own);
+        let found = ctl_run(&o, &env);
+        assert_eq!((found.count, found.dirs_to_remove.len()), (0, 0), "{found:?}");
+        // Anche un `RuleFound` costruito a mano con quei file non li cancella.
+        let forged = RuleFound {
+            files: files.iter().map(|f| (f.clone(), 4)).collect(),
+            dirs_to_remove: vec![app_data.join(r"winapp2\tmp"), app_data.join("winapp2"), app_data.clone(), backups.clone()],
+            count: files.len() as u64,
+            ..Default::default()
+        };
+        let done = clean_option(&forged, &o, &Guard::new(&env), &FakeReg::default(), &AtomicBool::new(false));
+        assert_eq!((done.removed, done.failed), (0, files.len() as u64), "{:?}", done.notes);
+        for f in &files {
+            assert!(f.exists(), "cancellato: {}", f.display());
+        }
     }
 
     /// Sola lettura del registro vero: si apre una chiave che c'è sempre,
