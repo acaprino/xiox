@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::model::{Env, PROTECT_PREFIX};
+use crate::model::{Env, PROTECT_PREFIX, PROTECT_TREE_PREFIX};
 use crate::wildcard::wildcard_match;
 
 /// [`Guard::protected`] con un `Guard` costruito per la sola chiamata. Chi
@@ -46,6 +46,9 @@ pub struct Guard {
     subtrees: Vec<Vec<String>>,
     /// Cartelle che si svuotano ma non si tolgono.
     keep_dirs: Vec<Vec<String>>,
+    /// Cartelle dell'ambiente con chiave `protect-tree:`
+    /// ([`PROTECT_TREE_PREFIX`]): con tutto il contenuto.
+    own_trees: Vec<Vec<String>>,
 }
 
 impl Guard {
@@ -88,6 +91,7 @@ impl Guard {
             system,
             installer,
             keep_dirs: keep_dirs(env, &windows),
+            own_trees: own_tree_dirs(env),
         }
     }
 
@@ -125,6 +129,8 @@ impl Guard {
     ///   ripristino e file di paging; `Fonts`, `servicing`, `Boot`, `INF`,
     ///   `SystemApps` di Windows, `WindowsApps` e `Windows Defender*` nei
     ///   Program Files, `Windows Defender\Platform`, il profilo `Default`;
+    /// - con tutto il contenuto: le cartelle delle chiavi `protect-tree:`
+    ///   dell'ambiente ([`PROTECT_TREE_PREFIX`], i dati dell'app);
     /// - gli altri profili presi interi (`C:\Users\altro\*`);
     /// - cartelle di soli jolly sotto la radice di un disco, qualunque sia il
     ///   file (`D:\*\*.docx`);
@@ -225,6 +231,9 @@ impl Guard {
         }
         if self.subtrees.iter().any(|d| covers_subtree_pattern(comps, d)) {
             return Some("cartella di sistema di Windows o profilo predefinito");
+        }
+        if self.own_trees.iter().any(|d| covers_subtree(comps, d)) {
+            return Some("cartella dei dati di PulisciPC");
         }
         if comps.iter().any(|c| c.starts_with("ntuser.") || c.starts_with("usrclass.dat")) {
             return Some("registro dell'utente (NTUSER.DAT, UsrClass.dat)");
@@ -473,6 +482,22 @@ fn user_content_dirs(env: &Env) -> Vec<Vec<String>> {
         }
         dirs.push(p);
     }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// Cartelle protette con tutto il contenuto dalle chiavi `protect-tree:`
+/// dell'ambiente (percorsi assoluti con lettera di unità; gli altri valori si
+/// ignorano).
+fn own_tree_dirs(env: &Env) -> Vec<Vec<String>> {
+    let mut dirs: Vec<Vec<String>> = env
+        .0
+        .iter()
+        .filter(|(k, v)| k.starts_with(PROTECT_TREE_PREFIX) && !v.trim().is_empty())
+        .filter_map(|(_, v)| normalize(v, false).ok())
+        .filter(|d| d.len() > 1)
+        .collect();
     dirs.sort();
     dirs.dedup();
     dirs
@@ -929,6 +954,46 @@ mod tests {
             assert!(protected(Path::new(p), &e).is_some(), "{p}");
         }
         assert!(protected(Path::new(r"D:\Pub\Documents\App\cache"), &e).is_none());
+    }
+
+    #[test]
+    fn protect_tree_keys_protect_the_folder_with_its_content() {
+        use crate::model::PROTECT_TREE_PREFIX;
+        let inside = [
+            r"C:\ProgramData\PulisciPC",
+            r"C:\ProgramData\PulisciPC\winapp2",
+            r"C:\ProgramData\PulisciPC\winapp2\Winapp2.ini",
+            r"C:\ProgramData\PulisciPC\winapp2\tmp\*.*",
+            r"C:\ProgramData\PulisciPC\*",
+            r"c:/programdata/PULISCIPC/Winapp2/etag.txt",
+            r"\\?\C:\ProgramData\PulisciPC\winapp2\etag.txt",
+            r"C:\Users\u\Documents\PulisciPC\backup_regole_1.reg",
+            r"C:\Users\u\Documents\PulisciPC\sub\x.reg",
+        ];
+        // Senza le chiavi `protect-tree:` il contenuto è permesso (le cartelle
+        // madri sono protette solo prese intere).
+        for p in [inside[1], inside[2], inside[7]] {
+            assert!(protected(Path::new(p), &env()).is_none(), "{p}");
+        }
+        let mut e = env();
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}dati"), r"C:\ProgramData\PulisciPC".into());
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}backup"), r"C:\Users\u\Documents\PulisciPC\".into());
+        for p in inside {
+            assert!(protected(Path::new(p), &e).is_some(), "doveva essere protetto: {p}");
+            assert!(protected_dir_removal(Path::new(p), &e).is_some(), "doveva essere protetto: {p}");
+        }
+        for p in [
+            r"C:\ProgramData\PulisciPCx\cache\a.tmp",
+            r"C:\ProgramData\Other\cache\a.tmp",
+            r"C:\Users\u\Documents\My Games\x.log",
+        ] {
+            assert!(protected(Path::new(p), &e).is_none(), "non doveva essere protetto: {p}");
+        }
+        // Un valore vuoto o relativo non protegge niente e non rompe il resto.
+        let mut e = env();
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}vuota"), "  ".into());
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}relativa"), r"PulisciPC".into());
+        assert!(protected(Path::new(r"C:\ProgramData\Other\a.tmp"), &e).is_none());
     }
 
     #[test]
