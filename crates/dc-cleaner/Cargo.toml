@@ -1,0 +1,19 @@
+[package]
+name = "dc-cleaner"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dc-model = { path = "../dc-model" }
+trash = "5.3.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_RestartManager",
+] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

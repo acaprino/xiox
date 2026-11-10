@@ -1,0 +1,8 @@
+[package]
+name = "dc-engine"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dc-model = { path = "../dc-model" }

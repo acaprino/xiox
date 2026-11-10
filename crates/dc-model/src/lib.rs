@@ -1,0 +1,475 @@
+//! devclean shared contract.
+//!
+//! Every other crate depends ONLY on this one (plus third-party crates). Concrete
+//! implementations are injected through the traits below, so each crate can be built
+//! and tested in isolation. Do not add behaviour here beyond the small path helpers:
+//! changes to this file are contract changes and go through the integrator.
+//!
+//! JSON shape (Tauri <-> React): structs are camelCase, enums are kebab-case strings
+//! (unit variants) or `{ "type": "...", ... }` (data variants). `src/types.ts` mirrors this.
+
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+pub const DEFAULT_INACTIVE_DAYS: u32 = 14;
+
+// ───────────────────────────── errors / helpers ─────────────────────────────
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("io error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{0}")]
+    Other(String),
+}
+
+/// Result of a best-effort load: never fails as a whole, problems become warnings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Loaded<T> {
+    pub items: Vec<T>,
+    pub warnings: Vec<String>,
+}
+
+impl<T> Default for Loaded<T> {
+    fn default() -> Self {
+        Self { items: Vec::new(), warnings: Vec::new() }
+    }
+}
+
+/// Strip `\\?\` / `\\?\UNC\` prefixes, use `\` separators (Windows), drop trailing
+/// separators (keeps `C:\`). Does not touch the filesystem.
+pub fn normalize_path(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    let mut out = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s.to_string()
+    };
+    if cfg!(windows) {
+        out = out.replace('/', "\\");
+    }
+    let keep = if cfg!(windows) { 3 } else { 1 };
+    while out.len() > keep && (out.ends_with('\\') || out.ends_with('/')) {
+        out.pop();
+    }
+    PathBuf::from(out)
+}
+
+/// Comparison key: normalized + lowercase (Windows paths are case-insensitive).
+/// Use this, never raw `==`, to compare paths coming from different sources.
+pub fn path_key(p: &Path) -> String {
+    normalize_path(p).to_string_lossy().to_lowercase()
+}
+
+// ─────────────────────────────── agents / sessions ──────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Agent {
+    Claude,
+    Codex,
+    Opencode,
+    Pi,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRecord {
+    pub agent: Agent,
+    pub session_id: Option<String>,
+    /// Real working directory of the session (taken from `cwd`/`directory` fields,
+    /// NEVER decoded from a folder name). Passed through `normalize_path`. May not exist.
+    pub project_path: PathBuf,
+    /// Unix epoch milliseconds of the last activity (last record timestamp; file mtime
+    /// only as a documented fallback).
+    pub last_activity_ms: i64,
+    pub archived: bool,
+    /// True only if the owning agent process is verified alive right now.
+    pub live: bool,
+}
+
+/// One AI-agent session store (Claude Code, Codex, OpenCode).
+pub trait SessionSource: Send + Sync {
+    fn agent(&self) -> Agent;
+    /// Read-only. A missing store is `Loaded::default()`, not an error. Must not panic.
+    fn load(&self) -> Loaded<SessionRecord>;
+    /// Directories this agent created as managed git worktrees (e.g. `~/.codex/worktrees/*`).
+    fn managed_worktrees(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+}
+
+// ───────────────────────────── scanning / artifacts ─────────────────────────
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SizeInfo {
+    pub logical_bytes: u64,
+    /// On-disk (cluster-rounded, hardlink-deduplicated) size when known.
+    pub allocated_bytes: Option<u64>,
+    pub file_count: u64,
+}
+
+impl SizeInfo {
+    /// Bytes that deleting would actually free.
+    pub fn effective_bytes(&self) -> u64 {
+        self.allocated_bytes.unwrap_or(self.logical_bytes)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArtifactKind {
+    RustTarget,
+    NodeModules,
+    PythonVenv,
+    PythonCache,
+    Gradle,
+    Maven,
+    DotNet,
+    CMake,
+    /// A whole agent-managed git worktree directory.
+    WorktreeDir,
+    Other,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    pub path: PathBuf,
+    pub kind: ArtifactKind,
+    /// Human label, e.g. "Rust target/".
+    pub label: String,
+    pub size: SizeInfo,
+    /// Identity check passed (CACHEDIR.TAG / .rustc_info.json, .modules.yaml, pyvenv.cfg ...).
+    /// Unverified artifacts are never preselected and block removal.
+    pub verified: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCandidate {
+    pub root: PathBuf,
+    pub name: String,
+    /// e.g. ["rust", "node"]
+    pub ecosystems: Vec<String>,
+    pub artifacts: Vec<Artifact>,
+    /// Newest mtime (epoch ms) of source files, EXCLUDING artifacts and `.git`.
+    pub source_mtime_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanOptions {
+    /// Descend into dot-directories such as `.claude/worktrees` (default true).
+    pub include_dot_dirs: bool,
+    pub max_depth: Option<usize>,
+    /// Paths (compared with `path_key`) never entered.
+    pub ignore: Vec<PathBuf>,
+    /// Artifacts smaller than this are dropped.
+    pub min_artifact_bytes: u64,
+}
+
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            include_dot_dirs: true,
+            max_depth: None,
+            ignore: Vec::new(),
+            min_artifact_bytes: 1 << 20,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexedDir {
+    pub path: PathBuf,
+    pub size: SizeInfo,
+}
+
+/// Pre-built directory index (WizTree MFT export). Lets the scanner find artifact
+/// directories without walking the disk.
+pub trait DirIndex: Send + Sync {
+    fn backend_name(&self) -> &'static str;
+    fn size_of(&self, dir: &Path) -> Option<SizeInfo>;
+    /// Indexed directories under any of `roots` whose last path component equals one of
+    /// `names` (ASCII case-insensitive).
+    fn find_dirs_named(&self, names: &[&str], roots: &[PathBuf]) -> Vec<IndexedDir>;
+}
+
+pub trait ProjectScanner: Send + Sync {
+    /// `index = None` -> walk the filesystem. `Some` -> discover artifact dirs through the
+    /// index, then validate markers/identity on disk. Never deletes or writes anything.
+    fn scan(
+        &self,
+        roots: &[PathBuf],
+        opts: &ScanOptions,
+        index: Option<&dyn DirIndex>,
+    ) -> Loaded<ProjectCandidate>;
+}
+
+// ──────────────────────────────────── git ───────────────────────────────────
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitState {
+    pub is_repo: bool,
+    /// Uncommitted changes (tracked modified/staged/untracked-not-ignored). None = could not tell.
+    pub dirty: Option<bool>,
+    /// Commits not on any remote branch. None = could not tell.
+    pub unpushed_commits: Option<u32>,
+    pub has_upstream: Option<bool>,
+    pub branch: Option<String>,
+    /// `.git` is a file pointing to a main repo (git worktree checkout).
+    pub is_linked_worktree: bool,
+    pub main_worktree: Option<PathBuf>,
+    /// Author date of HEAD, epoch ms.
+    pub last_commit_ms: Option<i64>,
+}
+
+pub trait GitProbe: Send + Sync {
+    fn state(&self, root: &Path) -> GitState;
+    /// True if any file under `rel` (relative to `root`) is tracked by git.
+    fn is_tracked(&self, root: &Path, rel: &Path) -> bool;
+}
+
+// ────────────────────────────── analysis (engine) ───────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectStatus {
+    /// No activity for >= inactive_days, clean. Preselected.
+    Inactive,
+    /// Activity within inactive_days. Selectable, not preselected.
+    Recent,
+    /// No session data at all; only file/git age known. Selectable, not preselected.
+    NoSessions,
+    /// A live agent process is using it. Not selectable.
+    InUse,
+    /// Cannot be removed (see `blocked_by`). Not selectable.
+    Blocked,
+    /// Root path not reachable (offline drive, permissions). Never treated as deleted.
+    Unreachable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlockReason {
+    LiveSession,
+    DirtyGit,
+    UnpushedCommits,
+    TrackedArtifact,
+    UnverifiedArtifact,
+    Unreachable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivitySource {
+    Claude,
+    Codex,
+    Opencode,
+    Pi,
+    Git,
+    Files,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectReport {
+    /// Stable id = `path_key(root)`.
+    pub id: String,
+    pub root: PathBuf,
+    pub name: String,
+    pub ecosystems: Vec<String>,
+    pub agents: Vec<Agent>,
+    pub last_activity_ms: Option<i64>,
+    pub last_activity_source: Option<ActivitySource>,
+    pub inactive_days: Option<u32>,
+    pub status: ProjectStatus,
+    pub blocked_by: Vec<BlockReason>,
+    /// Plain-language explanation shown in the UI (Italian), e.g. "Inattivo da 94 giorni".
+    pub reason: String,
+    pub artifacts: Vec<Artifact>,
+    pub reclaimable_bytes: u64,
+    pub preselected: bool,
+    pub is_agent_worktree: bool,
+    pub git: GitState,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineConfig {
+    pub roots: Vec<PathBuf>,
+    /// Folders that hold many projects (the home, the folders the user asked to walk in full).
+    /// A session started in one of them, or above one, never credits the projects below it.
+    /// The scan roots themselves are not used for this: a root found from a session is often
+    /// a workspace whose session belongs to the projects below it.
+    #[serde(default)]
+    pub container_roots: Vec<PathBuf>,
+    pub inactive_days: u32,
+    pub scan: ScanOptions,
+    /// Reference "now" in epoch ms (injected for deterministic tests).
+    pub now_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisResult {
+    pub reports: Vec<ProjectReport>,
+    pub warnings: Vec<String>,
+}
+
+// ───────────────────────────── plan / execute ───────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoveMode {
+    /// Windows Recycle Bin. NOTE: does not free disk space until the bin is emptied.
+    Recycle,
+    Permanent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum PlanAction {
+    RemoveDir,
+    /// `git -C <repo> worktree remove` then prune, instead of a raw delete.
+    GitWorktreeRemove { repo: PathBuf },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanItem {
+    pub path: PathBuf,
+    pub kind: ArtifactKind,
+    pub action: PlanAction,
+    pub expected_bytes: u64,
+    pub project_id: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanPlan {
+    pub id: String,
+    pub mode: RemoveMode,
+    pub items: Vec<PlanItem>,
+    pub expected_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+pub enum ItemOutcome {
+    /// `bytes_freed` is measured, not assumed.
+    Removed { bytes_freed: u64 },
+    Skipped { reason: String },
+    Failed { error: String, locked_by: Vec<String> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemResult {
+    pub path: PathBuf,
+    pub outcome: ItemOutcome,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanResult {
+    pub items: Vec<ItemResult>,
+    /// Sum of measured `Removed.bytes_freed`.
+    pub bytes_freed: u64,
+    pub dry_run: bool,
+}
+
+pub trait Remover: Send + Sync {
+    /// `dry_run = true` runs every check and reports what would happen without touching disk.
+    fn execute(&self, plan: &CleanPlan, dry_run: bool) -> CleanResult;
+}
+
+// ───────────────────────────── app-level (UI) types ─────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    /// Find the projects from the working directories of the agents' sessions (default on).
+    #[serde(default = "yes")]
+    pub session_projects: bool,
+    /// Extra folders, walked in full only when `scan_roots` is on (projects never opened with
+    /// an agent).
+    pub roots: Vec<PathBuf>,
+    /// Walk every folder in `roots` too. Default off: a settings file written before this field
+    /// existed keeps its folder list, but only the session projects are scanned.
+    #[serde(default)]
+    pub scan_roots: bool,
+    pub inactive_days: u32,
+    pub use_wiztree: bool,
+    pub wiztree_path: Option<PathBuf>,
+    pub remove_mode: RemoveMode,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub reports: Vec<ProjectReport>,
+    pub warnings: Vec<String>,
+    /// "wiztree" | "walker"
+    pub backend: String,
+    pub elapsed_ms: u64,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_file_keeps_roots_but_scans_sessions_only() {
+        let s: Settings = serde_json::from_str(
+            r#"{"roots":["D:\\Projects"],"inactiveDays":14,"useWiztree":true,"wiztreePath":null,"removeMode":"permanent"}"#,
+        )
+        .unwrap();
+        assert!(s.session_projects);
+        assert!(!s.scan_roots);
+        assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
+    }
+
+    #[test]
+    fn normalize_strips_verbatim_prefix_and_trailing_sep() {
+        assert_eq!(normalize_path(Path::new(r"\\?\C:\Users\alfio\")), PathBuf::from(r"C:\Users\alfio"));
+        assert_eq!(normalize_path(Path::new(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
+        assert_eq!(normalize_path(Path::new(r"C:\")), PathBuf::from(r"C:\"));
+    }
+
+    #[test]
+    fn key_is_case_insensitive_and_prefix_agnostic() {
+        assert_eq!(path_key(Path::new(r"\\?\C:\Users\Alfio")), path_key(Path::new(r"c:\users\alfio\")));
+    }
+
+    #[test]
+    fn effective_bytes_prefers_allocated() {
+        let s = SizeInfo { logical_bytes: 10, allocated_bytes: Some(4096), file_count: 1 };
+        assert_eq!(s.effective_bytes(), 4096);
+        assert_eq!(SizeInfo { logical_bytes: 10, ..Default::default() }.effective_bytes(), 10);
+    }
+
+    #[test]
+    fn json_shape_is_camel_and_kebab() {
+        let a = ItemOutcome::Removed { bytes_freed: 5 };
+        assert_eq!(serde_json::to_string(&a).unwrap(), r#"{"type":"removed","bytesFreed":5}"#);
+        assert_eq!(serde_json::to_string(&ProjectStatus::InUse).unwrap(), r#""in-use""#);
+    }
+}
