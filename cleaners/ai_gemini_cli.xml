@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CleanerML: definizioni Windows; ogni opzione va selezionata esplicitamente. -->
+<cleaner id="ai_gemini_cli" os="windows">
+  <label>Gemini CLI (AI)</label>
+  <description>Cronologia e sessioni locali di Gemini CLI per progetto.</description>
+  <running type="exe" os="windows" same_user="true">gemini.exe</running>
+  <option id="logs">
+    <label>Log dei progetti</label>
+    <description>Elimina i file logs.json delle cartelle temporanee dei progetti.</description>
+    <warning>I log possono contenere contenuto delle conversazioni e diagnostica.</warning>
+    <action command="delete" search="glob" path="%USERPROFILE%\.gemini\tmp\*\logs.json"/>
+  </option>
+  <option id="sessions">
+    <label>Conversazioni salvate</label>
+    <description>Elimina i file JSON e JSONL salvati nella cartella chats di ciascun progetto.</description>
+    <warning>Non potrai riprendere le sessioni eliminate. Usa gemini --list-sessions e --delete-session per cancellazioni selettive.</warning>
+    <action command="delete" search="glob" path="%USERPROFILE%\.gemini\tmp\*\chats\*.json"/>
+    <action command="delete" search="glob" path="%USERPROFILE%\.gemini\tmp\*\chats\*.jsonl"/>
+  </option>
+  <option id="shell_history">
+    <label>Cronologia comandi shell</label>
+    <description>Elimina gli archivi dei comandi shell per ogni progetto.</description>
+    <action command="delete" search="glob" path="%USERPROFILE%\.gemini\tmp\*\shell_history"/>
+  </option>
+  <option id="checkpoints">
+    <label>Checkpoint snapshot (avanzato)</label>
+    <description>Elimina gli snapshot Git di checkpoint gestiti da Gemini CLI.</description>
+    <warning>Perderai la possibilità di ripristinare modifiche tramite i checkpoint Gemini CLI.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.gemini\history"/>
+  </option>
+</cleaner>

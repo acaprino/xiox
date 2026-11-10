@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CleanerML: definizioni Windows; ogni opzione va selezionata esplicitamente. -->
+<cleaner id="ai_codex" os="windows">
+  <label>OpenAI Codex (AI)</label>
+  <description>Pulizia selettiva di cache, log, cronologia, sessioni e sessioni archiviate.</description>
+  <running type="exe" os="windows" same_user="true">codex.exe</running>
+  <option id="cache">
+    <label>Cache e temporanei</label>
+    <description>Elimina cache locali e dati temporanei ricostruibili.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.codex\cache"/>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.codex\tmp"/>
+    <action command="delete" search="file" path="%USERPROFILE%\.codex\models_cache.json"/>
+  </option>
+  <option id="logs">
+    <label>Log</label>
+    <description>Elimina i file di log locali, senza eliminare database o credenziali.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.codex\log"/>
+  </option>
+  <option id="history">
+    <label>Cronologia prompt</label>
+    <description>Elimina la cronologia testuale dei prompt e delle interazioni.</description>
+    <warning>La cronologia dei prompt non sarà più disponibile.</warning>
+    <action command="delete" search="file" path="%USERPROFILE%\.codex\history.jsonl"/>
+  </option>
+  <option id="sessions">
+    <label>Sessioni salvate</label>
+    <description>Elimina i file rollout delle sessioni attive/salvate.</description>
+    <warning>Eliminazione irreversibile delle conversazioni locali. I database possono conservare indici o metadati.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.codex\sessions"/>
+  </option>
+  <option id="archived">
+    <label>Sessioni archiviate</label>
+    <description>Elimina i rollout delle sessioni archiviate.</description>
+    <warning>Elimina le conversazioni archiviate che non potrai più ripristinare.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.codex\archived_sessions"/>
+  </option>
+  <option id="session_index">
+    <label>Indice sessioni (avanzato)</label>
+    <description>Elimina il file indice delle sessioni locali.</description>
+    <warning>Potresti perdere riferimenti alla cronologia. Altri database SQLite possono ancora contenere metadati.</warning>
+    <action command="delete" search="file" path="%USERPROFILE%\.codex\session_index.jsonl"/>
+  </option>
+  <option id="log_db">
+    <label>Database diagnostici (avanzato)</label>
+    <description>Elimina solo la famiglia SQLite dei log diagnostici di Codex, non quella dello stato utente.</description>
+    <warning>Assicurati di avere chiuso Codex, anche in background. Non selezionare durante una sessione in corso.</warning>
+    <action command="delete" search="glob" path="%USERPROFILE%\.codex\logs_2.sqlite*"/>
+  </option>
+</cleaner>

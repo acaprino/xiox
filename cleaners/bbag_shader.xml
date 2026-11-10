@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Windows 11: solo cache shader esplicite e ricostruibili. Nessun percorso di sistema. -->
+<cleaner id="bbag_shader" os="windows">
+  <label>Cache shader GPU</label>
+  <description>Cache shader e driver grafici ricostruibili. Chiudi giochi e software 3D.</description>
+  <option id="directx">
+    <label>Cache shader DirectX</label>
+    <description>Rimuove la cache DirectX. Chiudi giochi e programmi 3D: gli shader saranno ricompilati e potrebbero rallentare temporaneamente.</description>
+    <action command="delete" search="walk.files" path="%LocalAppData%\D3DSCache"/>
+  </option>
+  <option id="nvidia">
+    <label>Cache NVIDIA DX e OpenGL</label>
+    <description>Rimuove le cache NVIDIA: chiudi giochi e app GPU; le cache saranno rigenerate e il prossimo avvio può rallentare.</description>
+    <action command="delete" search="walk.files" path="%LocalAppData%\NVIDIA\DXCache"/>
+    <action command="delete" search="walk.files" path="%LocalAppData%\NVIDIA\GLCache"/>
+  </option>
+  <option id="amd">
+    <label>Cache AMD DX e OpenGL</label>
+    <description>Rimuove le cache AMD: chiudi giochi e app GPU; le cache saranno rigenerate e il prossimo avvio può rallentare.</description>
+    <action command="delete" search="walk.files" path="%LocalAppData%\AMD\DxCache"/>
+    <action command="delete" search="walk.files" path="%LocalAppData%\AMD\GLCache"/>
+  </option>
+</cleaner>

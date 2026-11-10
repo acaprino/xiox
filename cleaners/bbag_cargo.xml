@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Solo gli archivi compressi scaricati da Cargo: nessun binario, sorgente o progetto. -->
+<cleaner id="bbag_cargo" os="windows">
+  <label>Download di Cargo</label>
+  <description>Archivi .crate scaricati; nessuna modifica a binari, registry/src o repository Rust.</description>
+  <running type="exe" os="windows" same_user="true">cargo.exe</running>
+  <running type="exe" os="windows" same_user="true">rustc.exe</running>
+  <option id="downloaded_crates">
+    <label>Download compressi Cargo</label>
+    <description>Rimuove i download Cargo compressi; le dipendenze potranno essere riscaricate, quindi evita se lavori offline.</description>
+    <action command="delete" search="walk.files" path="%UserProfile%\.cargo\registry\cache"/>
+  </option>
+</cleaner>

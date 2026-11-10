@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- npm documented Windows default: %LocalAppData%\npm-cache. -->
+<cleaner id="bbag_npm" os="windows">
+  <label>npm e npx</label>
+  <description>Cache pacchetti, esecuzioni temporanee npx e log npm; non tocca progetti o node_modules.</description>
+  <running type="exe" os="windows" same_user="true">node.exe</running>
+  <option id="downloads">
+    <label>Cache pacchetti npm</label>
+    <description>Rimuove la cache npm. Chiudi Node/npm e tieni presente che i pacchetti dovranno essere riscaricati.</description>
+    <action command="delete" search="walk.files" path="%LocalAppData%\npm-cache\_cacache"/>
+  </option>
+  <option id="npx">
+    <label>Installazioni temporanee npx</label>
+    <description>Rimuove solo le copie temporanee dei pacchetti npx.</description>
+    <warning>Le future esecuzioni di npx potranno riscaricare pacchetti. Non usare durante l'esecuzione di npx.</warning>
+    <action command="delete" search="walk.files" path="%LocalAppData%\npm-cache\_npx"/>
+  </option>
+  <option id="logs">
+    <label>Log npm</label>
+    <description>Rimuove i log di debug npm. Conserva eventuali log necessari a diagnosticare errori recenti.</description>
+    <action command="delete" search="glob" path="%LocalAppData%\npm-cache\_logs\*.log"/>
+  </option>
+</cleaner>

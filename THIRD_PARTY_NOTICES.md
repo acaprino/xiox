@@ -31,6 +31,15 @@ Licensed under the MIT License. Portions of PulisciPC adapt ideas or code from t
 Source: https://github.com/acaprino/mukade (same author as PulisciPC), commit dfde57e (2026-11-10).
 Copyright (c) acaprino. MIT. Library-only copy in `vendor/mukade/` (see `vendor/mukade/VENDORED.md`); used to read the sessions of Claude Code, Codex, OpenCode and Pi (listings only, read-only).
 
+### Winapp2 (rules downloaded at runtime)
+
+Source: https://github.com/MoscaDotTo/Winapp2
+Licensed under CC-BY-SA-4.0. PulisciPC downloads `Winapp2.ini` at runtime to read its cleaning rules: il file si scarica a runtime, non fa parte dell'eseguibile. The file is kept unmodified in the user's data folder and keeps its own licence.
+
+### Embedded CleanerML cleaners
+
+The eleven XML cleaners in `cleaners/` (Claude Code, Codex, Gemini CLI, OpenCode, Cargo, crash dumps, Go, JetBrains, npm, pip, GPU shaders) are compiled into the executable. They are authored or adapted for this app and are covered by the app's own licence.
+
 ### Also looked at (ideas only, no code)
 
 - cleanup-cc: https://github.com/nicechencs/cleanup-cc (no licence)

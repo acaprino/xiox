@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dump in modalità utente standard di Windows; non i dump di crash di sistema. -->
+<cleaner id="bbag_crash" os="windows">
+  <label>Dump crash utente</label>
+  <description>File .dmp di crash delle applicazioni nella cartella utente standard.</description>
+  <option id="dumps">
+    <label>CrashDumps .dmp</label>
+    <description>Rimuove i dump standard di crash delle applicazioni nel profilo utente.</description>
+    <warning>I dump possono essere fondamentali per diagnosticare crash o inviare report a supporto tecnico. Salvali prima se necessari.</warning>
+    <action command="delete" search="glob" path="%LocalAppData%\CrashDumps\*.dmp"/>
+  </option>
+</cleaner>
