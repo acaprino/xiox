@@ -607,9 +607,11 @@ pub fn select_archived(
                 Some("ha una sessione figlia non archiviata o in uso".to_string())
             } else if agent == Agent::Opencode && path_key(&path) != store_key {
                 Some("la sessione è in un altro database di OpenCode".to_string())
-            } else if agent != Agent::Opencode && file.is_none() {
-                // OpenCode has no file by design (its CLI deletes the session); every other
-                // harness without its own transcript has nothing that may be removed.
+            } else if matches!(agent, Agent::Claude | Agent::Pi) && file.is_none() {
+                // Claude Code and Pi sessions ARE their transcript: without it nothing may be
+                // removed. Codex and OpenCode go through their CLI, which deletes a session
+                // without a file too (a Codex `threads` row whose rollout is gone,
+                // `codex delete --force <id>`; OpenCode never has one).
                 Some("nessun file della sessione".to_string())
             } else {
                 None
@@ -1012,10 +1014,11 @@ mod tests {
 
         let gone = td.path().join("sessions").join("rollout-gone.jsonl");
         let b = ainfo("b", &gone, true);
+        // Only a database row left: still deletable through the CLI.
         let got = select_archived(Agent::Codex, td.path(), vec![b.clone()], &[b]);
         assert_eq!(got[0].file, None);
         assert_eq!(got[0].bytes, 0);
-        assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"));
+        assert_eq!(got[0].blocked, None);
     }
 
     #[test]
@@ -1054,15 +1057,19 @@ mod tests {
     }
 
     #[test]
-    fn only_opencode_may_have_no_file() {
+    fn a_file_session_without_its_file_is_blocked_a_cli_session_is_not() {
         let td = tempfile::tempdir().unwrap();
         let gone = td.path().join("sessions").join("gone.jsonl");
-        for agent in [Agent::Claude, Agent::Codex, Agent::Pi] {
+        for agent in [Agent::Claude, Agent::Pi] {
             let a = ainfo("a", &gone, true);
             let got = select_archived(agent, td.path(), vec![a.clone()], &[a]);
             assert_eq!(got[0].file, None, "{agent:?}");
             assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"), "{agent:?}");
         }
+        // A Codex `threads` row whose rollout is gone: `codex delete` still removes it.
+        let a = ainfo("a", &gone, true);
+        let got = select_archived(Agent::Codex, td.path(), vec![a.clone()], &[a]);
+        assert_eq!((got[0].file.as_deref(), got[0].bytes, got[0].blocked.as_deref()), (None, 0, None));
         let a = ainfo("a", td.path(), true);
         let got = select_archived(Agent::Opencode, td.path(), vec![a.clone()], &[a]);
         assert_eq!(got[0].file, None);
@@ -1166,10 +1173,9 @@ mod tests {
         touch(&out, "123");
         let other = store.join("other").join("rollout.jsonl");
         touch(&other, "123");
-        let no_file = Some("nessun file della sessione".to_string());
         for p in [&out, &other] {
             let s = one(Agent::Codex, p);
-            assert_eq!((s.file, s.bytes, s.blocked), (None, 0, no_file.clone()), "{p:?}");
+            assert_eq!((s.file, s.bytes, s.blocked), (None, 0, None), "{p:?}");
         }
         let arch = store.join("archived_sessions").join("rollout.jsonl");
         touch(&arch, "123");
@@ -1179,7 +1185,7 @@ mod tests {
         let pi_out = store.join("auth").join("x.jsonl");
         touch(&pi_out, "1");
         let s = one(Agent::Pi, &pi_out);
-        assert_eq!((s.file, s.bytes, s.blocked), (None, 0, no_file));
+        assert_eq!((s.file, s.bytes, s.blocked.as_deref()), (None, 0, Some("nessun file della sessione")));
         let pi_in = store.join("sessions").join("--c--x").join("x.jsonl");
         touch(&pi_in, "1");
         assert_eq!(one(Agent::Pi, &pi_in).file.as_deref(), Some(pi_in.as_path()));
