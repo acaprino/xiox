@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders: global-packages (NUGET_PACKAGES), http-cache v3-cache (NUGET_HTTP_CACHE_PATH), plugins-cache e temp NuGetScratch. NuGet.Config NON si tocca. -->
+<cleaner id="nuget" os="windows">
+  <label>NuGet (.NET)</label>
+  <description>Pacchetti globali, cache HTTP, cache dei plugin e cartella temporanea di NuGet. Non tocca NuGet.Config, i progetti e le cartelle packages delle soluzioni.</description>
+  <var id="packages">
+    <value>%NUGET_PACKAGES%</value>
+    <value>%USERPROFILE%\.nuget\packages</value>
+  </var>
+  <var id="http_cache">
+    <value>%NUGET_HTTP_CACHE_PATH%</value>
+    <value>%LocalAppData%\NuGet\v3-cache</value>
+  </var>
+  <option id="packages">
+    <label>Pacchetti globali di NuGet</label>
+    <description>Rimuove tutti i pacchetti scaricati ed estratti nella cartella globale di NuGet.</description>
+    <warning>Si riscaricano al prossimo restore (`dotnet restore` o build). Chiudi Visual Studio e le build in corso.</warning>
+    <action command="delete" search="walk.all" path="$$packages$$"/>
+  </option>
+  <option id="http_cache">
+    <label>Cache HTTP di NuGet</label>
+    <description>Rimuove le risposte dei feed e i pacchetti in cache (v3-cache).</description>
+    <action command="delete" search="walk.all" path="$$http_cache$$"/>
+  </option>
+  <option id="plugins_cache">
+    <label>Cache dei plugin di NuGet</label>
+    <description>Rimuove i risultati in cache delle richieste ai plugin di credenziali e feed (plugins-cache).</description>
+    <action command="delete" search="walk.all" path="%LocalAppData%\NuGet\plugins-cache"/>
+  </option>
+  <option id="scratch">
+    <label>Cartella temporanea di NuGet</label>
+    <description>Rimuove i file temporanei di NuGet (NuGetScratch).</description>
+    <warning>Non pulire mentre è in corso un restore: NuGet usa questa cartella per coordinare i blocchi dei file.</warning>
+    <action command="delete" search="walk.all" path="%TEMP%\NuGetScratch"/>
+  </option>
+</cleaner>

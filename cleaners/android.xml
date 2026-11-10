@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da developer.android.com/tools/variables (ANDROID_USER_HOME, ANDROID_HOME, ANDROID_SDK_ROOT), developer.android.com/studio/troubleshoot (%LOCALAPPDATA%\Google\AndroidStudioVERSIONE e la sua cartella log), dai sorgenti Android (SdkConstants.FD_CACHE, AbstractPackageOperation: .temp e .downloadIntermediates) e da IntelliJ (FSRecords: caches). debug.keystore, adbkey e LocalHistory NON si toccano. Gli emulatori (AVD) non sono qui. -->
+<cleaner id="android" os="windows">
+  <label>Android (SDK e Android Studio)</label>
+  <description>Cache, file temporanei dell'SDK e cache e log di Android Studio. Non tocca emulatori, chiavi di firma, chiavi di adb, cronologia locale e progetti.</description>
+  <running type="exe" os="windows" same_user="true">studio64.exe</running>
+  <var id="user_home">
+    <value>%ANDROID_USER_HOME%</value>
+    <value>%USERPROFILE%\.android</value>
+  </var>
+  <var id="sdk">
+    <value>%ANDROID_HOME%</value>
+    <value>%ANDROID_SDK_ROOT%</value>
+    <value>%LocalAppData%\Android\Sdk</value>
+  </var>
+  <option id="user_cache">
+    <label>Cache degli strumenti Android</label>
+    <description>Rimuove la cartella cache dentro .android (elenchi dei pacchetti scaricati dall'SDK Manager). Non tocca debug.keystore, adbkey né gli emulatori.</description>
+    <warning>Si ricrea alla prossima apertura dell'SDK Manager.</warning>
+    <action command="delete" search="walk.all" path="$$user_home$$\cache"/>
+  </option>
+  <option id="sdk_temp">
+    <label>File temporanei dell'SDK Manager</label>
+    <description>Rimuove .temp e .downloadIntermediates dentro la cartella dell'SDK: residui di download e installazioni dei pacchetti.</description>
+    <warning>Non pulire mentre l'SDK Manager sta scaricando o installando un pacchetto.</warning>
+    <action command="delete" search="walk.all" path="$$sdk$$\.temp"/>
+    <action command="delete" search="walk.all" path="$$sdk$$\.downloadIntermediates"/>
+  </option>
+  <option id="studio_caches">
+    <label>Cache di Android Studio</label>
+    <description>Rimuove le cartelle caches di ogni versione di Android Studio. Non tocca la cronologia locale (LocalHistory), le impostazioni e i plugin.</description>
+    <warning>Chiudi Android Studio. Alla riapertura reindicizza i progetti: operazione lenta.</warning>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Google\AndroidStudio*\caches"/>
+  </option>
+  <option id="studio_logs">
+    <label>Log di Android Studio</label>
+    <description>Rimuove la cartella log di ogni versione di Android Studio.</description>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Google\AndroidStudio*\log"/>
+  </option>
+</cleaner>

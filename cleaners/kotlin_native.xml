@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da kotlinlang.org/docs/native-improving-compilation-time.html ($USER_HOME/.konan, %USERPROFILE% su Windows) e da kotlin-native/HACKING.md (JetBrains/kotlin): KONAN_DATA_DIR. -->
+<cleaner id="kotlin_native" os="windows">
+  <label>Kotlin/Native</label>
+  <description>Componenti e dipendenze scaricati da Kotlin/Native nella cartella .konan. Non tocca i progetti.</description>
+  <var id="data">
+    <value>%KONAN_DATA_DIR%</value>
+    <value>%USERPROFILE%\.konan</value>
+  </var>
+  <option id="data">
+    <label>Dati di Kotlin/Native</label>
+    <description>Rimuove il compilatore Kotlin/Native scaricato, le sue dipendenze (come LLVM) e le cache di compilazione.</description>
+    <warning>Si riscaricano alla prossima build nativa: operazione lunga che richiede la rete. Chiudi Gradle e gli IDE prima di pulire.</warning>
+    <action command="delete" search="walk.all" path="$$data$$"/>
+  </option>
+</cleaner>

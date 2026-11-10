@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi da scala-sbt.org (Launcher-Configuration: boot ${user.home}/.sbt/boot e ivy-home ${user.home}/.ivy2; Cached-Resolution: ~/.ivy2/cache) e da get-coursier.io/docs/cache (%LOCALAPPDATA%\Coursier\Cache\v1, COURSIER_CACHE). La cartella .ivy2\local NON si tocca: contiene i pacchetti pubblicati in locale. -->
+<cleaner id="sbt" os="windows">
+  <label>sbt, Ivy e Coursier (Scala)</label>
+  <description>Cache di sbt, di Ivy e di Coursier. Non tocca i progetti né i pacchetti pubblicati in locale (.ivy2\local).</description>
+  <var id="coursier">
+    <value>%COURSIER_CACHE%</value>
+    <value>%LocalAppData%\Coursier\Cache\v1</value>
+  </var>
+  <option id="boot">
+    <label>Cartella boot di sbt</label>
+    <description>Rimuove Scala e le librerie di sbt scaricate in .sbt\boot.</description>
+    <warning>sbt le riscarica al prossimo avvio: serve la rete.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.sbt\boot"/>
+  </option>
+  <option id="ivy_cache">
+    <label>Cache di Ivy</label>
+    <description>Rimuove le dipendenze scaricate in .ivy2\cache. Non tocca .ivy2\local.</description>
+    <warning>Si riscaricano alla prossima risoluzione delle dipendenze. I pacchetti pubblicati in locale (.ivy2\local) restano.</warning>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.ivy2\cache"/>
+  </option>
+  <option id="coursier_cache">
+    <label>Cache di Coursier</label>
+    <description>Rimuove le dipendenze scaricate da Coursier (usato anche da sbt).</description>
+    <warning>Si riscaricano alla prossima risoluzione delle dipendenze.</warning>
+    <action command="delete" search="walk.all" path="$$coursier$$"/>
+  </option>
+</cleaner>
