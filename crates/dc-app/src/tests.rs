@@ -316,6 +316,87 @@ fn delete_archived_deletes_listed_sessions_once() {
     assert_eq!(*cli.calls.lock().unwrap(), vec!["codex_delete free".to_string()]);
 }
 
+fn with_file(mut s: ArchivedSession, file: &str) -> ArchivedSession {
+    s.file = Some(PathBuf::from(file));
+    s
+}
+
+#[test]
+fn revalidation_keeps_only_sessions_still_archived_and_free() {
+    let scan = DevScan {
+        archived: vec![
+            with_file(archived(Agent::Codex, "fine", None), r"C:\s\fine.jsonl"),
+            with_file(archived(Agent::Codex, "reopened", None), r"C:\s\reopened.jsonl"),
+            with_file(archived(Agent::Codex, "gone", None), r"C:\s\gone.jsonl"),
+            with_file(archived(Agent::Codex, "moved", None), r"C:\s\moved.jsonl"),
+            archived(Agent::Opencode, "oc", None),
+        ],
+        ..Default::default()
+    };
+    let calls = Mutex::new(Vec::new());
+    let fresh = |agent: Agent| {
+        calls.lock().unwrap().push(agent);
+        match agent {
+            Agent::Codex => vec![
+                with_file(archived(Agent::Codex, "fine", None), r"c:/S/FINE.jsonl"),
+                // Reopened (live) or with an open descendant since the analysis.
+                with_file(archived(Agent::Codex, "reopened", Some("sessione in uso")), r"C:\s\reopened.jsonl"),
+                // Continued into a new rollout: not the session the analysis saw.
+                with_file(archived(Agent::Codex, "moved", None), r"C:\s\moved-2.jsonl"),
+            ],
+            // A failed or empty listing: nothing of that harness may go.
+            _ => vec![],
+        }
+    };
+    let picked = [
+        pick(Agent::Codex, "fine"),
+        pick(Agent::Codex, "reopened"),
+        pick(Agent::Codex, "gone"),
+        pick(Agent::Codex, "moved"),
+        pick(Agent::Opencode, "oc"),
+        pick(Agent::Codex, "fine"),
+    ];
+    let r = revalidate_archived(&scan, &picked, &fresh).unwrap();
+    assert_eq!(r.keep, vec![pick(Agent::Codex, "fine")]);
+    let skipped: Vec<&str> = r.skipped.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(skipped, vec!["reopened", "gone", "moved", "oc"]);
+    for o in &r.skipped {
+        assert!(
+            matches!(&o.outcome, ItemOutcome::Skipped { reason } if reason == NO_LONGER_ARCHIVED),
+            "{:?}",
+            o.outcome
+        );
+    }
+    assert_eq!(*calls.lock().unwrap(), vec![Agent::Codex, Agent::Opencode], "one listing per harness");
+
+    // Only the kept picks reach the deletion.
+    let cli = FakeCli::default();
+    let trash = FakeTrash::default();
+    let out = delete_archived(&scan, &r.keep, RemoveMode::Permanent, &cli, &trash).unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(*cli.calls.lock().unwrap(), vec!["codex_delete fine".to_string()]);
+}
+
+#[test]
+fn revalidation_refuses_a_pick_the_scan_never_listed() {
+    let scan = DevScan { archived: vec![archived(Agent::Codex, "free", None)], ..Default::default() };
+    let fresh = |_: Agent| vec![archived(Agent::Codex, "other", None)];
+    let err = revalidate_archived(&scan, &[pick(Agent::Codex, "other")], &fresh).unwrap_err();
+    assert!(err.contains("rifiutata"), "{err}");
+}
+
+#[test]
+fn an_analysis_older_than_half_an_hour_is_stale() {
+    let at = 1_800_000_000_000;
+    let scan = DevScan { scanned_at_ms: at, ..Default::default() };
+    assert!(!scan.is_stale(at));
+    assert!(!scan.is_stale(at + MAX_SCAN_AGE_MS));
+    assert!(scan.is_stale(at + MAX_SCAN_AGE_MS + 1));
+    assert!(!scan.is_stale(at - 5_000), "a clock that went back is not a reason to refuse");
+    assert!(DevScan::default().is_stale(at), "unknown age");
+    assert_eq!(MAX_SCAN_AGE_MS, 30 * 60 * 1000);
+}
+
 // ───────────────────────────── reports split ─────────────────────────────
 
 #[test]

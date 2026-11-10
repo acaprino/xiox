@@ -1,15 +1,18 @@
 //! UI-less glue between the devclean crates and PulisciPC: settings, the developer scan,
 //! the clean plan and the removal of archived agent sessions. Ported from devclean's Tauri
-//! shell (`src-tauri/src/lib.rs`) without Tauri and without WizTree: folder sizes come from
-//! the NTFS MFT (`dc-disktree`) when the app runs as administrator, otherwise from the walker.
+//! shell (`src-tauri/src/lib.rs`) without Tauri and without any external disk-size tool: folder
+//! sizes come from the NTFS MFT (`dc-disktree`) when the app runs as administrator, otherwise
+//! from the walker.
 //!
 //! Safety: `execute_plan` and `delete_archived` never trust what the caller passes. Every plan
 //! item must be a path the given scan found (an artifact, or the root of an agent worktree),
 //! and every session must be one the scan listed as archived and removable; anything else
-//! refuses the whole request before a single file is touched.
+//! refuses the whole request before a single file is touched. Sessions are checked once more
+//! against a fresh listing right before they go ([`revalidate_archived`]): an analysis can be
+//! hours old.
 
 use dc_model::{
-    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, Loaded,
+    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Loaded,
     PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions,
     SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
@@ -25,7 +28,8 @@ const AGENTS: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent:
 
 // ───────────────────────────────── settings ─────────────────────────────────
 
-fn now_ms() -> i64 {
+/// Milliseconds since the Unix epoch (0 if the clock is before it).
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -138,6 +142,19 @@ pub struct DevScan {
     /// `"mft"` when the MFT index was used, `"walker"` otherwise.
     pub backend: String,
     pub elapsed_ms: u64,
+    /// When the scan started ([`now_ms`]); 0 = unknown, as old as it gets.
+    pub scanned_at_ms: i64,
+}
+
+/// How long an analysis may be used to clean projects and worktrees.
+pub const MAX_SCAN_AGE_MS: i64 = 30 * 60 * 1000;
+
+impl DevScan {
+    /// Too old to plan a cleanup from: more than [`MAX_SCAN_AGE_MS`] before `now_ms`, or of
+    /// unknown age. A clock that went backwards counts as fresh.
+    pub fn is_stale(&self, now_ms: i64) -> bool {
+        self.scanned_at_ms <= 0 || now_ms.saturating_sub(self.scanned_at_ms) > MAX_SCAN_AGE_MS
+    }
 }
 
 /// One agent's sessions, read once per scan: they choose the project roots AND feed the engine.
@@ -330,6 +347,7 @@ pub fn split_reports(reports: Vec<ProjectReport>) -> (Vec<ProjectReport>, Vec<Pr
 /// except mukade's listing cache in [`cache_dir`].
 pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> DevScan {
     let started = Instant::now();
+    let scanned_at_ms = now_ms();
     let cache = Some(cache_dir());
 
     step("Lettura delle sessioni…", 0.05);
@@ -385,6 +403,7 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
         warnings,
         backend,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        scanned_at_ms,
     }
 }
 
@@ -397,6 +416,12 @@ fn selectable(scan: &DevScan) -> impl Iterator<Item = &ProjectReport> {
 
 fn selectable_reports(scan: &DevScan) -> Vec<ProjectReport> {
     selectable(scan).cloned().collect()
+}
+
+/// Whether [`build_plan`] gives this report at least one item: the whole agent worktree, or its
+/// artifacts. Status and blocks are not looked at (see `dc_engine::plans_something`).
+pub fn plans_something(report: &ProjectReport) -> bool {
+    dc_engine::plans_something(report)
 }
 
 pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> Result<CleanPlan, String> {
@@ -470,6 +495,69 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
     }
     let expected_bytes = items.iter().fold(0u64, |acc, i| acc.saturating_add(i.expected_bytes));
     Ok(CleanPlan { id: plan.id.clone(), mode: plan.mode, items, expected_bytes })
+}
+
+/// Why a picked session is left out by [`revalidate_archived`] (shown as «Saltato (…)»).
+pub const NO_LONGER_ARCHIVED: &str = "non più archiviata o in uso";
+
+/// The picks that can still go, and those dropped (each with a `Skipped` outcome).
+#[derive(Debug, Default)]
+pub struct Revalidated {
+    pub keep: Vec<(Agent, String)>,
+    pub skipped: Vec<SessionOutcome>,
+}
+
+/// The archived sessions of `agent` as they are now: a fresh listing, not the analysis.
+/// A listing that panics gives none (so every pick of that harness is skipped).
+pub fn fresh_archived(agent: Agent) -> Vec<ArchivedSession> {
+    let src = MukadeSessions::from_env(agent).with_cache_dir(Some(cache_dir()));
+    catch_unwind(AssertUnwindSafe(|| src.archived().items)).unwrap_or_default()
+}
+
+/// Checks the picks against the live state right before [`delete_archived`]: the analysis may be
+/// hours old and a session may have been reopened, unarchived or deleted since. `fresh(agent)`
+/// lists that harness's archived sessions now ([`fresh_archived`]; injectable for tests) and is
+/// called once per harness picked. A pick is kept only if the fresh listing still has exactly
+/// one session with its id, archived, with `blocked == None` and the same file as in `scan`;
+/// the others are skipped with [`NO_LONGER_ARCHIVED`] and must never reach `delete_archived`.
+/// A pick `scan` never listed refuses the whole request, as in `delete_archived`.
+pub fn revalidate_archived(
+    scan: &DevScan,
+    picked: &[(Agent, String)],
+    fresh: &dyn Fn(Agent) -> Vec<ArchivedSession>,
+) -> Result<Revalidated, String> {
+    let mut now: Vec<(Agent, Vec<ArchivedSession>)> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut out = Revalidated::default();
+    for (agent, id) in picked {
+        if !seen.insert((*agent, id.as_str())) {
+            continue;
+        }
+        let Some(old) = scan.archived.iter().find(|s| s.agent == *agent && s.id == *id) else {
+            return Err(format!("Sessione non presente nell'ultima analisi, rifiutata: {agent:?} {id}"));
+        };
+        if !now.iter().any(|(a, _)| a == agent) {
+            now.push((*agent, fresh(*agent)));
+        }
+        let listed = &now.iter().find(|(a, _)| a == agent).expect("just listed").1;
+        let mut same = listed.iter().filter(|s| s.agent == *agent && s.id == *id);
+        let still_fine = match (same.next(), same.next()) {
+            (Some(s), None) => {
+                s.blocked.is_none() && s.file.as_deref().map(path_key) == old.file.as_deref().map(path_key)
+            }
+            _ => false,
+        };
+        if still_fine {
+            out.keep.push((*agent, id.clone()));
+        } else {
+            out.skipped.push(SessionOutcome {
+                agent: *agent,
+                id: id.clone(),
+                outcome: ItemOutcome::Skipped { reason: NO_LONGER_ARCHIVED.into() },
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Removes the picked archived sessions (`dc_sessions::delete_sessions`). Every pick must be a
