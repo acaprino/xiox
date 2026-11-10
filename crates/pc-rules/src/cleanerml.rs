@@ -165,6 +165,7 @@ fn parse_option(
         warning: child_text(node, "warning"),
         default_on: false,
         actions,
+        excludes: Vec::new(),
         unsupported: (!reasons.is_empty())
             .then(|| format!("non supportato: {}", reasons.join(", "))),
     })

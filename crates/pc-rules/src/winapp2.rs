@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::expand::expand;
 use crate::guard::protected;
-use crate::model::{Action, Cleaner, Env, Opt, Origin, RegRoot, Search};
+use crate::model::{Action, Cleaner, Env, ExcludeRule, Opt, Origin, RegRoot, Search};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Winapp2 {
@@ -78,10 +78,11 @@ pub struct Report {
     pub discarded_protected: u32,
     /// Azioni scartate perché usano una variabile d'ambiente non definita.
     pub discarded_missing_var: u32,
-    /// Regole non rappresentabili: voci con `ExcludeKey` (le esclusioni non si
-    /// possono ancora applicare, quindi la voce non si offre) e regole
-    /// ignorate in lettura (`Entry::skipped_rules`) delle voci rilevate.
+    /// Regole ignorate in lettura (`Entry::skipped_rules`) delle voci rilevate.
     pub skipped_unknown: u32,
+    /// Voci con `ExcludeKey` di specie diversa da `FILE` (`PATH`, `REG`): non
+    /// si offrono, perché non si saprebbero rispettare.
+    pub skipped_excludes: u32,
 }
 
 const MAX_UNREADABLE_WARNINGS: usize = 50;
@@ -361,12 +362,20 @@ pub fn to_cleaners_with(
             continue;
         }
         report.skipped_unknown += entry.skipped_rules;
-        if !entry.excludes.is_empty() {
-            // `Action` non sa esprimere le esclusioni: cancellare senza
-            // rispettarle sarebbe peggio che non offrire la voce.
-            report.skipped_unknown += 1;
+        // Solo `FILE` si sa esprimere; con un'altra specie (`PATH`, `REG`)
+        // cancellare senza rispettarla sarebbe peggio che non offrire la voce.
+        if entry.excludes.iter().any(|x| x.kind != "FILE") {
+            report.skipped_excludes += 1;
             continue;
         }
+        let excludes: Vec<ExcludeRule> = entry
+            .excludes
+            .iter()
+            .map(|x| ExcludeRule {
+                path: x.path.clone(),
+                pattern: x.pattern.clone(),
+            })
+            .collect();
         let mut actions = Vec::new();
         for fk in &entry.file_keys {
             let expanded = expand(&fk.path, env);
@@ -426,6 +435,7 @@ pub fn to_cleaners_with(
                 // Nessuna voce preselezionata, qualunque sia `Default`.
                 default_on: false,
                 actions,
+                excludes,
                 unsupported: None,
             }],
         });
@@ -797,14 +807,25 @@ mod tests {
     }
 
     #[test]
-    fn entries_with_exclude_keys_are_skipped_and_counted() {
+    fn file_exclude_keys_go_on_the_option_and_other_kinds_are_counted() {
         let tmp = tempfile::tempdir().unwrap();
         let env = env_for(tmp.path());
         mk(&env, "appdata", "Delta");
-        let (w, _) = parse(SAMPLE);
+        mk(&env, "appdata", "Pi");
+        let (w, _) = parse(&format!(
+            "{SAMPLE}\n[Pi Path *]\nDetectFile=%AppData%\\Pi\nFileKey1=%AppData%\\Pi|*\nExcludeKey1=PATH|%AppData%\\Pi\\Keep\n"
+        ));
         let (cleaners, report) = to_cleaners_with(&w, &env, &no_registry);
-        assert!(!ids(&cleaners).contains(&"winapp2:Delta Keep"));
-        assert_eq!(report.skipped_unknown, 1);
+        let delta = cleaners.iter().find(|c| c.id == "winapp2:Delta Keep").unwrap();
+        assert_eq!(
+            delta.options[0].excludes,
+            vec![ExcludeRule {
+                path: r"%AppData%\Delta\Cache".into(),
+                pattern: Some("keep.dat".into()),
+            }]
+        );
+        assert!(!ids(&cleaners).contains(&"winapp2:Pi Path"));
+        assert_eq!(report.skipped_excludes, 1);
     }
 
     #[test]

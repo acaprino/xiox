@@ -51,8 +51,19 @@ pub struct Opt {
     pub warning: Option<String>,
     pub default_on: bool,
     pub actions: Vec<Action>,
+    /// File che la raccolta deve lasciare (Winapp2 `ExcludeKey`).
+    pub excludes: Vec<ExcludeRule>,
     /// Motivo per cui l'opzione compare disattivata ("non supportato").
     pub unsupported: Option<String>,
+}
+
+/// Esclusione dalla raccolta: `pattern: None` esclude il percorso (file o
+/// cartella) e tutto ciò che contiene; con un modello (`;` ne separa più
+/// d'uno) esclude, in quella cartella e sotto, i file con quei nomi.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExcludeRule {
+    pub path: String,
+    pub pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

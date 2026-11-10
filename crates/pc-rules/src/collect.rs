@@ -6,8 +6,19 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::expand::expand;
 use crate::guard::protected;
+pub use crate::model::ExcludeRule;
 use crate::model::{Action, Cleaner, Env, Opt, RegRoot, Search};
 
+/// Ciò che una regola toglierebbe.
+///
+/// Contratto di pulizia: prima si cancellano i `files` (un collegamento si
+/// toglie come collegamento, mai il suo contenuto), poi le `dirs_to_remove`
+/// nell'ordine dato (figli prima del padre) con `remove_dir` NON ricorsivo
+/// (un collegamento a cartella pure con `remove_dir`). Prima di ogni
+/// cancellazione si rilegge `symlink_metadata` e si rifà il controllo dei
+/// percorsi protetti: fra la raccolta e la pulizia il disco può cambiare.
+/// `skipped` conta ciò che si è scartato (protetti, collegamenti nel percorso,
+/// cartelle illeggibili, chiavi di registro fuori da `Software`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Collected {
     pub files: Vec<(PathBuf, u64)>,
@@ -23,11 +34,6 @@ pub enum RegItem {
     Value { root: RegRoot, path: String, value: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExcludeRule {
-    pub path: String,
-    pub pattern: Option<String>,
-}
 
 pub fn collect(opt: &Opt, env: &Env, reg_exists: &dyn Fn(&RegItem) -> bool) -> Collected {
     collect_with_excludes(opt, env, &[], reg_exists)
@@ -45,7 +51,7 @@ pub fn collect_with_excludes(
 ) -> Collected {
     let mut ctx = Ctx {
         env,
-        excludes: prepare_excludes(excludes, env),
+        excludes: prepare_excludes(opt.excludes.iter().chain(excludes), env),
         out: Collected::default(),
         seen: Vec::new(),
     };
@@ -355,7 +361,10 @@ fn registry_path_allowed(path: &str) -> bool {
         && !(comps.len() == 2 && comps[1] == "classes")
 }
 
-fn prepare_excludes(excludes: &[ExcludeRule], env: &Env) -> Vec<Exclude> {
+fn prepare_excludes<'a>(
+    excludes: impl Iterator<Item = &'a ExcludeRule>,
+    env: &Env,
+) -> Vec<Exclude> {
     let mut out = Vec::new();
     for rule in excludes {
         let patterns = rule.pattern.as_ref().map(|p| {
@@ -577,6 +586,7 @@ mod tests {
             warning: None,
             default_on: false,
             actions,
+            excludes: vec![],
             unsupported: None,
         }
     }
