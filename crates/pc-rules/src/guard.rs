@@ -1,133 +1,201 @@
 //! Percorsi che una regola esterna non può mai toccare.
+//!
+//! Contratto per chi chiama: ai **file** e alle **cartelle di partenza** (e al
+//! percorso grezzo della regola) si applica [`Guard::protected`]; a ogni
+//! **cartella che si toglie essa stessa** (cartelle svuotate, `REMOVESELF`,
+//! cancellazione di una cartella) si applica [`Guard::protected_dir_removal`],
+//! che comprende `protected`.
 
 use std::path::Path;
 
 use crate::model::Env;
 use crate::wildcard::wildcard_match;
 
-/// `Some(motivo in italiano)` se il percorso è protetto.
-///
-/// Il percorso si normalizza prima del confronto, come fa Windows: `/` come
-/// `\`, prefisso `\\?\` tolto, punti e spazi finali tolti da ogni componente,
-/// suffisso di flusso (`:nome`, `::$DATA`) tolto, maiuscole ignorate. Si
-/// accettano solo percorsi assoluti con lettera di unità; UNC, `\??\`,
-/// volumi, percorsi relativi e nomi brevi 8.3 (`PROGRA~1`) si rifiutano,
-/// perché non si possono confrontare con certezza. I valori dell'ambiente
-/// invece si accettano anche in forma breve (`Env::for_rules` li converte
-/// già nella forma lunga).
-///
-/// I caratteri jolly (`*`, `?`) valgono "qualunque cosa": si rifiuta il
-/// percorso se può coincidere con una cartella protetta o con un suo
-/// antenato, o se è una cartella protetta seguita solo da componenti jolly
-/// (`C:\Program Files\*`, `D:\*`, `E:\*\*`).
-///
-/// Cosa si protegge:
-/// - prese intere (il contenuto sì): radici dei dischi, cartelle di sistema
-///   e del profilo (`%WinDir%`, `%ProgramFiles%`, `%CommonProgramFiles%`,
-///   `%ProgramData%`, `%UserProfile%`, `%AppData%`, `%LocalAppData%`, le loro
-///   cartelle `Microsoft`, `Windows Defender`), le cartelle dei documenti
-///   dell'utente (nomi inglesi, valori delle cartelle note, cartelle spostate
-///   in OneDrive anche con i nomi italiani) e le cartelle pubbliche;
-/// - con tutto il contenuto: `System32`, `SysWOW64`, `WinSxS`, la cache di
-///   Windows Installer (`$PatchCache$` escluso), gli archivi di chiavi e
-///   credenziali (`Microsoft\Protect`, `Credentials`, `SystemCertificates`,
-///   `Crypto`, `Vault`, ovunque si trovino), e nella radice di ogni disco
-///   avvio, ripristino, Cestino, punti di ripristino e file di paging;
-/// - in ogni componente: `.git` e i file di credenziali; le cartelle
-///   `.codex`, `.claude`, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube` non si
-///   toccano prese intere (le sottocartelle sì, se non sono credenziali).
-///
-/// La cartella temporanea (`%Temp%`, `%WinDir%\Temp`) qui è permessa, perché
-/// è la cartella di partenza delle regole che la svuotano (`%Temp%|*.tmp`):
-/// prima di **cancellare una cartella** si usa [`protected_dir_removal`].
-///
-/// **Chi chiama deve applicarla due volte**: al percorso grezzo della regola
-/// (dopo l'espansione delle variabili, prima della risoluzione dei jolly) e a
-/// ogni percorso concreto che ne risulta (ogni cartella di partenza, ogni
-/// cartella visitata, ogni file trovato). Per il contenuto delle cartelle
-/// protette con tutto il contenuto il confronto è letterale: un jolly prima
-/// della cartella (`%AppData%\*\Protect\x`) lo ferma il controllo sui percorsi
-/// concreti.
+/// [`Guard::protected`] con un `Guard` costruito per la sola chiamata. Chi
+/// controlla molti percorsi costruisce un [`Guard`] una volta.
 pub fn protected(path: &Path, env: &Env) -> Option<&'static str> {
-    let comps = match normalize(&path.to_string_lossy(), true) {
-        Ok(c) => c,
-        Err(reason) => return Some(reason),
-    };
-    // Radice di un disco, anche presa con i soli jolly (`D:\*`, `E:\*\*`).
-    if comps.len() <= 1 {
-        return Some("radice di un disco");
-    }
-    if comps[1..].iter().all(|c| wildcard_only(c)) {
-        return Some("radice di un disco presa per intero con i caratteri jolly");
-    }
-    // Cartelle prese per intero, i loro antenati e "cartella + solo jolly".
-    for dir in whole_dirs(env) {
-        if covers_whole(&comps, &dir) {
-            return Some("cartella di sistema o del profilo presa per intero");
-        }
-    }
-    // Cartelle dei documenti dell'utente prese per intero (le sottocartelle sì).
-    for dir in user_content_dirs(env) {
-        if covers_whole(&comps, &dir) {
-            return Some("cartella dei documenti dell'utente presa per intero");
-        }
-    }
-    // Archivi di chiavi e credenziali di Windows, con il contenuto.
-    if in_key_store(&comps) || key_store_dirs(env).iter().any(|d| covers_whole(&comps, d)) {
-        return Some("archivio di chiavi o credenziali di Windows");
-    }
-    // Avvio, ripristino, Cestino e file di paging nella radice di ogni disco.
-    for name in ROOT_ENTRIES {
-        let dir = vec![comps[0].clone(), (*name).to_string()];
-        if covers_subtree(&comps, &dir) {
-            return Some("file o cartella di sistema nella radice del disco");
-        }
-    }
-    // Cartelle di sistema e il loro contenuto.
-    for win in windows_dirs(env) {
-        for sub in SYSTEM_SUBDIRS {
-            let mut dir = win.clone();
-            dir.push((*sub).to_string());
-            if comps.len() >= dir.len() && prefix_matches(&comps, &dir) {
-                return Some("cartella di sistema di Windows");
-            }
-        }
-        let mut installer = win.clone();
-        installer.push("installer".to_string());
-        let patch_cache = comps.get(installer.len()).is_some_and(|c| c == "$patchcache$");
-        if covers_whole(&comps, &installer) || (!patch_cache && covers_subtree(&comps, &installer))
-        {
-            return Some("cache di Windows Installer");
-        }
-    }
-    if comps.iter().any(|c| c == ".git") {
-        return Some("cartella .git di un repository");
-    }
-    if comps.iter().any(|c| CREDENTIAL_FILES.contains(&c.as_str())) {
-        return Some("file di credenziali");
-    }
-    if let Some(last) = comps.last()
-        && CREDENTIAL_DIRS.contains(&last.as_str())
-    {
-        return Some("cartella di credenziali o configurazione di un agente");
-    }
-    None
+    Guard::new(env).protected(path)
 }
 
-/// `Some(motivo)` se la cartella `path` non si può cancellare essa stessa:
-/// tutto ciò che rifiuta [`protected`], più le cartelle temporanee (`%Temp%`,
-/// `%Tmp%`, `%WinDir%\Temp`, `%LocalAppData%\Temp`), che si svuotano ma
-/// restano (molti programmi non le ricreano). Si usa prima di mettere una
-/// cartella fra quelle da togliere (`REMOVESELF`, cartelle svuotate).
+/// [`Guard::protected_dir_removal`] con un `Guard` costruito per la sola
+/// chiamata.
 pub fn protected_dir_removal(path: &Path, env: &Env) -> Option<&'static str> {
-    if let Some(reason) = protected(path, env) {
-        return Some(reason);
+    Guard::new(env).protected_dir_removal(path)
+}
+
+/// Le cartelle protette di un ambiente, già normalizzate: si costruisce una
+/// volta (per esempio per ogni raccolta) e si interroga per ogni percorso.
+#[derive(Debug, Clone)]
+pub struct Guard {
+    /// Cartelle di sistema e del profilo prese intere.
+    whole: Vec<Vec<String>>,
+    /// Cartelle dei documenti dell'utente prese intere.
+    user_content: Vec<Vec<String>>,
+    /// Archivi di chiavi sotto le cartelle dell'ambiente (per i jolly).
+    key_stores: Vec<Vec<String>>,
+    /// `System32`, `SysWOW64`, `WinSxS`: con il contenuto, anche con i jolly.
+    system: Vec<Vec<String>>,
+    /// Cache di Windows Installer.
+    installer: Vec<Vec<String>>,
+    /// Cartelle che si svuotano ma non si tolgono.
+    keep_dirs: Vec<Vec<String>>,
+}
+
+impl Guard {
+    pub fn new(env: &Env) -> Guard {
+        let windows = windows_dirs(env);
+        let mut system = Vec::new();
+        let mut installer = Vec::new();
+        for win in &windows {
+            for sub in SYSTEM_SUBDIRS {
+                system.push(joined(win, &[sub]));
+            }
+            installer.push(joined(win, &["installer"]));
+        }
+        Guard {
+            whole: whole_dirs(env),
+            user_content: user_content_dirs(env),
+            key_stores: key_store_dirs(env),
+            system,
+            installer,
+            keep_dirs: keep_dirs(env, &windows),
+        }
     }
-    let comps = normalize(&path.to_string_lossy(), true).ok()?;
-    temp_dirs(env)
-        .iter()
-        .any(|dir| comps.len() <= dir.len() && prefix_matches(&comps, dir))
-        .then_some("cartella temporanea: si svuota ma non si cancella")
+
+    /// `Some(motivo in italiano)` se il percorso è protetto: per i file, per
+    /// le cartelle di partenza delle regole e per il percorso grezzo della
+    /// regola.
+    ///
+    /// Il percorso si normalizza prima del confronto, come fa Windows: `/`
+    /// come `\`, prefisso `\\?\` tolto, punti e spazi finali tolti da ogni
+    /// componente, suffisso di flusso (`:nome`, `::$DATA`) tolto, maiuscole
+    /// ignorate. Si accettano solo percorsi assoluti con lettera di unità;
+    /// UNC, `\??\`, volumi, percorsi relativi e nomi brevi 8.3 (`PROGRA~1`)
+    /// si rifiutano, perché non si possono confrontare con certezza. I valori
+    /// dell'ambiente invece si accettano anche in forma breve
+    /// (`Env::for_rules` li converte già nella forma lunga).
+    ///
+    /// I caratteri jolly (`*`, `?`) valgono "qualunque cosa": si rifiuta il
+    /// percorso se può coincidere con una cartella protetta o con un suo
+    /// antenato, o se è una cartella protetta seguita solo da componenti
+    /// jolly (`C:\Program Files\*`, `D:\*`, `E:\*\*`).
+    ///
+    /// Cosa si protegge:
+    /// - prese intere (il contenuto sì): radici dei dischi, cartelle di
+    ///   sistema e del profilo (`%WinDir%`, `%ProgramFiles%`,
+    ///   `%CommonProgramFiles%`, `%ProgramData%`, `%UserProfile%`,
+    ///   `%AppData%`, `%LocalAppData%`, le loro cartelle `Microsoft`,
+    ///   `Windows Defender`), le cartelle dei documenti dell'utente (nomi
+    ///   inglesi, valori delle cartelle note, cartelle spostate in OneDrive
+    ///   anche con i nomi italiani) e le cartelle pubbliche;
+    /// - con tutto il contenuto: `System32`, `SysWOW64`, `WinSxS`, la cache
+    ///   di Windows Installer (`$PatchCache$` escluso), gli archivi di chiavi
+    ///   e credenziali (`Microsoft\Protect`, `Credentials`,
+    ///   `SystemCertificates`, `Crypto`, `Vault`, ovunque si trovino), e
+    ///   nella radice di ogni disco avvio, ripristino, Cestino, punti di
+    ///   ripristino e file di paging;
+    /// - in ogni componente: `.git` e i file di credenziali; le cartelle
+    ///   `.codex`, `.claude`, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube` non
+    ///   si toccano prese intere (le sottocartelle sì, se non sono
+    ///   credenziali).
+    ///
+    /// La cartella temporanea (`%Temp%`, `%WinDir%\Temp`) qui è permessa,
+    /// perché è la cartella di partenza delle regole che la svuotano
+    /// (`%Temp%|*.tmp`): la rifiuta [`Guard::protected_dir_removal`].
+    ///
+    /// **Chi chiama deve applicarla due volte**: al percorso grezzo della
+    /// regola (dopo l'espansione delle variabili, prima della risoluzione dei
+    /// jolly) e a ogni percorso concreto che ne risulta (ogni cartella di
+    /// partenza, ogni cartella visitata, ogni file trovato). Per il contenuto
+    /// delle cartelle protette con tutto il contenuto il confronto è
+    /// letterale: un jolly prima della cartella (`%AppData%\*\Protect\x`) lo
+    /// ferma il controllo sui percorsi concreti.
+    pub fn protected(&self, path: &Path) -> Option<&'static str> {
+        let comps = match normalize(&path.to_string_lossy(), true) {
+            Ok(c) => c,
+            Err(reason) => return Some(reason),
+        };
+        self.check(&comps)
+    }
+
+    /// `Some(motivo)` se la cartella `path` non si può togliere essa stessa
+    /// (cartelle svuotate, `REMOVESELF`, cancellazione di una cartella):
+    /// tutto ciò che rifiuta [`Guard::protected`], più le cartelle che si
+    /// svuotano ma restano: le cartelle temporanee (`%Temp%`, `%Tmp%`,
+    /// `%WinDir%\Temp`, `%LocalAppData%\Temp`, molti programmi non le
+    /// ricreano) e ogni cartella che l'ambiente nomina (`%Cargo_Home%`,
+    /// `%NuGet_Packages%`…), con i loro antenati.
+    pub fn protected_dir_removal(&self, path: &Path) -> Option<&'static str> {
+        let comps = match normalize(&path.to_string_lossy(), true) {
+            Ok(c) => c,
+            Err(reason) => return Some(reason),
+        };
+        if let Some(reason) = self.check(&comps) {
+            return Some(reason);
+        }
+        self.keep_dirs
+            .iter()
+            .any(|dir| comps.len() <= dir.len() && prefix_matches(&comps, dir))
+            .then_some("cartella che si svuota ma non si cancella")
+    }
+
+    fn check(&self, comps: &[String]) -> Option<&'static str> {
+        // Radice di un disco, anche presa con i soli jolly (`D:\*`, `E:\*\*`).
+        if comps.len() <= 1 {
+            return Some("radice di un disco");
+        }
+        if comps[1..].iter().all(|c| wildcard_only(c)) {
+            return Some("radice di un disco presa per intero con i caratteri jolly");
+        }
+        // Cartelle prese per intero, i loro antenati e "cartella + solo jolly".
+        if self.whole.iter().any(|d| covers_whole(comps, d)) {
+            return Some("cartella di sistema o del profilo presa per intero");
+        }
+        // Cartelle dei documenti dell'utente prese per intero (le sottocartelle sì).
+        if self.user_content.iter().any(|d| covers_whole(comps, d)) {
+            return Some("cartella dei documenti dell'utente presa per intero");
+        }
+        // Archivi di chiavi e credenziali di Windows, con il contenuto.
+        if in_key_store(comps) || self.key_stores.iter().any(|d| covers_whole(comps, d)) {
+            return Some("archivio di chiavi o credenziali di Windows");
+        }
+        // Avvio, ripristino, Cestino e file di paging nella radice di ogni
+        // disco, con il contenuto.
+        let first = &comps[1];
+        let rest_wild = comps[2..].iter().all(|c| wildcard_only(c));
+        if ROOT_ENTRIES
+            .iter()
+            .any(|name| first == name || (rest_wild && comp_matches(first, name)))
+        {
+            return Some("file o cartella di sistema nella radice del disco");
+        }
+        // Cartelle di sistema e il loro contenuto.
+        if self
+            .system
+            .iter()
+            .any(|d| comps.len() >= d.len() && prefix_matches(comps, d))
+        {
+            return Some("cartella di sistema di Windows");
+        }
+        for dir in &self.installer {
+            let patch_cache = comps.get(dir.len()).is_some_and(|c| c == "$patchcache$");
+            if covers_whole(comps, dir) || (!patch_cache && covers_subtree(comps, dir)) {
+                return Some("cache di Windows Installer");
+            }
+        }
+        if comps.iter().any(|c| c == ".git") {
+            return Some("cartella .git di un repository");
+        }
+        if comps.iter().any(|c| CREDENTIAL_FILES.contains(&c.as_str())) {
+            return Some("file di credenziali");
+        }
+        if let Some(last) = comps.last()
+            && CREDENTIAL_DIRS.contains(&last.as_str())
+        {
+            return Some("cartella di credenziali o configurazione di un agente");
+        }
+        None
+    }
 }
 
 /// Variabili le cui cartelle non si toccano prese intere (le sottocartelle sì).
@@ -309,6 +377,8 @@ fn whole_dirs(env: &Env) -> Vec<Vec<String>> {
             dirs.push(joined(&base, rel));
         }
     }
+    dirs.sort();
+    dirs.dedup();
     dirs
 }
 
@@ -340,6 +410,8 @@ fn user_content_dirs(env: &Env) -> Vec<Vec<String>> {
         }
         dirs.push(p);
     }
+    dirs.sort();
+    dirs.dedup();
     dirs
 }
 
@@ -365,33 +437,37 @@ fn in_key_store(comps: &[String]) -> bool {
         .any(|w| w[0] == "microsoft" && KEY_STORES.contains(&w[1].as_str()))
 }
 
-/// Cartelle temporanee: si svuotano ma non si cancellano.
-fn temp_dirs(env: &Env) -> Vec<Vec<String>> {
-    let mut dirs: Vec<Vec<String>> = ["temp", "tmp"].iter().filter_map(|v| env_dir(env, v)).collect();
-    for win in windows_dirs(env) {
-        dirs.push(joined(&win, &["temp"]));
+/// Cartelle che si svuotano ma non si tolgono: le temporanee e ogni cartella
+/// che l'ambiente nomina.
+fn keep_dirs(env: &Env, windows: &[Vec<String>]) -> Vec<Vec<String>> {
+    let mut dirs: Vec<Vec<String>> = env
+        .0
+        .values()
+        .filter_map(|v| normalize(v, false).ok())
+        .filter(|d| d.len() > 1)
+        .collect();
+    for win in windows {
+        dirs.push(joined(win, &["temp"]));
     }
     if let Some(local) = env_dir(env, "localappdata") {
         dirs.push(joined(&local, &["temp"]));
     }
+    dirs.sort();
+    dirs.dedup();
     dirs
 }
 
 /// Cartella di Windows: `windir`/`systemroot`, o `C:\Windows` se mancano.
 fn windows_dirs(env: &Env) -> Vec<Vec<String>> {
-    let dirs: Vec<Vec<String>> = ["windir", "systemroot"]
+    let mut dirs: Vec<Vec<String>> = ["windir", "systemroot"]
         .iter()
         .filter_map(|v| env_dir(env, v))
         .collect();
     if dirs.is_empty() {
-        vec![default_windows()]
-    } else {
-        dirs
+        dirs.push(vec!["c:".to_string(), "windows".to_string()]);
     }
-}
-
-fn default_windows() -> Vec<String> {
-    vec!["c:".to_string(), "windows".to_string()]
+    dirs.dedup();
+    dirs
 }
 
 /// `path` (che può avere jolly) coincide con `dir` o con un suo antenato, o è
@@ -413,12 +489,22 @@ fn covers_subtree(path: &[String], dir: &[String]) -> bool {
 /// I componenti di `path` corrispondono, uno a uno (jolly compresi), ai primi
 /// componenti di `dir`.
 fn prefix_matches(path: &[String], dir: &[String]) -> bool {
-    path.iter().zip(dir).all(|(p, d)| wildcard_match(p, d) || wildcard_match(d, p))
+    path.iter().zip(dir).all(|(p, d)| comp_matches(p, d))
+}
+
+/// Due componenti (già in minuscolo) possono indicare lo stesso nome: uguali,
+/// o uno dei due è un modello con jolly che corrisponde all'altro.
+fn comp_matches(p: &str, d: &str) -> bool {
+    p == d || (has_wildcard(p) && wildcard_match(p, d)) || (has_wildcard(d) && wildcard_match(d, p))
+}
+
+fn has_wildcard(c: &str) -> bool {
+    c.bytes().any(|b| b == b'*' || b == b'?')
 }
 
 /// Componente fatto solo di `*`, `?` e `.` con almeno un jolly (`*`, `*.*`).
 fn wildcard_only(c: &str) -> bool {
-    c.contains(['*', '?']) && c.chars().all(|ch| matches!(ch, '*' | '?' | '.'))
+    has_wildcard(c) && c.bytes().all(|b| matches!(b, b'*' | b'?' | b'.'))
 }
 
 #[cfg(test)]
@@ -1021,5 +1107,94 @@ mod tests {
         ] {
             assert!(check(rule).iter().all(|&r| !r), "non doveva essere protetto: {rule}");
         }
+    }
+
+    const SAMPLE: &[&str] = &[
+        r"C:\Windows\System32\x",
+        r"C:\Users\u\AppData\Local\Foo\cache\x.tmp",
+        r"C:\Users\u\AppData\Local\Temp",
+        r"C:\Users\u\AppData\Local\Temp\a\b.txt",
+        r"C:\Users\u\Documents",
+        r"C:\Users\u\Documents\My Games\x",
+        r"D:\*",
+        r"D:\Games\*\cache",
+        r"C:\Users\u\AppData\Roaming\Microsoft\Protect\x",
+        r"C:\Windows\Installer\x.msi",
+        r"C:\$Recycle.Bin",
+        r"C:\PROGRA~1",
+        r"\\server\share",
+        r"D:\proj\.git\x",
+        r"C:\Users\u\.ssh",
+        r"C:\Windows\Temp",
+    ];
+
+    #[test]
+    fn guard_built_once_answers_like_the_free_functions() {
+        let e = env();
+        let g = Guard::new(&e);
+        for p in SAMPLE {
+            let p = Path::new(p);
+            assert_eq!(g.protected(p), protected(p, &e), "{}", p.display());
+            assert_eq!(
+                g.protected_dir_removal(p),
+                protected_dir_removal(p, &e),
+                "{}",
+                p.display()
+            );
+        }
+    }
+
+    #[test]
+    fn folders_named_by_the_environment_are_emptied_not_removed() {
+        let mut e = env();
+        e.0.insert("cargo_home".into(), r"C:\Users\u\.cargo".into());
+        e.0.insert("nuget_packages".into(), r"D:\nuget".into());
+        let g = Guard::new(&e);
+        for p in [r"C:\Users\u\.cargo", r"D:\nuget", r"D:\nuget\", r"D:\nu*"] {
+            assert!(g.protected_dir_removal(Path::new(p)).is_some(), "{p}");
+            assert!(g.protected(Path::new(p)).is_none(), "{p}");
+        }
+        for p in [r"D:\nuget\packages\foo", r"C:\Users\u\.cargo\registry\cache", r"D:\other"] {
+            assert!(g.protected_dir_removal(Path::new(p)).is_none(), "{p}");
+        }
+        // ciò che `protected` rifiuta non si toglie
+        for p in [
+            r"C:\Users\u\Documents",
+            r"C:\Windows\System32\x",
+            r"\\server\x",
+            r"C:\PROGRA~1",
+            r"C:\Users\u\AppData\Roaming\Microsoft\Vault\x",
+        ] {
+            assert!(g.protected_dir_removal(Path::new(p)).is_some(), "{p}");
+        }
+    }
+
+    /// Tempo per chiamata (`cargo test -p pc-rules --release -- --ignored
+    /// guard_speed --nocapture`): l'obiettivo è meno di 5 µs.
+    #[test]
+    #[ignore]
+    fn guard_speed() {
+        use std::time::Instant;
+        let mut e = env();
+        e.0.insert("onedrive".into(), r"C:\Users\u\OneDrive".into());
+        e.0.insert("documents".into(), r"C:\Users\u\OneDrive\Documenti".into());
+        let g = Guard::new(&e);
+        let paths: Vec<PathBuf> = (0..20_000)
+            .map(|i| PathBuf::from(format!(r"C:\Users\u\AppData\Local\Foo\cache\sub{}\file{i}.tmp", i % 50)))
+            .collect();
+        let start = Instant::now();
+        let mut refused = 0;
+        for p in &paths {
+            refused += usize::from(g.protected(p).is_some());
+            refused += usize::from(g.protected_dir_removal(p).is_some());
+        }
+        let per_call = start.elapsed() / (2 * paths.len() as u32);
+        println!("Guard: {per_call:?} per chiamata ({refused} rifiuti)");
+        let start = Instant::now();
+        for p in paths.iter().take(2_000) {
+            refused += usize::from(protected(p, &e).is_some());
+        }
+        println!("protected(path, env): {:?} per chiamata", start.elapsed() / 2_000);
+        assert_eq!(refused, 0);
     }
 }

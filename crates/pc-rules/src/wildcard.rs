@@ -12,25 +12,41 @@
 /// `*` visto): al più `len(pattern) × len(text)` passi, mai esponenziale,
 /// anche con molti `*` di fila o alternati a lettere.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if pattern.is_ascii() && text.is_ascii() {
+        // Caso comune (percorsi): sui byte, senza allocare.
+        return match_symbols(pattern.as_bytes(), text.as_bytes(), u8::to_ascii_lowercase, b'*', b'?');
+    }
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
     let t: Vec<char> = text.to_lowercase().chars().collect();
+    match_symbols(&p, &t, |c: &char| *c, '*', '?')
+}
+
+/// L'algoritmo su sequenze di simboli: `low` porta un simbolo in minuscolo,
+/// `run` e `one` sono `*` e `?`.
+fn match_symbols<T: Copy + PartialEq>(
+    p: &[T],
+    t: &[T],
+    low: impl Fn(&T) -> T,
+    run: T,
+    one: T,
+) -> bool {
     let (mut pi, mut ti) = (0usize, 0usize);
-    // Posizione dell'ultimo `*` e del testo da cui quel `*` riprende.
+    // Posizione dopo l'ultimo `*` e punto del testo da cui quel `*` riprende.
     let mut star: Option<usize> = None;
     let mut resume = 0usize;
     while ti < t.len() {
-        if pi < p.len() && p[pi] == '*' {
+        if pi < p.len() && p[pi] == run {
             // Un `*` di fila a un altro non aggiunge nulla.
-            while pi < p.len() && p[pi] == '*' {
+            while pi < p.len() && p[pi] == run {
                 pi += 1;
             }
             star = Some(pi);
             resume = ti;
-        } else if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+        } else if pi < p.len() && (p[pi] == one || low(&p[pi]) == low(&t[ti])) {
             pi += 1;
             ti += 1;
         } else if let Some(after_star) = star {
-            // Il `*` assorbe un carattere in più e si riprova da lì.
+            // Il `*` assorbe un simbolo in più e si riprova da lì.
             resume += 1;
             ti = resume;
             pi = after_star;
@@ -38,7 +54,7 @@ pub fn wildcard_match(pattern: &str, text: &str) -> bool {
             return false;
         }
     }
-    p[pi..].iter().all(|&c| c == '*')
+    p[pi..].iter().all(|&c| c == run)
 }
 
 #[cfg(test)]
