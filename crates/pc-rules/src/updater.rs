@@ -8,10 +8,12 @@
 //! finestra e senza passare da una shell.
 
 use std::fs;
-use std::io::Read;
+use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,26 +69,37 @@ pub fn is_valid(bytes: &[u8]) -> Result<String, String> {
     if bytes.len() > MAX_BYTES {
         return Err(format!("file troppo grande ({} byte)", bytes.len()));
     }
+    if bytes.last() != Some(&b'\n') {
+        return Err("file troncato (non finisce con un ritorno a capo)".into());
+    }
     let text = std::str::from_utf8(bytes).map_err(|_| "il file non è UTF-8".to_string())?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
     let mut version: Option<String> = None;
+    let mut declared: Option<usize> = None;
     let mut sections = 0usize;
     let mut has_filekey = false;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') && line.ends_with(']') {
             sections += 1;
-        } else if version.is_none() && line.starts_with(';') {
+        } else if line.starts_with(';') {
             let rest = line.trim_start_matches(';').trim();
-            if let Some(v) = rest.strip_prefix("Version:") {
+            if version.is_none()
+                && let Some(v) = rest.strip_prefix("Version:")
+            {
                 let v = v.trim();
                 if !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()) {
                     version = Some(v.to_string());
                 }
+            } else if declared.is_none()
+                && let Some(n) = rest.strip_prefix("# of entries:")
+            {
+                let digits: String = n.chars().filter(|c| *c != ',' && !c.is_whitespace()).collect();
+                declared = digits.parse().ok();
             }
-        } else if !has_filekey && line.len() >= 7 && line.is_char_boundary(7)
-            && line[..7].eq_ignore_ascii_case("FileKey")
+        } else if !has_filekey
+            && line.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("FileKey"))
         {
             has_filekey = true;
         }
@@ -94,6 +107,11 @@ pub fn is_valid(bytes: &[u8]) -> Result<String, String> {
     let version = version.ok_or_else(|| "riga '; Version:' assente".to_string())?;
     if sections < MIN_SECTIONS {
         return Err(format!("solo {sections} sezioni"));
+    }
+    if let Some(d) = declared
+        && sections < d
+    {
+        return Err(format!("{sections} sezioni su {d} dichiarate"));
     }
     if !has_filekey {
         return Err("nessuna FileKey".into());
@@ -104,7 +122,10 @@ pub fn is_valid(bytes: &[u8]) -> Result<String, String> {
 /// Un giro di aggiornamento dentro `dir` (creata se manca).
 pub fn update(dir: &Path, fetch: &dyn Fetch, url: &str) -> UpdateOutcome {
     let ini = dir.join(INI_NAME);
-    let have_copy = ini.is_file();
+    // Una copia vale solo se si legge e passa `is_valid`: una copia rovinata
+    // equivale a nessuna copia (niente If-None-Match, niente 304 a vuoto).
+    let local_version = read_valid_local(&ini);
+    let have_copy = local_version.is_some();
     let fail = |reason: String| {
         if have_copy {
             UpdateOutcome::KeptOld(reason)
@@ -120,8 +141,7 @@ pub fn update(dir: &Path, fetch: &dyn Fetch, url: &str) -> UpdateOutcome {
     let etag = if have_copy {
         fs::read_to_string(dir.join(ETAG_NAME))
             .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .and_then(|s| sanitize_etag(&s))
     } else {
         None
     };
@@ -140,8 +160,13 @@ pub fn update(dir: &Path, fetch: &dyn Fetch, url: &str) -> UpdateOutcome {
                 Ok(v) => v,
                 Err(e) => return fail(format!("file scaricato non valido: {e}")),
             };
+            if let Some(old) = &local_version
+                && is_older(&version, old)
+            {
+                return fail("versione più vecchia ignorata".into());
+            }
             let tmp = dir.join(TMP_NAME);
-            if let Err(e) = fs::write(&tmp, &bytes) {
+            if let Err(e) = write_synced(&tmp, &bytes) {
                 let _ = fs::remove_file(&tmp);
                 return fail(format!("scrittura non riuscita: {e}"));
             }
@@ -149,9 +174,9 @@ pub fn update(dir: &Path, fetch: &dyn Fetch, url: &str) -> UpdateOutcome {
                 let _ = fs::remove_file(&tmp);
                 return fail(format!("sostituzione non riuscita: {e}"));
             }
-            match etag.filter(|s| !s.trim().is_empty()) {
+            match etag.as_deref().and_then(sanitize_etag) {
                 Some(t) => {
-                    let _ = fs::write(dir.join(ETAG_NAME), t.trim());
+                    let _ = fs::write(dir.join(ETAG_NAME), t);
                 }
                 None => {
                     let _ = fs::remove_file(dir.join(ETAG_NAME));
@@ -163,10 +188,15 @@ pub fn update(dir: &Path, fetch: &dyn Fetch, url: &str) -> UpdateOutcome {
 }
 
 /// Avvia l'aggiornamento in un thread staccato (nessun `join`): non blocca la
-/// UI né l'uscita dal programma. `on_done` gira sul thread di lavoro.
+/// UI né l'uscita dal programma. `on_done` gira sul thread di lavoro ed è
+/// chiamata sempre una volta sola (anche se il lavoro va in panico o il thread
+/// non riesce a partire).
 pub fn spawn_update(dir: PathBuf, on_done: impl FnOnce(UpdateOutcome) + Send + 'static) {
     spawn_update_with(dir, Arc::new(CurlFetch), WINAPP2_URL.to_string(), on_done);
 }
+
+type DoneFn = Box<dyn FnOnce(UpdateOutcome) + Send>;
+type DoneSlot = Arc<Mutex<Option<DoneFn>>>;
 
 /// Come [`spawn_update`] ma con sorgente e URL scelti da chi chiama.
 pub fn spawn_update_with(
@@ -175,22 +205,84 @@ pub fn spawn_update_with(
     url: String,
     on_done: impl FnOnce(UpdateOutcome) + Send + 'static,
 ) {
+    // La callback sta in uno slot condiviso: se il thread non parte la
+    // riprende chi chiama, altrimenti la prende il thread (una volta sola).
+    let slot: DoneSlot =
+        Arc::new(Mutex::new(Some(Box::new(on_done))));
+    let worker_slot = Arc::clone(&slot);
+    let worker_dir = dir.clone();
     let spawned = thread::Builder::new()
         .name("winapp2-update".into())
         .spawn(move || {
-            let outcome = update(&dir, fetch.as_ref(), &url);
-            on_done(outcome);
+            let outcome = catch_unwind(AssertUnwindSafe(|| update(&worker_dir, fetch.as_ref(), &url)))
+                .unwrap_or_else(|_| fallback_outcome(&worker_dir, "aggiornamento interrotto da un errore interno"));
+            finish(&worker_slot, outcome);
         });
-    // Se il thread non parte, l'app va avanti senza aggiornamento.
-    drop(spawned);
+    if spawned.is_err() {
+        finish(&slot, fallback_outcome(&dir, "impossibile avviare l'aggiornamento"));
+    }
 }
 
-/// Scaricamento con il `curl.exe` di Windows: nessuna finestra, nessuna shell,
-/// nessun dato dell'utente nei parametri (i file di lavoro stanno in una
-/// cartella temporanea usata come directory corrente di curl).
+fn finish(slot: &Mutex<Option<DoneFn>>, outcome: UpdateOutcome) {
+    let cb = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(cb) = cb {
+        cb(outcome);
+    }
+}
+
+fn fallback_outcome(dir: &Path, reason: &str) -> UpdateOutcome {
+    if dir.join(INI_NAME).is_file() {
+        UpdateOutcome::KeptOld(reason.to_string())
+    } else {
+        UpdateOutcome::NoCopyYet(reason.to_string())
+    }
+}
+
+/// ETag accettabile: niente caratteri di controllo (iniezione di header) e al
+/// massimo 256 caratteri. Altrimenti `None` (come se non ci fosse).
+fn sanitize_etag(raw: &str) -> Option<String> {
+    let t = raw.trim_matches(' ');
+    if t.is_empty() || t.chars().count() > 256 || t.chars().any(|c| c.is_control()) {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// Versione della copia locale se il file si legge e passa `is_valid`.
+fn read_valid_local(ini: &Path) -> Option<String> {
+    let len = fs::metadata(ini).ok()?.len();
+    if len > MAX_BYTES as u64 {
+        return None;
+    }
+    is_valid(&fs::read(ini).ok()?).ok()
+}
+
+/// `true` se `new` è un numero di versione strettamente minore di `old`.
+fn is_older(new: &str, old: &str) -> bool {
+    match (new.parse::<u64>(), old.parse::<u64>()) {
+        (Ok(n), Ok(o)) => n < o,
+        _ => false,
+    }
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// Scaricamento con il `curl.exe` di Windows: percorso assoluto della cartella
+/// di sistema, nessuna finestra, nessuna shell, nessun dato dell'utente nei
+/// parametri (i file di lavoro stanno in una cartella temporanea usata come
+/// directory corrente di curl).
 pub struct CurlFetch;
 
 static SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// Cartelle di lavoro di curl rimaste da un'esecuzione interrotta.
+const SCRATCH_PREFIX: &str = "pulisci-curl-";
+const STALE_AFTER: Duration = Duration::from_secs(600);
 
 struct ScratchDir(PathBuf);
 
@@ -201,12 +293,12 @@ impl ScratchDir {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let p = std::env::temp_dir().join(format!(
-            "pulisci-curl-{}-{}-{}",
+            "{SCRATCH_PREFIX}{}-{}-{}",
             std::process::id(),
             nanos,
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&p)?;
+        fs::create_dir(&p)?; // deve essere nuova: niente cartelle altrui
         Ok(ScratchDir(p))
     }
 }
@@ -217,28 +309,114 @@ impl Drop for ScratchDir {
     }
 }
 
+/// Toglie da `base` le cartelle `pulisci-curl-*` più vecchie di `older_than`.
+fn remove_stale_scratch(base: &Path, older_than: Duration) {
+    let Ok(rd) = fs::read_dir(base) else { return };
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with(SCRATCH_PREFIX) {
+            continue;
+        }
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_dir() || ft.is_symlink() {
+            continue;
+        }
+        let old_enough = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= older_than);
+        if old_enough {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn system_directory() -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    }
+    let mut buf = [0u16; 260];
+    // SAFETY: buffer valido per `buf.len()` elementi.
+    let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if n == 0 || n >= buf.len() {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_wide(&buf[..n])))
+}
+
+#[cfg(not(windows))]
+fn system_directory() -> Option<PathBuf> {
+    None
+}
+
+/// `<dir>\curl.exe` se esiste.
+fn locate_curl(system_dir: &Path) -> Result<PathBuf, String> {
+    let p = system_dir.join("curl.exe");
+    if p.is_file() {
+        Ok(p)
+    } else {
+        Err("curl.exe non trovato".to_string())
+    }
+}
+
+/// Percorso assoluto del `curl.exe` di Windows (`GetSystemDirectoryW`, con
+/// ripiego su `%SystemRoot%\System32`); mai una ricerca nel PATH.
+fn curl_exe_path() -> Result<PathBuf, String> {
+    let dir = system_directory()
+        .or_else(|| std::env::var_os("SystemRoot").map(|r| PathBuf::from(r).join("System32")))
+        .ok_or_else(|| "curl.exe non trovato".to_string())?;
+    locate_curl(&dir)
+}
+
+/// Argomenti di curl. `-q` per primo (nessun .curlrc); solo https anche nei
+/// redirect; dimensione massima; file di lavoro con nomi relativi.
+fn curl_args(url: &str, etag: Option<&str>, timeout: Duration) -> Vec<OsString> {
+    let mut a: Vec<OsString> = Vec::new();
+    let mut push = |s: &str| a.push(OsString::from(s));
+    push("-q");
+    push("-sS");
+    push("-L");
+    push("--proto");
+    push("=https");
+    push("--proto-redir");
+    push("=https");
+    push("--max-redirs");
+    push("3");
+    push("--max-filesize");
+    push(&MAX_BYTES.to_string());
+    push("--max-time");
+    push(&timeout.as_secs().max(1).to_string());
+    push("-D");
+    push("headers.txt");
+    push("-o");
+    push("body.bin");
+    push("-A");
+    push("PulisciPC");
+    if let Some(t) = etag.and_then(sanitize_etag) {
+        push("-H");
+        push(&format!("If-None-Match: {t}"));
+    }
+    push(url);
+    a
+}
+
 impl Fetch for CurlFetch {
     fn get(&self, url: &str, etag: Option<&str>, timeout: Duration) -> Result<Fetched, String> {
+        let curl = curl_exe_path()?;
+        remove_stale_scratch(&std::env::temp_dir(), STALE_AFTER);
         let scratch = ScratchDir::new().map_err(|e| format!("cartella temporanea: {e}"))?;
         let err_file = fs::File::create(scratch.0.join("err.txt"))
             .map_err(|e| format!("file temporaneo: {e}"))?;
 
-        let mut cmd = Command::new("curl.exe");
+        let mut cmd = Command::new(&curl);
         cmd.current_dir(&scratch.0)
-            .arg("-sS")
-            .arg("-L")
-            .arg("--max-time")
-            .arg(timeout.as_secs().max(1).to_string())
-            .arg("-D")
-            .arg("headers.txt")
-            .arg("-o")
-            .arg("body.bin")
-            .arg("-A")
-            .arg("PulisciPC");
-        if let Some(t) = etag {
-            cmd.arg("-H").arg(format!("If-None-Match: {t}"));
-        }
-        cmd.arg(url)
+            .args(curl_args(url, etag, timeout))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(err_file));
@@ -274,8 +452,8 @@ impl Fetch for CurlFetch {
 
         if !status.success() {
             let mut msg = String::new();
-            if let Ok(mut f) = fs::File::open(scratch.0.join("err.txt")) {
-                let _ = f.by_ref().take(2000).read_to_string(&mut msg);
+            if let Ok(f) = fs::File::open(scratch.0.join("err.txt")) {
+                let _ = f.take(2000).read_to_string(&mut msg);
             }
             let msg = msg.trim();
             return Err(if msg.is_empty() {
@@ -285,15 +463,21 @@ impl Fetch for CurlFetch {
             });
         }
 
-        let headers = fs::read_to_string(scratch.0.join("headers.txt"))
-            .or_else(|_| fs::read(scratch.0.join("headers.txt")).map(|b| String::from_utf8_lossy(&b).into_owned()))
+        let headers = fs::read(scratch.0.join("headers.txt"))
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
             .map_err(|e| format!("header non leggibili: {e}"))?;
         let (code, new_etag) = parse_headers(&headers)?;
         match code {
             304 => Ok(Fetched::NotModified),
             200 => {
-                let bytes = fs::read(scratch.0.join("body.bin"))
-                    .map_err(|e| format!("corpo non leggibile: {e}"))?;
+                let body = scratch.0.join("body.bin");
+                let len = fs::metadata(&body)
+                    .map_err(|e| format!("corpo non leggibile: {e}"))?
+                    .len();
+                if len > MAX_BYTES as u64 {
+                    return Err(format!("corpo troppo grande ({len} byte)"));
+                }
+                let bytes = fs::read(&body).map_err(|e| format!("corpo non leggibile: {e}"))?;
                 Ok(Fetched::Body { bytes, etag: new_etag })
             }
             other => Err(format!("risposta HTTP {other}")),
@@ -307,14 +491,14 @@ fn parse_headers(raw: &str) -> Result<(u16, Option<String>), String> {
     let mut etag: Option<String> = None;
     for line in raw.lines() {
         let line = line.trim_end();
-        if line.len() >= 5 && line[..5].eq_ignore_ascii_case("HTTP/") {
+        if line.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("HTTP/")) {
             // Nuovo blocco: si riparte (l'ultimo vince).
             code = line.split_whitespace().nth(1).and_then(|c| c.parse().ok());
             etag = None;
         } else if let Some((name, value)) = line.split_once(':')
             && name.trim().eq_ignore_ascii_case("etag")
         {
-            etag = Some(value.trim().to_string());
+            etag = sanitize_etag(value);
         }
     }
     code.map(|c| (c, etag))
@@ -532,6 +716,212 @@ mod tests {
         let raw304 = "HTTP/2 304 \r\netag: \"q\"\r\n\r\n";
         assert_eq!(parse_headers(raw304), Ok((304, Some("\"q\"".to_string()))));
         assert!(parse_headers("").is_err());
+    }
+
+    // ---- Fix round 1 ----
+
+    fn ini_with_entries(version: &str, n: usize, declared: &str) -> Vec<u8> {
+        let body = String::from_utf8(make_ini(version, n)).unwrap();
+        body.replacen(
+            "\n; Winapp2.ini finto",
+            &format!("\n; # of entries: {declared}\n; Winapp2.ini finto"),
+            1,
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn file_cut_mid_line_is_rejected() {
+        let full = valid_ini("260915");
+        let cut = &full[..full.len() - 20];
+        assert!(cut.len() > 200 * 1024);
+        assert_ne!(cut.last(), Some(&b'\n'));
+        assert!(is_valid(cut).is_err());
+        // Anche un file intero senza il ritorno a capo finale è sospetto.
+        let mut no_nl = full.clone();
+        while no_nl.last() == Some(&b'\n') {
+            no_nl.pop();
+        }
+        assert!(is_valid(&no_nl).is_err());
+    }
+
+    #[test]
+    fn declared_entries_must_be_reached() {
+        // dichiarate 4,068 ma presenti 1500: rifiutato
+        let short = ini_with_entries("260915", 1500, "4,068");
+        let err = is_valid(&short).unwrap_err();
+        assert!(err.contains("4068"), "{err}");
+        // dichiarate 1,500 e presenti 1500: valido; dichiarate meno: valido
+        assert!(is_valid(&ini_with_entries("260915", 1500, "1,500")).is_ok());
+        assert!(is_valid(&ini_with_entries("260915", 1500, "1200")).is_ok());
+    }
+
+    #[test]
+    fn etag_sanitising() {
+        assert_eq!(sanitize_etag("\"abc\""), Some("\"abc\"".into()));
+        assert_eq!(sanitize_etag("  W/\"abc\"  "), Some("W/\"abc\"".into()));
+        assert_eq!(sanitize_etag("a\nb"), None);
+        assert_eq!(sanitize_etag("a\r\nX-Evil: 1"), None);
+        assert_eq!(sanitize_etag("a\rb"), None);
+        assert_eq!(sanitize_etag("a\0b"), None);
+        assert_eq!(sanitize_etag(""), None);
+        assert_eq!(sanitize_etag(&"x".repeat(257)), None);
+        assert_eq!(sanitize_etag(&"x".repeat(256)), Some("x".repeat(256)));
+    }
+
+    #[test]
+    fn dirty_etag_in_file_is_not_sent_and_dirty_header_etag_not_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let v1 = valid_ini("260915");
+        let fake = FakeFetch::new(vec![
+            body(v1.clone(), Some("\"e1\"")),
+            body(valid_ini("261001"), Some("bad\r\nX: 1")),
+        ]);
+        update(dir.path(), &fake, "u");
+        fs::write(dir.path().join("etag.txt"), "\"e1\"\nX-Evil: 1").unwrap();
+        let out = update(dir.path(), &fake, "u");
+        assert_eq!(out, UpdateOutcome::Updated { version: "261001".into() });
+        assert_eq!(fake.seen_etags.lock().unwrap()[1], None);
+        assert!(!dir.path().join("etag.txt").exists());
+    }
+
+    #[test]
+    fn parse_headers_rejects_dirty_etag_and_survives_multibyte() {
+        let long = format!("HTTP/2 200\r\netag: {}\r\n\r\n", "x".repeat(300));
+        assert_eq!(parse_headers(&long), Ok((200, None)));
+        // riga con carattere multibyte a cavallo del byte 5: niente panic
+        let raw = "HTTP/2 200\r\nàààà\r\nétag: x\r\n\r\n";
+        assert_eq!(parse_headers(raw), Ok((200, None)));
+    }
+
+    #[test]
+    fn curl_args_are_hardened() {
+        let args: Vec<String> =
+            curl_args("https://example.org/x.ini", Some("\"e1\""), Duration::from_secs(20))
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+        assert_eq!(args[0], "-q");
+        let joined = args.join(" ");
+        for needle in [
+            "--proto =https",
+            "--proto-redir =https",
+            "--max-redirs 3",
+            "--max-filesize 20971520",
+            "--max-time 20",
+            "-A PulisciPC",
+            "-H If-None-Match: \"e1\"",
+        ] {
+            assert!(joined.contains(needle), "manca '{needle}' in {joined}");
+        }
+        assert_eq!(args.last().unwrap(), "https://example.org/x.ini");
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+        assert!(!joined.contains(&tmp), "percorso temporaneo nei parametri");
+        assert!(!joined.to_lowercase().contains("users"), "dato utente nei parametri");
+        // etag sporco o assente: nessun If-None-Match
+        for e in [Some("a\nb"), Some(""), None] {
+            let a = curl_args("u", e, Duration::from_secs(20));
+            assert!(!a.iter().any(|x| x.to_string_lossy().contains("If-None-Match")));
+        }
+    }
+
+    #[test]
+    fn locate_curl_uses_the_given_system_dir_only() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(locate_curl(dir.path()), Err("curl.exe non trovato".to_string()));
+        fs::write(dir.path().join("curl.exe"), b"x").unwrap();
+        assert_eq!(locate_curl(dir.path()), Ok(dir.path().join("curl.exe")));
+        // il percorso vero del sistema esiste su Windows 11 ed è assoluto
+        let real = curl_exe_path().expect("curl.exe di sistema");
+        assert!(real.is_absolute(), "{real:?}");
+    }
+
+    #[test]
+    fn damaged_local_copy_is_treated_as_no_copy() {
+        for damaged in [Vec::new(), valid_ini("260915")[..150 * 1024].to_vec()] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join("Winapp2.ini"), &damaged).unwrap();
+            fs::write(dir.path().join("etag.txt"), "\"old\"").unwrap();
+            let fresh = valid_ini("260915");
+            let fake = FakeFetch::new(vec![body(fresh.clone(), Some("\"new\""))]);
+            let out = update(dir.path(), &fake, "u");
+            assert_eq!(out, UpdateOutcome::Updated { version: "260915".into() });
+            assert_eq!(fake.seen_etags.lock().unwrap()[0], None, "etag inviato con copia rovinata");
+            assert_eq!(fs::read(dir.path().join("Winapp2.ini")).unwrap(), fresh);
+        }
+        // un 304 non lascia mai "UpToDate" su una copia rovinata
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Winapp2.ini"), b"").unwrap();
+        fs::write(dir.path().join("etag.txt"), "\"old\"").unwrap();
+        let fake = FakeFetch::new(vec![Ok(Fetched::NotModified)]);
+        let out = update(dir.path(), &fake, "u");
+        assert!(matches!(out, UpdateOutcome::NoCopyYet(_)), "{out:?}");
+    }
+
+    #[test]
+    fn failed_tmp_write_keeps_old_file_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let v1 = valid_ini("260915");
+        let fake = FakeFetch::new(vec![
+            body(v1.clone(), Some("\"e1\"")),
+            body(valid_ini("261001"), Some("\"e2\"")),
+        ]);
+        update(dir.path(), &fake, "u");
+        fs::create_dir(dir.path().join("Winapp2.ini.tmp")).unwrap();
+        let out = update(dir.path(), &fake, "u");
+        assert!(matches!(out, UpdateOutcome::KeptOld(_)), "{out:?}");
+        assert_eq!(fs::read(dir.path().join("Winapp2.ini")).unwrap(), v1);
+        assert_eq!(fs::read_to_string(dir.path().join("etag.txt")).unwrap(), "\"e1\"");
+    }
+
+    #[test]
+    fn older_version_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = valid_ini("261001");
+        let fake = FakeFetch::new(vec![
+            body(new.clone(), Some("\"e1\"")),
+            body(valid_ini("260915"), Some("\"e2\"")),
+        ]);
+        update(dir.path(), &fake, "u");
+        let out = update(dir.path(), &fake, "u");
+        assert_eq!(out, UpdateOutcome::KeptOld("versione più vecchia ignorata".into()));
+        assert_eq!(fs::read(dir.path().join("Winapp2.ini")).unwrap(), new);
+        assert_eq!(fs::read_to_string(dir.path().join("etag.txt")).unwrap(), "\"e1\"");
+    }
+
+    struct PanicFetch;
+    impl Fetch for PanicFetch {
+        fn get(&self, _u: &str, _e: Option<&str>, _t: Duration) -> Reply {
+            panic!("rete esplosa (prova)");
+        }
+    }
+
+    #[test]
+    fn on_done_is_called_exactly_once_even_if_worker_panics() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_update_with(dir.path().to_path_buf(), Arc::new(PanicFetch), "u".into(), move |o| {
+            let _ = tx.send(o);
+        });
+        let out = rx.recv_timeout(Duration::from_secs(10)).expect("on_done non chiamato");
+        assert!(matches!(out, UpdateOutcome::NoCopyYet(_)), "{out:?}");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "on_done chiamato due volte");
+    }
+
+    #[test]
+    fn stale_scratch_dirs_are_removed() {
+        let base = tempfile::tempdir().unwrap();
+        fs::create_dir(base.path().join("pulisci-curl-1-2-3")).unwrap();
+        fs::write(base.path().join("pulisci-curl-1-2-3").join("body.bin"), b"x").unwrap();
+        fs::create_dir(base.path().join("altra-cartella")).unwrap();
+        fs::write(base.path().join("pulisci-curl-file"), b"x").unwrap();
+        // con soglia lunga non si tocca nulla (cartelle recenti = altra istanza al lavoro)
+        remove_stale_scratch(base.path(), Duration::from_secs(3600));
+        assert!(base.path().join("pulisci-curl-1-2-3").exists());
+        remove_stale_scratch(base.path(), Duration::ZERO);
+        assert!(!base.path().join("pulisci-curl-1-2-3").exists());
+        assert!(base.path().join("altra-cartella").exists());
+        assert!(base.path().join("pulisci-curl-file").exists(), "solo cartelle");
     }
 
     /// Prova di rete vera (sola lettura): `cargo test -p pc-rules real_network -- --ignored --nocapture`.
