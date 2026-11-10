@@ -231,7 +231,7 @@ impl Ctx<'_> {
     /// Una voce di cartella in più esaminata.
     fn step(&mut self) {
         self.examined += 1;
-        if self.examined % TICK_EVERY == 0
+        if self.examined.is_multiple_of(TICK_EVERY)
             && let Some(ctl) = self.ctl
         {
             (ctl.tick)(self.examined);

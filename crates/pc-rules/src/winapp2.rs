@@ -9,13 +9,15 @@
 //! I flag sono `RECURSE` e `REMOVESELF`. Le chiavi che non si conoscono si
 //! ignorano e si contano negli avvisi.
 
-use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::expand::expand;
-use crate::guard::protected;
+use crate::guard::Guard;
 use crate::model::{Action, Cleaner, Env, ExcludeRule, Opt, Origin, RegRoot, Search};
 use crate::regguard::reg_allowed;
+use crate::wildcard::wildcard_match;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Winapp2 {
@@ -263,19 +265,19 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
 }
 
 fn header(comment: &str, w: &mut Winapp2) {
-    if w.version.is_none() {
-        if let Some(v) = comment.strip_prefix("Version:") {
-            let v = v.trim();
-            if !v.is_empty() {
-                w.version = Some(v.to_string());
-            }
+    if w.version.is_none()
+        && let Some(v) = comment.strip_prefix("Version:")
+    {
+        let v = v.trim();
+        if !v.is_empty() {
+            w.version = Some(v.to_string());
         }
     }
-    if w.declared_entries.is_none() {
-        if let Some(v) = comment.strip_prefix("# of entries:") {
-            let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
-            w.declared_entries = digits.parse().ok();
-        }
+    if w.declared_entries.is_none()
+        && let Some(v) = comment.strip_prefix("# of entries:")
+    {
+        let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
+        w.declared_entries = digits.parse().ok();
     }
 }
 
@@ -386,8 +388,10 @@ pub fn to_cleaners_with(
 ) -> (Vec<Cleaner>, Report) {
     let mut report = Report::default();
     let mut out = Vec::new();
+    let guard = Guard::new(env);
+    let mut probe = Probe::default();
     for entry in &w.entries {
-        if !detected(entry, env, reg_exists) {
+        if !detected(entry, env, reg_exists, &mut probe) {
             continue;
         }
         report.skipped_unknown += entry.skipped_rules;
@@ -412,7 +416,7 @@ pub fn to_cleaners_with(
                 report.discarded_missing_var += 1;
                 continue;
             }
-            if expanded.iter().any(|p| unsafe_files_rule(p, fk, env)) {
+            if expanded.iter().any(|p| unsafe_files_rule(p, fk, &guard)) {
                 report.discarded_protected += 1;
                 continue;
             }
@@ -449,10 +453,7 @@ pub fn to_cleaners_with(
         out.push(Cleaner {
             id: format!("winapp2:{label}"),
             label: label.to_string(),
-            group: entry
-                .section
-                .clone()
-                .unwrap_or_else(|| "Applicazioni".to_string()),
+            group: group_of(entry),
             origin: Origin::Winapp2,
             description: String::new(),
             running: Vec::new(),
@@ -472,12 +473,60 @@ pub fn to_cleaners_with(
     (out, report)
 }
 
-fn detected(entry: &Entry, env: &Env, reg_exists: &dyn Fn(RegRoot, &str) -> bool) -> bool {
+/// Gruppo in italiano: prima `LangSecRef` (le sezioni di CCleaner, vedi
+/// CONTRIBUTING.md di Winapp2), poi `Section` (`Games` → `Giochi`,
+/// `<X> Web Browser` → `Browser: <X>`, il resto com'è), altrimenti
+/// `Applicazioni`.
+fn group_of(entry: &Entry) -> String {
+    let by_ref = entry.lang_sec_ref.and_then(|r| {
+        Some(match r {
+            3021 => "Applicazioni",
+            3022 => "Internet",
+            3023 => "Multimedia",
+            3024 => "Utilità",
+            3025 => "Windows",
+            3031 => "Microsoft Store",
+            3001 => "Browser: Internet Explorer",
+            3005 | 3006 => "Browser: Microsoft Edge",
+            3026 => "Browser: Firefox",
+            3027 => "Browser: Opera",
+            3028 => "Browser: Safari",
+            3029 => "Browser: Google Chrome",
+            3030 => "Thunderbird",
+            3033 => "Browser: Vivaldi",
+            3034 => "Browser: Brave",
+            _ => return None,
+        })
+    });
+    if let Some(g) = by_ref {
+        return g.to_string();
+    }
+    let Some(section) = entry.section.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return "Applicazioni".to_string();
+    };
+    if section.eq_ignore_ascii_case("games") {
+        return "Giochi".to_string();
+    }
+    let lower = section.to_lowercase();
+    if let Some(name) = lower.strip_suffix(" web browser").map(|_| &section[..section.len() - 12])
+        && !name.trim().is_empty()
+    {
+        return format!("Browser: {}", name.trim());
+    }
+    section.to_string()
+}
+
+fn detected(
+    entry: &Entry,
+    env: &Env,
+    reg_exists: &dyn Fn(RegRoot, &str) -> bool,
+    probe: &mut Probe,
+) -> bool {
     if entry.detect.is_empty() {
         return entry
             .file_keys
             .iter()
-            .any(|fk| path_exists(&fk.path, env));
+            .any(|fk| path_exists(&fk.path, env, probe));
     }
     entry.detect.iter().any(|d| match d {
         Detect::RegKey { root, path } => {
@@ -485,7 +534,7 @@ fn detected(entry: &Entry, env: &Env, reg_exists: &dyn Fn(RegRoot, &str) -> bool
                 || (*root == RegRoot::Hklm
                     && wow6432_view(path).is_some_and(|alt| reg_exists(*root, &alt)))
         }
-        Detect::File(path) => path_exists(path, env),
+        Detect::File(path) => path_exists(path, env, probe),
     })
 }
 
@@ -495,8 +544,8 @@ fn detected(entry: &Entry, env: &Env, reg_exists: &dyn Fn(RegRoot, &str) -> bool
 /// si risolve in cartelle che il controllo sul percorso con il jolly non vede:
 /// si rifiuta se la regola prende tutto (modello `*`/`*.*`) o scende nelle
 /// sottocartelle (`RECURSE`/`REMOVESELF`).
-fn unsafe_files_rule(expanded: &Path, fk: &FileKey, env: &Env) -> bool {
-    if protected(expanded, env).is_some() {
+fn unsafe_files_rule(expanded: &Path, fk: &FileKey, guard: &Guard) -> bool {
+    if guard.protected(expanded).is_some() {
         return true;
     }
     let text = expanded.to_string_lossy().replace('/', "\\");
@@ -523,11 +572,9 @@ fn unsafe_files_rule(expanded: &Path, fk: &FileKey, env: &Env) -> bool {
         return false;
     }
     let prefix = comps[..first_wild].join("\\");
-    protected(Path::new(&prefix), env).is_some()
+    guard.protected(Path::new(&prefix)).is_some()
 }
 
-/// Esiste almeno uno dei percorsi ottenuti espandendo le variabili (con `*` e
-/// `?` nei componenti).
 /// `Software\X` → `Software\Wow6432Node\X` (la vista a 32 bit di HKLM).
 fn wow6432_view(path: &str) -> Option<String> {
     let (first, rest) = path.split_once('\\')?;
@@ -541,72 +588,113 @@ fn wow6432_view(path: &str) -> Option<String> {
     Some(format!(r"{first}\Wow6432Node\{rest}"))
 }
 
-fn path_exists(path: &str, env: &Env) -> bool {
-    expand(path, env).iter().any(|p| exists_wild(p))
+/// Esiste almeno uno dei percorsi ottenuti espandendo le variabili (con `*` e
+/// `?` nei componenti), cercato con `probe`.
+fn path_exists(path: &str, env: &Env, probe: &mut Probe) -> bool {
+    expand(path, env).iter().any(|p| probe.exists(p))
 }
 
-fn exists_wild(path: &Path) -> bool {
-    let mut current: Vec<PathBuf> = vec![PathBuf::new()];
-    for comp in path.components() {
-        match comp {
-            Component::Normal(name) => {
-                let name = name.to_string_lossy();
-                if name.contains(['*', '?']) {
-                    let mut next = Vec::new();
-                    for dir in &current {
-                        let Ok(rd) = std::fs::read_dir(dir) else { continue };
-                        for e in rd.flatten() {
-                            if wildcard_match(&name, &e.file_name().to_string_lossy()) {
-                                next.push(e.path());
-                            }
-                        }
-                    }
-                    current = next;
-                    if current.is_empty() {
-                        return false;
-                    }
-                } else {
-                    for p in &mut current {
-                        p.push(&*name);
-                    }
-                }
-            }
-            other => {
-                for p in &mut current {
-                    p.push(other.as_os_str());
-                }
-            }
-        }
+/// Componenti di jolly al più in un percorso di rilevazione.
+const MAX_PROBE_WILDCARDS: usize = 6;
+/// Voci di cartella esaminate al più per una rilevazione.
+const MAX_PROBE_ENTRIES: usize = 5000;
+
+/// `true` se un percorso di rilevazione (`DetectFile`, cartella di `FileKey`) si
+/// può cercare sul disco: assoluto con lettera di unità (mai UNC, `\\?\`,
+/// `\\.\`, volumi o percorsi relativi, che aprirebbero connessioni di rete o
+/// dispositivi), senza `.`/`..`, flussi (`:`) o componenti con punti o spazi
+/// finali, e al più `MAX_PROBE_WILDCARDS` componenti con jolly.
+fn is_probe_safe(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let b = text.as_bytes();
+    if b.len() < 3 || !b[0].is_ascii_alphabetic() || b[1] != b':' || b[2] != b'\\' {
+        return false;
     }
-    current.iter().any(|p| p.exists())
-}
-
-/// `*` e `?`, senza badare alle maiuscole.
-fn wildcard_match(pattern: &str, name: &str) -> bool {
-    let p: Vec<char> = pattern.to_lowercase().chars().collect();
-    let n: Vec<char> = name.to_lowercase().chars().collect();
-    let (mut pi, mut ni) = (0usize, 0usize);
-    let (mut star, mut mark) = (None::<usize>, 0usize);
-    while ni < n.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
-            pi += 1;
-            ni += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some(pi);
-            mark = ni;
-            pi += 1;
-        } else if let Some(s) = star {
-            pi = s + 1;
-            mark += 1;
-            ni = mark;
-        } else {
+    let mut wild = 0;
+    for c in text[3..].split('\\').filter(|c| !c.is_empty()) {
+        if c == "." || c == ".." || c.contains(':') || c.ends_with(['.', ' ']) {
             return false;
         }
+        if c.contains(['*', '?']) {
+            wild += 1;
+        }
     }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
+    wild <= MAX_PROBE_WILDCARDS
+}
+
+/// Voce di un elenco di cartella: nome e se è una cartella vera (non un
+/// collegamento: non si scende nei collegamenti).
+type Listing = Rc<Vec<(String, bool)>>;
+
+/// Ricerca sul disco per la rilevazione delle voci. Gli elenchi delle cartelle
+/// restano in memoria per tutta la conversione (decine di voci cercano in
+/// `%LocalAppData%\Microsoft\Edge*`); `None` = cartella illeggibile o troppo
+/// grande.
+#[derive(Default)]
+struct Probe {
+    listings: HashMap<String, Option<Listing>>,
+    /// Cartelle lette davvero (per le prove).
+    reads: usize,
+}
+
+impl Probe {
+    fn list(&mut self, dir: &Path) -> Option<Listing> {
+        let key = dir.to_string_lossy().to_lowercase();
+        if let Some(l) = self.listings.get(&key) {
+            return l.clone();
+        }
+        self.reads += 1;
+        let listing = std::fs::read_dir(dir).ok().and_then(|rd| {
+            let mut v = Vec::new();
+            for e in rd.flatten() {
+                if v.len() >= MAX_PROBE_ENTRIES {
+                    return None;
+                }
+                let is_dir = e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink());
+                v.push((e.file_name().to_string_lossy().into_owned(), is_dir));
+            }
+            Some(Rc::new(v))
+        });
+        self.listings.insert(key, listing.clone());
+        listing
     }
-    pi == p.len()
+
+    fn exists(&mut self, path: &Path) -> bool {
+        if !is_probe_safe(path) {
+            return false;
+        }
+        let text = path.to_string_lossy().replace('/', "\\");
+        let comps: Vec<&str> = text[3..].split('\\').filter(|c| !c.is_empty()).collect();
+        let mut current = vec![PathBuf::from(&text[..3])];
+        let mut budget = MAX_PROBE_ENTRIES;
+        for (i, name) in comps.iter().enumerate() {
+            let last = i + 1 == comps.len();
+            if !name.contains(['*', '?']) {
+                for p in &mut current {
+                    p.push(name);
+                }
+                continue;
+            }
+            let mut next = Vec::new();
+            for dir in &current {
+                let Some(listing) = self.list(dir) else { continue };
+                if listing.len() > budget {
+                    return false;
+                }
+                budget -= listing.len();
+                for (entry, is_dir) in listing.iter() {
+                    if (last || *is_dir) && wildcard_match(name, entry) {
+                        next.push(dir.join(entry));
+                    }
+                }
+            }
+            current = next;
+            if current.is_empty() {
+                return false;
+            }
+        }
+        current.iter().any(|p| std::fs::symlink_metadata(p).is_ok())
+    }
 }
 
 #[cfg(test)]
@@ -918,7 +1006,8 @@ mod tests {
 
         let beta = by("winapp2:Beta Temp");
         assert_eq!(beta.label, "Beta Temp");
-        assert_eq!(beta.group, "Applicazioni");
+        // LangSecRef=3026 è la sezione Firefox di CCleaner.
+        assert_eq!(beta.group, "Browser: Firefox");
         assert_eq!(beta.origin, Origin::Winapp2);
         match &beta.options[0].actions[0] {
             Action::Files { recurse, remove_self, search, path, patterns } => {
@@ -1176,6 +1265,108 @@ mod tests {
     }
 
     #[test]
+    fn probe_safety_rules() {
+        for ok in [r"C:\Users\u\AppData\Local\Microsoft\Edge*", r"D:\x\*\*\*\*\*\*", "c:/a/b"] {
+            assert!(is_probe_safe(Path::new(ok)), "{ok}");
+        }
+        for bad in [
+            r"\\host\share\x",
+            r"\\?\C:\x",
+            r"\\.\PhysicalDrive0",
+            r"\\?\Volume{0}\x",
+            r"\??\C:\x",
+            r"C:x",
+            r"x\y",
+            r"C:\a\..\b",
+            r"C:\a\.\b",
+            r"C:\a.\b",
+            r"C:\a \b",
+            r"C:\a\b:stream",
+            r"C:\*\*\*\*\*\*\*",
+        ] {
+            assert!(!is_probe_safe(Path::new(bad)), "{bad}");
+        }
+    }
+
+    /// I3: `DetectFile` verso UNC, `\\?\`, `..` non si cerca nemmeno se il
+    /// file esiste; lo stesso file con un percorso normale sì.
+    #[test]
+    fn unsafe_detect_paths_are_never_probed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let real = tmp.path().join("present.txt");
+        fs::write(&real, "x").unwrap();
+        let shown = real.to_string_lossy().replace('/', "\\");
+        let parent = tmp.path().file_name().unwrap().to_string_lossy().into_owned();
+        let detect = |d: &str| {
+            let (w, _) = parse(&format!("[D *]\nDetectFile={d}\nFileKey1=%AppData%\\D|*.tmp\n"));
+            !to_cleaners_with(&w, &env, &no_registry).0.is_empty()
+        };
+        assert!(detect(&shown));
+        assert!(!detect(&format!(r"\\?\{shown}")));
+        assert!(!detect(&format!(r"{}\..\{parent}\present.txt", tmp.path().display())));
+        assert!(!detect(r"\\pc-rules-no-such-host.invalid\share\x"));
+        assert!(!detect(r"C:\*\*\*\*\*\*\*\x"));
+    }
+
+    #[test]
+    fn huge_folders_stop_the_probe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let big = tmp.path().join("big");
+        fs::create_dir_all(&big).unwrap();
+        for i in 0..=MAX_PROBE_ENTRIES {
+            fs::write(big.join(format!("f{i}")), b"").unwrap();
+        }
+        let mut probe = Probe::default();
+        assert!(!probe.exists(&big.join("f1*")), "oltre il limite di voci");
+        // Senza jolly non si elenca nulla.
+        assert!(probe.exists(&big.join("f1")));
+    }
+
+    #[test]
+    fn folder_listings_are_cached_across_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("Local").join("Microsoft");
+        fs::create_dir_all(local.join("Edge Beta").join("User Data")).unwrap();
+        let mut probe = Probe::default();
+        for _ in 0..40 {
+            assert!(probe.exists(&local.join("Edge*").join("User Data")));
+            assert!(!probe.exists(&local.join("Edge*").join("Nope")));
+        }
+        assert_eq!(probe.reads, 1);
+    }
+
+    #[test]
+    fn groups_come_from_lang_sec_ref_then_section() {
+        let (w, _) = parse(
+            "[A *]\nLangSecRef=3021\n[B *]\nLangSecRef=3022\n[C *]\nLangSecRef=3023\n\
+             [D *]\nLangSecRef=3024\n[E *]\nLangSecRef=3025\n[F *]\nSection=Games\n\
+             [G *]\nSection=Opera GX Web Browser\n[H *]\nSection=Genspark Web browser\n\
+             [I *]\nSection=Adobe\n[J *]\n[K *]\nLangSecRef=3029\n[L *]\nLangSecRef=9999\nSection=Games\n\
+             [M *]\nLangSecRef=3024\nSection=Games\n",
+        );
+        let got: Vec<String> = w.entries.iter().map(group_of).collect();
+        assert_eq!(
+            got,
+            vec![
+                "Applicazioni",
+                "Internet",
+                "Multimedia",
+                "Utilità",
+                "Windows",
+                "Giochi",
+                "Browser: Opera GX",
+                "Browser: Genspark",
+                "Adobe",
+                "Applicazioni",
+                "Browser: Google Chrome",
+                "Giochi",
+                "Utilità",
+            ]
+        );
+    }
+
+    #[test]
     fn wildcard_matching() {
         assert!(wildcard_match("Adobe Photoshop*", "ADOBE PHOTOSHOP 2026"));
         assert!(wildcard_match("a?c", "abc"));
@@ -1268,6 +1459,7 @@ mod tests {
         // Quante regole e voci toglie ciascuna regola di sicurezza (indipendente
         // dalla rilevazione; variabili dell'ambiente vero, sola lettura).
         let env = Env::from_process();
+        let guard = Guard::new(&env);
         let (mut wild_extra, mut reg_new, mut dropped_wild, mut dropped_reg) = (0, 0, 0, 0);
         let (mut entries_with_rules, mut dropped_any) = (0, 0);
         // Registro: regola precedente contro `regguard`, con l'elenco di ciò che
@@ -1281,8 +1473,8 @@ mod tests {
                 if ex.is_empty() {
                     continue;
                 }
-                let old = !ex.iter().all(|p| protected(p, &env).is_some());
-                let new = !ex.iter().any(|p| unsafe_files_rule(p, fk, &env));
+                let old = !ex.iter().all(|p| guard.protected(p).is_some());
+                let new = !ex.iter().any(|p| unsafe_files_rule(p, fk, &guard));
                 old_ok += old as u32;
                 new_ok += new as u32;
                 if old && !new {
