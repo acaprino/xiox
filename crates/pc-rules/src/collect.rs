@@ -947,6 +947,69 @@ mod tests {
     }
 
     #[test]
+    fn intermediate_and_suffix_wildcards_resolve_to_candidate_bases() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        let e = env(&[("localappdata", &root.to_string_lossy())]);
+        // due cartelle di versione sorelle, solo una ha `caches`
+        write(&root.join("JetBrains").join("IDEA2025").join("caches").join("a.idx"), "12");
+        write(&root.join("JetBrains").join("IDEA2025").join("keep.xml"), "1");
+        write(&root.join("JetBrains").join("PyCharm2024").join("other").join("b.idx"), "1");
+        let walk_files = |path: &str, search: Search| Action::Files {
+            path: path.into(),
+            patterns: vec![],
+            recurse: true,
+            remove_self: false,
+            search,
+        };
+        let o = opt(vec![walk_files(
+            r"%LocalAppData%\JetBrains\*\caches",
+            Search::WalkFiles,
+        )]);
+        let c = collect(&o, &e, &never);
+        assert_eq!(names(&c, root), vec![r"JetBrains\IDEA2025\caches\a.idx"]);
+        assert_eq!(c.bytes, 2);
+        // carattere jolly come suffisso di un segmento
+        write(&root.join("Google").join("AndroidStudio2024.1").join("caches").join("c.bin"), "1");
+        write(&root.join("Google").join("AndroidStudio2025.1").join("caches").join("d.bin"), "1");
+        write(&root.join("Google").join("Chrome").join("caches").join("e.bin"), "1");
+        let o = opt(vec![walk_files(
+            r"%LocalAppData%\Google\AndroidStudio*\caches",
+            Search::WalkFiles,
+        )]);
+        let c = collect(&o, &e, &never);
+        assert_eq!(
+            names(&c, root),
+            vec![
+                r"Google\AndroidStudio2024.1\caches\c.bin",
+                r"Google\AndroidStudio2025.1\caches\d.bin"
+            ]
+        );
+        // ogni candidato passa da `protected`: un jolly che porta a `.git` non raccoglie
+        write(&root.join("w1").join(".git").join("HEAD"), "x");
+        let o = opt(vec![walk_files(r"%LocalAppData%\w*\.git", Search::WalkFiles)]);
+        let c = collect(&o, &e, &never);
+        assert!(c.files.is_empty());
+        assert_eq!(c.skipped, 1);
+        // modelli già tradotti da regex: `*.jsonl` e `*.jsonl.*`
+        write(&root.join("agent").join("s1").join("x.jsonl"), "1");
+        write(&root.join("agent").join("s1").join("x.jsonl.bak"), "1");
+        write(&root.join("agent").join("s1").join("x.txt"), "1");
+        let o = opt(vec![Action::Files {
+            path: r"%LocalAppData%\agent\*".into(),
+            patterns: vec!["*.jsonl".into(), "*.jsonl.*".into()],
+            recurse: true,
+            remove_self: false,
+            search: Search::WalkFiles,
+        }]);
+        let c = collect(&o, &e, &never);
+        assert_eq!(
+            names(&c, root),
+            vec![r"agent\s1\x.jsonl", r"agent\s1\x.jsonl.bak"]
+        );
+    }
+
+    #[test]
     fn overlapping_actions_do_not_double_count() {
         let t = tempfile::tempdir().unwrap();
         let base = t.path().join("c");
