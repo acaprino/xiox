@@ -71,6 +71,7 @@ fn execute_plan_refuses_paths_not_in_the_last_scan() {
         projects: vec![report(r"C:\dc-app-test-missing\proj", false, false)],
         worktrees: vec![report(r"C:\dc-app-test-missing\wt", true, true)],
         other_worktrees: vec![report(r"C:\dc-app-test-missing\other", false, true)],
+        scanned_at_ms: now_ms(),
         ..Default::default()
     };
     let refused = [
@@ -102,6 +103,7 @@ fn execute_plan_passes_scanned_paths_to_the_remover() {
     let scan = DevScan {
         projects: vec![report(proj.to_str().unwrap(), false, false)],
         worktrees: vec![whole_worktree(wt.to_str().unwrap(), repo.to_str().unwrap())],
+        scanned_at_ms: now_ms(),
         ..Default::default()
     };
     // Different case and a trailing separator: compared through `path_key`.
@@ -126,9 +128,47 @@ fn canonical_scan() -> (DevScan, PathBuf, PathBuf) {
     let scan = DevScan {
         projects: vec![report(proj.to_str().unwrap(), false, false)],
         worktrees: vec![whole_worktree(wt.to_str().unwrap(), repo.to_str().unwrap())],
+        scanned_at_ms: now_ms(),
         ..Default::default()
     };
     (scan, proj, wt)
+}
+
+#[derive(Default)]
+struct CountingRemover {
+    runs: Mutex<usize>,
+}
+
+impl Remover for CountingRemover {
+    /// Counts the runs; always a dry run, so a test can never remove anything.
+    fn execute(&self, plan: &CleanPlan, _dry_run: bool) -> CleanResult {
+        *self.runs.lock().unwrap() += 1;
+        dc_cleaner::DefaultRemover.execute(plan, true)
+    }
+}
+
+#[test]
+fn a_plan_from_an_old_analysis_is_refused_before_anything_runs() {
+    let (mut scan, proj, _) = canonical_scan();
+    let t = 1_800_000_000_000;
+    scan.scanned_at_ms = t;
+    let plan = plan_of(vec![item_for(&proj, &proj.join("target"), ArtifactKind::RustTarget, PlanAction::RemoveDir)]);
+    let remover = CountingRemover::default();
+
+    // Dialog opened at T, «Continua» pressed 31 minutes later.
+    let err = execute_plan_with(&scan, &plan, t + 31 * 60 * 1000, &remover).unwrap_err();
+    assert_eq!(err, STALE_ANALYSIS);
+    assert_eq!(err, "L'analisi è troppo vecchia: premi «Analizza» di nuovo.");
+    assert_eq!(*remover.runs.lock().unwrap(), 0, "nothing executed");
+    assert_eq!(execute_plan_at(&scan, &plan, t + 31 * 60 * 1000).unwrap_err(), STALE_ANALYSIS);
+    // Unknown age: refused too.
+    let unknown = DevScan { scanned_at_ms: 0, ..scan.clone() };
+    assert_eq!(execute_plan_with(&unknown, &plan, t, &remover).unwrap_err(), STALE_ANALYSIS);
+    assert_eq!(*remover.runs.lock().unwrap(), 0);
+
+    // Within the half hour the plan runs (the paths do not exist: nothing is touched).
+    execute_plan_with(&scan, &plan, t + 29 * 60 * 1000, &remover).expect("fresh enough");
+    assert_eq!(*remover.runs.lock().unwrap(), 1);
 }
 
 /// Refused by both `checked_plan` and `execute_plan`, with the same "rifiutato" error.
@@ -323,9 +363,14 @@ fn with_file(mut s: ArchivedSession, file: &str) -> ArchivedSession {
 
 #[test]
 fn revalidation_keeps_only_sessions_still_archived_and_free() {
+    // The kept session's rollout must exist: dc-sessions refuses one that vanished.
+    let td = tempfile::tempdir().unwrap();
+    let fine = td.path().join("fine.jsonl");
+    std::fs::write(&fine, "x").unwrap();
+    let fine_other_spelling = fine.to_string_lossy().to_uppercase().replace('\\', "/");
     let scan = DevScan {
         archived: vec![
-            with_file(archived(Agent::Codex, "fine", None), r"C:\s\fine.jsonl"),
+            with_file(archived(Agent::Codex, "fine", None), fine.to_str().unwrap()),
             with_file(archived(Agent::Codex, "reopened", None), r"C:\s\reopened.jsonl"),
             with_file(archived(Agent::Codex, "gone", None), r"C:\s\gone.jsonl"),
             with_file(archived(Agent::Codex, "moved", None), r"C:\s\moved.jsonl"),
@@ -338,7 +383,7 @@ fn revalidation_keeps_only_sessions_still_archived_and_free() {
         calls.lock().unwrap().push(agent);
         match agent {
             Agent::Codex => vec![
-                with_file(archived(Agent::Codex, "fine", None), r"c:/S/FINE.jsonl"),
+                with_file(archived(Agent::Codex, "fine", None), &fine_other_spelling),
                 // Reopened (live) or with an open descendant since the analysis.
                 with_file(archived(Agent::Codex, "reopened", Some("sessione in uso")), r"C:\s\reopened.jsonl"),
                 // Continued into a new rollout: not the session the analysis saw.

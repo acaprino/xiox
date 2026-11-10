@@ -110,7 +110,7 @@ pub struct DevState {
 }
 
 /// Progetti e worktree non si puliscono da un'analisi più vecchia di `dc_app::MAX_SCAN_AGE_MS`.
-const STALE_SCAN: &str = "L'analisi è troppo vecchia: premi «Analizza» di nuovo.";
+const STALE_SCAN: &str = dc_app::STALE_ANALYSIS;
 /// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
 const CLEANUP_DIED: &str = "Un errore interno ha fermato la pulizia: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
 
@@ -260,6 +260,23 @@ impl DevState {
 
     fn open_confirm(&mut self) {
         self.open_confirm_at(dc_app::now_ms());
+    }
+
+    /// Cambia sezione; l'avviso legato al pulsante della sezione precedente sparisce.
+    fn set_section(&mut self, s: Section) {
+        self.section = s;
+        self.notice = None;
+    }
+
+    /// «Continua» nel dialogo: l'età dell'analisi si ricontrolla a `now_ms` (il dialogo può
+    /// essere rimasto aperto a lungo). Troppo vecchia per progetti e worktree: nessuna pulizia,
+    /// avviso nella striscia gialla. `Some` = la conferma da passare a `start_clean`.
+    fn accept_confirm(&mut self, c: Confirm, now_ms: i64) -> Option<Confirm> {
+        if c.section != Section::Sessions && c.scan.is_stale(now_ms) {
+            self.notice = Some(STALE_SCAN.into());
+            return None;
+        }
+        Some(c)
     }
 
     /// Costruisce il piano dalla selezione della sezione visibile (lo stesso che verrà
@@ -419,7 +436,7 @@ impl DevState {
                 .stroke(Stroke::NONE)
                 .min_size(Vec2::new(ui.available_width(), 28.0));
             if ui.add(btn).clicked() {
-                self.section = s;
+                self.set_section(s);
             }
         }
 
@@ -704,7 +721,7 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         });
     });
     if go {
-        if let Some(c) = state.confirm.take() {
+        if let Some(c) = state.confirm.take().and_then(|c| state.accept_confirm(c, dc_app::now_ms())) {
             state.start_clean(ctx, c);
         }
     } else if close {
@@ -1360,6 +1377,35 @@ mod tests {
         st.open_confirm_at(at);
         assert!(st.confirm.is_none() && st.notice.is_some());
         st.set_scan(three_sections());
+        assert!(st.notice.is_none());
+    }
+
+    #[test]
+    fn a_dialog_left_open_past_half_an_hour_does_not_clean() {
+        let t = 1_800_000_000_000;
+        let mut st = state();
+        st.set_scan(DevScan { scanned_at_ms: t, ..three_sections() });
+        st.sel_worktrees = vec![true];
+        for section in [Section::Projects, Section::Worktrees] {
+            st.set_section(section);
+            st.open_confirm_at(t);
+            let c = st.confirm.take().expect("aperta in tempo");
+            assert!(st.accept_confirm(c, t + 31 * 60 * 1000).is_none(), "{section:?}");
+            assert_eq!(st.notice.as_deref(), Some(STALE_SCAN));
+            assert!(!st.busy(), "nessuna pulizia avviata");
+            // Cambiare sezione toglie l'avviso.
+            st.set_section(Section::Sessions);
+            assert!(st.notice.is_none());
+        }
+        st.set_section(Section::Projects);
+        st.open_confirm_at(t);
+        let c = st.confirm.take().unwrap();
+        assert!(st.accept_confirm(c, t + 29 * 60 * 1000).is_some());
+        // Le sessioni si ricontrollano dal vivo: l'età non le ferma.
+        st.set_section(Section::Sessions);
+        st.open_confirm_at(t);
+        let c = st.confirm.take().unwrap();
+        assert!(st.accept_confirm(c, t + 31 * 60 * 1000).is_some());
         assert!(st.notice.is_none());
     }
 

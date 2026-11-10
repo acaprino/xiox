@@ -149,6 +149,9 @@ pub struct DevScan {
 /// How long an analysis may be used to clean projects and worktrees.
 pub const MAX_SCAN_AGE_MS: i64 = 30 * 60 * 1000;
 
+/// Why a plan from an analysis older than [`MAX_SCAN_AGE_MS`] is refused.
+pub const STALE_ANALYSIS: &str = "L'analisi è troppo vecchia: premi «Analizza» di nuovo.";
+
 impl DevScan {
     /// Too old to plan a cleanup from: more than [`MAX_SCAN_AGE_MS`] before `now_ms`, or of
     /// unknown age. A clock that went backwards counts as fresh.
@@ -429,10 +432,28 @@ pub fn build_plan(scan: &DevScan, selected_ids: &[String], mode: RemoveMode) -> 
 }
 
 /// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after
-/// [`checked_plan`]: only items the scan itself would plan are executed.
+/// [`checked_plan`]: only items the scan itself would plan are executed. An analysis older than
+/// [`MAX_SCAN_AGE_MS`] is refused ([`STALE_ANALYSIS`]) before anything is touched.
 pub fn execute_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanResult, String> {
+    execute_plan_at(scan, plan, now_ms())
+}
+
+/// [`execute_plan`] with the current time given: the age check uses `now_ms`.
+pub fn execute_plan_at(scan: &DevScan, plan: &CleanPlan, now_ms: i64) -> Result<CleanResult, String> {
+    execute_plan_with(scan, plan, now_ms, &dc_cleaner::DefaultRemover)
+}
+
+fn execute_plan_with(
+    scan: &DevScan,
+    plan: &CleanPlan,
+    now_ms: i64,
+    remover: &dyn Remover,
+) -> Result<CleanResult, String> {
+    if scan.is_stale(now_ms) {
+        return Err(STALE_ANALYSIS.into());
+    }
     let checked = checked_plan(scan, plan)?;
-    Ok(dc_cleaner::DefaultRemover.execute(&checked, false))
+    Ok(remover.execute(&checked, false))
 }
 
 fn same_action(a: &PlanAction, b: &PlanAction) -> bool {
