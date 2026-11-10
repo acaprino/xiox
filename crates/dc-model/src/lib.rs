@@ -196,7 +196,7 @@ pub struct IndexedDir {
     pub size: SizeInfo,
 }
 
-/// Pre-built directory index (WizTree MFT export). Lets the scanner find artifact
+/// Pre-built directory index. Lets the scanner find artifact
 /// directories without walking the disk.
 pub trait DirIndex: Send + Sync {
     fn backend_name(&self) -> &'static str;
@@ -413,8 +413,6 @@ pub struct Settings {
     #[serde(default)]
     pub scan_roots: bool,
     pub inactive_days: u32,
-    pub use_wiztree: bool,
-    pub wiztree_path: Option<PathBuf>,
     pub remove_mode: RemoveMode,
 }
 
@@ -423,7 +421,7 @@ pub struct Settings {
 pub struct ScanResult {
     pub reports: Vec<ProjectReport>,
     pub warnings: Vec<String>,
-    /// "wiztree" | "walker"
+    /// Name of the scan backend that produced the result
     pub backend: String,
     pub elapsed_ms: u64,
 }
@@ -439,11 +437,22 @@ mod tests {
     #[test]
     fn old_settings_file_keeps_roots_but_scans_sessions_only() {
         let s: Settings = serde_json::from_str(
-            r#"{"roots":["D:\\Projects"],"inactiveDays":14,"useWiztree":true,"wiztreePath":null,"removeMode":"permanent"}"#,
+            r#"{"roots":["D:\\Projects"],"inactiveDays":14,"removeMode":"permanent"}"#,
         )
         .unwrap();
         assert!(s.session_projects);
         assert!(!s.scan_roots);
+        assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
+    }
+
+    #[test]
+    fn old_devclean_settings_with_wiztree_fields_still_load() {
+        let json = r#"{"sessionProjects":true,"roots":["D:\\Projects"],"scanRoots":false,
+                       "inactiveDays":30,"useWiztree":true,"wiztreePath":"C:\\x\\WizTree64.exe",
+                       "removeMode":"permanent"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.inactive_days, 30);
+        assert_eq!(s.remove_mode, RemoveMode::Permanent);
         assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
     }
 
