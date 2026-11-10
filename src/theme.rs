@@ -10,6 +10,11 @@ pub const TEXT: Color32 = Color32::from_rgb(0x2b, 0x2e, 0x33);
 pub const MUTED: Color32 = Color32::from_rgb(0x7a, 0x7f, 0x87);
 pub const WARN_BG: Color32 = Color32::from_rgb(0xff, 0xf4, 0xd6);
 pub const LINE: Color32 = Color32::from_rgb(0xe1, 0xe3, 0xe7);
+pub const RED: Color32 = Color32::from_rgb(0xd9, 0x48, 0x3b);
+/// Righe alterne delle tabelle (lo stesso grigio dei widget inattivi in `style()`).
+pub const STRIPE: Color32 = Color32::from_rgb(0xf7, 0xf8, 0xfa);
+/// Voce scelta in un elenco su card bianca (lo stesso azzurro del passaggio del mouse).
+pub const SEL_BG: Color32 = Color32::from_rgb(0xe8, 0xf0, 0xfd);
 
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) {
     egui::Frame::new()

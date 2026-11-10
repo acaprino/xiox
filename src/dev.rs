@@ -7,27 +7,21 @@
 
 use crate::sys;
 use crate::theme::*;
-use dc_app::DevScan;
+use dc_app::{DevScan, ANALYSIS_FAILED};
 use dc_model::{path_key, Agent, CleanPlan, ItemOutcome, PlanAction, PlanItem, ProjectReport, ProjectStatus, RemoveMode, Settings};
 use dc_mukade::ArchivedSession;
 use dc_sessions::{SystemCli, SystemTrash};
 use eframe::egui::{self, Align, Color32, Layout, Margin, RichText, Stroke, Ui, Vec2};
 use std::collections::{HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
 
-const RED: Color32 = Color32::from_rgb(0xd9, 0x48, 0x3b);
-/// Righe alterne delle tabelle (lo stesso grigio dei widget inattivi in `style()`).
-const STRIPE: Color32 = Color32::from_rgb(0xf7, 0xf8, 0xfa);
-const SEL_BG: Color32 = Color32::from_rgb(0xe8, 0xf0, 0xfd);
 const ROW_H: f32 = 22.0;
 const CHECK_W: f32 = 22.0;
 /// Spazio lasciato alla barra di scorrimento a destra delle tabelle.
 const SCROLLBAR: f32 = 12.0;
-/// L'avviso di `dc_app::run_scan` quando l'analisi dei progetti è fallita: le liste di
-/// progetti e worktree sono vuote ma non perché non ci sia nulla (le sessioni restano elencate).
-const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
@@ -69,6 +63,8 @@ pub struct DevCleaned {
     /// Richieste rifiutate per intero (nulla è stato toccato).
     pub errors: Vec<String>,
     pub mode: RemoveMode,
+    /// Un errore interno ha fermato la pulizia a metà: `rows` ha solo gli esiti raccolti prima.
+    pub interrupted: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -80,6 +76,8 @@ enum View {
 
 /// Il dialogo di conferma: il piano esatto che verrà eseguito, solo per la sezione visibile.
 struct Confirm {
+    /// L'analisi da cui è nato il piano: la pulizia gira su questa, non su `DevState::scan`.
+    scan: Arc<DevScan>,
     section: Section,
     plan: Option<CleanPlan>,
     sessions: Vec<(Agent, String)>,
@@ -194,10 +192,11 @@ impl DevState {
             }
         }
         if gone && !done {
+            // Una pulizia morta a metà può aver già tolto qualcosa: l'analisi non vale più e
+            // «Avvia pulizia» resta spento fino a una nuova analisi.
+            self.drop_data();
             self.error = Some("Il lavoro si è interrotto per un errore interno.".into());
-            if self.view == View::Cleaned && self.cleaned.is_none() {
-                self.view = View::Empty;
-            }
+            self.view = View::Empty;
             done = true;
         }
         if done {
@@ -232,6 +231,11 @@ impl DevState {
             let _ = tx.send(DevMsg::Scanned(scan));
             ctx.request_repaint();
         });
+    }
+
+    /// Quando «Avvia pulizia» è attivo: nessun lavoro in corso e qualcosa scelto nella sezione visibile.
+    fn can_clean(&self) -> bool {
+        !self.busy() && self.selection().0 > 0
     }
 
     /// (selezionati, totale, byte selezionati) della sezione visibile.
@@ -289,21 +293,21 @@ impl DevState {
             }
         }
         let sessions = sessions.iter().map(|s| (s.agent, s.id.clone())).collect();
-        self.confirm = Some(Confirm { section, plan, sessions, rows, summary, error, mode });
+        self.confirm = Some(Confirm { scan, section, plan, sessions, rows, summary, error, mode });
     }
 
     fn start_clean(&mut self, ctx: &egui::Context, c: Confirm) {
-        let Some(scan) = self.scan.clone() else { return };
         let plan_labels: HashMap<String, String> =
-            c.plan.iter().flat_map(|p| &p.items).map(|i| (path_key(&i.path), plan_label(&scan, i))).collect();
+            c.plan.iter().flat_map(|p| &p.items).map(|i| (path_key(&i.path), plan_label(&c.scan, i))).collect();
         let picked: HashSet<(Agent, &str)> = c.sessions.iter().map(|(a, id)| (*a, id.as_str())).collect();
-        let session_labels: HashMap<(Agent, String), String> = scan
+        let session_labels: HashMap<(Agent, String), String> = c
+            .scan
             .archived
             .iter()
             .filter(|s| picked.contains(&(s.agent, s.id.as_str())))
             .map(|s| ((s.agent, s.id.clone()), session_label(s)))
             .collect();
-        let Confirm { plan, sessions, mode, .. } = c;
+        let Confirm { scan, plan, sessions, mode, .. } = c;
         self.cleaned = None;
         self.error = None;
         self.view = View::Cleaned;
@@ -317,42 +321,44 @@ impl DevState {
                 let _ = tx.send(DevMsg::Step(t.to_string(), p));
                 ctx.request_repaint();
             };
-            let mut out = DevCleaned { rows: Vec::new(), freed: 0, errors: Vec::new(), mode };
-            if let Some(plan) = plan.filter(|p| !p.items.is_empty()) {
-                step("Eliminazione di cartelle e worktree…", 0.1);
-                match dc_app::execute_plan(&scan, &plan) {
-                    Ok(res) => {
-                        out.freed = out.freed.saturating_add(res.bytes_freed);
-                        for it in res.items {
-                            let label = plan_labels
-                                .get(&path_key(&it.path))
-                                .cloned()
-                                .unwrap_or_else(|| it.path.display().to_string());
-                            out.rows.push((label, it.outcome));
-                        }
-                    }
-                    Err(e) => out.errors.push(e),
-                }
-            }
-            if !sessions.is_empty() {
-                step("Cancellazione delle sessioni archiviate…", 0.6);
-                let cli = SystemCli::locate();
-                match dc_app::delete_archived(&scan, &sessions, mode, &cli, &SystemTrash) {
-                    Ok(done) => {
-                        for o in done {
-                            if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
-                                out.freed = out.freed.saturating_add(*bytes_freed);
+            let mut out = DevCleaned { rows: Vec::new(), freed: 0, errors: Vec::new(), mode, interrupted: false };
+            guarded(&mut out, |out| {
+                if let Some(plan) = plan.filter(|p| !p.items.is_empty()) {
+                    step("Eliminazione di cartelle e worktree…", 0.1);
+                    match dc_app::execute_plan(&scan, &plan) {
+                        Ok(res) => {
+                            out.freed = out.freed.saturating_add(res.bytes_freed);
+                            for it in res.items {
+                                let label = plan_labels
+                                    .get(&path_key(&it.path))
+                                    .cloned()
+                                    .unwrap_or_else(|| it.path.display().to_string());
+                                out.rows.push((label, it.outcome));
                             }
-                            let label = session_labels
-                                .get(&(o.agent, o.id.clone()))
-                                .cloned()
-                                .unwrap_or_else(|| format!("{} · {}", agent_label(o.agent), o.id));
-                            out.rows.push((label, o.outcome));
                         }
+                        Err(e) => out.errors.push(e),
                     }
-                    Err(e) => out.errors.push(e),
                 }
-            }
+                if !sessions.is_empty() {
+                    step("Cancellazione delle sessioni archiviate…", 0.6);
+                    let cli = SystemCli::locate();
+                    match dc_app::delete_archived(&scan, &sessions, mode, &cli, &SystemTrash) {
+                        Ok(done) => {
+                            for o in done {
+                                if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
+                                    out.freed = out.freed.saturating_add(*bytes_freed);
+                                }
+                                let label = session_labels
+                                    .get(&(o.agent, o.id.clone()))
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("{} · {}", agent_label(o.agent), o.id));
+                                out.rows.push((label, o.outcome));
+                            }
+                        }
+                        Err(e) => out.errors.push(e),
+                    }
+                }
+            });
             drop(scan);
             let _ = tx.send(DevMsg::Cleaned(out));
             ctx.request_repaint();
@@ -525,13 +531,18 @@ impl DevState {
     fn cleaned_view(&self, ui: &mut Ui, busy: bool) {
         let title = match &self.cleaned {
             _ if busy => "Pulizia in corso…",
+            Some(c) if c.interrupted => "Pulizia interrotta",
             Some(c) if c.rows.is_empty() && !c.errors.is_empty() => "Pulizia non eseguita",
             _ => "Pulizia completata",
         };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         let Some(c) = &self.cleaned else { return };
+        if c.interrupted {
+            let text = "Un errore interno ha fermato la pulizia: altri elementi potrebbero essere stati toccati senza comparire qui. Premi «Analizza» per vedere cosa resta.";
+            ui.add(egui::Label::new(RichText::new(text).color(RED)).wrap());
+        }
         if c.rows.is_empty() {
-            if c.errors.is_empty() {
+            if c.errors.is_empty() && !c.interrupted {
                 ui.add_space(10.0);
                 ui.label(RichText::new("Nessun elemento da pulire.").color(MUTED));
             }
@@ -584,7 +595,7 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
                     });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if primary(ui, "Avvia pulizia", !busy && selected > 0).clicked() {
+                    if primary(ui, "Avvia pulizia", state.can_clean()).clicked() {
                         state.open_confirm();
                     }
                     if secondary(ui, "Analizza", !busy).clicked() {
@@ -671,6 +682,9 @@ fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
     match (section, mode) {
         (Section::Sessions, RemoveMode::Recycle) => "Una copia viene messa nel Cestino prima della cancellazione, quando il file esiste.",
         (Section::Sessions, RemoveMode::Permanent) => "Le sessioni vengono cancellate definitivamente.",
+        (Section::Worktrees, RemoveMode::Recycle) => {
+            "I worktree vengono rimossi definitivamente con git, anche con «Nel Cestino»; le cartelle di build dentro un worktree vanno nel Cestino."
+        }
         (_, RemoveMode::Recycle) => "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git.",
         (_, RemoveMode::Permanent) => "Gli elementi selezionati verranno eliminati definitivamente.",
     }
@@ -917,6 +931,13 @@ fn report_stats(reports: &[ProjectReport], sel: &[bool]) -> (usize, usize, u64) 
 fn session_stats(sessions: &[ArchivedSession], sel: &[bool]) -> (usize, usize, u64) {
     let chosen: Vec<&ArchivedSession> = chosen_sessions(sessions, sel).collect();
     (chosen.len(), sessions.len(), chosen.iter().map(|s| s.bytes).sum())
+}
+
+/// Esegue la pulizia; un panico non perde gli esiti già raccolti in `out` e la segna interrotta.
+fn guarded(out: &mut DevCleaned, work: impl FnOnce(&mut DevCleaned)) {
+    if catch_unwind(AssertUnwindSafe(|| work(&mut *out))).is_err() {
+        out.interrupted = true;
+    }
 }
 
 /// (selezionati, totale, byte selezionati) di una sola sezione.
@@ -1254,10 +1275,16 @@ mod tests {
         assert_eq!(confirm_text(Section::Sessions, RemoveMode::Permanent), "Le sessioni vengono cancellate definitivamente.");
         assert_eq!(
             confirm_text(Section::Worktrees, RemoveMode::Recycle),
+            "I worktree vengono rimossi definitivamente con git, anche con «Nel Cestino»; le cartelle di build dentro un worktree vanno nel Cestino."
+        );
+        assert_eq!(confirm_text(Section::Worktrees, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
+        assert_eq!(
+            confirm_text(Section::Projects, RemoveMode::Recycle),
             "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git."
         );
         assert_eq!(confirm_text(Section::Projects, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
         let one = Confirm {
+            scan: Arc::new(DevScan::default()),
             section: Section::Sessions,
             plan: None,
             sessions: vec![(Agent::Pi, "x".into())],
@@ -1404,13 +1431,69 @@ mod tests {
     }
 
     #[test]
+    fn a_dead_cleanup_discards_the_scan_and_disables_the_button() {
+        let mut st = state();
+        st.set_scan(three_sections());
+        assert!(st.can_clean());
+        // Come dopo «Continua»: vista dell'esito, lavoro in corso, poi il thread muore senza esito.
+        st.view = View::Cleaned;
+        let (tx, rx) = channel::<DevMsg>();
+        st.job = Some(rx);
+        assert!(!st.can_clean());
+        drop(tx);
+        st.poll();
+        assert!(!st.busy());
+        assert!(st.scan.is_none());
+        assert!(st.sel_projects.is_empty() && st.sel_worktrees.is_empty() && st.sel_sessions.is_empty());
+        assert!(!st.can_clean());
+        assert!(st.error.is_some());
+        assert_eq!(st.view, View::Empty);
+    }
+
+    #[test]
+    fn a_panic_keeps_the_outcomes_collected_so_far() {
+        let mut out = DevCleaned { rows: vec![], freed: 0, errors: vec![], mode: RemoveMode::Recycle, interrupted: false };
+        guarded(&mut out, |o| {
+            o.rows.push(("a · Rust target/".into(), ItemOutcome::Removed { bytes_freed: 7 }));
+            o.freed = 7;
+        });
+        assert!(!out.interrupted);
+        guarded(&mut out, |o| {
+            o.rows.push(("b · node_modules/".into(), ItemOutcome::Removed { bytes_freed: 3 }));
+            panic!("prova");
+        });
+        assert!(out.interrupted);
+        assert_eq!(out.rows.len(), 2);
+        assert_eq!(out.freed, 7);
+    }
+
+    #[test]
+    fn the_confirmation_uses_the_chosen_mode_and_keeps_its_scan() {
+        let mut st = state();
+        st.set_scan(three_sections());
+        for mode in [RemoveMode::Permanent, RemoveMode::Recycle] {
+            st.settings.remove_mode = mode;
+            st.open_confirm();
+            let c = st.confirm.take().unwrap();
+            assert_eq!(c.mode, mode);
+            assert!(Arc::ptr_eq(&c.scan, st.scan.as_ref().unwrap()));
+        }
+        // Una nuova analisi arrivata dopo l'apertura non cambia la conferma già aperta.
+        st.open_confirm();
+        let old = st.scan.clone().unwrap();
+        st.set_scan(three_sections());
+        let c = st.confirm.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&c.scan, &old) && !Arc::ptr_eq(&c.scan, st.scan.as_ref().unwrap()));
+    }
+
+    #[test]
     fn cleaning_result_drops_the_scan() {
         let mut st = state();
         st.set_scan(DevScan { projects: vec![report("a", ProjectStatus::Inactive, true, 10)], ..Default::default() });
         let (tx, rx) = channel();
         st.job = Some(rx);
         let rows = vec![("a · Rust target/".to_string(), ItemOutcome::Removed { bytes_freed: 10 })];
-        tx.send(DevMsg::Cleaned(DevCleaned { rows, freed: 10, errors: vec![], mode: RemoveMode::Recycle })).unwrap();
+        tx.send(DevMsg::Cleaned(DevCleaned { rows, freed: 10, errors: vec![], mode: RemoveMode::Recycle, interrupted: false })).unwrap();
         st.poll();
         assert!(!st.busy());
         assert!(st.scan.is_none());

@@ -282,7 +282,7 @@ impl ProjectScanner for SplitScanner<'_> {
 }
 
 const FAST_READ_FAILED: &str = "Lettura veloce del disco non riuscita: uso la scansione normale.";
-const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
+pub const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
 
 /// Runs the MFT index build; a panic becomes a warning and no index (the walker does it all).
 fn guarded_index<I>(build: impl FnOnce() -> (Option<I>, Vec<String>), warnings: &mut Vec<String>) -> Option<I> {
