@@ -50,29 +50,40 @@ impl Env {
     /// regole esterne.
     ///
     /// **Fiducia.** L'app gira sempre da amministratore ma eredita l'ambiente
-    /// dell'utente, e un processo non elevato può cambiare `HKCU\Environment`:
-    /// con `LOCALAPPDATA=C:\Windows` una regola di `%LocalAppData%` pulirebbe
-    /// Windows, e le cartelle che `protected` difende si sposterebbero. Quindi:
-    /// - le radici vengono dalle cartelle note di Windows
-    ///   (`SHGetKnownFolderPath`), mai dalle variabili: `userprofile`,
-    ///   `appdata`, `localappdata`, `locallowappdata`, `programdata`,
+    /// dell'utente, e un processo non elevato può cambiare `HKCU\Environment`
+    /// e `HKCU\...\User Shell Folders`: con `LOCALAPPDATA=C:\Windows` una
+    /// regola di `%LocalAppData%` pulirebbe Windows, e le cartelle che
+    /// `protected` difende si sposterebbero. Quindi:
+    /// - radici di sistema dalle cartelle note che solo gli amministratori
+    ///   cambiano (`SHGetKnownFolderPath`; il profilo viene da `ProfileList`
+    ///   in HKLM), mai dalle variabili: `userprofile`, `programdata`,
     ///   `programfiles`, `programfiles(x86)`, `programw6432`,
     ///   `commonprogramfiles`, `commonprogramfiles(x86)`, `commonprogramw6432`,
-    ///   `windir` e `systemroot`, `system32`, `public`, `onedrive`, e le
-    ///   cartelle dei documenti `documents`, `desktop`, `downloads`, `music`,
-    ///   `pictures`, `video` (quelle che Windows non dà si mettono sotto il
-    ///   profilo). Si ricavano da queste `systemdrive` (l'unità di `windir`),
-    ///   `allusersprofile` e `commonappdata` (= `programdata`), `homedrive` e
-    ///   `homepath` (dal profilo); `username` viene da `GetUserNameW`;
+    ///   `windir` e `systemroot`, `system32`, `public`. Si ricavano da queste
+    ///   `systemdrive` (l'unità di `windir`), `allusersprofile` e
+    ///   `commonappdata` (= `programdata`), `homedrive` e `homepath` (dal
+    ///   profilo); `username` viene da `GetUserNameW`;
+    /// - cartelle note dell'utente (`appdata`, `localappdata`,
+    ///   `locallowappdata`, `onedrive`, `documents`, `desktop`, `downloads`,
+    ///   `music`, `pictures`, `video`): si accettano solo se stanno dentro il
+    ///   profilo (le cartelle spostate in `%USERPROFILE%\OneDrive` sì) e, per
+    ///   AppData, se `protected` le permette; altrimenti la cartella
+    ///   predefinita sotto il profilo. Una cartella dei documenti spostata
+    ///   fuori (`D:\Docs`) resta protetta presa intera con la chiave
+    ///   `protect:<nome>` ([`PROTECT_PREFIX`]), che `expand` non espande: non
+    ///   diventa base delle regole;
     /// - `temp` e `tmp`: il valore del processo, in forma lunga, solo se sta
     ///   dentro il profilo e `protected` lo permette (`…\Temp\2` delle sessioni
     ///   remote); altrimenti `<localappdata>\Temp`;
-    /// - dall'ambiente vengono solo le variabili degli strumenti
-    ///   ([`TOOL_VARS`]): ognuna deve essere un solo percorso assoluto con
-    ///   lettera di unità, si porta in forma lunga, e si scarta se `protected`
-    ///   la rifiuta (`C:\Windows`, il profilo stesso, un nome 8.3 che non si
-    ///   converte): le regole che la usano restano senza variabile e si
-    ///   scartano.
+    /// - `OneDriveConsumer`, `OneDriveCommercial`: come le cartelle dei
+    ///   documenti;
+    /// - variabili degli strumenti ([`TOOL_VARS`]): un solo percorso assoluto
+    ///   con lettera di unità, in forma lunga, permesso da `protected`; dentro
+    ///   il profilo basta l'ambiente, fuori dal profilo (`CARGO_HOME=D:\cargo`)
+    ///   solo se è il valore della variabile di sistema (HKLM `Session
+    ///   Manager\Environment`, `%Var%` espanse con le radici fidate). Un valore
+    ///   dell'utente fuori dal profilo (`C:\Program Files\Vendor`) si scarta, e
+    ///   con lui le regole che lo usano.
     ///
     /// La forma breve 8.3 (`C:\Users\RUNNER~1\…`) si converte con
     /// `GetLongPathNameW`: altrimenti ogni regola di `%Temp%` cadrebbe nel
@@ -85,6 +96,7 @@ impl Env {
             },
             long: &long_path,
             user: &user_name,
+            machine: &machine_var,
         })
     }
 
@@ -103,6 +115,7 @@ impl Env {
             }
             Some(v)
         };
+        // Radici di sistema: cartelle note che solo gli amministratori cambiano.
         let mut map: HashMap<String, String> = HashMap::new();
         for (key, folder) in CORE_FOLDERS {
             if let Some(v) = (src.known)(*folder).and_then(clean) {
@@ -117,7 +130,31 @@ impl Env {
             map.insert("allusersprofile".to_string(), data.clone());
             map.insert("commonappdata".to_string(), data);
         }
-        if let Some(profile) = map.get("userprofile").cloned() {
+        if let Some(user) = (src.user)().filter(|u| !u.trim().is_empty()) {
+            map.insert("username".to_string(), user);
+        }
+        let profile_value = map.get("userprofile").cloned();
+        let profile = profile_value.as_deref().map(path_comps);
+        let inside_profile = |v: &str| {
+            let c = path_comps(v);
+            profile.as_ref().is_some_and(|p| c.len() > p.len() && c.starts_with(p))
+        };
+        // Cartelle dell'utente (HKCU, le cambia anche un processo non
+        // elevato): valgono solo dentro il profilo, altrimenti la cartella
+        // predefinita. Le cartelle dei documenti spostate fuori restano
+        // protette (`protect:<nome>`), senza diventare basi delle regole.
+        let base_guard = crate::guard::Guard::new(&Env(map.clone()));
+        for (key, folder, documents) in USER_FOLDERS {
+            let Some(v) = (src.known)(*folder).and_then(clean) else {
+                continue;
+            };
+            if inside_profile(&v) && (*documents || base_guard.protected(Path::new(&v)).is_none()) {
+                map.insert((*key).to_string(), v);
+            } else if *documents {
+                map.insert(format!("{PROTECT_PREFIX}{key}"), v);
+            }
+        }
+        if let Some(profile) = &profile_value {
             for (key, rel) in UNDER_PROFILE {
                 map.entry((*key).to_string())
                     .or_insert_with(|| format!("{profile}\\{rel}"));
@@ -125,25 +162,46 @@ impl Env {
             map.insert("homedrive".to_string(), profile[..2].to_string());
             map.insert("homepath".to_string(), profile[2..].to_string());
         }
-        if let Some(user) = (src.user)().filter(|u| !u.trim().is_empty()) {
-            map.insert("username".to_string(), user);
-        }
 
         let trusted = Env(map.clone());
-        let allowed = |v: &str| crate::guard::protected(Path::new(v), &trusted).is_none();
-        let profile = map.get("userprofile").map(|p| path_comps(p));
+        let guard = crate::guard::Guard::new(&trusted);
+        let allowed = |v: &str| guard.protected(Path::new(v)).is_none();
         let default_temp = map.get("localappdata").map(|l| format!("{l}\\Temp"));
         for key in ["temp", "tmp"] {
-            let own = (src.var)(key).and_then(clean).filter(|v| {
-                let c = path_comps(v);
-                profile.as_ref().is_some_and(|p| c.len() > p.len() && c.starts_with(p)) && allowed(v)
-            });
+            let own = (src.var)(key)
+                .and_then(clean)
+                .filter(|v| inside_profile(v) && allowed(v));
             if let Some(v) = own.or_else(|| default_temp.clone()) {
                 map.insert(key.to_string(), v);
             }
         }
+        // OneDrive personale e di lavoro: come le cartelle dei documenti.
+        for key in CLOUD_VARS {
+            if let Some(v) = (src.var)(key).and_then(clean) {
+                if inside_profile(&v) {
+                    map.insert((*key).to_string(), v);
+                } else {
+                    map.insert(format!("{PROTECT_PREFIX}{key}"), v);
+                }
+            }
+        }
+        // Strumenti: dentro il profilo basta l'ambiente; fuori, solo se il
+        // valore è quello delle variabili di sistema.
+        let machine = |key: &str| -> Option<String> {
+            let raw = (src.machine)(key)?;
+            let mut values = crate::expand::expand(&raw, &trusted);
+            if values.len() != 1 {
+                return None;
+            }
+            clean(values.pop()?.to_string_lossy().into_owned())
+        };
         for key in TOOL_VARS {
-            if let Some(v) = (src.var)(key).and_then(clean).filter(|v| allowed(v)) {
+            let Some(v) = (src.var)(key).and_then(clean) else {
+                continue;
+            };
+            let scoped = inside_profile(&v)
+                || machine(key).is_some_and(|m| path_comps(&m) == path_comps(&v));
+            if scoped && allowed(&v) {
                 map.insert((*key).to_string(), v);
             }
         }
@@ -158,11 +216,8 @@ impl Env {
 
 /// Variabili che `Env::for_rules` prende dall'ambiente del processo (con i
 /// controlli descritti lì): le cartelle degli strumenti di sviluppo che i
-/// cleaner usano (catalogo, Parte B) e le cartelle OneDrive personali e di
-/// lavoro.
+/// cleaner usano (catalogo, Parte B).
 pub const TOOL_VARS: &[&str] = &[
-    "onedriveconsumer",
-    "onedrivecommercial",
     "android_avd_home",
     "android_home",
     "android_sdk_root",
@@ -217,6 +272,9 @@ struct RuleSources<'a> {
     var: &'a dyn Fn(&str) -> Option<String>,
     long: &'a dyn Fn(&str) -> Option<String>,
     user: &'a dyn Fn() -> Option<String>,
+    /// Variabili di sistema (HKLM, scrivibili solo dagli amministratori),
+    /// col valore com'è nel registro (`%Var%` non espanse).
+    machine: &'a dyn Fn(&str) -> Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,12 +302,10 @@ enum KnownFolder {
     Videos,
 }
 
-/// Variabili che `for_rules` prende dalle cartelle note.
+/// Variabili che `for_rules` prende dalle cartelle note di sistema (registro
+/// HKLM o cartelle fisse: solo gli amministratori le cambiano).
 const CORE_FOLDERS: &[(&str, KnownFolder)] = &[
     ("userprofile", KnownFolder::Profile),
-    ("appdata", KnownFolder::RoamingAppData),
-    ("localappdata", KnownFolder::LocalAppData),
-    ("locallowappdata", KnownFolder::LocalAppDataLow),
     ("programdata", KnownFolder::ProgramData),
     ("programfiles", KnownFolder::ProgramFiles),
     ("programfiles(x86)", KnownFolder::ProgramFilesX86),
@@ -260,14 +316,31 @@ const CORE_FOLDERS: &[(&str, KnownFolder)] = &[
     ("windir", KnownFolder::Windows),
     ("system32", KnownFolder::System),
     ("public", KnownFolder::Public),
-    ("onedrive", KnownFolder::OneDrive),
-    ("documents", KnownFolder::Documents),
-    ("desktop", KnownFolder::Desktop),
-    ("downloads", KnownFolder::Downloads),
-    ("music", KnownFolder::Music),
-    ("pictures", KnownFolder::Pictures),
-    ("video", KnownFolder::Videos),
 ];
+
+/// Cartelle note dell'utente (`HKCU\...\User Shell Folders`, le cambia anche
+/// un processo non elevato): (variabile, cartella, è una cartella dei
+/// documenti).
+const USER_FOLDERS: &[(&str, KnownFolder, bool)] = &[
+    ("appdata", KnownFolder::RoamingAppData, false),
+    ("localappdata", KnownFolder::LocalAppData, false),
+    ("locallowappdata", KnownFolder::LocalAppDataLow, false),
+    ("onedrive", KnownFolder::OneDrive, true),
+    ("documents", KnownFolder::Documents, true),
+    ("desktop", KnownFolder::Desktop, true),
+    ("downloads", KnownFolder::Downloads, true),
+    ("music", KnownFolder::Music, true),
+    ("pictures", KnownFolder::Pictures, true),
+    ("video", KnownFolder::Videos, true),
+];
+
+/// Cartelle OneDrive dall'ambiente (`OneDriveConsumer`, `OneDriveCommercial`).
+const CLOUD_VARS: &[&str] = &["onedriveconsumer", "onedrivecommercial"];
+
+/// Prefisso delle chiavi che solo la protezione legge: cartelle dei documenti
+/// spostate fuori dal profilo. `expand` non le espande (il nome contiene
+/// `:`), quindi non diventano basi delle regole.
+pub const PROTECT_PREFIX: &str = "protect:";
 
 /// Cartelle del profilo usate quando Windows non le dà: (variabile, posto
 /// sotto `%USERPROFILE%`).
@@ -412,6 +485,27 @@ fn user_name() -> Option<String> {
     None
 }
 
+/// Valore di una variabile di sistema
+/// (`HKLM\System\CurrentControlSet\Control\Session Manager\Environment`),
+/// com'è nel registro.
+#[cfg(windows)]
+fn machine_var(name: &str) -> Option<String> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"System\CurrentControlSet\Control\Session Manager\Environment",
+            KEY_READ,
+        )
+        .ok()?;
+    key.get_value::<String, _>(name).ok()
+}
+
+#[cfg(not(windows))]
+fn machine_var(_name: &str) -> Option<String> {
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
     Winapp2,
@@ -551,11 +645,22 @@ mod tests {
         var: &dyn Fn(&str) -> Option<String>,
         long: &dyn Fn(&str) -> Option<String>,
     ) -> Env {
+        build_m(known, var, long, &|_| None)
+    }
+
+    /// Con le variabili di sistema (HKLM) finte.
+    fn build_m(
+        known: &dyn Fn(KnownFolder) -> Option<String>,
+        var: &dyn Fn(&str) -> Option<String>,
+        long: &dyn Fn(&str) -> Option<String>,
+        machine: &dyn Fn(&str) -> Option<String>,
+    ) -> Env {
         Env::for_rules_from(&RuleSources {
             known,
             var,
             long,
             user: &user,
+            machine,
         })
     }
 
@@ -605,14 +710,14 @@ mod tests {
             ("homepath", r"\Users\u"),
             ("username", "u"),
             ("documents", r"C:\Users\u\OneDrive\Documenti"),
-            ("downloads", r"D:\Scaricati"),
+            ("downloads", r"C:\Users\u\Downloads"),
+            ("protect:downloads", r"D:\Scaricati"),
             ("temp", r"C:\Users\u\AppData\Local\Temp"),
             ("tmp", r"C:\Users\u\AppData\Local\Temp"),
-            ("cargo_home", r"D:\cargo"),
         ] {
             assert_eq!(env.get(k), Some(v), "{k}");
         }
-        for k in ["path", "comspec"] {
+        for k in ["path", "comspec", "cargo_home"] {
             assert_eq!(env.get(k), None, "{k}");
         }
     }
@@ -626,10 +731,9 @@ mod tests {
         assert_eq!(env.get("video"), Some(r"C:\Users\u\Videos"));
         // senza cartelle note non si inventa nulla, nemmeno dall'ambiente
         let env = build(&|_| None, &vars(HOSTILE), &no_long);
-        for k in ["userprofile", "windir", "music", "temp", "systemdrive", "programdata"] {
+        for k in ["userprofile", "windir", "music", "temp", "systemdrive", "programdata", "cargo_home"] {
             assert_eq!(env.get(k), None, "{k}");
         }
-        assert_eq!(env.get("cargo_home"), Some(r"D:\cargo"));
     }
 
     #[test]
@@ -679,10 +783,13 @@ mod tests {
             ]),
             &no_long,
         );
-        assert_eq!(env.get("cargo_home"), Some(r"D:\cargo"));
         assert_eq!(env.get("rustup_home"), Some(r"C:\Users\u\.rustup"));
-        assert_eq!(env.get("onedrivecommercial"), Some(r"E:\OneDrive - Contoso"));
+        assert_eq!(env.get("onedriveconsumer"), Some(r"C:\Users\u\OneDrive"));
+        // OneDrive di lavoro su un altro disco: protetta, ma non base delle regole
+        assert_eq!(env.get("onedrivecommercial"), None);
+        assert_eq!(env.get("protect:onedrivecommercial"), Some(r"E:\OneDrive - Contoso"));
         for k in [
+            "cargo_home",
             "gradle_user_home",
             "npm_config_cache",
             "pip_cache_dir",
@@ -692,10 +799,99 @@ mod tests {
             "conda_pkgs_dirs",
             "uv_cache_dir",
             "ollama_models",
-            "onedriveconsumer",
         ] {
             assert_eq!(env.get(k), None, "{k}");
         }
+    }
+
+    /// Cartelle note dell'utente: valgono solo dentro il profile, altrimenti
+    /// la cartella predefinita (e il valore spostato resta protetto).
+    #[test]
+    fn user_known_folders_outside_the_profile_fall_back_to_defaults() {
+        let known = |f: KnownFolder| -> Option<String> {
+            match f {
+                KnownFolder::RoamingAppData => Some(r"C:\Program Files\Vendor".into()),
+                KnownFolder::LocalAppData => Some(r"D:\Local".into()),
+                KnownFolder::LocalAppDataLow => Some(r"C:\Users\u\AppData\LocalLow".into()),
+                KnownFolder::Documents => Some(r"D:\Docs".into()),
+                KnownFolder::Desktop => Some(r"C:\Users\u\OneDrive\Desktop".into()),
+                KnownFolder::Pictures => Some(r"C:\Users\u\OneDrive\Immagini".into()),
+                KnownFolder::Music => Some(r"C:\Users\other\Music".into()),
+                KnownFolder::Videos => Some(r"C:\Users\u".into()),
+                KnownFolder::OneDrive => Some(r"E:\OneDrive".into()),
+                _ => known_for(r"C:\Users\u")(f),
+            }
+        };
+        let env = build(&known, &vars(&[]), &no_long);
+        for (k, v) in [
+            ("appdata", Some(r"C:\Users\u\AppData\Roaming")),
+            ("localappdata", Some(r"C:\Users\u\AppData\Local")),
+            ("locallowappdata", Some(r"C:\Users\u\AppData\LocalLow")),
+            ("documents", Some(r"C:\Users\u\Documents")),
+            ("desktop", Some(r"C:\Users\u\OneDrive\Desktop")),
+            ("pictures", Some(r"C:\Users\u\OneDrive\Immagini")),
+            ("music", Some(r"C:\Users\u\Music")),
+            ("video", Some(r"C:\Users\u\Videos")),
+            ("onedrive", None),
+            ("temp", Some(r"C:\Users\u\AppData\Local\Temp")),
+            ("protect:documents", Some(r"D:\Docs")),
+            ("protect:music", Some(r"C:\Users\other\Music")),
+            ("protect:onedrive", Some(r"E:\OneDrive")),
+        ] {
+            assert_eq!(env.get(k), v, "{k}");
+        }
+        // AppData e LocalAppData spostate non sono cartelle dei documenti
+        assert_eq!(env.get("protect:appdata"), None);
+        // il valore spostato resta protetto preso intero, ma non è una base
+        for p in [r"D:\Docs", r"D:\Docs\*", r"E:\OneDrive\*", r"C:\Users\other\Music"] {
+            assert!(crate::guard::protected(Path::new(p), &env).is_some(), "{p}");
+        }
+        assert!(crate::expand::expand(r"%Protect:Documents%\x", &env).is_empty());
+    }
+
+    #[test]
+    fn tool_variables_outside_the_profile_need_machine_scope() {
+        let machine = |name: &str| -> Option<String> {
+            match name {
+                "cargo_home" => Some(r"D:\cargo".into()),
+                "gradle_user_home" => Some(r"%SystemDrive%\gradle".into()),
+                "nuget_packages" => Some(r"D:\nuget".into()),
+                "android_home" => Some(r"C:\Program Files\Android".into()),
+                _ => None,
+            }
+        };
+        let env = build_m(
+            &known_for(r"C:\Users\u"),
+            &vars(&[
+                // di sistema, fuori dal profilo: si accettano
+                ("CARGO_HOME", r"D:\cargo"),
+                ("GRADLE_USER_HOME", r"C:\gradle"),
+                ("ANDROID_HOME", r"C:\Program Files\Android"),
+                // dell'utente (il valore del processo non è quello di sistema)
+                ("NUGET_PACKAGES", r"E:\nuget"),
+                ("PIP_CACHE_DIR", r"D:\pip"),
+                ("HF_HOME", r"C:\Program Files\Vendor"),
+                // dentro il profilo: basta l'ambiente
+                ("UV_CACHE_DIR", r"C:\Users\u\.cache\uv"),
+            ]),
+            &no_long,
+            &machine,
+        );
+        assert_eq!(env.get("cargo_home"), Some(r"D:\cargo"));
+        assert_eq!(env.get("gradle_user_home"), Some(r"C:\gradle"));
+        assert_eq!(env.get("android_home"), Some(r"C:\Program Files\Android"));
+        assert_eq!(env.get("uv_cache_dir"), Some(r"C:\Users\u\.cache\uv"));
+        for k in ["nuget_packages", "pip_cache_dir", "hf_home"] {
+            assert_eq!(env.get(k), None, "{k}");
+        }
+        // di sistema ma protetta: si scarta comunque
+        let env = build_m(
+            &known_for(r"C:\Users\u"),
+            &vars(&[("CARGO_HOME", r"C:\Windows")]),
+            &no_long,
+            &|n| (n == "cargo_home").then(|| r"C:\Windows".to_string()),
+        );
+        assert_eq!(env.get("cargo_home"), None);
     }
 
     const SHORT: &[(&str, &str)] = &[

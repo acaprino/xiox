@@ -59,8 +59,13 @@ fn push_all(partial: &mut [String], s: &str) {
 
 /// Valori di una variabile; vuoto se non è definita o vale solo spazi (un
 /// percorso con una radice vuota diventerebbe relativo alla cartella corrente
-/// o alla radice del disco).
+/// o alla radice del disco), o se il nome contiene `:` (chiavi riservate alla
+/// protezione).
 fn values_of<'a>(name: &str, env: &'a Env) -> Vec<&'a str> {
+    // Le chiavi con `:` (`protect:documents`) le legge solo la protezione.
+    if name.contains(':') {
+        return Vec::new();
+    }
     let defined = |n: &str| env.get(n).filter(|v| !v.trim().is_empty());
     if name.eq_ignore_ascii_case("programfiles") {
         let mut v: Vec<&str> = ["programfiles", "programfiles(x86)"]
@@ -171,6 +176,13 @@ mod tests {
         assert_eq!(expand(r"C:\100%%\x", &e), vec![PathBuf::from(r"C:\100%%\x")]);
         assert_eq!(expand(r"C:\100%\x", &e), vec![PathBuf::from(r"C:\100%\x")]);
         assert_eq!(expand(r"C:\a%b\c%d", &e), vec![PathBuf::from(r"C:\a%b\c%d")]);
+    }
+
+    #[test]
+    fn reserved_protection_keys_are_not_expanded() {
+        let e = env(&[("protect:documents", r"D:\Docs"), ("a:b", r"C:\X")]);
+        assert!(expand(r"%Protect:Documents%\x", &e).is_empty());
+        assert!(expand(r"%a:b%", &e).is_empty());
     }
 
     #[test]

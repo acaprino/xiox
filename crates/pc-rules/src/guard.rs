@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use crate::model::Env;
+use crate::model::{Env, PROTECT_PREFIX};
 use crate::wildcard::wildcard_match;
 
 /// [`Guard::protected`] con un `Guard` costruito per la sola chiamata. Chi
@@ -405,6 +405,14 @@ fn user_content_dirs(env: &Env) -> Vec<Vec<String>> {
         dirs.push(root);
     }
     dirs.extend(USER_CONTENT_VARS.iter().filter_map(|v| env_dir(env, v)));
+    // Cartelle dei documenti spostate fuori dal profilo (`Env::for_rules`).
+    dirs.extend(
+        env.0
+            .iter()
+            .filter(|(k, v)| k.starts_with(PROTECT_PREFIX) && !v.trim().is_empty())
+            .filter_map(|(_, v)| normalize(v, false).ok())
+            .filter(|d| d.len() > 1),
+    );
     let default_public = vec!["c:".to_string(), "users".to_string(), "public".to_string()];
     let public = env_dir(env, "public").unwrap_or_else(|| default_public.clone());
     for p in [public, default_public] {
