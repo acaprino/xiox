@@ -50,6 +50,8 @@ enum CleanView {
 struct App {
     tab: Tab,
     admin: bool,
+    /// Account del processo e della sessione, se diversi (calcolato una volta all'avvio).
+    mismatch: Option<(String, String)>,
     frame: u64,
     started: Instant,
     screenshot: Option<PathBuf>,
@@ -93,6 +95,7 @@ impl App {
         let mut app = App {
             tab,
             admin: sys::is_admin(),
+            mismatch: sys::profile_mismatch(),
             frame: 0,
             started: Instant::now(),
             screenshot,
@@ -370,23 +373,12 @@ impl App {
             });
     }
 
-    fn admin_strip(&mut self, ui: &mut Ui, what: &str) {
-        if self.admin {
-            return;
-        }
+    /// Avviso quando l'app gira con un account diverso da quello della sessione (profilo sbagliato).
+    fn profile_strip(&self, ui: &mut Ui) {
+        let Some((p, s)) = &self.mismatch else { return };
         egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let w = (ui.available_width() - 230.0).max(150.0);
-                ui.vertical(|ui| {
-                    ui.set_max_width(w);
-                    ui.add(egui::Label::new(RichText::new(format!("⚠  {what}")).color(TEXT)).wrap());
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Riavvia come amministratore").clicked() && sys::relaunch_as_admin() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
-            });
+            let text = format!("⚠  Stai pulendo il profilo di «{p}», non quello di «{s}» che ha aperto la sessione.");
+            ui.add(egui::Label::new(RichText::new(text).color(TEXT)).wrap());
         });
         ui.add_space(8.0);
     }
@@ -435,7 +427,7 @@ impl App {
                 });
             });
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(Margin::same(16))).show_inside(ui, |ui| {
-            self.admin_strip(ui, "Le voci con lo scudo richiedono i diritti di amministratore.");
+            self.profile_strip(ui);
             card(ui, |ui| {
                 if busy {
                     ui.label(RichText::new(&self.clean_text).size(16.0).color(TEXT));
@@ -571,7 +563,7 @@ impl App {
                 });
             });
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(Margin::same(16))).show_inside(ui, |ui| {
-            self.admin_strip(ui, "Senza diritti di amministratore si riparano solo le voci del tuo utente.");
+            self.profile_strip(ui);
             card(ui, |ui| {
                 if busy {
                     ui.label(RichText::new(&self.reg_text).size(16.0).color(TEXT));
@@ -693,7 +685,7 @@ impl App {
                 });
             });
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(Margin::same(16))).show_inside(ui, |ui| {
-            self.admin_strip(ui, "Per cambiare i servizi servono i diritti di amministratore.");
+            self.profile_strip(ui);
             // RAM card
             card(ui, |ui| {
                 let used = self.mem.total.saturating_sub(self.mem.available);
@@ -898,7 +890,14 @@ impl eframe::App for App {
             Tab::Cleaner => self.cleaner_tab(ui),
             Tab::Registry => self.registry_tab(ui),
             Tab::Services => self.services_tab(ui),
-            Tab::Dev => dev::dev_tab(&mut self.dev, ui, self.admin),
+            Tab::Dev => {
+                if self.mismatch.is_some() {
+                    egui::TopBottomPanel::top("dev_profile")
+                        .frame(egui::Frame::new().inner_margin(Margin { left: 16, right: 16, top: 12, bottom: 0 }))
+                        .show_inside(ui, |ui| self.profile_strip(ui));
+                }
+                dev::dev_tab(&mut self.dev, ui, self.admin)
+            }
         });
         self.handle_screenshot(ctx);
     }

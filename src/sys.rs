@@ -1,4 +1,4 @@
-//! Small helpers around Windows: admin rights, memory, recycle bin, commands.
+//! Small helpers around Windows: admin rights, accounts, memory, recycle bin, commands.
 
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -20,22 +20,55 @@ pub fn is_admin() -> bool {
     unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
 }
 
-/// Starts this program again with administrator rights (Windows asks the person).
-pub fn relaunch_as_admin() -> bool {
-    let Ok(exe) = std::env::current_exe() else { return false };
-    let exe = wide(&exe.to_string_lossy());
-    let verb = wide("runas");
-    let r = unsafe {
-        windows_sys::Win32::UI::Shell::ShellExecuteW(
-            std::ptr::null_mut(),
-            verb.as_ptr(),
-            exe.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            1,
-        )
+/// Account of the process (e.g. the administrator that approved the UAC prompt).
+fn process_user() -> Option<String> {
+    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+    let mut buf = [0u16; 257];
+    let mut len = buf.len() as u32;
+    if unsafe { GetUserNameW(buf.as_mut_ptr(), &mut len) } == 0 || len == 0 {
+        return None;
+    }
+    // `len` counts the terminating NUL.
+    Some(String::from_utf16_lossy(&buf[..(len as usize - 1).min(buf.len())]))
+}
+
+/// Account that opened the interactive session (the person at the keyboard).
+fn session_user() -> Option<String> {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTSFreeMemory, WTSQuerySessionInformationW, WTSUserName, WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
     };
-    (r as isize) > 32
+    let mut p: *mut u16 = std::ptr::null_mut();
+    let mut bytes = 0u32;
+    let ok = unsafe { WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSUserName, &mut p, &mut bytes) };
+    if ok == 0 || p.is_null() {
+        return None;
+    }
+    let name = unsafe {
+        let mut n = 0;
+        while *p.add(n) != 0 {
+            n += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+    };
+    unsafe { WTSFreeMemory(p.cast()) };
+    Some(name)
+}
+
+/// True when the two account names are different people: case-insensitive, the part before the last `\` (domain) ignored.
+fn names_differ(process: &str, session: &str) -> bool {
+    let base = |n: &str| n.rsplit('\\').next().unwrap_or(n).to_lowercase();
+    base(process) != base(session)
+}
+
+/// `Some((process account, session account))` when the program runs under a different account
+/// from the one that opened the session (the UAC prompt was approved with another administrator):
+/// "the user's" folders would then be those of the wrong profile.
+pub fn profile_mismatch() -> Option<(String, String)> {
+    let (p, s) = (process_user()?, session_user()?);
+    if s.is_empty() || !names_differ(&p, &s) {
+        return None;
+    }
+    Some((p, s))
 }
 
 pub struct Memory {
@@ -166,4 +199,24 @@ fn civil(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_user_any_case() {
+        assert!(!names_differ("Alfio", "alfio"));
+    }
+
+    #[test]
+    fn domain_prefix_ignored() {
+        assert!(!names_differ(r"PC\alfio", "alfio"));
+    }
+
+    #[test]
+    fn other_account() {
+        assert!(names_differ("Admin", "alfio"));
+    }
 }
