@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorsi di Windows dai sorgenti di Yarn (Classic: src/util/user-dirs.js; Berry: folderUtils.ts e Configuration.ts) e da yarnpkg.com/configuration/yarnrc. La cartella .yarn\cache dei progetti non si tocca qui. -->
+<cleaner id="yarn" os="windows">
+  <label>Yarn</label>
+  <description>Cache globali di Yarn Classic e di Yarn Berry. Non tocca i progetti né la cartella .yarn\cache dentro i progetti.</description>
+  <var id="berry">
+    <value>%LocalAppData%\Yarn\Berry\cache</value>
+    <value>%UserProfile%\.yarn\berry\cache</value>
+  </var>
+  <option id="classic">
+    <label>Cache di Yarn Classic</label>
+    <description>Rimuove la cache globale dei pacchetti di Yarn 1.</description>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Yarn\Cache"/>
+  </option>
+  <option id="berry">
+    <label>Cache globale di Yarn Berry</label>
+    <description>Rimuove la cache globale dei pacchetti di Yarn 2 e successivi.</description>
+    <warning>Si riscarica al prossimo `yarn install`. I progetti con Plug'n'Play che usano la cache globale non partono finché non rifai `yarn install`.</warning>
+    <action command="delete" search="walk.all" path="$$berry$$"/>
+  </option>
+</cleaner>

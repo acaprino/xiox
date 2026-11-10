@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Percorso predefinito da docs.deno.com (installazione): %LOCALAPPDATA%\deno, sostituibile con DENO_DIR. Sottocartelle e file dal sorgente di Deno (cache/deno_dir.rs). location_data (dati di origine) e deno_history.txt non si toccano. -->
+<cleaner id="deno" os="windows">
+  <label>Deno</label>
+  <description>Moduli, pacchetti npm e cache di compilazione di Deno. Non tocca i dati di origine (location_data), la cronologia del REPL né i programmi installati.</description>
+  <var id="home">
+    <value>%DENO_DIR%</value>
+    <value>%LocalAppData%\deno</value>
+  </var>
+  <option id="modules">
+    <label>Moduli remoti e pacchetti npm di Deno</label>
+    <description>Rimuove i moduli scaricati da indirizzi remoti e i pacchetti npm in cache.</description>
+    <warning>Si riscaricano alla prossima esecuzione dei programmi o con `deno cache`.</warning>
+    <action command="delete" search="walk.all" path="$$home$$\remote"/>
+    <action command="delete" search="walk.all" path="$$home$$\npm"/>
+  </option>
+  <option id="compiled">
+    <label>Cache di compilazione e analisi di Deno</label>
+    <description>Rimuove il codice emesso, la cache dei registri del language server, i file scaricati da deno upgrade e i database di analisi.</description>
+    <action command="delete" search="walk.all" path="$$home$$\gen"/>
+    <action command="delete" search="walk.all" path="$$home$$\registries"/>
+    <action command="delete" search="walk.all" path="$$home$$\dl"/>
+    <action command="delete" search="glob" path="$$home$$\*_cache_v2*"/>
+  </option>
+</cleaner>

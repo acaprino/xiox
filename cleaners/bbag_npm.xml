@@ -4,6 +4,9 @@
   <label>npm e npx</label>
   <description>Cache pacchetti, esecuzioni temporanee npx e log npm; non tocca progetti o node_modules.</description>
   <running type="exe" os="windows" same_user="true">node.exe</running>
+  <var id="custom_cache">
+    <value>%npm_config_cache%</value>
+  </var>
   <option id="downloads">
     <label>Cache pacchetti npm</label>
     <description>Rimuove la cache npm. Chiudi Node/npm e tieni presente che i pacchetti dovranno essere riscaricati.</description>
@@ -19,5 +22,13 @@
     <label>Log npm</label>
     <description>Rimuove i log di debug npm. Conserva eventuali log necessari a diagnosticare errori recenti.</description>
     <action command="delete" search="glob" path="%LocalAppData%\npm-cache\_logs\*.log"/>
+  </option>
+  <option id="custom_cache">
+    <label>Cache npm in una cartella personalizzata</label>
+    <description>Rimuove cache dei pacchetti, copie temporanee npx e log nella cartella indicata dalla variabile npm_config_cache. Compare solo se la variabile è definita.</description>
+    <warning>I pacchetti dovranno essere riscaricati e le future esecuzioni di npx potranno riscaricare pacchetti. Non usare durante l'esecuzione di npm o npx.</warning>
+    <action command="delete" search="walk.files" path="$$custom_cache$$\_cacache"/>
+    <action command="delete" search="walk.files" path="$$custom_cache$$\_npx"/>
+    <action command="delete" search="glob" path="$$custom_cache$$\_logs\*.log"/>
   </option>
 </cleaner>
