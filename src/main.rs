@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod cleaner;
+mod dev;
 mod registry;
 mod services;
 mod sys;
@@ -17,6 +18,7 @@ enum Tab {
     Cleaner,
     Registry,
     Services,
+    Dev,
 }
 
 enum CleanMsg {
@@ -49,6 +51,7 @@ struct App {
     tab: Tab,
     admin: bool,
     frame: u64,
+    started: Instant,
     screenshot: Option<PathBuf>,
     shot_sent: bool,
     mem: sys::Memory,
@@ -80,15 +83,18 @@ struct App {
     svc_filter: String,
     svc_msg: String,
     svc_confirm: Option<u32>,
+
+    dev: dev::DevState,
 }
 
 impl App {
-    fn new(screenshot: Option<PathBuf>, tab: Tab) -> Self {
+    fn new(screenshot: Option<PathBuf>, tab: Tab, dev: dev::DevState) -> Self {
         let n = cleaner::CATEGORIES.len();
         let mut app = App {
             tab,
             admin: sys::is_admin(),
             frame: 0,
+            started: Instant::now(),
             screenshot,
             shot_sent: false,
             mem: sys::memory(),
@@ -117,6 +123,7 @@ impl App {
             svc_filter: String::new(),
             svc_msg: String::new(),
             svc_confirm: None,
+            dev,
         };
         if tab == Tab::Services {
             app.load_services();
@@ -296,6 +303,7 @@ impl App {
                 self.load_services();
             }
         }
+        self.dev.poll();
     }
 
     // ---------- drawing ----------
@@ -324,6 +332,7 @@ impl App {
                     (Tab::Cleaner, "🗑", "Pulizia file"),
                     (Tab::Registry, "🔧", "Registro"),
                     (Tab::Services, "⚙", "Servizi e RAM"),
+                    (Tab::Dev, "💻", "Sviluppatori"),
                 ] {
                     let sel = self.tab == tab;
                     let fill = if sel { SIDEBAR_SEL } else { SIDEBAR };
@@ -333,6 +342,10 @@ impl App {
                         ui.painter().rect_filled(egui::Rect::from_min_size(resp.rect.min, Vec2::new(4.0, resp.rect.height())), 0.0, ACCENT);
                     }
                     if resp.clicked() {
+                        if self.tab == Tab::Dev && tab != Tab::Dev {
+                            // Uscendo dalla voce si liberano i dati dell'analisi (se nessun lavoro è in corso).
+                            self.dev.release();
+                        }
                         self.tab = tab;
                         if tab == Tab::Services && !self.svc_loaded {
                             self.load_services();
@@ -805,8 +818,10 @@ impl App {
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         let Some(path) = self.screenshot.clone() else { return };
         ctx.request_repaint();
-        let busy = self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some();
-        if self.frame >= 120 && (!busy || self.frame >= 900) && !self.shot_sent {
+        let busy = self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy();
+        // L'analisi Sviluppatori dura circa un minuto senza amministratore: la si aspetta fino a 5 minuti.
+        let dev_wait = self.dev.busy() && self.started.elapsed() < Duration::from_secs(300);
+        if self.frame >= 120 && (!busy || self.frame >= 900) && !dev_wait && !self.shot_sent {
             self.shot_sent = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
@@ -875,7 +890,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
         self.poll();
-        if self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() {
+        if self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() {
             ctx.request_repaint_after(Duration::from_millis(150));
         }
         self.sidebar(ctx);
@@ -883,6 +898,7 @@ impl eframe::App for App {
             Tab::Cleaner => self.cleaner_tab(ui),
             Tab::Registry => self.registry_tab(ui),
             Tab::Services => self.services_tab(ui),
+            Tab::Dev => dev::dev_tab(&mut self.dev, ui, self.admin),
         });
         self.handle_screenshot(ctx);
     }
@@ -913,6 +929,8 @@ fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut screenshot = None;
     let mut tab = Tab::Cleaner;
+    let mut analyze = false;
+    let mut section = dev::Section::Projects;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -924,8 +942,14 @@ fn main() -> eframe::Result<()> {
                 tab = match args[i + 1].as_str() {
                     "registry" | "registro" => Tab::Registry,
                     "services" | "servizi" => Tab::Services,
+                    "dev" | "sviluppatori" => Tab::Dev,
                     _ => Tab::Cleaner,
                 };
+                i += 1;
+            }
+            "--analyze" => analyze = true,
+            "--dev-section" if i + 1 < args.len() => {
+                section = dev::Section::parse(&args[i + 1]).unwrap_or(section);
                 i += 1;
             }
             _ => {}
@@ -945,7 +969,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             style(&cc.egui_ctx);
-            Ok(Box::new(App::new(screenshot, tab)))
+            Ok(Box::new(App::new(screenshot, tab, dev::DevState::new(section, analyze))))
         }),
     )
 }

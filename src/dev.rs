@@ -1,0 +1,1310 @@
+//! Voce «Sviluppatori»: Progetti, Worktree degli agenti e Sessioni archiviate.
+//!
+//! Analisi e pulizia girano in un thread e parlano alla UI con [`DevMsg`] su `mpsc`, come
+//! `start_clean`/`poll` in `main.rs`: la UI non si blocca mai. L'ultima analisi ([`DevScan`])
+//! è anche l'elenco di ciò che si può cancellare: `dc_app` rifiuta tutto il resto.
+//! I dati dell'analisi si liberano con [`DevState::release`] (uscendo dalla voce) o rianalizzando.
+
+use crate::sys;
+use crate::theme::*;
+use dc_app::DevScan;
+use dc_model::{path_key, Agent, CleanPlan, ItemOutcome, PlanAction, PlanItem, ProjectReport, ProjectStatus, RemoveMode, Settings};
+use dc_mukade::ArchivedSession;
+use dc_sessions::{SystemCli, SystemTrash};
+use eframe::egui::{self, Align, Color32, Layout, Margin, RichText, Stroke, Ui, Vec2};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::Arc;
+
+const RED: Color32 = Color32::from_rgb(0xd9, 0x48, 0x3b);
+/// Righe alterne delle tabelle (lo stesso grigio dei widget inattivi in `style()`).
+const STRIPE: Color32 = Color32::from_rgb(0xf7, 0xf8, 0xfa);
+const SEL_BG: Color32 = Color32::from_rgb(0xe8, 0xf0, 0xfd);
+const ROW_H: f32 = 22.0;
+const CHECK_W: f32 = 22.0;
+/// Spazio lasciato alla barra di scorrimento a destra delle tabelle.
+const SCROLLBAR: f32 = 12.0;
+/// L'avviso di `dc_app::run_scan` quando l'analisi dei progetti è fallita: le liste di
+/// progetti e worktree sono vuote ma non perché non ci sia nulla (le sessioni restano elencate).
+const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Section {
+    Projects,
+    Worktrees,
+    Sessions,
+}
+
+impl Section {
+    /// Valore di `--dev-section`.
+    pub fn parse(s: &str) -> Option<Section> {
+        match s {
+            "projects" | "progetti" => Some(Section::Projects),
+            "worktree" | "worktrees" => Some(Section::Worktrees),
+            "sessions" | "sessioni" => Some(Section::Sessions),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Section::Projects => "Progetti",
+            Section::Worktrees => "Worktree",
+            Section::Sessions => "Sessioni archiviate",
+        }
+    }
+}
+
+pub enum DevMsg {
+    Step(String, f32),
+    Scanned(DevScan),
+    Cleaned(DevCleaned),
+}
+
+/// Esito di una pulizia: una riga per elemento (cartella, worktree o sessione).
+pub struct DevCleaned {
+    pub rows: Vec<(String, ItemOutcome)>,
+    pub freed: u64,
+    /// Richieste rifiutate per intero (nulla è stato toccato).
+    pub errors: Vec<String>,
+    pub mode: RemoveMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum View {
+    Empty,
+    Scanned,
+    Cleaned,
+}
+
+/// Il dialogo di conferma: il piano esatto che verrà eseguito.
+struct Confirm {
+    plan: Option<CleanPlan>,
+    sessions: Vec<(Agent, String)>,
+    /// (elemento, dimensione) per l'elenco nel dialogo.
+    rows: Vec<(String, String)>,
+    summary: Vec<String>,
+    error: Option<String>,
+    mode: RemoveMode,
+}
+
+pub struct DevState {
+    settings: Settings,
+    settings_err: Option<String>,
+    section: Section,
+    view: View,
+    scan: Option<Arc<DevScan>>,
+    sel_projects: Vec<bool>,
+    sel_worktrees: Vec<bool>,
+    sel_sessions: Vec<bool>,
+    cleaned: Option<DevCleaned>,
+    error: Option<String>,
+    job: Option<Receiver<DevMsg>>,
+    text: String,
+    progress: f32,
+    confirm: Option<Confirm>,
+    root_sel: Option<usize>,
+    auto_scan: bool,
+}
+
+impl DevState {
+    /// `analyze`: avvia l'analisi la prima volta che la voce viene mostrata (`--analyze`).
+    pub fn new(section: Section, analyze: bool) -> Self {
+        Self::with_settings(dc_app::load_settings(), section, analyze)
+    }
+
+    fn with_settings(settings: Settings, section: Section, analyze: bool) -> Self {
+        DevState {
+            settings,
+            settings_err: None,
+            section,
+            view: View::Empty,
+            scan: None,
+            sel_projects: Vec::new(),
+            sel_worktrees: Vec::new(),
+            sel_sessions: Vec::new(),
+            cleaned: None,
+            error: None,
+            job: None,
+            text: String::new(),
+            progress: 0.0,
+            confirm: None,
+            root_sel: None,
+            auto_scan: analyze,
+        }
+    }
+
+    pub fn busy(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Libera l'analisi e l'esito (la voce torna vuota). Non fa nulla mentre un lavoro è in corso.
+    pub fn release(&mut self) {
+        if self.busy() {
+            return;
+        }
+        self.drop_data();
+        self.view = View::Empty;
+        self.error = None;
+    }
+
+    fn drop_data(&mut self) {
+        self.scan = None;
+        self.sel_projects = Vec::new();
+        self.sel_worktrees = Vec::new();
+        self.sel_sessions = Vec::new();
+        self.cleaned = None;
+        self.confirm = None;
+    }
+
+    pub fn poll(&mut self) {
+        let Some(rx) = &self.job else { return };
+        let mut msgs = Vec::new();
+        let mut gone = false;
+        loop {
+            match rx.try_recv() {
+                Ok(m) => msgs.push(m),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    gone = true;
+                    break;
+                }
+            }
+        }
+        let mut done = false;
+        for m in msgs {
+            match m {
+                DevMsg::Step(t, p) => {
+                    self.text = t;
+                    self.progress = p;
+                }
+                DevMsg::Scanned(scan) => {
+                    self.set_scan(scan);
+                    done = true;
+                }
+                DevMsg::Cleaned(c) => {
+                    // Quello che c'era è cambiato: l'analisi non vale più.
+                    self.drop_data();
+                    self.cleaned = Some(c);
+                    self.view = View::Cleaned;
+                    done = true;
+                }
+            }
+        }
+        if gone && !done {
+            self.error = Some("Il lavoro si è interrotto per un errore interno.".into());
+            if self.view == View::Cleaned && self.cleaned.is_none() {
+                self.view = View::Empty;
+            }
+            done = true;
+        }
+        if done {
+            self.job = None;
+        }
+    }
+
+    fn set_scan(&mut self, scan: DevScan) {
+        self.sel_projects = preselect_reports(&scan.projects);
+        self.sel_worktrees = preselect_reports(&scan.worktrees);
+        self.sel_sessions = preselect_sessions(&scan.archived);
+        self.scan = Some(Arc::new(scan));
+        self.view = View::Scanned;
+    }
+
+    fn start_scan(&mut self, ctx: &egui::Context, admin: bool) {
+        self.drop_data();
+        self.error = None;
+        self.view = View::Empty;
+        self.text = "Avvio dell'analisi…".into();
+        self.progress = 0.0;
+        let (tx, rx) = channel();
+        self.job = Some(rx);
+        let settings = self.settings.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let step = |t: &str, p: f32| {
+                let _ = tx.send(DevMsg::Step(t.to_string(), p));
+                ctx.request_repaint();
+            };
+            let scan = dc_app::run_scan(&settings, admin, &step);
+            let _ = tx.send(DevMsg::Scanned(scan));
+            ctx.request_repaint();
+        });
+    }
+
+    fn totals(&self) -> Totals {
+        match &self.scan {
+            Some(scan) => totals(scan, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions),
+            None => Totals::default(),
+        }
+    }
+
+    /// Costruisce il piano dalla selezione (lo stesso che verrà eseguito) e apre la conferma.
+    fn open_confirm(&mut self) {
+        let Some(scan) = self.scan.clone() else { return };
+        let mode = self.settings.remove_mode;
+        let ids: Vec<String> = chosen_reports(&scan.projects, &self.sel_projects)
+            .chain(chosen_reports(&scan.worktrees, &self.sel_worktrees))
+            .map(|r| r.id.clone())
+            .collect();
+        let sessions: Vec<&ArchivedSession> = chosen_sessions(&scan.archived, &self.sel_sessions).collect();
+        let mut rows = Vec::new();
+        let mut summary = Vec::new();
+        let mut plan = None;
+        let mut error = None;
+        if !ids.is_empty() {
+            match dc_app::build_plan(&scan, &ids, mode) {
+                Ok(p) => {
+                    for it in &p.items {
+                        rows.push((plan_label(&scan, it), sys::fmt_size(it.expected_bytes)));
+                    }
+                    if !p.items.is_empty() {
+                        summary.push(format!(
+                            "{} su disco: {}",
+                            plural(p.items.len(), "cartella", "cartelle"),
+                            sys::fmt_size(p.expected_bytes)
+                        ));
+                    }
+                    plan = Some(p);
+                }
+                Err(e) => error = Some(e),
+            }
+        }
+        if !sessions.is_empty() {
+            let bytes: u64 = sessions.iter().map(|s| s.bytes).sum();
+            summary.push(format!(
+                "{}: {}",
+                plural(sessions.len(), "sessione archiviata", "sessioni archiviate"),
+                sys::fmt_size(bytes)
+            ));
+            for s in &sessions {
+                rows.push((session_label(s), session_size(s)));
+            }
+        }
+        let sessions = sessions.iter().map(|s| (s.agent, s.id.clone())).collect();
+        self.confirm = Some(Confirm { plan, sessions, rows, summary, error, mode });
+    }
+
+    fn start_clean(&mut self, ctx: &egui::Context, c: Confirm) {
+        let Some(scan) = self.scan.clone() else { return };
+        let plan_labels: HashMap<String, String> =
+            c.plan.iter().flat_map(|p| &p.items).map(|i| (path_key(&i.path), plan_label(&scan, i))).collect();
+        let picked: HashSet<(Agent, &str)> = c.sessions.iter().map(|(a, id)| (*a, id.as_str())).collect();
+        let session_labels: HashMap<(Agent, String), String> = scan
+            .archived
+            .iter()
+            .filter(|s| picked.contains(&(s.agent, s.id.as_str())))
+            .map(|s| ((s.agent, s.id.clone()), session_label(s)))
+            .collect();
+        let Confirm { plan, sessions, mode, .. } = c;
+        self.cleaned = None;
+        self.error = None;
+        self.view = View::Cleaned;
+        self.text = "Pulizia in corso…".into();
+        self.progress = 0.0;
+        let (tx, rx) = channel();
+        self.job = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let step = |t: &str, p: f32| {
+                let _ = tx.send(DevMsg::Step(t.to_string(), p));
+                ctx.request_repaint();
+            };
+            let mut out = DevCleaned { rows: Vec::new(), freed: 0, errors: Vec::new(), mode };
+            if let Some(plan) = plan.filter(|p| !p.items.is_empty()) {
+                step("Eliminazione di cartelle e worktree…", 0.1);
+                match dc_app::execute_plan(&scan, &plan) {
+                    Ok(res) => {
+                        out.freed = out.freed.saturating_add(res.bytes_freed);
+                        for it in res.items {
+                            let label = plan_labels
+                                .get(&path_key(&it.path))
+                                .cloned()
+                                .unwrap_or_else(|| it.path.display().to_string());
+                            out.rows.push((label, it.outcome));
+                        }
+                    }
+                    Err(e) => out.errors.push(e),
+                }
+            }
+            if !sessions.is_empty() {
+                step("Cancellazione delle sessioni archiviate…", 0.6);
+                let cli = SystemCli::locate();
+                match dc_app::delete_archived(&scan, &sessions, mode, &cli, &SystemTrash) {
+                    Ok(done) => {
+                        for o in done {
+                            if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
+                                out.freed = out.freed.saturating_add(*bytes_freed);
+                            }
+                            let label = session_labels
+                                .get(&(o.agent, o.id.clone()))
+                                .cloned()
+                                .unwrap_or_else(|| format!("{} · {}", agent_label(o.agent), o.id));
+                            out.rows.push((label, o.outcome));
+                        }
+                    }
+                    Err(e) => out.errors.push(e),
+                }
+            }
+            drop(scan);
+            let _ = tx.send(DevMsg::Cleaned(out));
+            ctx.request_repaint();
+        });
+    }
+
+    fn save(&mut self) {
+        self.settings_err = dc_app::save_settings(&self.settings).err();
+    }
+
+    // ---------- drawing ----------
+
+    fn options(&mut self, ui: &mut Ui, busy: bool) {
+        group(ui, "Sezione", 6.0);
+        let counts = self.scan.as_ref().map(|s| [s.projects.len(), s.worktrees.len(), s.archived.len()]);
+        for (k, s) in [Section::Projects, Section::Worktrees, Section::Sessions].into_iter().enumerate() {
+            let text = section_label(s, counts.map(|c| c[k]));
+            let on = self.section == s;
+            let btn = egui::Button::new(RichText::new(text).color(if on { ACCENT } else { TEXT }).strong())
+                .fill(if on { SEL_BG } else { CARD })
+                .stroke(Stroke::NONE)
+                .min_size(Vec2::new(ui.available_width(), 28.0));
+            if ui.add(btn).clicked() {
+                self.section = s;
+            }
+        }
+
+        let mut changed = false;
+        group(ui, "Opzioni", 12.0);
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Giorni di inattività");
+                let r = ui.add(egui::DragValue::new(&mut self.settings.inactive_days).range(1..=365));
+                if (r.changed() && !r.dragged()) || r.drag_stopped() {
+                    changed = true;
+                }
+            });
+        });
+
+        group(ui, "Eliminazione", 12.0);
+        ui.add_enabled_ui(!busy, |ui| {
+            changed |= ui.radio_value(&mut self.settings.remove_mode, RemoveMode::Recycle, "Nel Cestino (recuperabile)").changed();
+            changed |= ui.radio_value(&mut self.settings.remove_mode, RemoveMode::Permanent, "Definitiva").changed();
+        });
+        ui.add(
+            egui::Label::new(
+                RichText::new("Il Cestino non libera spazio finché non lo svuoti. «Cestino» in Pulizia file lo svuota.")
+                    .size(12.0)
+                    .color(MUTED),
+            )
+            .wrap(),
+        );
+
+        group(ui, "Cartelle aggiuntive", 12.0);
+        ui.add_enabled_ui(!busy, |ui| {
+            changed |= ui.checkbox(&mut self.settings.scan_roots, "Analizza anche queste cartelle").changed();
+            ui.add_space(2.0);
+            for (i, root) in self.settings.roots.iter().enumerate() {
+                let text = root.display().to_string();
+                let on = self.root_sel == Some(i);
+                let r = ui
+                    .add(egui::Button::selectable(on, RichText::new(&text).color(if on { Color32::WHITE } else { TEXT })).truncate())
+                    .on_hover_text(&text);
+                if r.clicked() {
+                    self.root_sel = if on { None } else { Some(i) };
+                }
+            }
+            if self.settings.roots.is_empty() {
+                ui.label(RichText::new("Nessuna cartella.").color(MUTED));
+            }
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui.button("Aggiungi cartella…").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().set_title("Cartella da analizzare").pick_folder() {
+                        if !self.settings.roots.iter().any(|r| path_key(r) == path_key(&dir)) {
+                            self.settings.roots.push(dir);
+                            changed = true;
+                        }
+                    }
+                }
+                let can = self.root_sel.is_some_and(|i| i < self.settings.roots.len());
+                if ui.add_enabled(can, egui::Button::new("Togli")).clicked() {
+                    if let Some(i) = self.root_sel.take() {
+                        self.settings.roots.remove(i);
+                        changed = true;
+                    }
+                }
+            });
+        });
+        if changed {
+            self.save();
+        }
+        if let Some(e) = &self.settings_err {
+            ui.add(egui::Label::new(RichText::new(format!("Impostazioni non salvate: {e}")).size(12.0).color(RED)).wrap());
+        }
+    }
+
+    fn body(&mut self, ui: &mut Ui, busy: bool) {
+        if busy {
+            ui.label(RichText::new(&self.text).size(16.0).color(TEXT));
+            ui.add_space(6.0);
+            ui.add(egui::ProgressBar::new(self.progress).fill(ACCENT).show_percentage());
+            ui.add_space(10.0);
+        }
+        match self.view {
+            View::Empty if busy => {
+                ui.label(RichText::new("L'analisi può durare un minuto: intanto puoi usare le altre voci.").color(MUTED));
+            }
+            View::Empty => {
+                ui.add_space(30.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("Pulizia per sviluppatori").size(22.0).strong().color(TEXT));
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Premi «Analizza»: i progetti vengono dalle sessioni di Claude Code, Codex, OpenCode e Pi.")
+                            .color(MUTED),
+                    );
+                    if let Some(e) = &self.error {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(e).color(RED));
+                    }
+                });
+            }
+            View::Scanned => self.scanned_view(ui),
+            View::Cleaned => self.cleaned_view(ui, busy),
+        }
+    }
+
+    fn scanned_view(&mut self, ui: &mut Ui) {
+        let Some(scan) = self.scan.clone() else { return };
+        let (selected, total, bytes) = match self.section {
+            Section::Projects => report_stats(&scan.projects, &self.sel_projects),
+            Section::Worktrees => report_stats(&scan.worktrees, &self.sel_worktrees),
+            Section::Sessions => session_stats(&scan.archived, &self.sel_sessions),
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Analisi completata").size(20.0).strong().color(TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let none = ui.small_button("Nessuno").clicked();
+                let all = ui.small_button("Tutti").clicked();
+                if none || all {
+                    match self.section {
+                        Section::Projects => select_reports(&scan.projects, &mut self.sel_projects, all),
+                        Section::Worktrees => select_reports(&scan.worktrees, &mut self.sel_worktrees, all),
+                        Section::Sessions => select_sessions(&scan.archived, &mut self.sel_sessions, all),
+                    }
+                }
+            });
+        });
+        ui.label(
+            RichText::new(format!("{} da liberare · {selected} di {total} selezionati", sys::fmt_size(bytes)))
+                .size(15.0)
+                .color(ACCENT),
+        );
+        let how = if scan.backend == "mft" { "dimensioni dalla MFT del disco" } else { "cartelle misurate una per una" };
+        ui.label(RichText::new(format!("{} · {how}", fmt_elapsed(scan.elapsed_ms))).size(12.0).color(MUTED));
+        if self.section == Section::Worktrees {
+            ui.label(
+                RichText::new("I worktree si rimuovono con git e sempre in modo definitivo; quelli con modifiche non salvate restano.")
+                    .size(12.0)
+                    .color(MUTED),
+            );
+        }
+        ui.add_space(8.0);
+        match self.section {
+            Section::Projects => projects_table(ui, &scan.projects, &mut self.sel_projects, analysis_failed(&scan)),
+            Section::Worktrees => {
+                worktrees_table(ui, &scan.worktrees, &scan.other_worktrees, &mut self.sel_worktrees, analysis_failed(&scan))
+            }
+            Section::Sessions => sessions_table(ui, &scan.archived, &mut self.sel_sessions),
+        }
+    }
+
+    fn cleaned_view(&self, ui: &mut Ui, busy: bool) {
+        let title = match &self.cleaned {
+            _ if busy => "Pulizia in corso…",
+            Some(c) if c.rows.is_empty() && !c.errors.is_empty() => "Pulizia non eseguita",
+            _ => "Pulizia completata",
+        };
+        ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+        let Some(c) = &self.cleaned else { return };
+        if c.rows.is_empty() {
+            if c.errors.is_empty() {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Nessun elemento da pulire.").color(MUTED));
+            }
+            return;
+        }
+        ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(c.freed))).size(15.0).color(GREEN));
+        if c.mode == RemoveMode::Recycle {
+            ui.label(RichText::new("Quello che è andato nel Cestino libera spazio quando lo svuoti.").size(12.0).color(MUTED));
+        }
+        ui.add_space(10.0);
+        let w = col_widths(ui.available_width() - SCROLLBAR, &[0.0, 240.0], ui.spacing().item_spacing.x);
+        header(ui, &w, &["Elemento", "Esito"]);
+        egui::ScrollArea::vertical().id_salt("dev_cleaned").auto_shrink([false, false]).show_rows(ui, ROW_H, c.rows.len(), |ui, range| {
+            for i in range {
+                let (label, outcome) = &c.rows[i];
+                let (text, color) = outcome_text(outcome);
+                striped_row(ui, i, |ui| {
+                    crate::cell(ui, w[0], RichText::new(label).color(TEXT));
+                    crate::cell(ui, w[1], RichText::new(text).color(color));
+                });
+            }
+        });
+    }
+}
+
+/// La voce «Sviluppatori»: pannello opzioni, pulsanti in basso, card centrale, conferma.
+pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
+    if state.auto_scan && !state.busy() {
+        state.auto_scan = false;
+        let ctx = ui.ctx().clone();
+        state.start_scan(&ctx, admin);
+    }
+    let busy = state.busy();
+    egui::SidePanel::left("dev_opts")
+        .exact_width(270.0)
+        .resizable(false)
+        .frame(egui::Frame::new().fill(CARD).inner_margin(Margin::same(14)).stroke(Stroke::new(1.0_f32, LINE)))
+        .show_inside(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| state.options(ui, busy));
+        });
+    egui::TopBottomPanel::bottom("dev_buttons")
+        .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
+        .show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                let t = state.totals();
+                if state.scan.is_some() {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("Selezionati: {}", sys::fmt_size(t.bytes))).color(TEXT));
+                        ui.label(RichText::new(t.counts_text()).size(12.0).color(MUTED));
+                    });
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if primary(ui, "Avvia pulizia", !busy && t.any()).clicked() {
+                        state.open_confirm();
+                    }
+                    if secondary(ui, "Analizza", !busy).clicked() {
+                        let ctx = ui.ctx().clone();
+                        state.start_scan(&ctx, admin);
+                    }
+                });
+            });
+        });
+    egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(Margin::same(16))).show_inside(ui, |ui| {
+        match (&state.view, &state.scan, &state.cleaned) {
+            (View::Scanned, Some(scan), _) => warn_strip(ui, &scan.warnings),
+            // Un piano o una scelta di sessioni rifiutati: niente è stato toccato e non si
+            // riprova da soli, serve una nuova analisi.
+            (View::Cleaned, _, Some(c)) if !c.errors.is_empty() => error_strip(ui, &c.errors),
+            _ => {}
+        }
+        card(ui, |ui| state.body(ui, busy));
+    });
+    confirm_dialog(state, ui.ctx());
+}
+
+fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
+    let Some(c) = &state.confirm else { return };
+    let mut go = false;
+    let mut close = false;
+    egui::Modal::new(egui::Id::new("dev_confirm")).show(ctx, |ui| {
+        ui.set_width(460.0);
+        ui.label(RichText::new("Avviare la pulizia?").size(18.0).strong());
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(confirm_text(c.mode)).wrap());
+        ui.add_space(8.0);
+        if let Some(e) = &c.error {
+            ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
+        }
+        for s in &c.summary {
+            ui.label(RichText::new(s).color(ACCENT));
+        }
+        if !c.rows.is_empty() {
+            ui.add_space(4.0);
+            let w = col_widths(ui.available_width() - SCROLLBAR, &[0.0, 90.0], ui.spacing().item_spacing.x);
+            egui::ScrollArea::vertical()
+                .id_salt("dev_confirm_list")
+                .max_height(220.0)
+                .auto_shrink([false, true])
+                .show_rows(ui, ROW_H, c.rows.len(), |ui, range| {
+                    for i in range {
+                        let (label, size) = &c.rows[i];
+                        striped_row(ui, i, |ui| {
+                            crate::cell(ui, w[0], label.as_str());
+                            crate::cell(ui, w[1], RichText::new(size).color(MUTED));
+                        });
+                    }
+                });
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if primary(ui, "Continua", c.error.is_none() && !c.rows.is_empty()).clicked() {
+                go = true;
+            }
+            if secondary(ui, "Annulla", true).clicked() {
+                close = true;
+            }
+        });
+    });
+    if go {
+        if let Some(c) = state.confirm.take() {
+            state.start_clean(ctx, c);
+        }
+    } else if close {
+        state.confirm = None;
+    }
+}
+
+fn confirm_text(mode: RemoveMode) -> &'static str {
+    match mode {
+        RemoveMode::Recycle => "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git.",
+        RemoveMode::Permanent => "Gli elementi selezionati verranno eliminati definitivamente.",
+    }
+}
+
+// ---------- tables ----------
+
+fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut [bool], failed: bool) {
+    if reports.is_empty() {
+        empty_note(ui, empty_text(Section::Projects, failed));
+        return;
+    }
+    let w = col_widths(ui.available_width() - SCROLLBAR, &[CHECK_W, 140.0, 0.0, 80.0, 80.0], ui.spacing().item_spacing.x);
+    header(ui, &w, &["", "Progetto", "Stato", "Ultimo uso", "Da liberare"]);
+    egui::ScrollArea::vertical().id_salt("dev_projects").auto_shrink([false, false]).show_rows(ui, ROW_H, reports.len(), |ui, range| {
+        for i in range {
+            let r = &reports[i];
+            let on = selectable(r);
+            let color = if on { TEXT } else { MUTED };
+            striped_row(ui, i, |ui| {
+                check_cell(ui, w[0], &mut sel[i], on);
+                crate::cell(ui, w[1], RichText::new(&r.name).color(color)).on_hover_text(r.root.display().to_string());
+                crate::cell(ui, w[2], RichText::new(&r.reason).color(color));
+                crate::cell(ui, w[3], RichText::new(r.last_activity_ms.map_or_else(|| "—".to_string(), fmt_date)).color(color));
+                crate::cell(ui, w[4], RichText::new(sys::fmt_size(r.reclaimable_bytes)).color(color));
+            });
+        }
+    });
+}
+
+fn worktrees_table(ui: &mut Ui, reports: &[ProjectReport], others: &[ProjectReport], sel: &mut [bool], failed: bool) {
+    let w = col_widths(ui.available_width() - SCROLLBAR, &[CHECK_W, 0.0, 110.0, 150.0, 86.0], ui.spacing().item_spacing.x);
+    let titles = ["", "Worktree", "Repository", "Stato", "Dimensione"];
+    if reports.is_empty() {
+        empty_note(ui, empty_text(Section::Worktrees, failed));
+    } else {
+        header(ui, &w, &titles);
+    }
+    egui::ScrollArea::vertical().id_salt("dev_worktrees").auto_shrink([false, false]).show(ui, |ui| {
+        for (i, r) in reports.iter().enumerate() {
+            let on = selectable(r);
+            striped_row(ui, i, |ui| {
+                check_cell(ui, w[0], &mut sel[i], on);
+                worktree_cells(ui, &w, r, if on { TEXT } else { MUTED });
+            });
+        }
+        if !others.is_empty() {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Altri worktree (creati a mano, non si rimuovono da qui)").color(MUTED));
+            ui.add_space(2.0);
+            if reports.is_empty() {
+                header(ui, &w, &titles);
+            }
+            for (i, r) in others.iter().enumerate() {
+                striped_row(ui, i, |ui| {
+                    crate::cell(ui, w[0], "");
+                    worktree_cells(ui, &w, r, MUTED);
+                });
+            }
+        }
+    });
+}
+
+fn worktree_cells(ui: &mut Ui, w: &[f32], r: &ProjectReport, color: Color32) {
+    crate::cell(ui, w[1], RichText::new(&r.name).color(color)).on_hover_text(r.root.display().to_string());
+    let repo = r.git.main_worktree.as_deref();
+    let resp = crate::cell(ui, w[2], RichText::new(repo.map_or_else(|| "—".to_string(), folder_name)).color(color));
+    if let Some(p) = repo {
+        resp.on_hover_text(p.display().to_string());
+    }
+    crate::cell(ui, w[3], RichText::new(&r.reason).color(color));
+    crate::cell(ui, w[4], RichText::new(sys::fmt_size(r.reclaimable_bytes)).color(color));
+}
+
+fn sessions_table(ui: &mut Ui, sessions: &[ArchivedSession], sel: &mut [bool]) {
+    if sessions.is_empty() {
+        empty_note(ui, empty_text(Section::Sessions, false));
+        return;
+    }
+    let w = col_widths(ui.available_width() - SCROLLBAR, &[CHECK_W, 76.0, 0.0, 80.0, 74.0, 116.0], ui.spacing().item_spacing.x);
+    header(ui, &w, &["", "Harness", "Titolo", "Progetto", "Data", "Dimensione"]);
+    egui::ScrollArea::vertical().id_salt("dev_sessions").auto_shrink([false, false]).show_rows(ui, ROW_H, sessions.len(), |ui, range| {
+        for i in range {
+            let s = &sessions[i];
+            let on = s.blocked.is_none();
+            let color = if on { TEXT } else { MUTED };
+            striped_row(ui, i, |ui| {
+                let check = check_cell(ui, w[0], &mut sel[i], on);
+                if let Some(why) = &s.blocked {
+                    check.on_disabled_hover_text(why);
+                }
+                crate::cell(ui, w[1], RichText::new(agent_label(s.agent)).color(color));
+                crate::cell(ui, w[2], RichText::new(session_title(s)).color(color));
+                let project = crate::cell(ui, w[3], RichText::new(s.cwd.as_deref().map_or_else(|| "—".to_string(), folder_name)).color(color));
+                if let Some(cwd) = &s.cwd {
+                    project.on_hover_text(cwd.display().to_string());
+                }
+                crate::cell(ui, w[4], RichText::new(s.updated_ms.map_or_else(|| "—".to_string(), fmt_date)).color(color));
+                match &s.blocked {
+                    Some(why) => crate::cell(ui, w[5], RichText::new(why).size(12.0).color(MUTED)),
+                    None if s.file.is_none() => crate::cell(ui, w[5], RichText::new(session_size(s)).size(12.0).color(MUTED)),
+                    None => crate::cell(ui, w[5], RichText::new(session_size(s)).color(TEXT)),
+                };
+            });
+        }
+    });
+}
+
+fn group(ui: &mut Ui, title: &str, space: f32) {
+    ui.add_space(space);
+    ui.label(RichText::new(title).strong().color(ACCENT));
+    ui.separator();
+}
+
+fn header(ui: &mut Ui, w: &[f32], titles: &[&str]) {
+    ui.horizontal(|ui| {
+        for (w, t) in w.iter().zip(titles) {
+            crate::cell(ui, *w, RichText::new(*t).strong());
+        }
+    });
+    ui.separator();
+}
+
+fn empty_note(ui: &mut Ui, text: &str) {
+    ui.add_space(20.0);
+    ui.vertical_centered(|ui| ui.label(RichText::new(text).size(16.0).color(MUTED)));
+    ui.add_space(10.0);
+}
+
+/// Una riga di tabella alta [`ROW_H`]; le righe dispari hanno lo sfondo [`STRIPE`].
+fn striped_row(ui: &mut Ui, i: usize, add: impl FnOnce(&mut Ui)) {
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let r = ui
+        .horizontal(|ui| {
+            ui.set_min_height(ROW_H);
+            add(ui)
+        })
+        .response
+        .rect;
+    if i % 2 == 1 {
+        let half = ui.spacing().item_spacing.y / 2.0;
+        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), (r.top() - half)..=(r.bottom() + half));
+        ui.painter().set(bg, egui::Shape::rect_filled(rect, 3.0, STRIPE));
+    }
+}
+
+fn check_cell(ui: &mut Ui, w: f32, value: &mut bool, enabled: bool) -> egui::Response {
+    ui.allocate_ui_with_layout(Vec2::new(w, ROW_H), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(w);
+        ui.set_max_width(w);
+        ui.add_enabled(enabled, egui::Checkbox::without_text(value))
+    })
+    .inner
+}
+
+/// Gli avvisi dell'analisi, il fallimento dell'analisi dei progetti per primo e in evidenza.
+fn warn_strip(ui: &mut Ui, warnings: &[String]) {
+    if warnings.is_empty() {
+        return;
+    }
+    let list = ordered_warnings(warnings);
+    egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for w in list.iter().take(2) {
+            if w.as_str() == ANALYSIS_FAILED {
+                let text = format!("⚠  {w} I progetti e i worktree non sono stati analizzati: premi «Analizza» per riprovare.");
+                ui.add(egui::Label::new(RichText::new(text).strong().color(TEXT)).wrap());
+            } else {
+                ui.add(egui::Label::new(RichText::new(format!("⚠  {w}")).color(TEXT)).truncate());
+            }
+        }
+        if list.len() > 2 {
+            let rest: Vec<&str> = list[2..].iter().map(|w| w.as_str()).collect();
+            ui.label(RichText::new(format!("e altri {} avvisi", list.len() - 2)).size(12.0).color(MUTED))
+                .on_hover_text(rest.join("\n"));
+        }
+    });
+    ui.add_space(8.0);
+}
+
+/// Richieste rifiutate da `dc_app` (per esempio «Piano rifiutato: …»): per intero, mai troncate.
+fn error_strip(ui: &mut Ui, errors: &[String]) {
+    egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for e in errors {
+            ui.add(egui::Label::new(RichText::new(format!("⚠  {e}")).color(TEXT)).wrap());
+        }
+        ui.label(RichText::new("Quella parte non è stata toccata. Premi «Analizza» per rifare l'analisi prima di riprovare.").strong().color(TEXT));
+    });
+    ui.add_space(8.0);
+}
+
+// ---------- pure helpers ----------
+
+/// Quello che `dc_engine::build_plan` accetta: non in uso, non bloccato, con qualcosa da togliere.
+fn selectable(r: &ProjectReport) -> bool {
+    matches!(r.status, ProjectStatus::Inactive | ProjectStatus::Recent | ProjectStatus::NoSessions)
+        && r.blocked_by.is_empty()
+        && (r.is_agent_worktree || !r.artifacts.is_empty())
+}
+
+fn preselect_reports(reports: &[ProjectReport]) -> Vec<bool> {
+    reports.iter().map(|r| r.preselected && selectable(r)).collect()
+}
+
+/// Scelta di piano: tutte le sessioni archiviate non bloccate.
+fn preselect_sessions(sessions: &[ArchivedSession]) -> Vec<bool> {
+    sessions.iter().map(|s| s.blocked.is_none()).collect()
+}
+
+fn select_reports(reports: &[ProjectReport], sel: &mut [bool], all: bool) {
+    for (s, r) in sel.iter_mut().zip(reports) {
+        *s = all && selectable(r);
+    }
+}
+
+fn select_sessions(sessions: &[ArchivedSession], sel: &mut [bool], all: bool) {
+    for (s, x) in sel.iter_mut().zip(sessions) {
+        *s = all && x.blocked.is_none();
+    }
+}
+
+fn chosen_reports<'a>(reports: &'a [ProjectReport], sel: &'a [bool]) -> impl Iterator<Item = &'a ProjectReport> {
+    reports.iter().zip(sel).filter(|(r, s)| **s && selectable(r)).map(|(r, _)| r)
+}
+
+fn chosen_sessions<'a>(sessions: &'a [ArchivedSession], sel: &'a [bool]) -> impl Iterator<Item = &'a ArchivedSession> {
+    sessions.iter().zip(sel).filter(|(s, on)| **on && s.blocked.is_none()).map(|(s, _)| s)
+}
+
+/// (selezionati, totale, byte selezionati) di una tabella di progetti o worktree.
+fn report_stats(reports: &[ProjectReport], sel: &[bool]) -> (usize, usize, u64) {
+    let chosen: Vec<&ProjectReport> = chosen_reports(reports, sel).collect();
+    (chosen.len(), reports.len(), chosen.iter().map(|r| r.reclaimable_bytes).sum())
+}
+
+fn session_stats(sessions: &[ArchivedSession], sel: &[bool]) -> (usize, usize, u64) {
+    let chosen: Vec<&ArchivedSession> = chosen_sessions(sessions, sel).collect();
+    (chosen.len(), sessions.len(), chosen.iter().map(|s| s.bytes).sum())
+}
+
+#[derive(Default, Debug, PartialEq)]
+struct Totals {
+    projects: usize,
+    worktrees: usize,
+    sessions: usize,
+    bytes: u64,
+}
+
+impl Totals {
+    fn any(&self) -> bool {
+        self.projects + self.worktrees + self.sessions > 0
+    }
+
+    fn counts_text(&self) -> String {
+        format!(
+            "{} · {} · {}",
+            plural(self.projects, "progetto", "progetti"),
+            plural(self.worktrees, "worktree", "worktree"),
+            plural(self.sessions, "sessione", "sessioni")
+        )
+    }
+}
+
+fn totals(scan: &DevScan, sp: &[bool], sw: &[bool], ss: &[bool]) -> Totals {
+    let (projects, _, pb) = report_stats(&scan.projects, sp);
+    let (worktrees, _, wb) = report_stats(&scan.worktrees, sw);
+    let (sessions, _, sb) = session_stats(&scan.archived, ss);
+    Totals { projects, worktrees, sessions, bytes: pb + wb + sb }
+}
+
+fn analysis_failed(scan: &DevScan) -> bool {
+    scan.warnings.iter().any(|w| w == ANALYSIS_FAILED)
+}
+
+/// Il fallimento dell'analisi prima degli altri avvisi.
+fn ordered_warnings(warnings: &[String]) -> Vec<&String> {
+    let (mut first, rest): (Vec<&String>, Vec<&String>) = warnings.iter().partition(|w| w.as_str() == ANALYSIS_FAILED);
+    first.extend(rest);
+    first
+}
+
+/// Cosa dire in una sezione vuota: dopo un'analisi fallita le liste vuote non significano «niente».
+fn empty_text(section: Section, failed: bool) -> &'static str {
+    match section {
+        Section::Projects | Section::Worktrees if failed => "Analisi dei progetti non riuscita: premi «Analizza» per riprovare.",
+        Section::Projects => "Nessun progetto trovato.",
+        Section::Worktrees => "Nessun worktree creato da un agente.",
+        Section::Sessions => "Nessuna sessione archiviata.",
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+fn section_label(s: Section, count: Option<usize>) -> String {
+    match count {
+        Some(n) => format!("{} ({n})", s.name()),
+        None => s.name().to_string(),
+    }
+}
+
+/// Larghezze delle colonne: la colonna `0.0` prende quello che resta (almeno 80 px).
+fn col_widths(total: f32, cols: &[f32], gap: f32) -> Vec<f32> {
+    let fixed: f32 = cols.iter().sum();
+    let gaps = gap * cols.len().saturating_sub(1) as f32;
+    let flex = (total - fixed - gaps).max(80.0);
+    cols.iter().map(|&w| if w == 0.0 { flex } else { w }).collect()
+}
+
+fn agent_label(a: Agent) -> &'static str {
+    match a {
+        Agent::Claude => "Claude Code",
+        Agent::Codex => "Codex",
+        Agent::Opencode => "OpenCode",
+        Agent::Pi => "Pi",
+    }
+}
+
+fn session_title(s: &ArchivedSession) -> String {
+    let t = s.title.as_deref().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.is_empty() {
+        "(senza titolo)".into()
+    } else {
+        t
+    }
+}
+
+fn session_label(s: &ArchivedSession) -> String {
+    format!("{} · {}", agent_label(s.agent), session_title(s))
+}
+
+fn session_size(s: &ArchivedSession) -> String {
+    if s.file.is_none() {
+        "solo riga nel database".into()
+    } else {
+        sys::fmt_size(s.bytes)
+    }
+}
+
+/// «progetto · Rust target/» per una cartella, «progetto · worktree intero» per un worktree.
+fn plan_label(scan: &DevScan, item: &PlanItem) -> String {
+    let report = scan.projects.iter().chain(&scan.worktrees).find(|r| r.id == item.project_id);
+    let name = report.map_or_else(|| folder_name(&item.path), |r| r.name.clone());
+    match item.action {
+        PlanAction::GitWorktreeRemove { .. } => format!("{name} · worktree intero"),
+        PlanAction::RemoveDir => {
+            let key = path_key(&item.path);
+            let what = report
+                .and_then(|r| r.artifacts.iter().find(|a| path_key(&a.path) == key))
+                .map_or_else(|| folder_name(&item.path), |a| a.label.clone());
+            format!("{name} · {what}")
+        }
+    }
+}
+
+fn outcome_text(o: &ItemOutcome) -> (String, Color32) {
+    match o {
+        ItemOutcome::Removed { bytes_freed: 0 } => ("Rimosso".into(), GREEN),
+        ItemOutcome::Removed { bytes_freed } => (format!("Rimosso · {}", sys::fmt_size(*bytes_freed)), GREEN),
+        ItemOutcome::Skipped { reason } => (format!("Saltato ({reason})"), MUTED),
+        ItemOutcome::Failed { error, locked_by } if locked_by.is_empty() => (format!("Non riuscito ({error})"), RED),
+        ItemOutcome::Failed { error, locked_by } => (format!("Non riuscito ({error}; in uso da {})", locked_by.join(", ")), RED),
+    }
+}
+
+fn folder_name(p: &Path) -> String {
+    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Data locale `gg/mm/aaaa` da millisecondi epoch.
+fn fmt_date(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| d.with_timezone(&chrono::Local).format("%d/%m/%Y").to_string())
+        .unwrap_or_else(|| "—".into())
+}
+
+fn fmt_elapsed(ms: u64) -> String {
+    let s = (ms + 500) / 1000;
+    if s < 60 {
+        format!("Analisi in {s} s")
+    } else {
+        format!("Analisi in {} min {} s", s / 60, s % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dc_model::{Artifact, ArtifactKind, BlockReason, GitState, SizeInfo};
+    use std::path::PathBuf;
+
+    fn report(id: &str, status: ProjectStatus, preselected: bool, bytes: u64) -> ProjectReport {
+        ProjectReport {
+            id: id.into(),
+            root: PathBuf::from(format!(r"D:\p\{id}")),
+            name: id.into(),
+            ecosystems: vec![],
+            agents: vec![],
+            last_activity_ms: None,
+            last_activity_source: None,
+            inactive_days: None,
+            status,
+            blocked_by: vec![],
+            reason: String::new(),
+            artifacts: vec![Artifact {
+                path: PathBuf::from(format!(r"D:\p\{id}\target")),
+                kind: ArtifactKind::RustTarget,
+                label: "Rust target/".into(),
+                size: SizeInfo { logical_bytes: bytes, allocated_bytes: None, file_count: 1 },
+                verified: true,
+            }],
+            reclaimable_bytes: bytes,
+            preselected,
+            is_agent_worktree: false,
+            git: GitState::default(),
+        }
+    }
+
+    fn session(id: &str, blocked: Option<&str>, file: bool, bytes: u64) -> ArchivedSession {
+        ArchivedSession {
+            agent: Agent::Codex,
+            id: id.into(),
+            title: Some(format!("  titolo\n{id}  ")),
+            cwd: Some(PathBuf::from(r"D:\Projects\demo")),
+            updated_ms: None,
+            file: file.then(|| PathBuf::from(format!(r"C:\s\{id}.jsonl"))),
+            bytes,
+            blocked: blocked.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn only_free_projects_are_selectable() {
+        assert!(selectable(&report("a", ProjectStatus::Inactive, true, 1)));
+        assert!(selectable(&report("b", ProjectStatus::Recent, false, 1)));
+        assert!(selectable(&report("c", ProjectStatus::NoSessions, false, 1)));
+        for st in [ProjectStatus::InUse, ProjectStatus::Blocked, ProjectStatus::Unreachable] {
+            assert!(!selectable(&report("x", st, false, 1)), "{st:?}");
+        }
+        let mut blocked = report("d", ProjectStatus::Recent, false, 1);
+        blocked.blocked_by.push(BlockReason::DirtyGit);
+        assert!(!selectable(&blocked));
+        let mut empty = report("e", ProjectStatus::Inactive, false, 0);
+        empty.artifacts.clear();
+        assert!(!selectable(&empty), "un progetto senza artefatti non ha nulla da togliere");
+        empty.is_agent_worktree = true;
+        assert!(selectable(&empty), "un worktree si toglie intero");
+    }
+
+    #[test]
+    fn preselection_follows_the_engine_but_never_a_blocked_row() {
+        let mut odd = report("c", ProjectStatus::Blocked, true, 5);
+        odd.preselected = true;
+        let rs = vec![report("a", ProjectStatus::Inactive, true, 1), report("b", ProjectStatus::Recent, false, 2), odd];
+        assert_eq!(preselect_reports(&rs), vec![true, false, false]);
+    }
+
+    #[test]
+    fn sessions_preselected_unless_blocked() {
+        let ss = vec![session("1", None, false, 0), session("2", Some("sessione in uso"), true, 10), session("3", None, true, 7)];
+        assert_eq!(preselect_sessions(&ss), vec![true, false, true]);
+        // Anche se la casella risultasse spuntata, una sessione bloccata non viene mai scelta.
+        let sel = vec![true, true, false];
+        let ids: Vec<&str> = chosen_sessions(&ss, &sel).map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["1"]);
+        assert_eq!(session_stats(&ss, &[true, true, true]), (2, 3, 7));
+    }
+
+    #[test]
+    fn select_all_and_none_skip_what_cannot_go() {
+        let rs = vec![report("a", ProjectStatus::Inactive, true, 1), report("b", ProjectStatus::InUse, false, 2)];
+        let mut sel = vec![false, false];
+        select_reports(&rs, &mut sel, true);
+        assert_eq!(sel, vec![true, false]);
+        select_reports(&rs, &mut sel, false);
+        assert_eq!(sel, vec![false, false]);
+        let ss = vec![session("1", Some("x"), true, 1), session("2", None, true, 1)];
+        let mut ssel = vec![false, false];
+        select_sessions(&ss, &mut ssel, true);
+        assert_eq!(ssel, vec![false, true]);
+    }
+
+    #[test]
+    fn totals_count_only_selectable_rows() {
+        let scan = DevScan {
+            projects: vec![report("a", ProjectStatus::Inactive, true, 100), report("b", ProjectStatus::Blocked, false, 50)],
+            worktrees: vec![report("w", ProjectStatus::Recent, false, 30)],
+            archived: vec![session("1", None, false, 0), session("2", None, true, 4)],
+            ..Default::default()
+        };
+        let t = totals(&scan, &[true, true], &[true], &[true, true]);
+        assert_eq!(t, Totals { projects: 1, worktrees: 1, sessions: 2, bytes: 134 });
+        assert!(t.any());
+        assert_eq!(t.counts_text(), "1 progetto · 1 worktree · 2 sessioni");
+        assert!(!totals(&scan, &[false, true], &[false], &[false, false]).any());
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(agent_label(Agent::Opencode), "OpenCode");
+        assert_eq!(agent_label(Agent::Claude), "Claude Code");
+        let s = session("abc", None, false, 0);
+        assert_eq!(session_title(&s), "titolo abc");
+        assert_eq!(session_label(&s), "Codex · titolo abc");
+        assert_eq!(session_size(&s), "solo riga nel database");
+        assert_eq!(session_size(&session("x", None, true, 2048)), "2 KB");
+        let mut untitled = s.clone();
+        untitled.title = Some("   ".into());
+        assert_eq!(session_title(&untitled), "(senza titolo)");
+        assert_eq!(section_label(Section::Sessions, Some(664)), "Sessioni archiviate (664)");
+        assert_eq!(section_label(Section::Worktrees, None), "Worktree");
+        assert_eq!(plural(1, "cartella", "cartelle"), "1 cartella");
+        assert_eq!(plural(0, "cartella", "cartelle"), "0 cartelle");
+        assert_eq!(fmt_elapsed(58_400), "Analisi in 58 s");
+        assert_eq!(fmt_elapsed(125_000), "Analisi in 2 min 5 s");
+    }
+
+    #[test]
+    fn outcome_texts() {
+        assert_eq!(outcome_text(&ItemOutcome::Removed { bytes_freed: 0 }).0, "Rimosso");
+        assert_eq!(outcome_text(&ItemOutcome::Removed { bytes_freed: 1024 }).0, "Rimosso · 1 KB");
+        assert_eq!(outcome_text(&ItemOutcome::Skipped { reason: "in uso".into() }).0, "Saltato (in uso)");
+        let f = ItemOutcome::Failed { error: "accesso negato".into(), locked_by: vec![] };
+        assert_eq!(outcome_text(&f), ("Non riuscito (accesso negato)".into(), RED));
+        let f = ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe".into()] };
+        assert_eq!(outcome_text(&f).0, "Non riuscito (bloccato; in uso da code.exe)");
+    }
+
+    #[test]
+    fn plan_labels_name_the_project_and_the_artifact() {
+        let mut wt = report("wt", ProjectStatus::Inactive, true, 9);
+        wt.is_agent_worktree = true;
+        let scan = DevScan { projects: vec![report("app", ProjectStatus::Inactive, true, 1)], worktrees: vec![wt], ..Default::default() };
+        let item = |path: &str, id: &str, action| PlanItem {
+            path: PathBuf::from(path),
+            kind: ArtifactKind::RustTarget,
+            action,
+            expected_bytes: 0,
+            project_id: id.into(),
+            reason: String::new(),
+        };
+        assert_eq!(plan_label(&scan, &item(r"D:\p\app\target", "app", PlanAction::RemoveDir)), "app · Rust target/");
+        let remove_wt = PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"D:\repo") };
+        assert_eq!(plan_label(&scan, &item(r"D:\p\wt", "wt", remove_wt)), "wt · worktree intero");
+        assert_eq!(plan_label(&scan, &item(r"D:\x\node_modules", "?", PlanAction::RemoveDir)), "node_modules · node_modules");
+    }
+
+    #[test]
+    fn dates_are_day_month_year() {
+        // Mezzogiorno UTC: lo stesso giorno in ogni fuso tra -11 e +11.
+        assert_eq!(fmt_date(1_762_776_000_000), "10/11/2025");
+        assert_eq!(fmt_date(1_709_208_000_000), "29/02/2024");
+    }
+
+    #[test]
+    fn a_failed_analysis_is_not_an_empty_one() {
+        let ok = DevScan { warnings: vec!["Sessioni di Pi illeggibili".into()], ..Default::default() };
+        assert!(!analysis_failed(&ok));
+        assert_eq!(empty_text(Section::Projects, false), "Nessun progetto trovato.");
+        let failed = DevScan { warnings: vec!["altro".into(), ANALYSIS_FAILED.into()], ..Default::default() };
+        assert!(analysis_failed(&failed));
+        assert_eq!(ordered_warnings(&failed.warnings), vec![ANALYSIS_FAILED, "altro"]);
+        for s in [Section::Projects, Section::Worktrees] {
+            assert!(empty_text(s, true).contains("non riuscita"), "{s:?}");
+        }
+        assert_eq!(empty_text(Section::Sessions, true), "Nessuna sessione archiviata.");
+    }
+
+    #[test]
+    fn column_widths_give_the_rest_to_the_flexible_column() {
+        assert_eq!(col_widths(500.0, &[20.0, 0.0, 100.0], 8.0), vec![20.0, 364.0, 100.0]);
+        assert_eq!(col_widths(100.0, &[20.0, 0.0, 100.0], 8.0), vec![20.0, 80.0, 100.0]);
+    }
+
+    #[test]
+    fn sections_from_the_command_line() {
+        assert_eq!(Section::parse("projects"), Some(Section::Projects));
+        assert_eq!(Section::parse("worktree"), Some(Section::Worktrees));
+        assert_eq!(Section::parse("sessions"), Some(Section::Sessions));
+        assert_eq!(Section::parse("boh"), None);
+    }
+
+    fn state() -> DevState {
+        DevState::with_settings(dc_app::default_settings(), Section::Projects, false)
+    }
+
+    #[test]
+    fn scan_result_preselects_and_release_frees_it() {
+        let mut st = state();
+        let (tx, rx) = channel();
+        st.job = Some(rx);
+        tx.send(DevMsg::Step("Lettura delle sessioni…".into(), 0.05)).unwrap();
+        st.poll();
+        assert!(st.busy());
+        assert_eq!(st.text, "Lettura delle sessioni…");
+
+        // Mentre il lavoro è in corso release() non tocca nulla.
+        st.release();
+        assert!(st.busy());
+
+        let scan = DevScan {
+            projects: vec![report("a", ProjectStatus::Inactive, true, 10), report("b", ProjectStatus::Recent, false, 5)],
+            archived: vec![session("1", None, false, 0), session("2", Some("sessione in uso"), true, 3)],
+            ..Default::default()
+        };
+        tx.send(DevMsg::Scanned(scan)).unwrap();
+        st.poll();
+        assert!(!st.busy());
+        assert_eq!(st.view, View::Scanned);
+        assert_eq!(st.sel_projects, vec![true, false]);
+        assert_eq!(st.sel_sessions, vec![true, false]);
+        assert_eq!(st.totals().bytes, 10);
+
+        st.release();
+        assert!(st.scan.is_none());
+        assert_eq!(st.view, View::Empty);
+        assert!(st.sel_projects.is_empty() && st.sel_sessions.is_empty());
+    }
+
+    #[test]
+    fn a_dead_job_is_reported_not_left_spinning() {
+        let mut st = state();
+        let (tx, rx) = channel::<DevMsg>();
+        st.job = Some(rx);
+        drop(tx);
+        st.poll();
+        assert!(!st.busy());
+        assert!(st.error.is_some());
+        assert_eq!(st.view, View::Empty);
+    }
+
+    #[test]
+    fn cleaning_result_drops_the_scan() {
+        let mut st = state();
+        st.set_scan(DevScan { projects: vec![report("a", ProjectStatus::Inactive, true, 10)], ..Default::default() });
+        let (tx, rx) = channel();
+        st.job = Some(rx);
+        let rows = vec![("a · Rust target/".to_string(), ItemOutcome::Removed { bytes_freed: 10 })];
+        tx.send(DevMsg::Cleaned(DevCleaned { rows, freed: 10, errors: vec![], mode: RemoveMode::Recycle })).unwrap();
+        st.poll();
+        assert!(!st.busy());
+        assert!(st.scan.is_none());
+        assert_eq!(st.view, View::Cleaned);
+        assert_eq!(st.cleaned.as_ref().map(|c| c.freed), Some(10));
+        assert!(!st.totals().any());
+    }
+}

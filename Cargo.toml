@@ -12,7 +12,14 @@ name = "PulisciPC"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
+dc-app = { path = "crates/dc-app" }
+dc-model = { path = "crates/dc-model" }
+dc-mukade = { path = "crates/dc-mukade" }
+dc-sessions = { path = "crates/dc-sessions" }
+rfd = "0.15"
+# Same version and features as dc-mukade (already in the build): local dates in the Sviluppatori tables.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+eframe ={ version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 winreg = "0.56"
 windows-sys = { version = "0.61", features = [
