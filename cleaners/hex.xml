@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hex (Elixir): %USERPROFILE%\.hex\packages. rebar3: solo la sottocartella hex della cache globale;
+     bin e lib della stessa cache contengono rebar3 installato con "rebar3 local install" e non si toccano. -->
+<cleaner id="hex" os="windows">
+  <label>Cache di Hex e rebar3</label>
+  <description>Pacchetti scaricati da Hex per Elixir e da rebar3 per Erlang. Non tocca la configurazione né il rebar3 installato.</description>
+  <option id="hex_packages">
+    <label>Pacchetti scaricati da Hex</label>
+    <description>Rimuove gli archivi dei pacchetti Hex scaricati da Mix.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.hex\packages"/>
+  </option>
+  <option id="rebar3_hex">
+    <label>Pacchetti e indice di rebar3</label>
+    <description>Rimuove i pacchetti Hex e l'indice locale scaricati da rebar3.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.cache\rebar3\hex"/>
+  </option>
+</cleaner>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Bundler: cache utente %USERPROFILE%\.bundle\cache (default di user_cache). Il file .bundle\config non si tocca. -->
+<cleaner id="bundler" os="windows">
+  <label>Cache di Bundler</label>
+  <description>Cache globale di Bundler per Ruby. Non tocca la configurazione in .bundle\config.</description>
+  <option id="cache">
+    <label>Cache di Bundler</label>
+    <description>Rimuove l'indice dei gem e i repository git scaricati da Bundler nella cache utente.</description>
+    <action command="delete" search="walk.all" path="%USERPROFILE%\.bundle\cache"/>
+  </option>
+</cleaner>

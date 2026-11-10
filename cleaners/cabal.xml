@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cabal: solo la cartella packages. Nella stessa cartella %LocalAppData%\cabal vive lo store
+     delle librerie compilate, che non si tocca. -->
+<cleaner id="cabal" os="windows">
+  <label>Cache di Cabal</label>
+  <description>Pacchetti Haskell scaricati da Cabal. Non tocca lo store delle librerie compilate né la configurazione.</description>
+  <option id="packages">
+    <label>Pacchetti scaricati da Cabal</label>
+    <description>Rimuove gli archivi dei pacchetti e gli indici dei repository scaricati da Cabal.</description>
+    <action command="delete" search="walk.all" path="%APPDATA%\cabal\packages"/>
+    <action command="delete" search="walk.all" path="%LOCALAPPDATA%\cabal\packages"/>
+  </option>
+</cleaner>
