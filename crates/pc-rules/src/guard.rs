@@ -40,6 +40,10 @@ pub struct Guard {
     system: Vec<Vec<String>>,
     /// Cache di Windows Installer.
     installer: Vec<Vec<String>>,
+    /// Con il contenuto (confronto letterale sui componenti del percorso,
+    /// jolly ammessi solo nella cartella protetta): altre cartelle di Windows,
+    /// `WindowsApps`, `Windows Defender*`, profilo `Default`.
+    subtrees: Vec<Vec<String>>,
     /// Cartelle che si svuotano ma non si tolgono.
     keep_dirs: Vec<Vec<String>>,
 }
@@ -49,14 +53,36 @@ impl Guard {
         let windows = windows_dirs(env);
         let mut system = Vec::new();
         let mut installer = Vec::new();
+        let mut subtrees = Vec::new();
         for win in &windows {
             for sub in SYSTEM_SUBDIRS {
                 system.push(joined(win, &[sub]));
             }
+            for sub in WINDOWS_SUBTREES {
+                subtrees.push(joined(win, &[sub]));
+            }
             installer.push(joined(win, &["installer"]));
         }
+        for var in ["programfiles", "programfiles(x86)", "programw6432"] {
+            if let Some(base) = env_dir_or_default(env, var) {
+                subtrees.push(joined(&base, &["windowsapps"]));
+                subtrees.push(joined(&base, &["windows defender*"]));
+            }
+        }
+        if let Some(data) = env_dir_or_default(env, "programdata") {
+            subtrees.push(joined(&data, &["microsoft", "windows defender", "platform"]));
+        }
+        let mut whole = whole_dirs(env);
+        for users in users_dirs(env) {
+            // Gli altri profili presi interi; il profilo `Default` con tutto.
+            subtrees.push(joined(&users, &["default"]));
+            whole.push(joined(&users, &["*"]));
+        }
+        subtrees.sort();
+        subtrees.dedup();
         Guard {
-            whole: whole_dirs(env),
+            whole,
+            subtrees,
             user_content: user_content_dirs(env),
             key_stores: key_store_dirs(env),
             system,
@@ -96,11 +122,17 @@ impl Guard {
     ///   e credenziali (`Microsoft\Protect`, `Credentials`,
     ///   `SystemCertificates`, `Crypto`, `Vault`, ovunque si trovino), e
     ///   nella radice di ogni disco avvio, ripristino, Cestino, punti di
-    ///   ripristino e file di paging;
-    /// - in ogni componente: `.git` e i file di credenziali; le cartelle
-    ///   `.codex`, `.claude`, `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube` non
-    ///   si toccano prese intere (le sottocartelle sì, se non sono
-    ///   credenziali).
+    ///   ripristino e file di paging; `Fonts`, `servicing`, `Boot`, `INF`,
+    ///   `SystemApps` di Windows, `WindowsApps` e `Windows Defender*` nei
+    ///   Program Files, `Windows Defender\Platform`, il profilo `Default`;
+    /// - gli altri profili presi interi (`C:\Users\altro\*`);
+    /// - cartelle di soli jolly sotto la radice di un disco, qualunque sia il
+    ///   file (`D:\*\*.docx`);
+    /// - in ogni componente: `.git`, i file di credenziali, i registri
+    ///   dell'utente (`NTUSER.*`, `UsrClass.dat*`) e le cartelle di
+    ///   credenziali `.ssh`, `.aws`, `.azure`, `.kube`, `.gnupg`, `.docker`
+    ///   con tutto il contenuto; `.codex` e `.claude` non si toccano prese
+    ///   intere (le sottocartelle sì, se non sono credenziali).
     ///
     /// La cartella temporanea (`%Temp%`, `%WinDir%\Temp`) qui è permessa,
     /// perché è la cartella di partenza delle regole che la svuotano
@@ -164,6 +196,11 @@ impl Guard {
         }
         // Avvio, ripristino, Cestino e file di paging nella radice di ogni
         // disco, con il contenuto.
+        // Cartelle di soli jolly sotto la radice, qualunque sia il file
+        // (`D:\*\*.docx`).
+        if comps.len() >= 3 && comps[1..comps.len() - 1].iter().all(|c| wildcard_only(c)) {
+            return Some("cartelle di un disco prese con i soli caratteri jolly");
+        }
         let first = &comps[1];
         let rest_wild = comps[2..].iter().all(|c| wildcard_only(c));
         if ROOT_ENTRIES
@@ -185,6 +222,15 @@ impl Guard {
             if covers_whole(comps, dir) || (!patch_cache && covers_subtree(comps, dir)) {
                 return Some("cache di Windows Installer");
             }
+        }
+        if self.subtrees.iter().any(|d| covers_subtree_pattern(comps, d)) {
+            return Some("cartella di sistema di Windows o profilo predefinito");
+        }
+        if comps.iter().any(|c| c.starts_with("ntuser.") || c.starts_with("usrclass.dat")) {
+            return Some("registro dell'utente (NTUSER.DAT, UsrClass.dat)");
+        }
+        if comps.iter().any(|c| CREDENTIAL_CONTENT_DIRS.contains(&c.as_str())) {
+            return Some("cartella di credenziali");
         }
         if comps.iter().any(|c| c == ".git") {
             return Some("cartella .git di un repository");
@@ -291,9 +337,15 @@ const ROOT_ENTRIES: &[&str] = &[
 
 const SYSTEM_SUBDIRS: &[&str] = &["system32", "syswow64", "winsxs"];
 
+/// Altre cartelle di Windows protette con il contenuto.
+const WINDOWS_SUBTREES: &[&str] = &["fonts", "servicing", "boot", "inf", "systemapps"];
+
+/// Cartelle di credenziali: né prese intere né il loro contenuto.
+const CREDENTIAL_CONTENT_DIRS: &[&str] = &[".ssh", ".aws", ".azure", ".kube", ".gnupg", ".docker"];
+
 const CREDENTIAL_FILES: &[&str] = &[".credentials.json", "auth.json", "credentials.toml", "token"];
 
-const CREDENTIAL_DIRS: &[&str] = &[".codex", ".claude", ".ssh", ".gnupg", ".aws", ".azure", ".kube"];
+const CREDENTIAL_DIRS: &[&str] = &[".codex", ".claude"];
 
 const NOT_DRIVE: &str = "percorso non assoluto o con prefisso non riconosciuto (UNC, volume, relativo)";
 
@@ -490,6 +542,32 @@ fn covers_whole(path: &[String], dir: &[String]) -> bool {
         // Prima la coda (controllo economico: un percorso concreto non ha jolly).
         path[dir.len()..].iter().all(|c| wildcard_only(c)) && prefix_matches(&path[..dir.len()], dir)
     }
+}
+
+/// Come `covers_whole`, e in più ogni percorso dentro `dir` (confronto
+/// letterale; `dir` può avere jolly, il percorso no).
+fn covers_subtree_pattern(path: &[String], dir: &[String]) -> bool {
+    covers_whole(path, dir)
+        || (path.len() > dir.len()
+            && path[..dir.len()]
+                .iter()
+                .zip(dir)
+                .all(|(p, d)| p == d || (has_wildcard(d) && wildcard_match(d, p))))
+}
+
+/// Cartelle dei profili (`C:\Users`): quella del profilo e di `Public`, e
+/// `C:\Users`.
+fn users_dirs(env: &Env) -> Vec<Vec<String>> {
+    let mut dirs: Vec<Vec<String>> = ["userprofile", "public"]
+        .iter()
+        .filter_map(|v| env_dir(env, v))
+        .filter(|d| d.len() > 2)
+        .map(|d| d[..d.len() - 1].to_vec())
+        .collect();
+    dirs.push(vec!["c:".to_string(), "users".to_string()]);
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// Come `covers_whole`, e in più ogni percorso dentro `dir` (confronto
@@ -1208,5 +1286,97 @@ mod tests {
         }
         println!("protected(path, env): {:?} per chiamata", start.elapsed() / 2_000);
         assert_eq!(refused, 0);
+    }
+
+    #[test]
+    fn other_profiles_default_profile_and_registry_hives_are_refused() {
+        assert_refused(&[
+            r"C:\Users\other",
+            r"C:\Users\other\*",
+            r"C:\Users\other\*.*",
+            r"C:\Users\other\*\*",
+            r"C:\Users\Default",
+            r"C:\Users\Default\*",
+            r"C:\Users\Default\AppData\Local\Temp\x.tmp",
+            r"C:\Users\u\NTUSER.DAT",
+            r"C:\Users\u\ntuser.dat.LOG1",
+            r"C:\Users\u\NTUSER.DAT{016888bd-6c6f-11de-8d1d-001e0bcde3ec}.TM.blf",
+            r"C:\Users\u\ntuser.ini",
+            r"C:\Users\other\NTUSER.DAT",
+            r"C:\Users\u\AppData\Local\Microsoft\Windows\UsrClass.dat",
+            r"C:\Users\u\AppData\Local\Microsoft\Windows\UsrClass.dat.LOG2",
+        ]);
+        assert_allowed(&[
+            r"C:\Users\other\AppData\Local\Foo\cache",
+            r"C:\Users\u\AppData\Local\Microsoft\Windows\INetCache\*",
+        ]);
+    }
+
+    #[test]
+    fn more_windows_folders_are_refused_with_their_contents() {
+        assert_refused(&[
+            r"C:\Windows\Fonts",
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\*",
+            r"C:\Windows\servicing",
+            r"C:\Windows\servicing\Packages\x.mum",
+            r"C:\Windows\INF",
+            r"C:\Windows\INF\oem1.inf",
+            r"C:\Windows\Boot\EFI\bootmgfw.efi",
+            r"C:\Windows\SystemApps",
+            r"C:\Windows\SystemApps\Microsoft.Windows.Search_cw5n1h2txyewy\x",
+            r"C:\Program Files\WindowsApps",
+            r"C:\Program Files\WindowsApps\*",
+            r"C:\Program Files\WindowsApps\Pkg_1.0_x64\app.exe",
+            r"C:\Program Files\Windows Defender",
+            r"C:\Program Files\Windows Defender\MsMpEng.exe",
+            r"C:\Program Files\Windows Defender Advanced Threat Protection\x",
+            r"C:\Program Files (x86)\Windows Defender\x",
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform",
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\*",
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.1\MsMpEng.exe",
+        ]);
+        assert_allowed(&[
+            r"C:\Windows\Logs\CBS\*.log",
+            r"C:\Windows\Prefetch\*.pf",
+            r"C:\Windows\Temp\*",
+            r"C:\Program Files\Foo\log",
+            r"C:\Program Files\*\Logs",
+            r"C:\ProgramData\Microsoft\Windows Defender\Scans\History\Results\Quick\*",
+        ]);
+    }
+
+    #[test]
+    fn contents_of_credential_folders_are_refused() {
+        assert_refused(&[
+            r"C:\Users\u\.ssh\id_rsa",
+            r"C:\Users\u\.ssh\*",
+            r"C:\Users\u\.aws\config",
+            r"C:\Users\u\.azure\msal_token_cache.json",
+            r"C:\Users\u\.kube\config",
+            r"C:\Users\u\.kube\cache\x",
+            r"C:\Users\u\.gnupg\pubring.kbx",
+            r"C:\Users\u\.docker",
+            r"C:\Users\u\.docker\config.json",
+            r"D:\x\.docker\*",
+        ]);
+        assert_allowed(&[
+            r"C:\Users\u\.claude\projects",
+            r"C:\Users\u\.codex\sessions",
+            r"C:\Users\u\.dockerignore",
+            r"D:\proj\.docker-cache\x",
+        ]);
+    }
+
+    #[test]
+    fn wildcard_folders_under_a_drive_root_are_refused_whatever_the_file() {
+        assert_refused(&[
+            r"D:\*\*.docx",
+            r"E:\*\*\*.pdf",
+            r"C:\*\*.log",
+            r"D:\?\x.txt",
+            r"D:\*.*\report.docx",
+        ]);
+        assert_allowed(&[r"C:\*.log", r"D:\*\cache\*.tmp", r"D:\Games\*\x.log"]);
     }
 }
