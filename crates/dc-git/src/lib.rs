@@ -86,6 +86,17 @@ impl GitProbe for GitCli {
     fn is_tracked(&self, root: &Path, rel: &Path) -> bool {
         self.is_tracked_checked(root, rel).unwrap_or(false)
     }
+
+    fn is_ignored(&self, root: &Path, rel: &Path) -> Option<bool> {
+        // Trailing `/` so directory-only patterns such as `dist/` match.
+        let rel = format!("{}/", rel.to_string_lossy().replace('\\', "/").trim_end_matches('/'));
+        // `check-ignore` rejects the literal-pathspec mode that `base_command` enables.
+        match git(root, &["--no-literal-pathspecs", "check-ignore", "-q", "--", &rel])?.code {
+            Some(0) => Some(true),
+            Some(1) => Some(false),
+            _ => None,
+        }
+    }
 }
 
 // ───────────────────────────── worktrees ─────────────────────────────
@@ -174,6 +185,7 @@ fn unquote_c(s: &str) -> String {
 
 struct Out {
     ok: bool,
+    code: Option<i32>,
     stdout: Vec<u8>,
     stderr: String,
 }
@@ -264,6 +276,7 @@ fn run_cmd(mut cmd: Command, timeout: Duration) -> Option<Out> {
     }
     Some(Out {
         ok: status.success(),
+        code: status.code(),
         stdout,
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })
@@ -605,6 +618,22 @@ mod tests {
         g(&repo, &["commit", "-q", "-m", "oops"]);
         assert!(GitCli.is_tracked(&repo, Path::new("target")));
         assert!(GitCli.is_tracked(&repo, Path::new("target/debug")));
+    }
+
+    #[test]
+    fn is_ignored_three_outcomes() {
+        let t = Tmp::new();
+        let repo = t.sub("proj");
+        init(&repo);
+        write(&repo, ".gitignore", "dist/\n");
+        std::fs::create_dir_all(repo.join("dist")).unwrap();
+        std::fs::create_dir_all(repo.join("out")).unwrap();
+
+        assert_eq!(GitCli.is_ignored(&repo, Path::new("dist")), Some(true));
+        assert_eq!(GitCli.is_ignored(&repo, Path::new("out")), Some(false));
+
+        let plain = t.sub("plain");
+        assert_eq!(GitCli.is_ignored(&plain, Path::new("dist")), None);
     }
 
     #[test]

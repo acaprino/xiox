@@ -55,6 +55,8 @@ struct FakeGit {
     states: HashMap<String, GitState>,
     /// (path_key(root), lowercase relative path with `\`)
     tracked: HashSet<(String, String)>,
+    /// (path_key(root), lowercase relative path with `\`) -> answer of `is_ignored`
+    ignored: HashMap<(String, String), bool>,
     state_calls: Mutex<HashMap<String, u32>>,
 }
 
@@ -65,6 +67,11 @@ impl FakeGit {
     }
     fn with_tracked(mut self, root: &str, rel: &str) -> Self {
         self.tracked.insert((path_key(Path::new(root)), rel.to_lowercase()));
+        self
+    }
+    #[allow(dead_code)]
+    fn with_ignored(mut self, root: &str, rel: &str, ignored: bool) -> Self {
+        self.ignored.insert((path_key(Path::new(root)), rel.to_lowercase()), ignored);
         self
     }
 }
@@ -78,6 +85,11 @@ impl GitProbe for FakeGit {
     fn is_tracked(&self, root: &Path, rel: &Path) -> bool {
         self.tracked
             .contains(&(path_key(root), rel.to_string_lossy().to_lowercase().replace('/', "\\")))
+    }
+    fn is_ignored(&self, root: &Path, rel: &Path) -> Option<bool> {
+        self.ignored
+            .get(&(path_key(root), rel.to_string_lossy().to_lowercase().replace('/', "\\")))
+            .copied()
     }
 }
 

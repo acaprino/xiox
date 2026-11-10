@@ -240,6 +240,8 @@ pub trait GitProbe: Send + Sync {
     fn state(&self, root: &Path) -> GitState;
     /// True if any file under `rel` (relative to `root`) is tracked by git.
     fn is_tracked(&self, root: &Path, rel: &Path) -> bool;
+    /// `Some(true)` ignored by git, `Some(false)` not ignored, `None` = not a repository or git did not answer.
+    fn is_ignored(&self, root: &Path, rel: &Path) -> Option<bool>;
 }
 
 // ────────────────────────────── analysis (engine) ───────────────────────────
