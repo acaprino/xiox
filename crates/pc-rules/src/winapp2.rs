@@ -543,7 +543,12 @@ fn detected(
 /// protetta o la radice di un disco (`%AppData%\Micro*`, `%UserProfile%\*\x`)
 /// si risolve in cartelle che il controllo sul percorso con il jolly non vede:
 /// si rifiuta se la regola prende tutto (modello `*`/`*.*`) o scende nelle
-/// sottocartelle (`RECURSE`/`REMOVESELF`).
+/// sottocartelle (`RECURSE`/`REMOVESELF`), salvo un ultimo componente con un
+/// prefisso letterale di almeno `MIN_LITERAL_PREFIX` caratteri.
+/// Caratteri letterali minimi prima del jolly in un ultimo componente sotto
+/// una cartella protetta.
+const MIN_LITERAL_PREFIX: usize = 3;
+
 fn unsafe_files_rule(expanded: &Path, fk: &FileKey, guard: &Guard) -> bool {
     if guard.protected(expanded).is_some() {
         return true;
@@ -569,6 +574,14 @@ fn unsafe_files_rule(expanded: &Path, fk: &FileKey, guard: &Guard) -> bool {
     let wild = comps[first_wild];
     let wild_only = wild.chars().all(|c| matches!(c, '*' | '?' | '.'));
     if first_wild + 1 < comps.len() && !wild_only {
+        return false;
+    }
+    // Ultimo componente con almeno `MIN_LITERAL_PREFIX` caratteri letterali
+    // prima del jolly (`Discord*`, `CLR_v*`): resta nella cartella di una
+    // applicazione; la raccolta rifiuta comunque ogni cartella concreta
+    // protetta. `*`, `M*`, `Mi*` si rifiutano.
+    let literal = wild.chars().take_while(|c| !matches!(c, '*' | '?')).count();
+    if literal >= MIN_LITERAL_PREFIX {
         return false;
     }
     let prefix = comps[..first_wild].join("\\");
@@ -1096,6 +1109,39 @@ mod tests {
         );
     }
 
+    /// N3: un ultimo componente con almeno 3 caratteri letterali prima del
+    /// jolly (`Discord*`) resta: la raccolta controlla le cartelle concrete.
+    #[test]
+    fn partial_wildcard_last_component_with_a_literal_prefix_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let w = one_entry(
+            "FileKey1=%AppData%\\Discord*|*|RECURSE\n\
+             FileKey2=%LocalAppData%\\TempOffice*|*\n\
+             FileKey3=%AppData%\\JDownloader*|*.log|RECURSE\n\
+             FileKey4=%AppData%\\Mi*|*|RECURSE\n\
+             FileKey5=%AppData%\\*|*|RECURSE\n\
+             FileKey6=%AppData%\\M?*|*|RECURSE\n\
+             FileKey7=%AppData%\\Microsoft*|*|RECURSE\n",
+        );
+        let (c, report) = to_cleaners_with(&w, &env, &|_, _| true);
+        let paths: Vec<&str> = c[0].options[0]
+            .actions
+            .iter()
+            .map(|a| match a {
+                Action::Files { path, .. } => path.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![r"%AppData%\Discord*", r"%LocalAppData%\TempOffice*", r"%AppData%\JDownloader*"]
+        );
+        // `Mi*`, `*`, `M?*` (meno di 3 lettere) e `Microsoft*` (può essere la
+        // cartella protetta `%AppData%\Microsoft`, la rifiuta il guard).
+        assert_eq!(report.discarded_protected, 4, "{report:?}");
+    }
+
     fn reg_actions(body: &str) -> (Vec<Action>, Report) {
         let tmp = tempfile::tempdir().unwrap();
         let env = env_for(tmp.path());
@@ -1460,6 +1506,7 @@ mod tests {
         // dalla rilevazione; variabili dell'ambiente vero, sola lettura).
         let env = Env::from_process();
         let guard = Guard::new(&env);
+        let (mut fk_total, mut fk_dropped) = (0u32, 0u32);
         let (mut wild_extra, mut reg_new, mut dropped_wild, mut dropped_reg) = (0, 0, 0, 0);
         let (mut entries_with_rules, mut dropped_any) = (0, 0);
         // Registro: regola precedente contro `regguard`, con l'elenco di ciò che
@@ -1477,6 +1524,8 @@ mod tests {
                 let new = !ex.iter().any(|p| unsafe_files_rule(p, fk, &guard));
                 old_ok += old as u32;
                 new_ok += new as u32;
+                fk_total += 1;
+                fk_dropped += u32::from(!new);
                 if old && !new {
                     wild_extra += 1;
                     only_wild += 1;
@@ -1521,6 +1570,7 @@ mod tests {
             "nuove regole: FileKey con jolly sotto cartella protetta scartate {wild_extra}, RegKey intere di sistema scartate {reg_new}; voci con azioni prima {entries_with_rules}, voci che restano senza azioni per il nuovo controllo {dropped_any} (di cui con file {dropped_wild}, con registro {dropped_reg}); regole ignorate in lettura {}",
             w.entries.iter().map(|e| e.skipped_rules).sum::<u32>()
         );
+        eprintln!("FileKey con variabili definite: {fk_total}, scartate dalle regole di sicurezza: {fk_dropped}");
         let lines = text
             .lines()
             .filter(|l| l.trim_start().to_ascii_lowercase().starts_with("regkey"))

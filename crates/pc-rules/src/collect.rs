@@ -1518,4 +1518,29 @@ mod tests {
         assert_eq!(wow6432_path(r"Software\A\B").as_deref(), Some(r"Software\Wow6432Node\A\B"));
         assert_eq!(wow6432_path(r"Software\Wow6432Node\A"), None);
     }
+
+    /// N3: `%AppData%\Microsoft*` non tocca mai `%AppData%\Microsoft`; le
+    /// cartelle concrete non protette di un jolly con prefisso sì.
+    #[test]
+    fn partial_wildcard_touches_only_unprotected_concrete_folders() {
+        let t = tempfile::tempdir().unwrap();
+        let appdata = t.path().join("Roaming");
+        write(&appdata.join("Microsoft").join("a.log"), "keep");
+        write(&appdata.join("Microsoftx").join("b.log"), "x");
+        write(&appdata.join("Discord").join("c.log"), "x");
+        write(&appdata.join("DiscordPTB").join("d.log"), "x");
+        let e = env(&[("appdata", &appdata.to_string_lossy())]);
+        let rule = |path: &str| Action::Files {
+            path: path.into(),
+            patterns: vec!["*".into()],
+            recurse: true,
+            remove_self: false,
+            search: Search::Winapp2,
+        };
+        let c = collect(&opt(vec![rule(r"%AppData%\Microsoft*")]), &e, &never);
+        assert!(c.files.iter().all(|(p, _)| !p.starts_with(appdata.join("Microsoft"))), "{c:?}");
+        let c = collect(&opt(vec![rule(r"%AppData%\Discord*")]), &e, &never);
+        assert_eq!(names(&c, &appdata), vec![r"DiscordPTB\d.log", r"Discord\c.log"]);
+        assert!(appdata.join("Microsoft").join("a.log").exists());
+    }
 }
