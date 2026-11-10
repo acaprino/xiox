@@ -103,9 +103,16 @@ pub struct DevState {
     text: String,
     progress: f32,
     confirm: Option<Confirm>,
+    /// Perché «Avvia pulizia» non ha aperto la conferma (striscia gialla sopra la card).
+    notice: Option<String>,
     root_sel: Option<usize>,
     auto_scan: bool,
 }
+
+/// Progetti e worktree non si puliscono da un'analisi più vecchia di `dc_app::MAX_SCAN_AGE_MS`.
+const STALE_SCAN: &str = "L'analisi è troppo vecchia: premi «Analizza» di nuovo.";
+/// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
+const CLEANUP_DIED: &str = "Un errore interno ha fermato la pulizia: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
 
 impl DevState {
     /// `analyze`: avvia l'analisi la prima volta che la voce viene mostrata (`--analyze`).
@@ -129,6 +136,7 @@ impl DevState {
             text: String::new(),
             progress: 0.0,
             confirm: None,
+            notice: None,
             root_sel: None,
             auto_scan: analyze,
         }
@@ -155,6 +163,7 @@ impl DevState {
         self.sel_sessions = Vec::new();
         self.cleaned = None;
         self.confirm = None;
+        self.notice = None;
     }
 
     pub fn poll(&mut self) {
@@ -194,8 +203,10 @@ impl DevState {
         if gone && !done {
             // Una pulizia morta a metà può aver già tolto qualcosa: l'analisi non vale più e
             // «Avvia pulizia» resta spento fino a una nuova analisi.
+            let cleaning = self.view == View::Cleaned;
             self.drop_data();
-            self.error = Some("Il lavoro si è interrotto per un errore interno.".into());
+            let text = if cleaning { CLEANUP_DIED } else { "Il lavoro si è interrotto per un errore interno." };
+            self.error = Some(text.into());
             self.view = View::Empty;
             done = true;
         }
@@ -205,6 +216,7 @@ impl DevState {
     }
 
     fn set_scan(&mut self, scan: DevScan) {
+        self.notice = None;
         self.sel_projects = preselect_reports(&scan.projects);
         self.sel_worktrees = preselect_reports(&scan.worktrees);
         self.sel_sessions = preselect_sessions(&scan.archived);
@@ -246,12 +258,23 @@ impl DevState {
         }
     }
 
+    fn open_confirm(&mut self) {
+        self.open_confirm_at(dc_app::now_ms());
+    }
+
     /// Costruisce il piano dalla selezione della sezione visibile (lo stesso che verrà
     /// eseguito) e apre la conferma. Le righe scelte nelle altre sezioni non ci entrano.
-    fn open_confirm(&mut self) {
+    /// Progetti e worktree: un'analisi vecchia (`DevScan::is_stale` a `now_ms`) non apre nulla
+    /// e lo dice nella striscia gialla; le sessioni si ricontrollano comunque prima di cancellarle.
+    fn open_confirm_at(&mut self, now_ms: i64) {
         let Some(scan) = self.scan.clone() else { return };
         let mode = self.settings.remove_mode;
         let section = self.section;
+        self.notice = None;
+        if section != Section::Sessions && scan.is_stale(now_ms) {
+            self.notice = Some(STALE_SCAN.into());
+            return;
+        }
         let action = section_action(&scan, section, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions);
         let ids = action.ids;
         let sessions: Vec<&ArchivedSession> = scan
@@ -340,19 +363,33 @@ impl DevState {
                     }
                 }
                 if !sessions.is_empty() {
-                    step("Cancellazione delle sessioni archiviate…", 0.6);
-                    let cli = SystemCli::locate();
-                    match dc_app::delete_archived(&scan, &sessions, mode, &cli, &SystemTrash) {
-                        Ok(done) => {
-                            for o in done {
-                                if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
-                                    out.freed = out.freed.saturating_add(*bytes_freed);
+                    let label = |agent: Agent, id: &str| {
+                        session_labels
+                            .get(&(agent, id.to_string()))
+                            .cloned()
+                            .unwrap_or_else(|| format!("{} · {id}", agent_label(agent)))
+                    };
+                    // L'analisi può avere ore: si cancella solo ciò che è ANCORA archiviato e libero.
+                    step("Controllo delle sessioni archiviate…", 0.5);
+                    match dc_app::revalidate_archived(&scan, &sessions, &dc_app::fresh_archived) {
+                        Ok(checked) => {
+                            for o in checked.skipped {
+                                out.rows.push((label(o.agent, &o.id), o.outcome));
+                            }
+                            if !checked.keep.is_empty() {
+                                step("Cancellazione delle sessioni archiviate…", 0.6);
+                                let cli = SystemCli::locate();
+                                match dc_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
+                                    Ok(done) => {
+                                        for o in done {
+                                            if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
+                                                out.freed = out.freed.saturating_add(*bytes_freed);
+                                            }
+                                            out.rows.push((label(o.agent, &o.id), o.outcome));
+                                        }
+                                    }
+                                    Err(e) => out.errors.push(e),
                                 }
-                                let label = session_labels
-                                    .get(&(o.agent, o.id.clone()))
-                                    .cloned()
-                                    .unwrap_or_else(|| format!("{} · {}", agent_label(o.agent), o.id));
-                                out.rows.push((label, o.outcome));
                             }
                         }
                         Err(e) => out.errors.push(e),
@@ -607,7 +644,12 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
         });
     egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(Margin::same(16))).show_inside(ui, |ui| {
         match (&state.view, &state.scan, &state.cleaned) {
-            (View::Scanned, Some(scan), _) => warn_strip(ui, &scan.warnings),
+            (View::Scanned, Some(scan), _) => {
+                if let Some(n) = &state.notice {
+                    notice_strip(ui, n);
+                }
+                warn_strip(ui, &scan.warnings)
+            }
             // Un piano o una scelta di sessioni rifiutati: niente è stato toccato e non si
             // riprova da soli, serve una nuova analisi.
             (View::Cleaned, _, Some(c)) if !c.errors.is_empty() => error_strip(ui, &c.errors),
@@ -685,7 +727,7 @@ fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
         (Section::Worktrees, RemoveMode::Recycle) => {
             "I worktree vengono rimossi definitivamente con git, anche con «Nel Cestino»; le cartelle di build dentro un worktree vanno nel Cestino."
         }
-        (_, RemoveMode::Recycle) => "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git.",
+        (_, RemoveMode::Recycle) => "Gli elementi selezionati vanno nel Cestino.",
         (_, RemoveMode::Permanent) => "Gli elementi selezionati verranno eliminati definitivamente.",
     }
 }
@@ -733,9 +775,13 @@ fn worktrees_table(ui: &mut Ui, reports: &[ProjectReport], others: &[ProjectRepo
     egui::ScrollArea::vertical().id_salt("dev_worktrees").auto_shrink([false, false]).show(ui, |ui| {
         for (i, r) in reports.iter().enumerate() {
             let on = selectable(r);
+            let why = nothing_to_remove(r);
             striped_row(ui, i, |ui| {
-                check_cell(ui, w[0], &mut sel[i], on);
-                worktree_cells(ui, &w, r, if on { TEXT } else { MUTED });
+                let check = check_cell(ui, w[0], &mut sel[i], on);
+                if let Some(why) = why {
+                    check.on_disabled_hover_text(why);
+                }
+                worktree_cells(ui, &w, r, if on { TEXT } else { MUTED }, why);
             });
         }
         if !others.is_empty() {
@@ -748,21 +794,26 @@ fn worktrees_table(ui: &mut Ui, reports: &[ProjectReport], others: &[ProjectRepo
             for (i, r) in others.iter().enumerate() {
                 striped_row(ui, i, |ui| {
                     crate::cell(ui, w[0], "");
-                    worktree_cells(ui, &w, r, MUTED);
+                    worktree_cells(ui, &w, r, MUTED, None);
                 });
             }
         }
     });
 }
 
-fn worktree_cells(ui: &mut Ui, w: &[f32], r: &ProjectReport, color: Color32) {
+/// `why`: perché la riga non ha nulla da togliere, al posto dello stato e in grigio come le
+/// righe bloccate.
+fn worktree_cells(ui: &mut Ui, w: &[f32], r: &ProjectReport, color: Color32, why: Option<&str>) {
     crate::cell(ui, w[1], RichText::new(&r.name).color(color)).on_hover_text(r.root.display().to_string());
     let repo = r.git.main_worktree.as_deref();
     let resp = crate::cell(ui, w[2], RichText::new(repo.map_or_else(|| "—".to_string(), folder_name)).color(color));
     if let Some(p) = repo {
         resp.on_hover_text(p.display().to_string());
     }
-    crate::cell(ui, w[3], RichText::new(&r.reason).color(color));
+    match why {
+        Some(why) => crate::cell(ui, w[3], RichText::new(why).size(12.0).color(MUTED)),
+        None => crate::cell(ui, w[3], RichText::new(&r.reason).color(color)),
+    };
     crate::cell(ui, w[4], RichText::new(sys::fmt_size(r.reclaimable_bytes)).color(color));
 }
 
@@ -872,6 +923,15 @@ fn warn_strip(ui: &mut Ui, warnings: &[String]) {
     ui.add_space(8.0);
 }
 
+/// Un avviso sul pulsante appena premuto (per esempio l'analisi troppo vecchia), niente dialogo.
+fn notice_strip(ui: &mut Ui, text: &str) {
+    egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add(egui::Label::new(RichText::new(format!("⚠  {text}")).strong().color(TEXT)).wrap());
+    });
+    ui.add_space(8.0);
+}
+
 /// Richieste rifiutate da `dc_app` (per esempio «Piano rifiutato: …»): per intero, mai troncate.
 fn error_strip(ui: &mut Ui, errors: &[String]) {
     egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
@@ -886,11 +946,30 @@ fn error_strip(ui: &mut Ui, errors: &[String]) {
 
 // ---------- pure helpers ----------
 
-/// Quello che `dc_engine::build_plan` accetta: non in uso, non bloccato, con qualcosa da togliere.
-fn selectable(r: &ProjectReport) -> bool {
+/// Lo stato e i blocchi che `dc_engine::build_plan` lascia passare: non in uso, non bloccato.
+fn status_allows(r: &ProjectReport) -> bool {
     matches!(r.status, ProjectStatus::Inactive | ProjectStatus::Recent | ProjectStatus::NoSessions)
         && r.blocked_by.is_empty()
-        && (r.is_agent_worktree || !r.artifacts.is_empty())
+}
+
+/// Quello che `dc_engine::build_plan` accetta E da cui ricava almeno un elemento
+/// (`dc_app::plans_something`, la stessa regola): un worktree con modifiche non salvate, o di
+/// stato git ignoto, senza artefatti darebbe un piano vuoto.
+fn selectable(r: &ProjectReport) -> bool {
+    status_allows(r) && dc_app::plans_something(r)
+}
+
+/// Perché una riga che lo stato lascerebbe passare non ha nulla da togliere; `None` altrimenti
+/// (allora il `reason` del report dice già tutto).
+fn nothing_to_remove(r: &ProjectReport) -> Option<&'static str> {
+    if !status_allows(r) || dc_app::plans_something(r) {
+        return None;
+    }
+    Some(match (r.is_agent_worktree, r.git.dirty) {
+        (true, Some(true)) => "Modifiche non salvate: il worktree resta",
+        (true, None) => "Stato di git non leggibile: il worktree resta",
+        _ => "Nulla da togliere",
+    })
 }
 
 fn preselect_reports(reports: &[ProjectReport]) -> Vec<bool> {
@@ -1154,8 +1233,51 @@ mod tests {
         let mut empty = report("e", ProjectStatus::Inactive, false, 0);
         empty.artifacts.clear();
         assert!(!selectable(&empty), "un progetto senza artefatti non ha nulla da togliere");
+        assert_eq!(nothing_to_remove(&empty), Some("Nulla da togliere"));
         empty.is_agent_worktree = true;
-        assert!(selectable(&empty), "un worktree si toglie intero");
+        empty.git.main_worktree = Some(PathBuf::from(r"D:\repo"));
+        empty.git.dirty = Some(false);
+        assert!(selectable(&empty), "un worktree pulito si toglie intero");
+        assert_eq!(nothing_to_remove(&empty), None);
+    }
+
+    #[test]
+    fn a_worktree_with_nothing_to_remove_is_greyed_out_with_the_reason() {
+        let mut dirty = report("d", ProjectStatus::Inactive, true, 40);
+        dirty.is_agent_worktree = true;
+        dirty.artifacts.clear();
+        dirty.git.main_worktree = Some(PathBuf::from(r"D:\repo"));
+        dirty.git.dirty = Some(true);
+        let mut unknown = dirty.clone();
+        unknown.id = "u".into();
+        unknown.git.dirty = None;
+        let mut clean = dirty.clone();
+        clean.id = "c".into();
+        clean.git.dirty = Some(false);
+        // Lo stesso giudizio di dc_engine::build_plan: piano vuoto per i primi due.
+        for (r, want) in [(&dirty, false), (&unknown, false), (&clean, true)] {
+            let plan = dc_engine_plan_len(r);
+            assert_eq!(selectable(r), want, "{}", r.id);
+            assert_eq!(plan > 0, want, "{}", r.id);
+        }
+        assert_eq!(nothing_to_remove(&dirty), Some("Modifiche non salvate: il worktree resta"));
+        assert_eq!(nothing_to_remove(&unknown), Some("Stato di git non leggibile: il worktree resta"));
+        // Un worktree in uso lo dice già il suo stato.
+        let mut busy = dirty.clone();
+        busy.status = ProjectStatus::InUse;
+        assert_eq!(nothing_to_remove(&busy), None);
+
+        let rs = vec![dirty, unknown, clean];
+        assert_eq!(preselect_reports(&rs), vec![false, false, true]);
+        let mut sel = vec![false; 3];
+        select_reports(&rs, &mut sel, true);
+        assert_eq!(sel, vec![false, false, true]);
+        assert_eq!(report_stats(&rs, &[true, true, true]), (1, 3, 40), "i byte dei worktree che restano non contano");
+    }
+
+    fn dc_engine_plan_len(r: &ProjectReport) -> usize {
+        let scan = DevScan { worktrees: vec![r.clone()], ..Default::default() };
+        dc_app::build_plan(&scan, &[r.id.clone()], RemoveMode::Recycle).unwrap().items.len()
     }
 
     #[test]
@@ -1199,8 +1321,46 @@ mod tests {
             projects: vec![report("a", ProjectStatus::Inactive, true, 100), report("b", ProjectStatus::Blocked, false, 50)],
             worktrees: vec![wt],
             archived: vec![session("1", None, false, 0), session("2", None, true, 4)],
+            scanned_at_ms: dc_app::now_ms(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn an_old_analysis_does_not_clean_projects_or_worktrees() {
+        let at = 1_800_000_000_000;
+        let mut st = state();
+        st.set_scan(DevScan { scanned_at_ms: at, ..three_sections() });
+        st.sel_worktrees = vec![true];
+        let late = at + dc_app::MAX_SCAN_AGE_MS + 1;
+        for section in [Section::Projects, Section::Worktrees] {
+            st.section = section;
+            st.open_confirm_at(late);
+            assert!(st.confirm.is_none(), "{section:?}: nessun dialogo");
+            assert_eq!(st.notice.as_deref(), Some(STALE_SCAN));
+        }
+        assert_eq!(STALE_SCAN, "L'analisi è troppo vecchia: premi «Analizza» di nuovo.");
+
+        // Entro la mezz'ora la conferma si apre e l'avviso sparisce.
+        st.section = Section::Projects;
+        st.open_confirm_at(at + dc_app::MAX_SCAN_AGE_MS);
+        assert!(st.confirm.take().is_some());
+        assert!(st.notice.is_none());
+
+        // Le sessioni si ricontrollano dal vivo prima di cancellarle: l'età non le ferma.
+        st.section = Section::Sessions;
+        st.open_confirm_at(late);
+        assert!(st.confirm.take().is_some());
+        assert!(st.notice.is_none());
+
+        // Un'analisi di età ignota vale come vecchia; una nuova analisi toglie l'avviso.
+        st.set_scan(DevScan { scanned_at_ms: 0, ..three_sections() });
+        st.section = Section::Worktrees;
+        st.sel_worktrees = vec![true];
+        st.open_confirm_at(at);
+        assert!(st.confirm.is_none() && st.notice.is_some());
+        st.set_scan(three_sections());
+        assert!(st.notice.is_none());
     }
 
     #[test]
@@ -1280,7 +1440,7 @@ mod tests {
         assert_eq!(confirm_text(Section::Worktrees, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
         assert_eq!(
             confirm_text(Section::Projects, RemoveMode::Recycle),
-            "Gli elementi selezionati vanno nel Cestino. I worktree vengono rimossi definitivamente con git."
+            "Gli elementi selezionati vanno nel Cestino."
         );
         assert_eq!(confirm_text(Section::Projects, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
         let one = Confirm {
@@ -1426,7 +1586,7 @@ mod tests {
         drop(tx);
         st.poll();
         assert!(!st.busy());
-        assert!(st.error.is_some());
+        assert_eq!(st.error.as_deref(), Some("Il lavoro si è interrotto per un errore interno."));
         assert_eq!(st.view, View::Empty);
     }
 
@@ -1446,7 +1606,8 @@ mod tests {
         assert!(st.scan.is_none());
         assert!(st.sel_projects.is_empty() && st.sel_worktrees.is_empty() && st.sel_sessions.is_empty());
         assert!(!st.can_clean());
-        assert!(st.error.is_some());
+        assert_eq!(st.error.as_deref(), Some(CLEANUP_DIED));
+        assert!(CLEANUP_DIED.contains("potrebbero essere già stati rimossi"));
         assert_eq!(st.view, View::Empty);
     }
 
