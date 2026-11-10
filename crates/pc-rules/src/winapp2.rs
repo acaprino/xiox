@@ -165,13 +165,26 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
                     entry.warning = Some(value.to_string());
                 }
             }
-            "detect" => match split_root(value.split('|').next().unwrap_or("")) {
-                Some((root, path)) => entry.detect.push(Detect::RegKey {
-                    root,
-                    path: path.to_string(),
-                }),
-                None => entry.skipped_rules += 1,
-            },
+            "detect" => {
+                let target = value.split('|').next().unwrap_or("");
+                if let Some(rest) = classes_root(target) {
+                    // HKCR è la fusione di `Software\Classes` di HKCU e HKLM.
+                    for root in [RegRoot::Hkcu, RegRoot::Hklm] {
+                        entry.detect.push(Detect::RegKey {
+                            root,
+                            path: format!(r"Software\Classes\{rest}"),
+                        });
+                    }
+                } else {
+                    match split_root(target) {
+                        Some((root, path)) => entry.detect.push(Detect::RegKey {
+                            root,
+                            path: path.to_string(),
+                        }),
+                        None => entry.skipped_rules += 1,
+                    }
+                }
+            }
             "detectfile" => {
                 if !value.is_empty() {
                     let joined = match value.split_once('|') {
@@ -190,9 +203,15 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
             },
             "regkey" => {
                 let (key_part, val_part) = match value.split_once('|') {
-                    Some((k, v)) => (k, Some(v.trim()).filter(|v| !v.is_empty())),
+                    Some((k, v)) => (k, Some(v.trim())),
                     None => (value, None),
                 };
+                // `Chiave|` con il nome del valore vuoto non è «tutta la chiave»:
+                // non si sa cosa cancellare, quindi si salta.
+                if val_part == Some("") {
+                    entry.skipped_rules += 1;
+                    continue;
+                }
                 match split_root(key_part) {
                     Some((root, path)) => entry.reg_keys.push(RegKeyRule {
                         root,
@@ -259,30 +278,30 @@ fn header(comment: &str, w: &mut Winapp2) {
     }
 }
 
-/// `percorso|modelli|FLAG`. `None` se non ci sono modelli né flag (solo il
-/// percorso): non si sa cosa cancellare, quindi non si inventa.
+/// `percorso|modelli|FLAG`. `None` se mancano i modelli (solo il percorso,
+/// oppure un flag al loro posto): non si sa cosa cancellare, quindi non si
+/// inventa.
 fn file_key(value: &str, unknown: &mut BTreeMap<String, u32>) -> Option<FileKey> {
     let mut parts = value.split('|');
     let path = parts.next().unwrap_or("").trim().trim_end_matches('\\');
     if path.is_empty() {
         return None;
     }
-    let second = parts.next()?.trim();
-    let third = parts.next().map(str::trim).unwrap_or("");
-    // Caso raro: il secondo campo è già un flag.
-    let (patterns_field, flags_field) = if is_flag(second) && third.is_empty() {
-        ("", second)
-    } else {
-        (second, third)
-    };
-    let mut patterns: Vec<String> = patterns_field
+    let patterns_field = parts.next()?.trim();
+    let flags_field = parts.next().map(str::trim).unwrap_or("");
+    // Un flag al posto dei modelli (`percorso|RECURSE`) o nessun modello
+    // (`percorso||RECURSE`): non si inventa `*.*`.
+    if is_flag(patterns_field) {
+        return None;
+    }
+    let patterns: Vec<String> = patterns_field
         .split(';')
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .map(str::to_string)
         .collect();
     if patterns.is_empty() {
-        patterns.push("*.*".to_string());
+        return None;
     }
     let (mut recurse, mut remove_self) = (false, false);
     for flag in flags_field.split(['|', ';']).map(str::trim).filter(|f| !f.is_empty()) {
@@ -302,6 +321,15 @@ fn file_key(value: &str, unknown: &mut BTreeMap<String, u32>) -> Option<FileKey>
 
 fn is_flag(s: &str) -> bool {
     s.eq_ignore_ascii_case("RECURSE") || s.eq_ignore_ascii_case("REMOVESELF")
+}
+
+/// `HKCR\.foo` → `.foo`.
+fn classes_root(s: &str) -> Option<&str> {
+    let s = s.trim();
+    let (root, rest) = s.split_once('\\')?;
+    let rest = rest.trim().trim_matches('\\');
+    (matches!(root.to_ascii_uppercase().as_str(), "HKCR" | "HKEY_CLASSES_ROOT") && !rest.is_empty())
+        .then_some(rest)
 }
 
 /// `HKCU\Software\X` → (Hkcu, `Software\X`). Altre radici: `None`.
@@ -383,7 +411,7 @@ pub fn to_cleaners_with(
                 report.discarded_missing_var += 1;
                 continue;
             }
-            if expanded.iter().all(|p| protected(p, env).is_some()) {
+            if expanded.iter().any(|p| unsafe_files_rule(p, fk, env)) {
                 report.discarded_protected += 1;
                 continue;
             }
@@ -397,7 +425,7 @@ pub fn to_cleaners_with(
             });
         }
         for rk in &entry.reg_keys {
-            if !reg_path_allowed(&rk.path) {
+            if !reg_path_allowed(&rk.path, rk.value.is_none()) {
                 report.discarded_protected += 1;
                 continue;
             }
@@ -451,23 +479,114 @@ fn detected(entry: &Entry, env: &Env, reg_exists: &dyn Fn(RegRoot, &str) -> bool
             .any(|fk| path_exists(&fk.path, env));
     }
     entry.detect.iter().any(|d| match d {
-        Detect::RegKey { root, path } => reg_exists(*root, path),
+        Detect::RegKey { root, path } => {
+            reg_exists(*root, path)
+                || (*root == RegRoot::Hklm
+                    && wow6432_view(path).is_some_and(|alt| reg_exists(*root, &alt)))
+        }
         Detect::File(path) => path_exists(path, env),
     })
 }
 
-/// Solo `Software\<qualcosa>` (anche `Software\Classes\…`).
-fn reg_path_allowed(path: &str) -> bool {
-    let mut parts = path.split('\\').filter(|p| !p.is_empty());
-    let first = parts.next();
-    let second = parts.next();
-    first.is_some_and(|f| f.eq_ignore_ascii_case("software"))
-        && second.is_some()
-        && !path.split('\\').any(|p| p == "..")
+/// Percorso di `FileKey` (già espanso) che non si può offrire. Oltre a
+/// `protected` sul percorso intero, un jolly che sta subito sotto una cartella
+/// protetta o la radice di un disco (`%AppData%\Micro*`, `%UserProfile%\*\x`)
+/// si risolve in cartelle che il controllo sul percorso con il jolly non vede:
+/// si rifiuta se la regola prende tutto (modello `*`/`*.*`) o scende nelle
+/// sottocartelle (`RECURSE`/`REMOVESELF`).
+fn unsafe_files_rule(expanded: &Path, fk: &FileKey, env: &Env) -> bool {
+    if protected(expanded, env).is_some() {
+        return true;
+    }
+    let text = expanded.to_string_lossy().replace('/', "\\");
+    let comps: Vec<&str> = text.split('\\').filter(|c| !c.is_empty()).collect();
+    let Some(first_wild) = comps.iter().position(|c| c.contains(['*', '?'])) else {
+        return false;
+    };
+    let takes_all = fk.recurse
+        || fk.remove_self
+        || fk.patterns.iter().any(|p| matches!(p.as_str(), "*" | "*.*"));
+    if !takes_all {
+        return false;
+    }
+    if first_wild == 0 {
+        return true;
+    }
+    // Il jolly è la cartella stessa da pulire (`Micro*`), o è un componente fatto
+    // solo di jolly (`*`): si risolve in qualunque cartella sotto il prefisso.
+    // Un jolly parziale con una coda fissa (`Radeon*\cache`) resta dentro la
+    // cartella dell'applicazione.
+    let wild = comps[first_wild];
+    let wild_only = wild.chars().all(|c| matches!(c, '*' | '?' | '.'));
+    if first_wild + 1 < comps.len() && !wild_only {
+        return false;
+    }
+    let prefix = comps[..first_wild].join("\\");
+    protected(Path::new(&prefix), env).is_some()
+}
+
+/// Rami di `Software` (con `Wow6432Node` tolto) che non si cancellano interi.
+const REG_BRANCHES: &[&str] = &["classes", "microsoft", "policies"];
+
+/// Chiavi di registro che una regola può cancellare: `Software\<qualcosa>`.
+/// Per le chiavi intere (`whole_key`) anche: mai `Software`, `Software\Classes`,
+/// `Software\Microsoft`, `Software\Policies` e `Wow6432Node` interi, mai le
+/// chiavi contenitore di Windows (`Microsoft\Windows`, `Windows NT`,
+/// `…\CurrentVersion` e le sue figlie dirette: `Run`, `RunOnce`, `Policies`,
+/// `Uninstall`, `Explorer`, `Winlogon`…). I valori (`|Nome`) seguono la regola
+/// semplice.
+fn reg_path_allowed(path: &str, whole_key: bool) -> bool {
+    let mut comps: Vec<String> = path
+        .split('\\')
+        .filter(|p| !p.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    if comps.iter().any(|c| c == "..") || comps.first().map(String::as_str) != Some("software") {
+        return false;
+    }
+    if comps.len() < 2 {
+        return false;
+    }
+    if !whole_key {
+        return true;
+    }
+    // La vista a 32 bit ha le stesse regole della principale.
+    if comps[1] == "wow6432node" {
+        comps.remove(1);
+        if comps.len() < 2 {
+            return false;
+        }
+    }
+    if comps.len() == 2 && REG_BRANCHES.contains(&comps[1].as_str()) {
+        return false;
+    }
+    if comps[1] == "microsoft" {
+        let rest: Vec<&str> = comps[2..].iter().map(String::as_str).collect();
+        match rest.as_slice() {
+            ["windows"] | ["windows nt"] => return false,
+            ["windows" | "windows nt", "currentversion"]
+            | ["windows" | "windows nt", "currentversion", _] => return false,
+            _ => {}
+        }
+    }
+    true
 }
 
 /// Esiste almeno uno dei percorsi ottenuti espandendo le variabili (con `*` e
 /// `?` nei componenti).
+/// `Software\X` → `Software\Wow6432Node\X` (la vista a 32 bit di HKLM).
+fn wow6432_view(path: &str) -> Option<String> {
+    let (first, rest) = path.split_once('\\')?;
+    if !first.eq_ignore_ascii_case("software") {
+        return None;
+    }
+    let second = rest.split('\\').next().unwrap_or("");
+    if second.eq_ignore_ascii_case("wow6432node") {
+        return None;
+    }
+    Some(format!(r"{first}\Wow6432Node\{rest}"))
+}
+
 fn path_exists(path: &str, env: &Env) -> bool {
     expand(path, env).iter().any(|p| exists_wild(p))
 }
@@ -565,6 +684,9 @@ mod tests {
             fs::create_dir_all(&p).unwrap();
             m.insert(k.to_string(), p.to_string_lossy().replace('/', "\\"));
         }
+        // `C:` del disco della cartella temporanea: `%SystemDrive%\*` è la radice.
+        let drive: String = root.to_string_lossy().chars().take(2).collect();
+        m.insert("systemdrive".to_string(), drive);
         Env(m)
     }
 
@@ -883,6 +1005,176 @@ mod tests {
         }
     }
 
+    fn one_entry(body: &str) -> Winapp2 {
+        let text = format!("[P *]\nDetect=HKCU\\Software\\P\n{body}");
+        parse(&text).0
+    }
+
+    #[test]
+    fn wildcard_rules_under_protected_folders_are_discarded_and_counted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let w = one_entry(
+            "FileKey1=%UserProfile%\\*|*|RECURSE\n\
+             FileKey2=%LocalAppData%\\*|*.*|RECURSE\n\
+             FileKey3=%SystemDrive%\\*|*|REMOVESELF\n\
+             FileKey4=%AppData%\\*|*|RECURSE\n\
+             FileKey5=%ProgramData%\\*|*|RECURSE\n\
+             FileKey6=%WinDir%\\*|*|RECURSE\n\
+             FileKey7=%AppData%\\Micro*|*|RECURSE\n\
+             FileKey8=%UserProfile%\\*\\Cache|*|RECURSE\n\
+             FileKey9=%NoSuchVar%\\*|*|RECURSE\n\
+             FileKey10=%LocalAppData%\\Foo\\*|*.log\n\
+             FileKey11=%AppData%\\Foo\\*|*|RECURSE\n\
+             FileKey12=%ProgramData%\\Foo*\\Logs|*.log\n\
+             FileKey13=%LocalAppData%\\Radeon*\\cache|*|RECURSE\n\
+             FileKey14=%AppData%\\*WebStorage\\Logs|*|RECURSE\n",
+        );
+        let (c, report) = to_cleaners_with(&w, &env, &|_, _| true);
+        assert_eq!(report.discarded_protected, 8, "{report:?}");
+        assert_eq!(report.discarded_missing_var, 1);
+        let paths: Vec<&str> = c[0].options[0]
+            .actions
+            .iter()
+            .map(|a| match a {
+                Action::Files { path, .. } => path.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                r"%LocalAppData%\Foo\*",
+                r"%AppData%\Foo\*",
+                r"%ProgramData%\Foo*\Logs",
+                r"%LocalAppData%\Radeon*\cache",
+                r"%AppData%\*WebStorage\Logs"
+            ]
+        );
+    }
+
+    fn reg_actions(body: &str) -> (Vec<Action>, Report) {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let w = one_entry(body);
+        let (c, report) = to_cleaners_with(&w, &env, &|_, _| true);
+        (
+            c.first().map(|c| c.options[0].actions.clone()).unwrap_or_default(),
+            report,
+        )
+    }
+
+    #[test]
+    fn whole_key_deletes_of_system_registry_branches_are_discarded() {
+        let (actions, report) = reg_actions(
+            "RegKey1=HKLM\\Software\\Classes\n\
+             RegKey2=HKCU\\Software\\Microsoft\n\
+             RegKey3=HKLM\\Software\\Policies\n\
+             RegKey4=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\n\
+             RegKey5=HKLM\\Software\\Wow6432Node\n\
+             RegKey6=HKLM\\Software\\Wow6432Node\\Classes\n\
+             RegKey7=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\n\
+             RegKey8=HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\n\
+             RegKey9=HKCU\\Software\\VOS\n\
+             RegKey10=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU\n\
+             RegKey11=HKLM\\Software\\Classes\\.mpf\n\
+             RegKey12=HKLM\\Software\\Wow6432Node\\VOS\n",
+        );
+        assert_eq!(report.discarded_protected, 8, "{report:?}");
+        let paths: Vec<&str> = actions
+            .iter()
+            .map(|a| match a {
+                Action::RegKey { path, .. } => path.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                r"Software\VOS",
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU",
+                r"Software\Classes\.mpf",
+                r"Software\Wow6432Node\VOS"
+            ]
+        );
+    }
+
+    #[test]
+    fn value_deletes_under_system_branches_keep_the_old_rule() {
+        let (actions, report) = reg_actions(
+            "RegKey1=HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run|Foo\n\
+             RegKey2=HKCU\\Software|Foo\n",
+        );
+        assert_eq!(actions.len(), 1);
+        assert_eq!(report.discarded_protected, 1);
+    }
+
+    #[test]
+    fn empty_registry_value_name_is_skipped_not_a_whole_key_delete() {
+        let (w, warnings) = parse(
+            "[P *]\nDetect=HKCU\\Software\\P\nRegKey1=HKCU\\Software\\P\\Y|\nRegKey2=HKCU\\Software\\P\\Z\n",
+        );
+        assert_eq!(w.entries[0].reg_keys.len(), 1);
+        assert_eq!(w.entries[0].reg_keys[0].path, r"Software\P\Z");
+        assert_eq!(w.entries[0].skipped_rules, 1);
+        assert!(warnings.iter().any(|m| m.contains("non rappresentabili")));
+    }
+
+    #[test]
+    fn file_key_with_a_flag_instead_of_patterns_is_skipped_and_counted() {
+        let (w, _) = parse(
+            "[P *]\nFileKey1=%AppData%\\P\\a|RECURSE\nFileKey2=%AppData%\\P\\b|REMOVESELF\n\
+             FileKey3=%AppData%\\P\\c||RECURSE\nFileKey4=%AppData%\\P\\d|*.log|RECURSE\n",
+        );
+        assert_eq!(w.entries[0].file_keys.len(), 1);
+        assert_eq!(w.entries[0].file_keys[0].path, r"%AppData%\P\d");
+        assert_eq!(w.entries[0].skipped_rules, 3);
+    }
+
+    #[test]
+    fn hkcr_detect_checks_software_classes_in_both_hives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let (w, _) = parse("[C *]\nDetect=HKCR\\.foo\nFileKey1=%AppData%\\C|*.tmp\n");
+        assert_eq!(w.entries[0].skipped_rules, 0);
+        let hkcu = |r: RegRoot, p: &str| r == RegRoot::Hkcu && p == r"Software\Classes\.foo";
+        let hklm = |r: RegRoot, p: &str| r == RegRoot::Hklm && p == r"Software\Classes\.foo";
+        assert_eq!(to_cleaners_with(&w, &env, &hkcu).0.len(), 1);
+        assert_eq!(to_cleaners_with(&w, &env, &hklm).0.len(), 1);
+        assert!(to_cleaners_with(&w, &env, &no_registry).0.is_empty());
+    }
+
+    #[test]
+    fn hklm_detect_also_checks_the_wow6432node_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = env_for(tmp.path());
+        let (w, _) =
+            parse("[W *]\nDetect=HKLM\\Software\\Vendor\\App\nFileKey1=%AppData%\\W|*.tmp\n");
+        let wow = |r: RegRoot, p: &str| r == RegRoot::Hklm && p == r"Software\Wow6432Node\Vendor\App";
+        assert_eq!(to_cleaners_with(&w, &env, &wow).0.len(), 1);
+        // HKCU non ha la vista Wow6432Node.
+        let (w, _) =
+            parse("[W *]\nDetect=HKCU\\Software\\Vendor\\App\nFileKey1=%AppData%\\W|*.tmp\n");
+        let wow = |_: RegRoot, p: &str| p == r"Software\Wow6432Node\Vendor\App";
+        assert!(to_cleaners_with(&w, &env, &wow).0.is_empty());
+    }
+
+    /// Legge il vero ambiente del processo (solo lettura) per verificare che
+    /// `from_process` aggiunga le cartelle note.
+    #[cfg(windows)]
+    #[test]
+    fn from_process_adds_known_folders() {
+        let env = Env::from_process();
+        for name in ["locallowappdata", "documents", "commonappdata"] {
+            assert!(
+                env.get(name).is_some_and(|v| v.len() > 3),
+                "{name} manca: {:?}",
+                env.get(name)
+            );
+        }
+        assert_eq!(env.get("commonappdata"), env.get("programdata"));
+    }
+
     #[test]
     fn wildcard_matching() {
         assert!(wildcard_match("Adobe Photoshop*", "ADOBE PHOTOSHOP 2026"));
@@ -923,5 +1215,54 @@ mod tests {
         // Conversione con un ambiente finto vuoto: nulla è rilevato, ma non deve andare in panico.
         let (c, _) = to_cleaners_with(&w, &Env::default(), &|_, _| false);
         eprintln!("rilevate con ambiente vuoto: {}", c.len());
+
+        // Quante regole e voci toglie ciascuna regola di sicurezza (indipendente
+        // dalla rilevazione; variabili dell'ambiente vero, sola lettura).
+        let env = Env::from_process();
+        let (mut wild_extra, mut reg_new, mut dropped_wild, mut dropped_reg) = (0, 0, 0, 0);
+        let (mut entries_with_rules, mut dropped_any) = (0, 0);
+        let old_reg = |path: &str| {
+            let mut p = path.split('\\').filter(|p| !p.is_empty());
+            p.next().is_some_and(|f| f.eq_ignore_ascii_case("software")) && p.next().is_some()
+        };
+        for e in &w.entries {
+            let (mut old_ok, mut new_ok, mut only_wild, mut only_reg) = (0, 0, 0, 0);
+            for fk in &e.file_keys {
+                let ex = expand(&fk.path, &env);
+                if ex.is_empty() {
+                    continue;
+                }
+                let old = !ex.iter().all(|p| protected(p, &env).is_some());
+                let new = !ex.iter().any(|p| unsafe_files_rule(p, fk, &env));
+                old_ok += old as u32;
+                new_ok += new as u32;
+                if old && !new {
+                    wild_extra += 1;
+                    only_wild += 1;
+                }
+            }
+            for rk in &e.reg_keys {
+                let old = old_reg(&rk.path);
+                let new = reg_path_allowed(&rk.path, rk.value.is_none());
+                old_ok += old as u32;
+                new_ok += new as u32;
+                if old && !new {
+                    reg_new += 1;
+                    only_reg += 1;
+                }
+            }
+            if old_ok > 0 {
+                entries_with_rules += 1;
+            }
+            if old_ok > 0 && new_ok == 0 {
+                dropped_any += 1;
+                dropped_wild += (only_wild > 0) as u32;
+                dropped_reg += (only_reg > 0) as u32;
+            }
+        }
+        eprintln!(
+            "nuove regole: FileKey con jolly sotto cartella protetta scartate {wild_extra}, RegKey intere di sistema scartate {reg_new}; voci con azioni prima {entries_with_rules}, voci che restano senza azioni per il nuovo controllo {dropped_any} (di cui con file {dropped_wild}, con registro {dropped_reg}); regole ignorate in lettura {}",
+            w.entries.iter().map(|e| e.skipped_rules).sum::<u32>()
+        );
     }
 }
