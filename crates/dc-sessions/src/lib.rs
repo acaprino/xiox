@@ -134,11 +134,25 @@ fn delete_codex(
         return failed("CLI di Codex non trovata");
     }
     let rollout = s.file.as_ref().filter(|f| f.exists());
+    // A paginated thread keeps earlier pages beside its rollout and the CLI deletes them all:
+    // every page is backed up, measured and checked.
+    let pages: Vec<(PathBuf, u64)> = rollout
+        .map(|f| dc_mukade::codex_thread_files(f, &s.id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| {
+            let len = std::fs::metadata(&p).map_or(0, |m| m.len());
+            (p, len)
+        })
+        .collect();
     if mode == RemoveMode::Recycle {
-        if let Some(rollout) = rollout {
-            // The CLI deletes the rollout permanently, so bin a copy first.
-            let copy = scratch.join(format!("{}.jsonl", s.id));
-            if let Err(e) = copy_and_bin(rollout, &copy, trash) {
+        // The CLI deletes the rollouts permanently, so bin a copy of each first.
+        for (page, _) in &pages {
+            let name = match (pages.len(), page.file_name()) {
+                (2.., Some(n)) => n.to_string_lossy().into_owned(),
+                _ => format!("{}.jsonl", s.id),
+            };
+            if let Err(e) = copy_and_bin(page, &scratch.join(name), trash) {
                 return failed(e);
             }
         }
@@ -146,10 +160,10 @@ fn delete_codex(
     if let Err(e) = cli.codex_delete(&s.id) {
         return failed(e);
     }
-    let freed = match rollout {
-        Some(f) if is_gone(f) => s.bytes,
-        _ => 0,
-    };
+    let freed = pages
+        .iter()
+        .filter(|(p, _)| is_gone(p))
+        .fold(0u64, |acc, (_, n)| acc.saturating_add(*n));
     ItemOutcome::Removed { bytes_freed: freed }
 }
 
@@ -241,8 +255,8 @@ mod tests {
         /// What opencode_export writes (exit 0).
         export_body: Vec<u8>,
         codex_missing: bool,
-        /// Emulates the real CLI: codex_delete removes the rollout.
-        codex_rollout: Option<PathBuf>,
+        /// Emulates the real CLI: codex_delete removes the thread's rollouts.
+        codex_rollouts: Vec<PathBuf>,
     }
     impl HarnessCli for FakeCli {
         fn codex_delete(&self, id: &str) -> Result<(), String> {
@@ -253,7 +267,7 @@ mod tests {
             if let Some(e) = &self.error {
                 return Err(e.clone());
             }
-            if let Some(f) = &self.codex_rollout {
+            for f in &self.codex_rollouts {
                 std::fs::remove_file(f).unwrap();
             }
             Ok(())
@@ -314,7 +328,7 @@ mod tests {
                     export_error: None,
                     export_body: br#"{"info":{"id":"t-oc"},"messages":[]}"#.to_vec(),
                     codex_missing: false,
-                    codex_rollout: None,
+                    codex_rollouts: vec![],
                 },
                 trash: FakeTrash {
                     log: log.clone(),
@@ -426,7 +440,7 @@ mod tests {
     fn codex_recycle_bins_a_copy_then_deletes() {
         let mut env = Env::new();
         let f = env.file("rollout.jsonl", b"rollout-data");
-        env.cli.codex_rollout = Some(f.clone());
+        env.cli.codex_rollouts = vec![f.clone()];
         let s = session(Agent::Codex, "t-codex-recycle", Some(f.clone()), 12);
         let r = env.run(&[s], RemoveMode::Recycle);
         {
@@ -442,6 +456,59 @@ mod tests {
         );
         assert_removed(outcome(&r), 12);
         assert!(!f.exists());
+    }
+
+    #[test]
+    fn codex_recycle_bins_every_page_of_a_paginated_thread() {
+        let mut env = Env::new();
+        let id = "019a0000-1111-2222-3333-444455556666";
+        let day = |d: &str| {
+            let dir = env.work.path().join("sessions").join("2026").join("11").join(d);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        };
+        let first = day("09").join(format!("rollout-2026-11-09T10-00-00-{id}.jsonl"));
+        let latest = day("10").join(format!("rollout-2026-11-10T09-00-00-{id}_019a0000-aaaa-bbbb-cccc-ddddeeeeffff.jsonl"));
+        let other = day("10").join("rollout-2026-11-10T08-00-00-019a0000-9999-2222-3333-444455556666.jsonl");
+        std::fs::write(&first, b"page-one").unwrap();
+        std::fs::write(&latest, b"two").unwrap();
+        std::fs::write(&other, b"not this thread").unwrap();
+        env.cli.codex_rollouts = vec![first.clone(), latest.clone()];
+        let s = session(Agent::Codex, id, Some(latest.clone()), 3);
+        let r = env.run(&[s], RemoveMode::Recycle);
+        {
+            let binned = env.trash.binned.lock().unwrap();
+            let mut contents: Vec<&[u8]> = binned.iter().map(|(_, c)| c.as_slice()).collect();
+            contents.sort();
+            assert_eq!(contents, vec![b"page-one".as_slice(), b"two".as_slice()]);
+            assert!(binned.iter().all(|(p, _)| p.starts_with(env.scratch.path())), "copies, not the originals");
+        }
+        let log = env.log.all();
+        assert_eq!(log.len(), 3, "{log:?}");
+        assert!(log[..2].iter().all(|l| l.starts_with("to_bin rollout-")), "{log:?}");
+        assert_eq!(log[2], format!("codex_delete {id}"));
+        assert_removed(outcome(&r), 11);
+        assert!(!first.exists() && !latest.exists());
+        assert!(other.exists(), "another thread is never touched");
+    }
+
+    #[test]
+    fn codex_permanent_counts_only_the_pages_that_are_gone() {
+        let mut env = Env::new();
+        let id = "019a0000-1111-2222-3333-444455556666";
+        let dir = env.work.path().join("sessions").join("2026");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join(format!("rollout-a-{id}.jsonl"));
+        let latest = dir.join(format!("rollout-b-{id}_p.jsonl"));
+        std::fs::write(&first, b"12345").unwrap();
+        std::fs::write(&latest, b"12").unwrap();
+        // The CLI leaves the earlier page behind: only what is really gone is counted.
+        env.cli.codex_rollouts = vec![latest.clone()];
+        let s = session(Agent::Codex, id, Some(latest.clone()), 2);
+        let r = env.run(&[s], RemoveMode::Permanent);
+        assert_eq!(env.log.all(), vec![format!("codex_delete {id}")]);
+        assert_removed(outcome(&r), 2);
+        assert!(first.exists());
     }
 
     #[test]

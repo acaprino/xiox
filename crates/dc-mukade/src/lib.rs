@@ -393,7 +393,8 @@ pub struct ArchivedSession {
     pub updated_ms: Option<i64>,
     /// The session's own transcript file, the only thing that may be removed for it.
     pub file: Option<PathBuf>,
-    /// Size of `file`; 0 when there is none.
+    /// Size of `file`; for Codex, of every page of the thread ([`codex_thread_files`]); 0 when
+    /// there is no file.
     pub bytes: u64,
     /// Why it cannot be removed (Italian); `None` means removable.
     pub blocked: Option<String>,
@@ -442,6 +443,87 @@ fn within(root: &Path, p: &Path) -> bool {
         && PathBuf::from(path_key(p)).starts_with(PathBuf::from(path_key(root)))
 }
 
+/// Where a Codex home keeps rollouts: live threads, then those `codex archive` moved.
+const CODEX_ROLLOUT_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
+
+/// The `.jsonl` files in `dir` (and below it when `deep`); links are not followed.
+fn jsonl_files(dir: &Path, deep: bool, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(t) = e.file_type() else { continue };
+        let p = e.path();
+        if t.is_dir() {
+            if deep {
+                jsonl_files(&p, true, out);
+            }
+        } else if t.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("jsonl")) {
+            out.push(p);
+        }
+    }
+}
+
+/// Is `name` a rollout of the Codex thread `id`: `rollout-<ts>-<id>.jsonl`, or a page of a
+/// paginated thread, `rollout-<ts>-<id>_<page>.jsonl` (as mukade's `rollout_id` reads them).
+fn is_codex_rollout_of(name: &str, id: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let Some(stem) = name.strip_suffix(".jsonl") else { return false };
+    let thread = stem.rsplit_once('_').map_or(stem, |(t, _page)| t);
+    !id.is_empty()
+        && thread.starts_with("rollout-")
+        && thread.ends_with(&format!("-{}", id.to_ascii_lowercase()))
+}
+
+/// The Codex home a rollout lies in: the folder holding the nearest `sessions` or
+/// `archived_sessions` folder above the file.
+fn codex_home_of(file: &Path) -> Option<&Path> {
+    file.ancestors()
+        .skip(1)
+        .find(|a| {
+            a.file_name()
+                .is_some_and(|n| CODEX_ROLLOUT_DIRS.iter().any(|d| n.eq_ignore_ascii_case(d)))
+        })
+        .and_then(Path::parent)
+}
+
+/// `file` plus the other rollouts among `candidates` that belong to the thread `id`, sorted,
+/// each once.
+fn codex_pages_in(candidates: &[PathBuf], file: &Path, id: &str) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = candidates
+        .iter()
+        .filter(|p| p.file_name().is_some_and(|n| is_codex_rollout_of(&n.to_string_lossy(), id)))
+        .cloned()
+        .collect();
+    if file.is_file() {
+        out.push(file.to_path_buf());
+    }
+    out.sort_by_key(|p| path_key(p));
+    out.dedup_by(|a, b| path_key(a) == path_key(b));
+    out
+}
+
+/// Every file of the Codex thread `id` whose rollout is `file`. Codex 0.165 may keep one thread
+/// over several files (`history_mode: "paginated"`): the latest page is the thread's rollout,
+/// the earlier ones (`rollout-<ts>-<id>.jsonl`, `rollout-<ts>-<id>_<page>.jsonl`) can sit in
+/// other day folders and in `archived_sessions/`, and `codex delete` removes them all. Looks
+/// under both rollout folders of the home `file` lies in, else beside `file`. `file` itself is
+/// always in the list when it exists.
+pub fn codex_thread_files(file: &Path, id: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    match codex_home_of(file) {
+        Some(home) => {
+            for d in CODEX_ROLLOUT_DIRS {
+                jsonl_files(&home.join(d), true, &mut candidates);
+            }
+        }
+        None => {
+            if let Some(dir) = file.parent() {
+                jsonl_files(dir, false, &mut candidates);
+            }
+        }
+    }
+    codex_pages_in(&candidates, file, id)
+}
+
 /// Every session below `root` (children, their children, ...) through the parent links in
 /// `children` (parent id -> sessions naming it). Each session is visited once, so a cycle in the
 /// links ends the walk instead of looping.
@@ -469,6 +551,13 @@ pub fn select_archived(
     all: &[SessionInfo],
 ) -> Vec<ArchivedSession> {
     let store_key = path_key(store_root);
+    // Codex: every rollout of the store, read once, to find the pages of paginated threads.
+    let mut codex_rollouts = Vec::new();
+    if agent == Agent::Codex {
+        for d in CODEX_ROLLOUT_DIRS {
+            jsonl_files(&store_root.join(d), true, &mut codex_rollouts);
+        }
+    }
     let mut children: HashMap<&str, Vec<&SessionInfo>> = HashMap::new();
     for c in all {
         if let Some(p) = c.parent.as_deref() {
@@ -495,10 +584,15 @@ pub fn select_archived(
                 Agent::Opencode => false,
             }
             .then(|| path.clone());
-            let bytes = file
-                .as_ref()
-                .and_then(|f| std::fs::metadata(f).ok())
-                .map_or(0, |m| m.len());
+            let pages = match (&file, agent) {
+                (Some(f), Agent::Codex) => codex_pages_in(&codex_rollouts, f, &i.id),
+                (Some(f), _) => vec![f.clone()],
+                (None, _) => Vec::new(),
+            };
+            let bytes = pages
+                .iter()
+                .filter_map(|f| std::fs::metadata(f).ok())
+                .fold(0u64, |acc, m| acc.saturating_add(m.len()));
             let updated_ms = i.updated.as_deref().and_then(parse_ms).or_else(|| {
                 file.as_ref().and_then(|f| file_mtime_ms(&f.to_string_lossy()))
             });
@@ -922,6 +1016,41 @@ mod tests {
         assert_eq!(got[0].file, None);
         assert_eq!(got[0].bytes, 0);
         assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"));
+    }
+
+    #[test]
+    fn a_paginated_codex_thread_counts_every_page() {
+        let td = tempfile::tempdir().unwrap();
+        let home = td.path();
+        let id = "019a0000-1111-2222-3333-444455556666";
+        let day = |d: &str| home.join("sessions").join("2026").join("11").join(d);
+        let first = day("09").join(format!("rollout-2026-11-09T10-00-00-{id}.jsonl"));
+        let latest =
+            day("10").join(format!("rollout-2026-11-10T09-00-00-{id}_019a0000-aaaa-bbbb-cccc-ddddeeeeffff.jsonl"));
+        let moved = home.join("archived_sessions").join(format!("rollout-2026-11-08T08-00-00-{id}.jsonl"));
+        let other = day("10").join("rollout-2026-11-10T09-00-00-019a0000-9999-2222-3333-444455556666.jsonl");
+        touch(&first, "12345");
+        touch(&latest, "123");
+        touch(&moved, "1");
+        touch(&other, "1234567");
+
+        let mut want = vec![first.clone(), latest.clone(), moved.clone()];
+        want.sort_by_key(|p| path_key(p));
+        assert_eq!(codex_thread_files(&latest, id), want);
+
+        let a = ainfo(id, &latest, true);
+        let got = select_archived(Agent::Codex, home, vec![a.clone()], &[a]);
+        assert_eq!(got[0].file.as_deref(), Some(latest.as_path()));
+        assert_eq!(got[0].bytes, 9, "the three pages, not the other thread");
+
+        // A single-file thread is just its rollout.
+        assert_eq!(codex_thread_files(&other, "019a0000-9999-2222-3333-444455556666"), vec![other.clone()]);
+        // Outside a Codex home: only the folder of the file is looked at.
+        let loose = td.path().join("loose").join(format!("rollout-x-{id}.jsonl"));
+        let beside = td.path().join("loose").join(format!("rollout-y-{id}_p.jsonl"));
+        touch(&loose, "1");
+        touch(&beside, "1");
+        assert_eq!(codex_thread_files(&loose, id).len(), 2);
     }
 
     #[test]
