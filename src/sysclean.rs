@@ -148,10 +148,13 @@ pub fn items() -> Vec<NativeItem> {
             id: "event_logs",
             group: GROUP,
             label: "Registri eventi di Windows",
-            description: "Svuota i registri del Visualizzatore eventi che contengono eventi (Applicazione, Sistema, Sicurezza e gli altri canali amministrativi e operativi).",
+            description: "Svuota tre registri del Visualizzatore eventi: Applicazione, Sistema e Installazione \
+                 (Application, System, Setup). Windows scrive poi nel registro Sistema un evento 104 per ogni \
+                 registro svuotato, quindi Sistema non resta vuoto.",
             warning: Some(
-                "si perde la storia degli eventi che serve per la diagnosi dei problemi, e non se ne salva una copia; \
-                 il registro Sicurezza, svuotato, scrive l'evento 1102.",
+                "si svuotano i registri Applicazione, Sistema e Installazione e si perde la storia degli eventi \
+                 che serve per la diagnosi dei problemi, senza copia. Sicurezza, Windows Defender e gli altri \
+                 registri restano come sono.",
             ),
             default_on: false,
             needs_admin: true,
@@ -289,12 +292,52 @@ pub fn clean_dns(found: &NativeFound, methods: &[&dyn Dns]) -> NativeCleaned {
     out
 }
 
+/// Tempo massimo di `ipconfig /flushdns`.
+pub const IPCONFIG_TIMEOUT: Duration = Duration::from_secs(5);
+/// Intervallo fra due controlli del processo.
+const POLL_STEP: Duration = Duration::from_millis(50);
+
+/// Aspetta la fine di un processo (`poll` dà `Some(codice)` quando è finito)
+/// al più `timeout`. Oltre: `Err("Cache DNS: tempo scaduto")`, e chi chiama
+/// termina il processo. Codice diverso da 0: errore con il codice.
+pub fn wait_bounded(
+    poll: &mut dyn FnMut() -> Result<Option<i32>, String>,
+    timeout: Duration,
+    sleep: &dyn Fn(Duration),
+) -> Result<(), String> {
+    let mut waited = Duration::ZERO;
+    loop {
+        match poll()? {
+            Some(0) => return Ok(()),
+            Some(code) => return Err(format!("ipconfig /flushdns: codice {code}")),
+            None if waited >= timeout => return Err("Cache DNS: tempo scaduto".to_string()),
+            None => {
+                sleep(POLL_STEP);
+                waited += POLL_STEP;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Registri eventi (N3).
 
-/// Canali con almeno un evento. Guarda e basta: non svuota niente.
+/// Gli unici registri che si svuotano (v1). Sicurezza, Defender, PowerShell,
+/// CodeIntegrity, Sysmon, AppLocker, Firewall e gli altri canali restano:
+/// svuotarli in blocco è la tecnica che gli antivirus segnalano (T1070.001)
+/// e cancella le prove di un'infezione.
+pub const CLEARABLE_CHANNELS: [&str; 3] = ["Application", "System", "Setup"];
+
+/// `true` solo per i nomi esatti di [`CLEARABLE_CHANNELS`] (senza maiuscole).
+pub fn is_clearable_channel(name: &str) -> bool {
+    CLEARABLE_CHANNELS.iter().any(|c| c.eq_ignore_ascii_case(name))
+}
+
+/// Canali ammessi ([`is_clearable_channel`]) con almeno un evento. Guarda e
+/// basta: non svuota niente.
 pub fn analyze_event_logs(ev: &dyn EventLog) -> NativeFound {
-    let channels: Vec<(String, u64)> = ev.channels().into_iter().filter(|(_, n)| *n > 0).collect();
+    let channels: Vec<(String, u64)> =
+        ev.channels().into_iter().filter(|(c, n)| *n > 0 && is_clearable_channel(c)).collect();
     if channels.is_empty() {
         return NativeFound::default();
     }
@@ -313,16 +356,25 @@ pub fn analyze_event_logs(ev: &dyn EventLog) -> NativeFound {
     }
 }
 
-/// Svuota i canali trovati dall'analisi; un canale che non si svuota non
-/// ferma gli altri.
+/// Svuota i canali trovati dall'analisi, solo se ammessi
+/// ([`is_clearable_channel`]); un canale che non si svuota non ferma gli
+/// altri. `done` elenca i canali svuotati.
 pub fn clean_event_logs(ev: &dyn EventLog, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
     let mut out = NativeCleaned::default();
     for channel in &found.items {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
+        if !is_clearable_channel(channel) {
+            out.failed += 1;
+            out.note(format!("{channel}: registro non ammesso, lasciato"));
+            continue;
+        }
         match ev.clear(channel) {
-            Ok(()) => out.removed += 1,
+            Ok(()) => {
+                out.removed += 1;
+                out.done.push(format!("Svuotato: {channel}"));
+            }
             Err(e) => {
                 out.failed += 1;
                 out.note(format!("{channel}: {e}"));
@@ -409,7 +461,12 @@ pub fn broken_target(sc: &dyn Shortcuts, env: &Env, lnk: &Path, common: bool) ->
         if common && uses_per_user_var(raw) {
             return None;
         }
-        let p = PathBuf::from(expand_vars(raw, env)?);
+        let expanded = expand_vars(raw, env)?;
+        // `\\?\C:\…` come `C:\…`, così le gemelle WOW64 si riconoscono.
+        let p = PathBuf::from(match expanded.strip_prefix(r"\\?\") {
+            Some(rest) if drive_letter(Path::new(rest)).is_some() => rest.to_string(),
+            _ => expanded,
+        });
         if !is_drive_path(&p) {
             return None;
         }
@@ -490,6 +547,9 @@ pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &
         }
     }
     found.files = found.count;
+    if found.skipped > 0 {
+        notes_push_skipped(&mut found);
+    }
     if found.count > 0 {
         found.detail.push(plural(found.count, "collegamento non valido", "collegamenti non validi"));
         found.detail.extend(lines);
@@ -499,6 +559,12 @@ pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &
     }
     found.detail.extend(notes);
     found
+}
+
+fn notes_push_skipped(found: &mut NativeFound) {
+    let what = plural(found.skipped, "collegamento lasciato", "collegamenti lasciati");
+    let line = format!("{what}: protetti o con un nome non leggibile");
+    found.detail.push(line);
 }
 
 /// Cancella i `.lnk` trovati dall'analisi, ciascuno solo se: sta in una delle
@@ -726,7 +792,7 @@ mod win {
     use std::ptr::{null, null_mut};
 
     use windows_sys::core::{BOOL, GUID, HRESULT, PCWSTR};
-    use windows_sys::Win32::Foundation::{FreeLibrary, GetLastError, ERROR_INSUFFICIENT_BUFFER, RPC_E_CHANGED_MODE, S_OK};
+    use windows_sys::Win32::Foundation::{FreeLibrary, RPC_E_CHANGED_MODE, S_OK};
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows_sys::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -735,8 +801,8 @@ mod win {
     use windows_sys::Win32::System::DataExchange::{CloseClipboard, CountClipboardFormats, EmptyClipboard, OpenClipboard};
     use windows_sys::Win32::System::EventLog::{
         EvtChannelConfigType, EvtClearLog, EvtClose, EvtGetChannelConfigProperty, EvtGetLogInfo, EvtLogNumberOfLogRecords,
-        EvtNextChannelPath, EvtOpenChannelConfig, EvtOpenChannelEnum, EvtOpenChannelPath, EvtOpenLog, EvtVarTypeUInt32,
-        EvtVarTypeUInt64, EVT_HANDLE, EVT_VARIANT,
+        EvtOpenChannelConfig, EvtOpenChannelPath, EvtOpenLog, EvtVarTypeUInt32, EvtVarTypeUInt64, EVT_HANDLE,
+        EVT_VARIANT,
     };
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
@@ -870,15 +936,25 @@ mod win {
                 .map(|d| d.join("ipconfig.exe"))
                 .filter(|p| p.is_file())
                 .ok_or("ipconfig.exe non trovato")?;
-            let st = std::process::Command::new(exe)
+            let mut child = std::process::Command::new(exe)
                 .arg("/flushdns")
                 .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status()
+                .spawn()
                 .map_err(|e| e.to_string())?;
-            if st.success() { Ok(()) } else { Err(format!("ipconfig /flushdns: codice {}", st.code().unwrap_or(-1))) }
+            let mut poll = || match child.try_wait() {
+                Ok(Some(st)) => Ok(Some(st.code().unwrap_or(-1))),
+                Ok(None) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            };
+            let out = super::wait_bounded(&mut poll, super::IPCONFIG_TIMEOUT, &std::thread::sleep);
+            if out.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            out
         }
     }
 
@@ -900,35 +976,11 @@ mod win {
 
     impl EventLog for RealEventLog {
         fn channels(&self) -> Vec<(String, u64)> {
-            let mut out = Vec::new();
-            // SAFETY: sessione locale (0), flag 0; l'handle lo chiude `Evt`.
-            let en = Evt(unsafe { EvtOpenChannelEnum(0, 0) });
-            if en.0 == 0 {
-                return out;
-            }
-            let mut buf = vec![0u16; 512];
-            loop {
-                let mut used = 0u32;
-                // SAFETY: `buf` ha `buf.len()` u16 scrivibili, la dimensione
-                // passata è quella; `used` riceve i caratteri scritti o quelli
-                // necessari (zero finale compreso).
-                let ok = unsafe { EvtNextChannelPath(en.0, buf.len() as u32, buf.as_mut_ptr(), &mut used) };
-                if ok == 0 {
-                    // SAFETY: nessun argomento.
-                    let err = unsafe { GetLastError() };
-                    if err == ERROR_INSUFFICIENT_BUFFER && used as usize > buf.len() && used <= 32_768 {
-                        buf.resize(used as usize, 0);
-                        continue;
-                    }
-                    break; // ERROR_NO_MORE_ITEMS o un errore: fine.
-                }
-                let n = (used as usize).saturating_sub(1).min(buf.len());
-                let name = String::from_utf16_lossy(&buf[..n]);
-                if let Some(records) = channel_records(&name).filter(|&r| r > 0) {
-                    out.push((name, records));
-                }
-            }
-            out
+            // Solo i canali ammessi: nessuna enumerazione di tutti i registri.
+            super::CLEARABLE_CHANNELS
+                .iter()
+                .filter_map(|name| channel_records(name).map(|n| (name.to_string(), n)))
+                .collect()
         }
 
         fn clear(&self, channel: &str) -> Result<(), String> {
@@ -1313,6 +1365,8 @@ mod tests {
         let cb = FakeClip { formats: 3, busy: 0, calls: Cell::new(0) };
         let f = analyze_clipboard(&cb);
         assert_eq!(f.count, 1);
+        assert_eq!(f.files, 0, "gli Appunti non sono un file");
+        assert_eq!(analyze_dns().files, 0, "il DNS non è un file");
         assert_eq!(f.detail, vec!["Appunti con contenuto".to_string()]);
         assert_eq!(cb.calls.get(), 0, "l'analisi non svuota");
     }
@@ -1346,7 +1400,14 @@ mod tests {
 
     fn events(fail: &[&str]) -> FakeEvents {
         FakeEvents {
-            channels: vec![("Application".into(), 10), ("Security".into(), 5), ("Empty".into(), 0), ("System".into(), 7)],
+            channels: vec![
+                ("Application".into(), 10),
+                ("Security".into(), 5),
+                ("Setup".into(), 0),
+                ("Microsoft-Windows-Windows Defender/Operational".into(), 50),
+                ("Setup".into(), 3),
+                ("System".into(), 7),
+            ],
             fail: fail.iter().map(|s| s.to_string()).collect(),
             cleared: RefCell::new(Vec::new()),
         }
@@ -1354,15 +1415,17 @@ mod tests {
 
     #[test]
     fn event_logs_continue_after_a_channel_fails() {
-        let ev = events(&["Security"]);
+        let ev = events(&["Setup"]);
         let found = analyze_event_logs(&ev);
         assert_eq!(found.count, 3);
-        assert_eq!(found.items, vec!["Application", "Security", "System"]);
+        assert_eq!(found.items, vec!["Application", "Setup", "System"]);
+        assert_eq!(found.files, 0, "i registri non sono file");
         let out = clean_event_logs(&ev, &found, &AtomicBool::new(false));
         assert_eq!((out.removed, out.failed), (2, 1));
-        assert_eq!(*ev.cleared.borrow(), vec!["Application", "Security", "System"]);
+        assert_eq!(*ev.cleared.borrow(), vec!["Application", "Setup", "System"]);
         assert_eq!(out.notes.len(), 1);
-        assert!(out.notes[0].contains("Security"), "{:?}", out.notes);
+        assert!(out.notes[0].contains("Setup"), "{:?}", out.notes);
+        assert_eq!(out.done, vec!["Svuotato: Application".to_string(), "Svuotato: System".to_string()]);
     }
 
     #[test]
@@ -1371,11 +1434,64 @@ mod tests {
         let found = analyze_event_logs(&ev);
         assert!(ev.cleared.borrow().is_empty());
         assert!(found.detail[0].contains("3 registri"), "{:?}", found.detail);
-        assert!(found.detail[0].contains("22 eventi"), "{:?}", found.detail);
-        // Si svuota solo ciò che l'analisi ha trovato (mai «Empty»).
+        assert!(found.detail[0].contains("20 eventi"), "{:?}", found.detail);
+        // Si svuota solo ciò che l'analisi ha trovato.
         let partial = NativeFound { items: vec!["System".into()], ..found };
         clean_event_logs(&ev, &partial, &AtomicBool::new(false));
         assert_eq!(*ev.cleared.borrow(), vec!["System"]);
+    }
+
+    #[test]
+    fn security_and_defender_channels_are_never_listed() {
+        for ok in ["Application", "System", "Setup", "application", "SYSTEM"] {
+            assert!(is_clearable_channel(ok), "{ok}");
+        }
+        for no in [
+            "Security",
+            "Microsoft-Windows-Windows Defender/Operational",
+            "Microsoft-Windows-Windows Defender/WHC",
+            "Windows PowerShell",
+            "Microsoft-Windows-PowerShell/Operational",
+            "Microsoft-Windows-CodeIntegrity/Operational",
+            "Microsoft-Windows-Sysmon/Operational",
+            "Microsoft-Windows-AppLocker/EXE and DLL",
+            "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall",
+            "Microsoft-Windows-Security-Mitigations/KernelMode",
+            "ForwardedEvents",
+            "System ",
+            "System/Operational",
+            "Microsoft-Windows-Setup/Analytic",
+            "",
+        ] {
+            assert!(!is_clearable_channel(no), "{no}");
+        }
+        let ev = events(&[]);
+        let found = analyze_event_logs(&ev);
+        assert!(!found.items.iter().any(|c| c == "Security" || c.contains("Defender")), "{:?}", found.items);
+        // Un `NativeFound` forzato con Security non lo svuota.
+        let forged = NativeFound { items: vec!["Security".into(), "System".into()], ..Default::default() };
+        let out = clean_event_logs(&ev, &forged, &AtomicBool::new(false));
+        assert_eq!(*ev.cleared.borrow(), vec!["System"]);
+        assert_eq!((out.removed, out.failed), (1, 1));
+    }
+
+    // ----- DNS: tempo massimo di ipconfig -----
+
+    #[test]
+    fn ipconfig_wait_is_bounded() {
+        let slept = Cell::new(Duration::ZERO);
+        let sleep = |d: Duration| slept.set(slept.get() + d);
+        let mut never = || Ok(None);
+        assert_eq!(wait_bounded(&mut never, IPCONFIG_TIMEOUT, &sleep), Err("Cache DNS: tempo scaduto".to_string()));
+        assert!(slept.get() >= IPCONFIG_TIMEOUT && slept.get() <= IPCONFIG_TIMEOUT + Duration::from_millis(100));
+        let calls = Cell::new(0);
+        let mut later = || {
+            calls.set(calls.get() + 1);
+            Ok(if calls.get() < 3 { None } else { Some(0) })
+        };
+        assert_eq!(wait_bounded(&mut later, IPCONFIG_TIMEOUT, &no), Ok(()));
+        let mut bad = || Ok(Some(1));
+        assert!(wait_bounded(&mut bad, IPCONFIG_TIMEOUT, &no).unwrap_err().contains("codice 1"));
     }
 
     // ----- Collegamenti -----
@@ -1409,6 +1525,7 @@ mod tests {
         assert_eq!(items, want);
         assert_eq!(found.count, 2);
         assert_eq!(found.bytes, 6);
+        assert_eq!(found.files, 2, "i collegamenti sono file");
         assert!(found.detail[0].contains("2 collegamenti"), "{:?}", found.detail);
         assert!(broken.exists() && on_desktop.exists(), "l'analisi non cancella");
     }
@@ -1445,6 +1562,10 @@ mod tests {
         touch(&t.path().join("PF86").join("Vecchio").join("app.exe"));
         sc.targets.insert(wow.clone(), vec![t.path().join("PF").join("Vecchio").join("app.exe").to_string_lossy().into_owned()]);
         assert_eq!(broken_target(&sc, &env, &wow, false), None, "gemella in Program Files (x86)");
+        // Anche scritta con il prefisso `\\?\`.
+        let verbatim = format!(r"\\?\{}", t.path().join("PF").join("Vecchio").join("app.exe").display());
+        sc.targets.insert(wow.clone(), vec![verbatim]);
+        assert_eq!(broken_target(&sc, &env, &wow, false), None, "gemella con \\\\?\\");
         // Una destinazione che esiste fra due lette basta a tenerlo.
         let two = dir.join("due.lnk");
         touch(&two);
@@ -1669,6 +1790,20 @@ mod tests {
     }
 
     #[test]
+    fn skipped_shortcuts_show_up_in_the_report() {
+        let t = tempfile::tempdir().unwrap();
+        let env = env_in(t.path());
+        // Una cartella di credenziali nel menu Start: il `Guard` la rifiuta.
+        let lnk = start_menu(&env).join(".ssh").join("x.lnk");
+        touch(&lnk);
+        let mut sc = FakeLinks::default();
+        sc.targets.insert(lnk.clone(), vec![t.path().join("manca.exe").to_string_lossy().into_owned()]);
+        let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
+        assert_eq!((found.count, found.skipped), (0, 1));
+        assert!(found.detail.iter().any(|l| l == "1 collegamento lasciato: protetti o con un nome non leggibile"), "{:?}", found.detail);
+    }
+
+    #[test]
     fn advertised_msi_and_id_list_only_shortcuts_are_never_listed() {
         let t = tempfile::tempdir().unwrap();
         let env = env_in(t.path());
@@ -1763,7 +1898,9 @@ mod tests {
         let ev = by("event_logs");
         assert!(!ev.default_on && ev.needs_admin);
         let w = ev.warning.unwrap();
-        assert!(w.contains("diagnosi") && w.contains("Sicurezza") && w.contains("1102"), "{w}");
+        assert!(w.contains("diagnosi") && w.contains("Applicazione, Sistema e Installazione"), "{w}");
+        assert!(w.contains("Sicurezza, Windows Defender") && w.contains("restano"), "{w}");
+        assert!(ev.description.contains("104"), "{}", ev.description);
         assert!(!by("broken_shortcuts").default_on && by("broken_shortcuts").warning.is_some());
         assert_eq!(by("clipboard").label, "Appunti");
         assert_eq!(by("dns_cache").label, "Cache DNS");

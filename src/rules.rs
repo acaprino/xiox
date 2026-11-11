@@ -459,7 +459,7 @@ pub fn native_warnings(items: &[&NativeItem]) -> Vec<String> {
 /// Gruppi del pannello: i gruppi dei cleaner inglobati (`groups`) con, in
 /// ciascuno, le voci native dello stesso `group` (indici in `natives`), che
 /// vengono **prima** dei cleaner XML. Un gruppo che ha solo voci native si
-/// inserisce al suo posto di [`GROUP_ORDER`].
+/// inserisce al suo posto di [`GROUP_ORDER`]; fuori elenco, in ordine alfabetico.
 pub fn panel_groups(groups: &[(String, Vec<usize>)], natives: &[NativeItem]) -> Vec<(String, Vec<usize>, Vec<usize>)> {
     let mut out: Vec<(String, Vec<usize>, Vec<usize>)> =
         groups.iter().map(|(g, idx)| (g.clone(), Vec::new(), idx.clone())).collect();
@@ -470,7 +470,7 @@ pub fn panel_groups(groups: &[(String, Vec<usize>)], natives: &[NativeItem]) -> 
         }
     }
     let rank = |g: &str| GROUP_ORDER.iter().position(|o| *o == g).unwrap_or(GROUP_ORDER.len());
-    // Ordinamento stabile: dentro lo stesso rango resta l'ordine di `groups`.
+    // Stesso ordine di `embedded_groups`: rango di `GROUP_ORDER`, poi il nome.
     out.sort_by_key(|(g, _, _)| (rank(g), g.to_lowercase()));
     out
 }

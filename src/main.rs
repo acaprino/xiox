@@ -700,7 +700,7 @@ impl App {
             + self.native_found.iter().map(|r| r.2.bytes).sum::<u64>()
             + self.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
         let files: u64 = self.found.iter().flatten().map(|f| f.count).sum::<u64>()
-            + self.native_found.iter().map(|r| r.2.count).sum::<u64>()
+            + self.native_found.iter().map(|r| r.2.files).sum::<u64>()
             + self.rule_found.iter().map(|r| r.2.count).sum::<u64>();
         let title = if self.clean_job.is_some() { "Analisi in corso…".to_string() } else { "Analisi completata".to_string() };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
@@ -729,7 +729,8 @@ impl App {
                 for (_, label, f) in &self.native_found {
                     ui.label(label);
                     ui.label(sys::fmt_size(f.bytes));
-                    ui.label(f.count.to_string());
+                    // Canali, DNS e Appunti non sono file: il numero sta nel dettaglio.
+                    ui.label(if f.files > 0 { f.files.to_string() } else { "—".to_string() });
                     note_cell(ui, &f.detail);
                     ui.end_row();
                 }
@@ -746,6 +747,9 @@ impl App {
                     ui.end_row();
                 }
             });
+            for (key, label, f) in &self.native_found {
+                native_list(ui, key, label, &f.detail);
+            }
         });
     }
 
@@ -803,6 +807,10 @@ impl App {
                     ui.end_row();
                 }
             });
+            for (key, label, c) in &self.native_cleaned {
+                let lines: Vec<String> = c.done.iter().chain(&c.notes).cloned().collect();
+                native_list(ui, key, label, &lines);
+            }
         });
     }
 
@@ -1247,6 +1255,23 @@ fn native_checkbox(ui: &mut Ui, item: &native::NativeItem, admin: bool, sel: &mu
             sel.remove(&key);
         }
     }
+}
+
+/// Elenco completo di una voce nativa sotto la tabella (collegamenti trovati,
+/// canali svuotati, note), aperto: si legge prima di «Avvia pulizia».
+fn native_list(ui: &mut Ui, key: &str, label: &str, lines: &[String]) {
+    if lines.len() < 2 {
+        return;
+    }
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(format!("{label}: elenco ({} righe)", lines.len()))
+        .id_salt(("native_list", key))
+        .default_open(true)
+        .show(ui, |ui| {
+            for l in lines {
+                ui.label(RichText::new(l).color(MUTED).size(12.0));
+            }
+        });
 }
 
 /// Ultima colonna delle tabelle: la prima riga, le altre al passaggio del mouse.
