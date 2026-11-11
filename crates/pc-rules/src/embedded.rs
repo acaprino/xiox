@@ -4,8 +4,9 @@
 use crate::cleanerml::parse_cleaner;
 use crate::model::{Cleaner, Env};
 
-/// Nome e testo di ogni cleaner inglobato.
-const CLEANERS: [(&str, &str); 59] = [
+/// Nome e testo di ogni cleaner inglobato. Il gruppo con cui compare
+/// nell'elenco lo dà [`group_of`] dal nome.
+const CLEANERS: [(&str, &str); 61] = [
     ("ai_claude_code", include_str!("../../../cleaners/ai_claude_code.xml")),
     ("ai_codex", include_str!("../../../cleaners/ai_codex.xml")),
     ("ai_gemini_cli", include_str!("../../../cleaners/ai_gemini_cli.xml")),
@@ -65,7 +66,20 @@ const CLEANERS: [(&str, &str); 59] = [
     ("vscode", include_str!("../../../cleaners/vscode.xml")),
     ("yarn", include_str!("../../../cleaners/yarn.xml")),
     ("zig", include_str!("../../../cleaners/zig.xml")),
+    ("windows_extra", include_str!("../../../cleaners/windows_extra.xml")),
+    ("safari", include_str!("../../../cleaners/safari.xml")),
 ];
+
+/// Gruppo di un cleaner inglobato, dal nome: le voci di Windows e i browser
+/// hanno un gruppo proprio, tutti gli altri sono «Sviluppo e AI» (il gruppo
+/// che `parse_cleaner` assegna).
+fn group_of(name: &str) -> Option<&'static str> {
+    match name {
+        "windows_extra" => Some("Windows"),
+        "safari" => Some("Browser"),
+        _ => None,
+    }
+}
 
 /// Legge i cleaner inglobati. Un XML che non si legge dà un avviso e non
 /// ferma gli altri.
@@ -74,7 +88,12 @@ pub fn embedded(env: &Env) -> (Vec<Cleaner>, Vec<String>) {
     let mut warnings = Vec::new();
     for (name, xml) in CLEANERS {
         match parse_cleaner(xml, name, env) {
-            Ok(c) => cleaners.push(c),
+            Ok(mut c) => {
+                if let Some(group) = group_of(name) {
+                    c.group = group.to_string();
+                }
+                cleaners.push(c);
+            }
             Err(e) => warnings.push(format!("cleaner inglobato {name}: {e}")),
         }
     }
@@ -120,9 +139,18 @@ mod tests {
     fn all_embedded_cleaners_parse() {
         let (cleaners, warnings) = load();
         assert_eq!(cleaners.len(), CLEANERS.len());
-        assert_eq!(cleaners.len(), 59);
+        assert_eq!(cleaners.len(), 61);
         assert!(warnings.is_empty(), "avvisi: {warnings:?}");
-        assert!(cleaners.iter().all(|c| c.group == "Sviluppo e AI"));
+        for c in &cleaners {
+            let want = match c.id.as_str() {
+                "windows_extra" => "Windows",
+                "safari" => "Browser",
+                _ => "Sviluppo e AI",
+            };
+            assert_eq!(c.group, want, "gruppo di {}", c.id);
+        }
+        assert!(cleaners.iter().any(|c| c.id == "windows_extra"));
+        assert!(cleaners.iter().any(|c| c.id == "safari"));
     }
 
     #[test]

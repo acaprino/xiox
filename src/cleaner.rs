@@ -81,7 +81,7 @@ pub fn targets(index: usize) -> Vec<Target> {
             t(win.join("Logs").join("MoSetup"), &["*.log"], false),
             t(win.join("Panther"), &["*.log"], false),
             t(win.join("inf"), &["setupapi*.log"], false),
-            t(win.clone(), &["*.log"], false),
+            t(win.clone(), &["*.log", "*.bak", "*log.txt"], false),
         ],
         5 => vec![
             t(progdata.join("Microsoft\\Windows\\WER\\ReportArchive"), &["*"], true),
@@ -89,8 +89,12 @@ pub fn targets(index: usize) -> Vec<Target> {
             t(progdata.join("Microsoft\\Windows\\WER\\Temp"), &["*"], true),
             t(local.join("Microsoft\\Windows\\WER\\ReportArchive"), &["*"], true),
             t(local.join("Microsoft\\Windows\\WER\\ReportQueue"), &["*"], true),
+            t(local.join("ElevatedDiagnostics"), &["*"], true),
         ],
-        6 => vec![t(local.join("Microsoft\\Windows\\Explorer"), &["thumbcache_*.db"], false)],
+        6 => vec![
+            t(local.join("Microsoft\\Windows\\Explorer"), &["thumbcache_*.db"], false),
+            t(local.join("Microsoft\\Windows\\Explorer\\ThumbCacheToDelete"), &["thm*.tmp"], false),
+        ],
         7 => {
             let mut x = t(win.join("Prefetch"), &["*.pf"], false);
             x.min_age_secs = PREFETCH_MIN_AGE_DAYS * 86400;
@@ -265,6 +269,56 @@ mod tests {
         assert!(!wildcard("*.dmp", "a.dmp.txt"));
         assert!(wildcard("*", "x"));
         assert!(wildcard("setupapi*.log", "setupapi.dev.log"));
+    }
+
+    /// Ritocchi della Fase 3 (tabella di copertura, §4.1): si aggiungono solo
+    /// i percorsi che la guardia delle regole esterne accetterebbe; il resto
+    /// (`System32\wbem\Logs`, il valore di registro di WER) resta fuori.
+    #[test]
+    fn phase3_additions_pass_the_rules_guard() {
+        use pc_rules::{Env, Guard};
+        use std::collections::HashMap;
+        use std::path::Path;
+        let env = Env(HashMap::from([
+            ("windir".to_string(), r"C:\Windows".to_string()),
+            ("systemroot".to_string(), r"C:\Windows".to_string()),
+            ("systemdrive".to_string(), "C:".to_string()),
+            ("userprofile".to_string(), r"C:\Users\t".to_string()),
+            ("localappdata".to_string(), r"C:\Users\t\AppData\Local".to_string()),
+            ("appdata".to_string(), r"C:\Users\t\AppData\Roaming".to_string()),
+            ("programdata".to_string(), r"C:\ProgramData".to_string()),
+        ]));
+        let g = Guard::new(&env);
+        for p in [
+            r"C:\Users\t\AppData\Local\Microsoft\Windows\Explorer\ThumbCacheToDelete\thm*.tmp",
+            r"C:\Users\t\AppData\Local\Microsoft\Windows\Explorer\ThumbCacheToDelete\thm1A2B.tmp",
+            r"C:\Windows\*.bak",
+            r"C:\Windows\win.ini.bak",
+            r"C:\Windows\*log.txt",
+            r"C:\Windows\setuplog.txt",
+            r"C:\Users\t\AppData\Local\ElevatedDiagnostics",
+            r"C:\Users\t\AppData\Local\ElevatedDiagnostics\123\report.cab",
+        ] {
+            assert_eq!(g.protected(Path::new(p)), None, "{p}");
+        }
+        assert!(g.protected(Path::new(r"C:\Windows\System32\wbem\Logs\*.log")).is_some());
+    }
+
+    #[test]
+    fn phase3_additions_are_in_the_targets() {
+        let has = |index: usize, dir_end: &str, pattern: &str| {
+            super::targets(index)
+                .iter()
+                .any(|t| t.dir.ends_with(dir_end) && t.patterns.contains(&pattern))
+        };
+        assert!(has(6, r"Microsoft\Windows\Explorer\ThumbCacheToDelete", "thm*.tmp"));
+        let win = std::path::PathBuf::from(crate::sys::windir());
+        let root = super::targets(4).into_iter().find(|t| t.dir == win).expect("cartella di Windows");
+        assert_eq!(root.patterns, vec!["*.log", "*.bak", "*log.txt"]);
+        assert!(!root.recursive);
+        assert!(has(5, "ElevatedDiagnostics", "*"));
+        // `System32\wbem\Logs` no: la guardia delle regole esterne lo rifiuta.
+        assert!(!super::targets(4).iter().any(|t| t.dir.ends_with(r"wbem\Logs")));
     }
 }
 

@@ -1,5 +1,6 @@
 //! Categorie dinamiche di Pulizia file: i cleaner inglobati (CleanerML,
-//! gruppo "Sviluppo e AI") e le voci di Winapp2 ("Applicazioni").
+//! gruppi "Windows", "Browser" e "Sviluppo e AI", vedi
+//! `pc_rules::embedded`) e le voci di Winapp2 ("Applicazioni").
 //!
 //! Nessuna UI qui: `main.rs` mostra le caselle e lancia il job; questo modulo
 //! carica le regole, raccoglie ciò che un'opzione toglierebbe e lo cancella
@@ -25,6 +26,10 @@ use crate::{regbackup, sys};
 pub const EMBEDDED_GROUP: &str = "Sviluppo e AI";
 /// Titolo del gruppo delle voci di Winapp2.
 pub const WINAPP2_GROUP: &str = "Applicazioni";
+/// Ordine dei gruppi dei cleaner inglobati nel pannello; un gruppo fuori
+/// elenco va dopo questi, in ordine alfabetico. "Applicazioni" (Winapp2) viene
+/// sempre per ultimo.
+pub const GROUP_ORDER: [&str; 3] = ["Windows", "Browser", EMBEDDED_GROUP];
 /// Attribuzione delle regole nella finestra Informazioni.
 pub const ABOUT_RULES: &str = "Le regole di pulizia delle applicazioni vengono da Winapp2 \
      (https://github.com/MoscaDotTo/Winapp2), licenza CC-BY-SA-4.0, scaricate a ogni avvio.";
@@ -46,6 +51,9 @@ pub struct RuleSet {
     /// Sezioni di Winapp2 (`Cleaner::group`, in ordine alfabetico) con gli
     /// indici delle voci in `cleaners`.
     pub sections: Vec<(String, Vec<usize>)>,
+    /// Gruppi dei cleaner inglobati presenti (`Cleaner::group`, nell'ordine di
+    /// [`GROUP_ORDER`]) con gli indici in `cleaners`.
+    pub groups: Vec<(String, Vec<usize>)>,
 }
 
 pub enum RulesMsg {
@@ -168,6 +176,7 @@ pub fn load_with(
         Err(e) => (format!("Winapp2 non letto: {}", reason_it(&e)), None),
     };
     let first = cleaners.len();
+    let groups = embedded_groups(&cleaners);
     cleaners.extend(winapp);
     let mut sections: Vec<(String, Vec<usize>)> = Vec::new();
     for (i, c) in cleaners.iter().enumerate().skip(first) {
@@ -184,7 +193,24 @@ pub fn load_with(
         warnings,
         env: env.clone(),
         sections,
+        groups,
     }
+}
+
+/// Raggruppa i cleaner per `Cleaner::group` nell'ordine di [`GROUP_ORDER`]
+/// (gli altri gruppi dopo, in ordine alfabetico); dentro un gruppo resta
+/// l'ordine di `cleaners`.
+pub fn embedded_groups(cleaners: &[Cleaner]) -> Vec<(String, Vec<usize>)> {
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, c) in cleaners.iter().enumerate() {
+        match groups.iter_mut().find(|(g, _)| *g == c.group) {
+            Some((_, v)) => v.push(i),
+            None => groups.push((c.group.clone(), vec![i])),
+        }
+    }
+    let rank = |g: &str| GROUP_ORDER.iter().position(|o| *o == g).unwrap_or(GROUP_ORDER.len());
+    groups.sort_by_key(|(g, _)| (rank(g), g.to_lowercase()));
+    groups
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1266,55 @@ mod tests {
         assert_eq!(ids(&rs), vec!["bbag_cargo"]);
         assert!(rs.cleaners.iter().all(|c| c.group == EMBEDDED_GROUP));
         assert!(rs.sections.is_empty());
+    }
+
+    #[test]
+    fn embedded_groups_follow_windows_browser_development_order() {
+        let mk = |id: &str, group: &str| {
+            let mut c = cleaner(&[], vec![]);
+            c.id = id.into();
+            c.group = group.into();
+            c
+        };
+        let cleaners = vec![
+            mk("bbag_cargo", EMBEDDED_GROUP),
+            mk("safari", "Browser"),
+            mk("altro", "Zeta"),
+            mk("windows_extra", "Windows"),
+            mk("uv", EMBEDDED_GROUP),
+        ];
+        let groups = embedded_groups(&cleaners);
+        let names: Vec<&str> = groups.iter().map(|(g, _)| g.as_str()).collect();
+        assert_eq!(names, vec!["Windows", "Browser", EMBEDDED_GROUP, "Zeta"]);
+        assert_eq!(groups[0].1, vec![3]);
+        assert_eq!(groups[1].1, vec![1]);
+        assert_eq!(groups[2].1, vec![0, 4]);
+        // "Applicazioni" non è un gruppo degli inglobati: viene dopo, nel pannello.
+        assert!(!GROUP_ORDER.contains(&WINAPP2_GROUP));
+    }
+
+    #[test]
+    fn real_embedded_cleaners_group_windows_and_safari_first() {
+        let t = tempfile::tempdir().unwrap();
+        let env = fake_env(t.path());
+        // Safari e Internet Explorer presenti nel profilo finto, più Cargo.
+        write(&t.path().join(r"profile\AppData\Local\Apple Computer\Safari\Cache.db"), "x");
+        write(&t.path().join(r"profile\AppData\Local\Microsoft\Windows\INetCache\IE\a.gif"), "x");
+        write(&t.path().join(r"profile\.cargo\registry\cache\index\a.crate"), "x");
+        let rs = load_with(&t.path().join("rules"), &env, &no_copy, &never);
+        let names: Vec<(&str, Vec<&str>)> = rs
+            .groups
+            .iter()
+            .map(|(g, idx)| (g.as_str(), idx.iter().map(|&i| rs.cleaners[i].id.as_str()).collect()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Windows", vec!["windows_extra"]),
+                ("Browser", vec!["safari"]),
+                (EMBEDDED_GROUP, vec!["bbag_cargo"]),
+            ]
+        );
     }
 
     #[test]

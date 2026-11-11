@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CleanerML: Safari per Windows (ultima versione 5.1.7, 2012)
+     (docs/ccleaner-coverage.md, sezione 3.1, righe «Nuovo XML»).
+     Ogni opzione va selezionata esplicitamente.
+     Non inclusi: i cookie (percorso Cookies.binarycookies da verificare) e
+     le password salvate (portachiavi Apple). -->
+<cleaner id="safari" os="windows">
+  <label>Safari</label>
+  <description>Cache, cronologia e moduli salvati di Safari per Windows.</description>
+  <running type="exe" os="windows" same_user="true">Safari.exe</running>
+  <option id="cache">
+    <label>Cache Internet</label>
+    <description>Elimina la cache delle pagine visitate.</description>
+    <action command="delete" search="file" path="%LocalAppData%\Apple Computer\Safari\Cache.db"/>
+  </option>
+  <option id="history">
+    <label>Cronologia Internet</label>
+    <description>Elimina la cronologia, l'ultima sessione, i siti più visitati, l'elenco dei download e le anteprime delle pagine.</description>
+    <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\History.plist"/>
+    <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\LastSession.plist"/>
+    <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\TopSites.plist"/>
+    <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\Downloads.plist"/>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Apple Computer\Safari\History"/>
+    <action command="delete" search="walk.all" path="%LocalAppData%\Apple Computer\Safari\Webpage Previews"/>
+  </option>
+  <option id="forms">
+    <label>Informazioni moduli salvate</label>
+    <description>Elimina i dati inseriti nei moduli delle pagine web.</description>
+    <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\Form Values.plist"/>
+  </option>
+</cleaner>

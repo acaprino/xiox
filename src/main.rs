@@ -1081,17 +1081,17 @@ fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u3
     let _ = tx.send(SvcMsg::Message(msg));
 }
 
-/// Gruppi dinamici del pannello sinistro di Pulizia file: "Sviluppo e AI" (un
+/// Gruppi dinamici del pannello sinistro di Pulizia file: gli inglobati per
+/// gruppo ("Windows", "Browser", "Sviluppo e AI", `rules::GROUP_ORDER`; un
 /// `CollapsingHeader` per cleaner) e "Applicazioni" (Winapp2, uno per sezione,
 /// con «Cerca»). Il corpo di un `CollapsingHeader` si costruisce solo se aperto.
 /// `status`: riga di stato di Winapp2 e motivo al passaggio del mouse (`rules::status_line`).
 fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, status: (String, Option<String>), sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
-    let mut embedded = rs.cleaners.iter().filter(|c| rules::is_embedded(c)).peekable();
-    if embedded.peek().is_some() {
+    for (group, idx) in &rs.groups {
         ui.add_space(6.0);
-        ui.label(RichText::new(rules::EMBEDDED_GROUP).strong().color(ACCENT));
+        ui.label(RichText::new(group).strong().color(ACCENT));
         ui.separator();
-        for c in embedded {
+        for c in idx.iter().map(|&i| &rs.cleaners[i]) {
             let header = egui::CollapsingHeader::new(&c.label).id_salt(("rule", &c.id)).default_open(false).show(ui, |ui| {
                 for o in &c.options {
                     rule_checkbox(ui, c, o, &o.label, sel, processes, busy);
