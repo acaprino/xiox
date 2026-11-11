@@ -2,11 +2,13 @@
 
 mod cleaner;
 mod dev;
+mod native;
 mod regbackup;
 mod registry;
 mod rules;
 mod services;
 mod sys;
+mod sysclean;
 mod theme;
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
@@ -31,6 +33,8 @@ enum CleanMsg {
     Cleaned(usize, cleaner::Found, cleaner::Cleaned),
     /// Opzione dinamica: chiave `"<cleaner>/<opzione>"`, etichetta, raccolta e (in pulizia) esito.
     Rule(String, String, rules::RuleFound, Option<rules::RuleCleaned>),
+    /// Voce nativa: chiave `"native:<id>"`, etichetta, analisi e (in pulizia) esito.
+    Native(String, String, native::NativeFound, Option<native::NativeCleaned>),
     Done,
 }
 
@@ -87,6 +91,10 @@ struct App {
     rule_found: Vec<(String, String, rules::RuleFound)>,
     rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
     rule_search: String,
+    /// Voci native (Appunti, DNS…): selezione `native:<id>` in `rule_sel`.
+    natives: Vec<native::NativeItem>,
+    native_found: Vec<(String, String, native::NativeFound)>,
+    native_cleaned: Vec<(String, String, native::NativeCleaned)>,
     /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
     processes: Vec<String>,
 
@@ -113,6 +121,7 @@ struct App {
 impl App {
     fn new(screenshot: Option<PathBuf>, tab: Tab, dev: dev::DevState, about_open: bool) -> Self {
         let n = cleaner::CATEGORIES.len();
+        let natives = native::all();
         let mut app = App {
             tab,
             admin: sys::is_admin(),
@@ -136,10 +145,13 @@ impl App {
             rules_rx: None,
             winapp2_update: None,
             about_open,
-            rule_sel: HashSet::new(),
+            rule_sel: rules::native_defaults(&natives),
             rule_found: vec![],
             rule_cleaned: vec![],
             rule_search: String::new(),
+            natives,
+            native_found: vec![],
+            native_cleaned: vec![],
             processes: rules::processes(),
             reg_sel: registry::CATEGORIES.iter().map(|c| c.default_on).collect(),
             issues: vec![],
@@ -207,19 +219,22 @@ impl App {
         let cats: Vec<usize> = (0..self.clean_sel.len()).filter(|&i| self.clean_sel[i]).collect();
         self.processes = rules::processes();
         let dynamic = self.chosen_rules();
-        let env = self.rules.as_ref().map(|r| r.env.clone()).unwrap_or_default();
+        let natives: Vec<native::NativeItem> = self.natives.iter().filter(|i| self.rule_sel.contains(&rules::native_key(i))).copied().collect();
+        let env = self.rules.as_ref().map(|r| r.env.clone());
         let (tx, rx) = channel();
         self.clean_job = Some(rx);
         self.found = vec![None; self.clean_sel.len()];
         self.cleaned = vec![None; self.clean_sel.len()];
         self.rule_found.clear();
         self.rule_cleaned.clear();
+        self.native_found.clear();
+        self.native_cleaned.clear();
         self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
         let only_old = self.only_old;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let verb = if also_clean { "Pulizia" } else { "Analisi" };
-            let total = (cats.len() + dynamic.len()).max(1) as f32;
+            let total = (cats.len() + natives.len() + dynamic.len()).max(1) as f32;
             for (k, &i) in cats.iter().enumerate() {
                 let name = cleaner::CATEGORIES[i].name;
                 let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
@@ -232,11 +247,21 @@ impl App {
                     let _ = tx.send(CleanMsg::Analyzed(i, f));
                 }
             }
-            // Opzioni dinamiche: in sequenza, un solo Guard per tutta la pulizia;
-            // i processi si rileggono prima dell'analisi e della pulizia di ognuna.
+            // Voci native e opzioni dinamiche: in sequenza, un solo Guard per tutta
+            // la pulizia; i processi si rileggono prima dell'analisi e della pulizia
+            // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
+            let env = env.unwrap_or_else(pc_rules::Env::for_rules);
             let guard = pc_rules::Guard::new(&env);
             let cancel = AtomicBool::new(false);
             let processes = rules::processes;
+            let nctx = native::NativeCtx { env: &env, cancel: &cancel, guard: &guard };
+            let nprogress = |k: usize, text: String| {
+                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
+                ctx.request_repaint();
+            };
+            native::run_natives(&natives, also_clean, &nctx, &processes, &nprogress, &mut |item, f, done| {
+                let _ = tx.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
+            });
             let run = rules::RunCtx {
                 env: &env,
                 guard: &guard,
@@ -246,7 +271,7 @@ impl App {
                 cancel: &cancel,
             };
             let progress = |k: usize, text: String| {
-                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
+                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));
                 ctx.request_repaint();
             };
             rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
@@ -354,6 +379,12 @@ impl App {
                             self.rule_cleaned.push((key.clone(), label.clone(), c));
                         }
                         self.rule_found.push((key, label, f));
+                    }
+                    CleanMsg::Native(key, label, f, c) => {
+                        if let Some(c) = c {
+                            self.native_cleaned.push((key.clone(), label.clone(), c));
+                        }
+                        self.native_found.push((key, label, f));
                     }
                     CleanMsg::Done => done = true,
                 }
@@ -557,9 +588,14 @@ impl App {
                             ui.checkbox(&mut self.clean_sel[i], label).on_hover_text(c.help);
                         });
                     }
-                    if let Some(rs) = &self.rules {
-                        let status = rules::status_line(rs, self.winapp2_update.as_ref());
-                        rules_panel(ui, rs, status, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
+                    let natives = Natives { items: &self.natives, admin: self.admin };
+                    match &self.rules {
+                        Some(rs) => {
+                            let status = rules::status_line(rs, self.winapp2_update.as_ref());
+                            rules_panel(ui, rs, natives, status, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
+                        }
+                        // Regole non ancora caricate: le voci native ci sono già.
+                        None => group_panel(ui, None, natives, &rules::panel_groups(&[], natives.items), &mut self.rule_sel, &self.processes, busy),
                     }
                     ui.add_space(12.0);
                     ui.label(RichText::new("Opzioni").strong().color(ACCENT));
@@ -573,7 +609,9 @@ impl App {
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let any = self.clean_sel.iter().any(|&b| b) || self.rules.as_ref().is_some_and(|rs| !rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes).is_empty());
+                    let any = self.clean_sel.iter().any(|&b| b)
+                        || !rules::active_natives(&self.natives, &self.rule_sel, &self.processes).is_empty()
+                        || self.rules.as_ref().is_some_and(|rs| !rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes).is_empty());
                     if primary(ui, "Avvia pulizia", !busy && any).clicked() {
                         self.confirm_clean = true;
                     }
@@ -646,16 +684,24 @@ impl App {
         }
     }
 
-    /// "<cleaner> – <opzione>: <avviso>" per ogni opzione dinamica spuntata, non bloccata, con un avviso.
+    /// "<voce>: <avviso>" per ogni voce nativa e "<cleaner> – <opzione>: <avviso>"
+    /// per ogni opzione dinamica spuntata, non bloccata, con un avviso.
     fn rule_warnings(&self) -> Vec<String> {
-        let Some(rs) = &self.rules else { return vec![] };
-        // Solo le opzioni che si pulirebbero davvero (non quelle bloccate).
-        rules::choice_warnings(&rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes))
+        // Solo le scelte che si pulirebbero davvero (non quelle bloccate).
+        let mut out = rules::native_warnings(&rules::active_natives(&self.natives, &self.rule_sel, &self.processes));
+        if let Some(rs) = &self.rules {
+            out.extend(rules::choice_warnings(&rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes)));
+        }
+        out
     }
 
     fn analysis_table(&self, ui: &mut Ui) {
-        let total: u64 = self.found.iter().flatten().map(|f| f.bytes).sum::<u64>() + self.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
-        let files: u64 = self.found.iter().flatten().map(|f| f.count).sum::<u64>() + self.rule_found.iter().map(|r| r.2.count).sum::<u64>();
+        let total: u64 = self.found.iter().flatten().map(|f| f.bytes).sum::<u64>()
+            + self.native_found.iter().map(|r| r.2.bytes).sum::<u64>()
+            + self.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
+        let files: u64 = self.found.iter().flatten().map(|f| f.count).sum::<u64>()
+            + self.native_found.iter().map(|r| r.2.count).sum::<u64>()
+            + self.rule_found.iter().map(|r| r.2.count).sum::<u64>();
         let title = if self.clean_job.is_some() { "Analisi in corso…".to_string() } else { "Analisi completata".to_string() };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         ui.label(RichText::new(format!("{} da eliminare ({} file)", sys::fmt_size(total), files)).size(15.0).color(ACCENT));
@@ -680,6 +726,13 @@ impl App {
                         ui.end_row();
                     }
                 }
+                for (_, label, f) in &self.native_found {
+                    ui.label(label);
+                    ui.label(sys::fmt_size(f.bytes));
+                    ui.label(f.count.to_string());
+                    note_cell(ui, &f.detail);
+                    ui.end_row();
+                }
                 for (_, label, f) in &self.rule_found {
                     ui.label(label);
                     ui.label(sys::fmt_size(f.bytes));
@@ -697,7 +750,9 @@ impl App {
     }
 
     fn cleaned_table(&self, ui: &mut Ui) {
-        let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>() + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
+        let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>()
+            + self.native_cleaned.iter().map(|r| r.2.freed).sum::<u64>()
+            + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
         let title = if self.clean_job.is_some() { "Pulizia in corso…" } else { "Pulizia completata" };
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(freed))).size(15.0).color(GREEN));
@@ -719,6 +774,14 @@ impl App {
                         ui.label("");
                         ui.end_row();
                     }
+                }
+                for (_, label, c) in &self.native_cleaned {
+                    ui.label(label);
+                    ui.label(sys::fmt_size(c.freed));
+                    ui.label(c.removed.to_string());
+                    ui.label(c.failed.to_string());
+                    note_cell(ui, &c.notes);
+                    ui.end_row();
                 }
                 for (_, label, c) in &self.rule_cleaned {
                     ui.label(label);
@@ -1086,22 +1149,9 @@ fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u3
 /// `CollapsingHeader` per cleaner) e "Applicazioni" (Winapp2, uno per sezione,
 /// con «Cerca»). Il corpo di un `CollapsingHeader` si costruisce solo se aperto.
 /// `status`: riga di stato di Winapp2 e motivo al passaggio del mouse (`rules::status_line`).
-fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, status: (String, Option<String>), sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
-    for (group, idx) in &rs.groups {
-        ui.add_space(6.0);
-        ui.label(RichText::new(group).strong().color(ACCENT));
-        ui.separator();
-        for c in idx.iter().map(|&i| &rs.cleaners[i]) {
-            let header = egui::CollapsingHeader::new(&c.label).id_salt(("rule", &c.id)).default_open(false).show(ui, |ui| {
-                for o in &c.options {
-                    rule_checkbox(ui, c, o, &o.label, sel, processes, busy);
-                }
-            });
-            if !c.description.is_empty() {
-                header.header_response.on_hover_text(&c.description);
-            }
-        }
-    }
+#[allow(clippy::too_many_arguments)]
+fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, natives: Natives, status: (String, Option<String>), sel: &mut HashSet<String>, search: &mut String, processes: &[String], busy: bool) {
+    group_panel(ui, Some(rs), natives, &rules::panel_groups(&rs.groups, natives.items), sel, processes, busy);
     ui.add_space(6.0);
     ui.label(RichText::new(rules::WINAPP2_GROUP).strong().color(ACCENT));
     ui.separator();
@@ -1137,6 +1187,77 @@ fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, status: (String, Option<String>
                     }
                 }
             });
+    }
+}
+
+/// Le voci native e se l'app è amministratore (per il 🛡).
+#[derive(Clone, Copy)]
+struct Natives<'a> {
+    items: &'a [native::NativeItem],
+    admin: bool,
+}
+
+/// I gruppi dei cleaner inglobati (`rules::panel_groups`): titolo, poi le voci
+/// native del gruppo come caselle, poi un `CollapsingHeader` per cleaner XML.
+fn group_panel(ui: &mut Ui, rs: Option<&rules::RuleSet>, natives: Natives, groups: &[(String, Vec<usize>, Vec<usize>)], sel: &mut HashSet<String>, processes: &[String], busy: bool) {
+    for (group, nat, idx) in groups {
+        ui.add_space(6.0);
+        ui.label(RichText::new(group).strong().color(ACCENT));
+        ui.separator();
+        for item in nat.iter().map(|&n| &natives.items[n]) {
+            native_checkbox(ui, item, natives.admin, sel, processes, busy);
+        }
+        let Some(rs) = rs else { continue };
+        for c in idx.iter().map(|&i| &rs.cleaners[i]) {
+            let header = egui::CollapsingHeader::new(&c.label).id_salt(("rule", &c.id)).default_open(false).show(ui, |ui| {
+                for o in &c.options {
+                    rule_checkbox(ui, c, o, &o.label, sel, processes, busy);
+                }
+            });
+            if !c.description.is_empty() {
+                header.header_response.on_hover_text(&c.description);
+            }
+        }
+    }
+}
+
+/// Casella di una voce nativa: come le categorie statiche (🛡 se serve
+/// l'amministratore), disattivata se un suo processo è attivo, avviso al
+/// passaggio del mouse.
+fn native_checkbox(ui: &mut Ui, item: &native::NativeItem, admin: bool, sel: &mut HashSet<String>, processes: &[String], busy: bool) {
+    let key = rules::native_key(item);
+    let label = if item.needs_admin && !admin { format!("{}  🛡", item.label) } else { item.label.to_string() };
+    if let Some(why) = rules::native_blocked(item, processes) {
+        let mut off = false;
+        ui.add_enabled(false, egui::Checkbox::new(&mut off, label)).on_disabled_hover_text(&why);
+        ui.label(RichText::new(why).color(MUTED).size(12.0));
+        return;
+    }
+    let mut help = item.description.to_string();
+    if let Some(w) = item.warning {
+        help.push_str("\n\nAttenzione: ");
+        help.push_str(w);
+    }
+    let mut on = sel.contains(&key);
+    let r = ui.add_enabled(!busy, egui::Checkbox::new(&mut on, label)).on_hover_text(help);
+    if r.changed() {
+        if on {
+            sel.insert(key);
+        } else {
+            sel.remove(&key);
+        }
+    }
+}
+
+/// Ultima colonna delle tabelle: la prima riga, le altre al passaggio del mouse.
+fn note_cell(ui: &mut Ui, lines: &[String]) {
+    match lines.first() {
+        Some(first) => {
+            ui.label(RichText::new(first).color(MUTED).size(12.0)).on_hover_text(lines.join("\n"));
+        }
+        None => {
+            ui.label("");
+        }
     }
 }
 

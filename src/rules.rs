@@ -20,6 +20,7 @@ use pc_rules::{
     CollectCtl, Env, Guard, Opt, Origin, RegItem, RegRoot,
 };
 
+use crate::native::NativeItem;
 use crate::{regbackup, sys};
 
 /// Titolo del gruppo dei cleaner inglobati.
@@ -404,6 +405,74 @@ pub fn blocked(cleaner: &Cleaner, opt: &Opt, processes: &[String]) -> Option<Str
     } else {
         Some(format!("Chiudi {} per pulire", active.join(", ")))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Voci native (`crate::native`): stesse caselle, stessa selezione, stessi avvisi.
+
+/// Prefisso delle chiavi di selezione delle voci native.
+pub const NATIVE_PREFIX: &str = "native:";
+
+/// Chiave di selezione e di risultato di una voce nativa: `"native:<id>"`.
+pub fn native_key(item: &NativeItem) -> String {
+    format!("{NATIVE_PREFIX}{}", item.id)
+}
+
+/// Le voci native accese per default (selezione iniziale del pannello).
+pub fn native_defaults(items: &[NativeItem]) -> HashSet<String> {
+    items.iter().filter(|i| i.default_on).map(native_key).collect()
+}
+
+/// Come [`blocked`] per una voce nativa: `Some("Chiudi … per pulire")` se un
+/// processo di `running` è attivo (nomi senza maiuscole, `.exe` facoltativo).
+pub fn native_blocked(item: &NativeItem, processes: &[String]) -> Option<String> {
+    let norm = |s: &str| {
+        let s = s.trim().to_lowercase();
+        s.strip_suffix(".exe").map(str::to_string).unwrap_or(s)
+    };
+    let active: Vec<String> = processes.iter().map(|p| norm(p)).collect();
+    let hits: Vec<&str> = item
+        .running
+        .iter()
+        .copied()
+        .filter(|r| {
+            let n = norm(r);
+            !n.is_empty() && active.contains(&n)
+        })
+        .collect();
+    (!hits.is_empty()).then(|| format!("Chiudi {} per pulire", hits.join(", ")))
+}
+
+/// Voci native spuntate e non bloccate (abilitano «Avvia pulizia»).
+pub fn active_natives<'a>(items: &'a [NativeItem], sel: &HashSet<String>, processes: &[String]) -> Vec<&'a NativeItem> {
+    items
+        .iter()
+        .filter(|i| sel.contains(&native_key(i)) && native_blocked(i, processes).is_none())
+        .collect()
+}
+
+/// "<voce>: <avviso>" per ogni voce nativa con un avviso.
+pub fn native_warnings(items: &[&NativeItem]) -> Vec<String> {
+    items.iter().filter_map(|i| i.warning.map(|w| format!("{}: {w}", i.label))).collect()
+}
+
+/// Gruppi del pannello: i gruppi dei cleaner inglobati (`groups`) con, in
+/// ciascuno, le voci native dello stesso `group` (indici in `natives`), che
+/// vengono **prima** dei cleaner XML. Un gruppo che ha solo voci native si
+/// inserisce al suo posto di [`GROUP_ORDER`].
+pub fn panel_groups(groups: &[(String, Vec<usize>)], natives: &[NativeItem]) -> Vec<(String, Vec<usize>, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>, Vec<usize>)> =
+        groups.iter().map(|(g, idx)| (g.clone(), Vec::new(), idx.clone())).collect();
+    for (n, item) in natives.iter().enumerate() {
+        match out.iter_mut().find(|(g, _, _)| g == item.group) {
+            Some((_, v, _)) => v.push(n),
+            None => out.push((item.group.to_string(), vec![n], Vec::new())),
+        }
+    }
+    let rank = |g: &str| GROUP_ORDER.iter().position(|o| *o == g).unwrap_or(GROUP_ORDER.len());
+    // Ordinamento stabile: dentro lo stesso rango resta l'ordine di `groups`.
+    out.sort_by_key(|(g, _, _)| (rank(g), g.to_lowercase()));
+    out
 }
 
 /// Raccoglie ciò che l'opzione toglierebbe. Un'opzione non supportata non
@@ -2409,5 +2478,70 @@ mod tests {
         assert_eq!(done.backup, None);
         assert!(key_exists_now(RegRoot::Hklm, protected_path), "(f) la chiave protetta è sparita");
         drop(cleanup);
+    }
+
+    // ----- voci native -----
+
+    fn native_none(_: &crate::native::NativeCtx) -> crate::native::NativeFound {
+        crate::native::NativeFound::default()
+    }
+
+    fn native_nothing(_: &crate::native::NativeCtx, _: &crate::native::NativeFound) -> crate::native::NativeCleaned {
+        crate::native::NativeCleaned::default()
+    }
+
+    fn native(id: &'static str, group: &'static str, running: &'static [&'static str]) -> NativeItem {
+        NativeItem {
+            id,
+            group,
+            label: "Voce nativa",
+            description: "",
+            warning: Some("attenzione"),
+            default_on: id == "acceso",
+            needs_admin: false,
+            running,
+            analyze: native_none,
+            clean: native_nothing,
+        }
+    }
+
+    #[test]
+    fn native_item_is_blocked_while_its_process_runs() {
+        let item = native("db", "Browser", &["Firefox.exe", "thunderbird"]);
+        assert_eq!(native_blocked(&item, &["explorer.exe".to_string()]), None);
+        assert_eq!(
+            native_blocked(&item, &["firefox.EXE".to_string()]),
+            Some("Chiudi Firefox.exe per pulire".to_string())
+        );
+        assert_eq!(
+            native_blocked(&item, &["Thunderbird.exe".to_string(), "firefox.exe".to_string()]),
+            Some("Chiudi Firefox.exe, thunderbird per pulire".to_string())
+        );
+        // Bloccata = non abilita «Avvia pulizia» e non dà avvisi.
+        let items = [item, native("acceso", "Windows", &[])];
+        let sel: HashSet<String> = items.iter().map(native_key).collect();
+        let procs = ["firefox.exe".to_string()];
+        let active = active_natives(&items, &sel, &procs);
+        assert_eq!(active.iter().map(|i| i.id).collect::<Vec<_>>(), vec!["acceso"]);
+        assert_eq!(native_warnings(&active), vec!["Voce nativa: attenzione".to_string()]);
+        assert_eq!(native_key(&items[1]), "native:acceso");
+        assert_eq!(native_defaults(&items), HashSet::from(["native:acceso".to_string()]));
+    }
+
+    #[test]
+    fn native_items_join_their_group_before_the_xml_cleaners() {
+        let natives = [native("a", "Windows", &[]), native("b", "Windows", &[])];
+        let groups = vec![("Windows".to_string(), vec![0]), ("Browser".to_string(), vec![1]), (EMBEDDED_GROUP.to_string(), vec![2])];
+        let got = panel_groups(&groups, &natives);
+        assert_eq!(got[0], ("Windows".to_string(), vec![0, 1], vec![0]));
+        assert_eq!(got.len(), 3);
+        // Nessun cleaner XML di Windows presente: il gruppo c'è lo stesso, primo.
+        let groups = vec![("Browser".to_string(), vec![0]), (EMBEDDED_GROUP.to_string(), vec![1])];
+        let got = panel_groups(&groups, &natives);
+        let names: Vec<&str> = got.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(names, vec!["Windows", "Browser", EMBEDDED_GROUP]);
+        assert_eq!(got[0], ("Windows".to_string(), vec![0, 1], vec![]));
+        // Senza regole caricate.
+        assert_eq!(panel_groups(&[], &natives), vec![("Windows".to_string(), vec![0, 1], vec![])]);
     }
 }
