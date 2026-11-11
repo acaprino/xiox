@@ -26,10 +26,15 @@ pub struct NativeCtx<'a> {
 /// Ciò che l'analisi ha trovato.
 #[derive(Debug, Default, Clone)]
 pub struct NativeFound {
-    /// Testo per la tabella: la prima riga si vede, le altre al passaggio del mouse.
+    /// Testo per il resoconto: la prima riga nella tabella, tutte nell'elenco
+    /// sotto la tabella.
     pub detail: Vec<String>,
+    /// Elementi trovati (canali, collegamenti, 1 per Appunti e DNS).
     pub count: u64,
+    /// Quanti di `count` sono file (il «N file» del titolo dell'analisi).
+    pub files: u64,
     pub bytes: u64,
+    /// Lasciati dall'analisi (protetti, nome non leggibile).
     pub skipped: u64,
     /// Su cosa può agire `clean` (canali, percorsi dei `.lnk`, `"clipboard"`…).
     pub items: Vec<String>,
@@ -42,6 +47,8 @@ pub struct NativeCleaned {
     pub removed: u64,
     pub failed: u64,
     pub notes: Vec<String>,
+    /// Cosa si è tolto davvero (canali svuotati, collegamenti cancellati), per il resoconto.
+    pub done: Vec<String>,
 }
 
 impl NativeCleaned {

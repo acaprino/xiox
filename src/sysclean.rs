@@ -57,12 +57,61 @@ pub trait Shortcuts {
     /// I `.lnk` di `dir` (con le sottocartelle se `recursive`), senza seguire
     /// collegamenti né giunzioni.
     fn list(&self, dir: &Path, recursive: bool) -> Vec<PathBuf>;
-    /// Destinazioni scritte nel collegamento così come le dà la shell
-    /// (`GetPath` normale e con `SLGP_RAWPATH`, che può contenere `%VAR%`).
-    /// Vuoto = non leggibile o non un file (URL, `shell:`, app pacchettizzate).
-    fn targets(&self, lnk: &Path) -> Vec<String>;
+    /// `LinkFlags` dell'intestazione del collegamento e destinazioni così come
+    /// le dà la shell (`GetPath` normale e con `SLGP_RAWPATH`, che può
+    /// contenere `%VAR%`), in UTF-16 senza conversioni. `None` = illeggibile;
+    /// nessun percorso = non un file (URL, `shell:`, app pacchettizzate).
+    fn targets(&self, lnk: &Path) -> Option<LinkTargets>;
     /// `true` solo per un disco fisso presente (`GetDriveTypeW == DRIVE_FIXED`).
     fn volume_is_fixed(&self, p: &Path) -> bool;
+    /// Menu Start comune e Desktop pubblico dalle cartelle note di Windows
+    /// (`SHGetKnownFolderPath`), mai dalle variabili del processo.
+    fn common_dirs(&self) -> CommonDirs;
+}
+
+/// Ciò che si legge di un `.lnk`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkTargets {
+    /// `LinkFlags` dell'intestazione MS-SHLLINK (offset 0x14).
+    pub flags: u32,
+    pub paths: Vec<std::ffi::OsString>,
+}
+
+/// Cartelle comuni dei collegamenti (`None` = non risolta).
+#[derive(Debug, Clone, Default)]
+pub struct CommonDirs {
+    pub start_menu: Option<PathBuf>,
+    pub public_desktop: Option<PathBuf>,
+}
+
+/// Una cartella dei collegamenti.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShortcutDir {
+    pub path: PathBuf,
+    /// Con le sottocartelle (menu Start) o solo il primo livello (Desktop).
+    pub recursive: bool,
+    /// Comune a tutti gli utenti (menu Start comune, Desktop pubblico).
+    pub common: bool,
+}
+
+/// `LinkFlags`: il collegamento ha una `LinkInfo` (percorso del file system).
+pub const SLDF_HAS_LINK_INFO: u32 = 0x2;
+/// `LinkFlags`: collegamento «pubblicizzato» di Windows Installer (Darwin).
+pub const SLDF_HAS_DARWINID: u32 = 0x1000;
+/// Destinazioni da questa lunghezza in su (UTF-16) possono essere troncate da
+/// `IShellLinkW` (`MAX_PATH`): non si giudicano.
+pub const MAX_TARGET_LEN: usize = 259;
+
+/// `LinkFlags` dall'intestazione di un `.lnk` (MS-SHLLINK: `HeaderSize`
+/// 0x4C, CLSID `00021401-0000-0000-C000-000000000046`, flag a 0x14);
+/// `None` se l'intestazione non è quella.
+pub fn link_flags(header: &[u8]) -> Option<u32> {
+    const CLSID: [u8; 16] = [0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+    let size = u32::from_le_bytes(header.get(0..4)?.try_into().ok()?);
+    if size != 0x4C || header.len() < 0x4C || header[4..20] != CLSID {
+        return None;
+    }
+    Some(u32::from_le_bytes(header[0x14..0x18].try_into().ok()?))
 }
 
 // ---------------------------------------------------------------------------
@@ -286,41 +335,88 @@ pub fn clean_event_logs(ev: &dyn EventLog, found: &NativeFound, cancel: &AtomicB
 // ---------------------------------------------------------------------------
 // Collegamenti non validi (N4).
 
-/// Cartelle dei collegamenti (`true` = con le sottocartelle): menu Start
-/// dell'utente e comune, Desktop dell'utente e pubblico (solo il primo
-/// livello). Solo percorsi assoluti con lettera di unità dell'ambiente fidato.
-pub fn shortcut_dirs(env: &Env) -> Vec<(PathBuf, bool)> {
-    let start_menu = |var: &str| env.get(var).map(|b| Path::new(b).join("Microsoft").join("Windows").join("Start Menu"));
+/// Cartelle dei collegamenti: menu Start dell'utente (`%AppData%`
+/// dell'ambiente fidato) e comune, Desktop dell'utente e pubblico (solo il
+/// primo livello). Le cartelle comuni vengono da `common` (cartelle note di
+/// Windows), mai dalle variabili. Una cartella che non si risolve in un
+/// percorso assoluto con lettera di unità si salta, con una nota.
+pub fn shortcut_dirs(env: &Env, common: &CommonDirs) -> (Vec<ShortcutDir>, Vec<String>) {
+    let start_menu = env.get("appdata").map(|b| Path::new(b).join("Microsoft").join("Windows").join("Start Menu"));
     let desktop = env
         .get("desktop")
         .map(PathBuf::from)
         .or_else(|| env.get("userprofile").map(|p| Path::new(p).join("Desktop")));
-    let public = env.get("public").map(|p| Path::new(p).join("Desktop"));
-    [(start_menu("appdata"), true), (start_menu("programdata"), true), (desktop, false), (public, false)]
-        .into_iter()
-        .filter_map(|(d, rec)| d.map(|d| (d, rec)))
-        .filter(|(d, _)| is_drive_path(d))
-        .collect()
+    let mut dirs = Vec::new();
+    let mut notes = Vec::new();
+    for (name, path, recursive, is_common) in [
+        ("Menu Start dell'utente", start_menu, true, false),
+        ("Menu Start comune", common.start_menu.clone(), true, true),
+        ("Desktop dell'utente", desktop, false, false),
+        ("Desktop pubblico", common.public_desktop.clone(), false, true),
+    ] {
+        match path.filter(|d| is_drive_path(d)) {
+            Some(path) => dirs.push(ShortcutDir { path, recursive, common: is_common }),
+            None => notes.push(format!("{name}: cartella non trovata, saltata")),
+        }
+    }
+    (dirs, notes)
+}
+
+/// Variabili per utente: in una cartella comune una destinazione che le usa
+/// vale per un altro utente in un altro modo, quindi non si giudica.
+const PER_USER_VARS: &[&str] = &[
+    "userprofile", "appdata", "localappdata", "locallowappdata", "homepath", "homedrive", "homeshare",
+    "temp", "tmp", "onedrive", "onedriveconsumer", "onedrivecommercial", "username", "userdomain",
+];
+
+fn uses_per_user_var(raw: &str) -> bool {
+    let low = raw.to_lowercase();
+    PER_USER_VARS.iter().any(|v| low.contains(&format!("%{v}%")))
+}
+
+/// La radice dei profili (`C:\Users`), dal profilo dell'ambiente.
+fn profiles_root(env: &Env) -> Option<PathBuf> {
+    env.get("userprofile").and_then(|p| Path::new(p).parent().map(Path::to_path_buf))
 }
 
 /// Destinazione mancante di un collegamento da proporre, o `None`.
 ///
+/// Non si giudicano mai: collegamenti illeggibili, «pubblicizzati» di
+/// Windows Installer (`SLDF_HAS_DARWINID`), senza `LinkInfo` (solo ID-list:
+/// app pacchettizzate, cartelle virtuali), senza percorsi, con un percorso
+/// non Unicode valido o lungo [`MAX_TARGET_LEN`] o più (forse troncato).
+/// Nelle cartelle comuni (`common`) neppure quelli con variabili per utente o
+/// con la destinazione dentro un profilo diverso da `Public`.
+///
 /// Si propone solo se **ogni** destinazione letta (con le variabili espanse
 /// dall'ambiente fidato, più le gemelle WOW64: `Program Files` ↔
 /// `Program Files (x86)`, `System32` ↔ `SysWOW64`) è un percorso assoluto
-/// con lettera di unità, sta su un disco fisso presente e manca con
-/// `ErrorKind::NotFound` (mai `Path::exists`, che dice «no» anche per un
-/// accesso negato). UNC, dischi rimovibili o di rete, URL, `shell:`,
-/// variabili sconosciute e collegamenti illeggibili non si propongono mai.
-pub fn broken_target(sc: &dyn Shortcuts, env: &Env, lnk: &Path) -> Option<PathBuf> {
-    let raw = sc.targets(lnk);
-    if raw.is_empty() {
+/// con lettera di unità, sta su un disco fisso presente e manca davvero
+/// secondo [`truly_missing`]. UNC, dischi rimovibili o di rete, URL,
+/// `shell:` e variabili sconosciute non si propongono mai.
+pub fn broken_target(sc: &dyn Shortcuts, env: &Env, lnk: &Path, common: bool) -> Option<PathBuf> {
+    let link = sc.targets(lnk)?;
+    if link.flags & SLDF_HAS_DARWINID != 0 || link.flags & SLDF_HAS_LINK_INFO == 0 || link.paths.is_empty() {
         return None;
     }
+    let users = profiles_root(env);
     let mut candidates: Vec<PathBuf> = Vec::new();
-    for r in &raw {
-        let p = PathBuf::from(expand_vars(r.trim(), env)?);
+    for raw in &link.paths {
+        let raw = raw.to_str()?.trim();
+        if raw.is_empty() || raw.encode_utf16().count() >= MAX_TARGET_LEN {
+            return None;
+        }
+        if common && uses_per_user_var(raw) {
+            return None;
+        }
+        let p = PathBuf::from(expand_vars(raw, env)?);
         if !is_drive_path(&p) {
+            return None;
+        }
+        let in_profile = |users: &PathBuf| {
+            strictly_under(&p, users) && !comps(&p).get(comps(users).len()).is_some_and(|c| c == "public")
+        };
+        if common && users.as_ref().is_some_and(in_profile) {
             return None;
         }
         for q in std::iter::once(p.clone()).chain(wow64_twins(&p, env)) {
@@ -329,40 +425,79 @@ pub fn broken_target(sc: &dyn Shortcuts, env: &Env, lnk: &Path) -> Option<PathBu
             }
         }
     }
-    if candidates.iter().all(|c| sc.volume_is_fixed(c) && missing(c)) {
+    if candidates.iter().all(|c| sc.volume_is_fixed(c) && truly_missing(c)) {
         candidates.into_iter().next()
     } else {
         None
     }
 }
 
+/// `true` solo se `p` manca davvero sul disco della sua lettera.
+///
+/// Si scende dalla radice componente per componente con `symlink_metadata`
+/// (che non segue il componente esaminato): un componente esistente che è un
+/// punto di reparse (collegamento simbolico, giunzione, cartella di
+/// montaggio) fa rispondere `false`, perché la destinazione vera può stare su
+/// un disco di rete o staccato; il primo componente che manca deve dare
+/// `ERROR_FILE_NOT_FOUND` (2) o `ERROR_PATH_NOT_FOUND` (3), ogni altro errore
+/// (rete, accesso negato, nome non valido) fa rispondere `false`. Un percorso
+/// con `..` non si giudica. Si apre solo ciò che sta prima del primo reparse:
+/// nessuna attesa di rete.
+pub fn truly_missing(p: &Path) -> bool {
+    if p.components().any(|c| matches!(c, Component::ParentDir)) || !is_drive_path(p) {
+        return false;
+    }
+    let chain: Vec<&Path> = p.ancestors().collect();
+    for a in chain.iter().rev() {
+        if a.parent().is_none() {
+            continue; // radice del disco
+        }
+        match std::fs::symlink_metadata(a) {
+            Ok(md) if is_reparse(&md) => return false,
+            Ok(_) => {}
+            Err(e) => return matches!(e.raw_os_error(), Some(2 | 3)),
+        }
+    }
+    false
+}
+
 /// I collegamenti non validi delle [`shortcut_dirs`]; quelli che il `Guard`
-/// rifiuta si contano fra i saltati.
+/// rifiuta, e quelli con un nome non Unicode valido, si contano fra i saltati.
 pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &AtomicBool) -> NativeFound {
     let mut found = NativeFound::default();
     let mut lines: Vec<String> = Vec::new();
-    'dirs: for (dir, recursive) in shortcut_dirs(env) {
-        for lnk in sc.list(&dir, recursive) {
+    let (dirs, notes) = shortcut_dirs(env, &sc.common_dirs());
+    'dirs: for dir in dirs {
+        for lnk in sc.list(&dir.path, dir.recursive) {
             if cancel.load(Ordering::Relaxed) {
                 break 'dirs;
             }
+            let Some(text) = lnk.to_str().map(str::to_string) else {
+                found.skipped += 1;
+                continue;
+            };
             if guard.protected(&lnk).is_some() {
                 found.skipped += 1;
                 continue;
             }
-            let Some(target) = broken_target(sc, env, &lnk) else { continue };
+            let Some(target) = broken_target(sc, env, &lnk, dir.common) else { continue };
             found.count += 1;
             found.bytes += std::fs::symlink_metadata(&lnk).map(|m| m.len()).unwrap_or(0);
             if lines.len() < MAX_DETAIL {
-                lines.push(format!("{} → {}", lnk.display(), target.display()));
+                lines.push(format!("{text} → {}", target.display()));
             }
-            found.items.push(lnk.to_string_lossy().into_owned());
+            found.items.push(text);
         }
     }
+    found.files = found.count;
     if found.count > 0 {
         found.detail.push(plural(found.count, "collegamento non valido", "collegamenti non validi"));
         found.detail.extend(lines);
+        if found.count as usize > MAX_DETAIL {
+            found.detail.push(format!("… e altri {}", found.count as usize - MAX_DETAIL));
+        }
     }
+    found.detail.extend(notes);
     found
 }
 
@@ -372,37 +507,37 @@ pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &
 /// `pc_rules::delete_checked_with` con il `Guard` della pulizia.
 pub fn clean_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
     let mut out = NativeCleaned::default();
-    let dirs = shortcut_dirs(env);
+    let (dirs, _) = shortcut_dirs(env, &sc.common_dirs());
     for item in &found.items {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
         let lnk = PathBuf::from(item);
-        let allowed = is_lnk(&lnk)
-            && dirs.iter().any(|(d, recursive)| {
-                if *recursive {
-                    strictly_under(&lnk, d)
-                } else {
-                    lnk.parent().is_some_and(|p| same_path(p, d))
-                }
-            });
-        if !allowed {
+        let home = dirs.iter().find(|d| {
+            if d.recursive {
+                strictly_under(&lnk, &d.path)
+            } else {
+                lnk.parent().is_some_and(|p| same_path(p, &d.path))
+            }
+        });
+        let Some(home) = home.filter(|_| is_lnk(&lnk)) else {
             out.failed += 1;
             out.note(format!("{item}: fuori dalle cartelle dei collegamenti, lasciato"));
             continue;
-        }
-        if missing(&lnk) {
+        };
+        if matches!(std::fs::symlink_metadata(&lnk), Err(e) if e.kind() == ErrorKind::NotFound) {
             out.note(format!("{item}: già assente"));
             continue;
         }
-        if broken_target(sc, env, &lnk).is_none() {
-            out.note(format!("{item}: la destinazione c'è di nuovo, lasciato"));
+        if broken_target(sc, env, &lnk, home.common).is_none() {
+            out.note(format!("{item}: non più da togliere (destinazione tornata o non giudicabile), lasciato"));
             continue;
         }
         match pc_rules::delete_checked_with(&lnk, guard) {
             Ok(bytes) => {
                 out.removed += 1;
                 out.freed += bytes;
+                out.done.push(item.clone());
             }
             Err(e) => {
                 out.failed += 1;
@@ -476,7 +611,8 @@ fn comp_text(c: &Component) -> String {
     c.as_os_str().to_string_lossy().to_lowercase()
 }
 
-/// Componenti confrontabili (minuscole, senza `\\?\` e senza `.`).
+/// Componenti confrontabili (minuscole, senza `\\?\` e senza `.`); `..`
+/// resta come componente e fa fallire i confronti.
 fn comps(p: &Path) -> Vec<String> {
     let s = p.to_string_lossy();
     let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
@@ -487,14 +623,22 @@ fn comps(p: &Path) -> Vec<String> {
         .collect()
 }
 
-/// `p` sta dentro `dir` (non è `dir`).
+fn has_parent_dir(p: &Path) -> bool {
+    p.components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// `p` sta dentro `dir` (non è `dir`); mai con `..`.
 fn strictly_under(p: &Path, dir: &Path) -> bool {
+    if has_parent_dir(p) || has_parent_dir(dir) {
+        return false;
+    }
     let (p, d) = (comps(p), comps(dir));
     d.len() >= 2 && p.len() > d.len() && p[..d.len()] == d[..]
 }
 
+/// Stessa voce (stessi componenti); mai con `..`.
 fn same_path(a: &Path, b: &Path) -> bool {
-    comps(a) == comps(b)
+    !has_parent_dir(a) && !has_parent_dir(b) && comps(a) == comps(b)
 }
 
 /// `p` con la cartella `from` sostituita da `to` (confronto senza maiuscole).
@@ -561,11 +705,6 @@ fn is_lnk(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk"))
 }
 
-/// Manca davvero: `NotFound` (file o percorso), non un altro errore.
-fn missing(p: &Path) -> bool {
-    matches!(std::fs::symlink_metadata(p), Err(e) if e.kind() == ErrorKind::NotFound)
-}
-
 /// Punto di reparse (collegamento simbolico, giunzione, segnaposto cloud).
 fn is_reparse(md: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -590,7 +729,7 @@ mod win {
     use windows_sys::Win32::Foundation::{FreeLibrary, GetLastError, ERROR_INSUFFICIENT_BUFFER, RPC_E_CHANGED_MODE, S_OK};
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows_sys::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
         COINIT_DISABLE_OLE1DDE, STGM_READ,
     };
     use windows_sys::Win32::System::DataExchange::{CloseClipboard, CountClipboardFormats, EmptyClipboard, OpenClipboard};
@@ -602,9 +741,37 @@ mod win {
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
-    use windows_sys::Win32::UI::Shell::{ShellLink, SLGP_RAWPATH};
+    use windows_sys::Win32::UI::Shell::{
+        FOLDERID_CommonStartMenu, FOLDERID_PublicDesktop, SHGetKnownFolderPath, ShellLink, KF_FLAG_DONT_VERIFY,
+        SLGP_RAWPATH,
+    };
 
-    use super::{Clipboard, Dns, EventLog, Shortcuts};
+    use std::ffi::OsString;
+    use std::io::Read;
+    use std::os::windows::ffi::OsStringExt;
+
+    use super::{Clipboard, CommonDirs, Dns, EventLog, LinkTargets, Shortcuts};
+
+    /// Una cartella nota di Windows (`SHGetKnownFolderPath`, token del processo).
+    fn known_folder(id: &GUID) -> Option<PathBuf> {
+        let mut raw: windows_sys::core::PWSTR = null_mut();
+        // SAFETY: GUID valido, token nullo (utente del processo), `raw` riceve
+        // una stringa allocata con CoTaskMemAlloc, liberata sotto su ogni percorso
+        // (anche in errore la funzione può scriverla: si libera comunque).
+        let hr = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DONT_VERIFY as u32, null_mut(), &mut raw) };
+        let out = if hr >= 0 && !raw.is_null() {
+            // SAFETY: stringa terminata da zero restituita da Windows.
+            let n = (0..).take_while(|&i| unsafe { *raw.add(i) } != 0).count();
+            // SAFETY: `n` u16 leggibili a partire da `raw` (contati sopra).
+            let wide = unsafe { std::slice::from_raw_parts(raw, n) };
+            Some(PathBuf::from(OsString::from_wide(wide)))
+        } else {
+            None
+        };
+        // SAFETY: memoria di SHGetKnownFolderPath (o nulla), liberata una volta.
+        unsafe { CoTaskMemFree(raw as *const c_void) };
+        out
+    }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -896,16 +1063,24 @@ mod win {
             super::list_lnk(dir, recursive)
         }
 
-        fn targets(&self, lnk: &Path) -> Vec<String> {
+        fn targets(&self, lnk: &Path) -> Option<LinkTargets> {
+            // Prima l'intestazione, letta come byte (nessun codice della shell):
+            // un collegamento pubblicizzato o senza `LinkInfo` non si apre con COM.
+            let mut header = [0u8; 0x4C];
+            std::fs::File::open(lnk).ok()?.read_exact(&mut header).ok()?;
+            let flags = super::link_flags(&header)?;
+            if flags & super::SLDF_HAS_DARWINID != 0 || flags & super::SLDF_HAS_LINK_INFO == 0 {
+                return Some(LinkTargets { flags, paths: Vec::new() });
+            }
             // `_apt` dichiarato prima: le interfacce (`Com`) si rilasciano
             // prima di `CoUninitialize`, su ogni percorso di uscita.
-            let Some(_apt) = Apartment::enter() else { return Vec::new() };
+            let _apt = Apartment::enter()?;
             let mut raw: *mut c_void = null_mut();
             // SAFETY: CLSID e IID validi, nessun aggregato, `raw` riceve
             // un'interfaccia IShellLinkW con un riferimento (rilasciato da `Com`).
             let hr = unsafe { CoCreateInstance(&ShellLink, null_mut(), CLSCTX_INPROC_SERVER, &IID_ISHELLLINKW, &mut raw) };
             if hr < 0 || raw.is_null() {
-                return Vec::new();
+                return None;
             }
             let link = Com(raw);
             let mut raw: *mut c_void = null_mut();
@@ -913,33 +1088,42 @@ mod win {
             // `raw` un IPersistFile con un riferimento (rilasciato da `Com`).
             let hr = unsafe { (link.vtbl::<IUnknownVtbl>().query_interface)(link.0, &IID_IPERSISTFILE, &mut raw) };
             if hr < 0 || raw.is_null() {
-                return Vec::new();
+                return None;
             }
             let file = Com(raw);
             let path = wide_path(lnk);
             // SAFETY: `file` è un IPersistFile vivo, percorso terminato da zero,
             // `STGM_READ`: il collegamento si legge e basta.
             if unsafe { (file.vtbl::<IPersistFileVtbl>().load)(file.0, path.as_ptr(), STGM_READ) } < 0 {
-                return Vec::new();
+                return None;
             }
-            let mut out: Vec<String> = Vec::new();
-            for flags in [0u32, SLGP_RAWPATH as u32] {
+            let mut paths: Vec<OsString> = Vec::new();
+            for flag in [0u32, SLGP_RAWPATH as u32] {
                 let mut buf = vec![0u16; 32_768];
                 // SAFETY: `buf` ha `buf.len()` u16 scrivibili e `cch` è quella
                 // lunghezza; `pfd` nullo è ammesso; il risultato è terminato da zero.
                 let hr = unsafe {
-                    (link.vtbl::<IShellLinkWVtbl>().get_path)(link.0, buf.as_mut_ptr(), buf.len() as i32, null_mut(), flags)
+                    (link.vtbl::<IShellLinkWVtbl>().get_path)(link.0, buf.as_mut_ptr(), buf.len() as i32, null_mut(), flag)
                 };
                 if hr != S_OK {
                     continue; // S_FALSE: nessun percorso (URL, shell:, app pacchettizzata).
                 }
                 let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-                let s = String::from_utf16_lossy(&buf[..n]);
-                if !s.trim().is_empty() && !out.contains(&s) {
-                    out.push(s);
+                // Senza conversioni: un surrogato spaiato resta tale e il
+                // collegamento poi non si giudica (`to_str` dà `None`).
+                let s = OsString::from_wide(&buf[..n]);
+                if !s.is_empty() && !paths.contains(&s) {
+                    paths.push(s);
                 }
             }
-            out
+            Some(LinkTargets { flags, paths })
+        }
+
+        fn common_dirs(&self) -> CommonDirs {
+            CommonDirs {
+                start_menu: known_folder(&FOLDERID_CommonStartMenu),
+                public_desktop: known_folder(&FOLDERID_PublicDesktop),
+            }
         }
 
         fn volume_is_fixed(&self, p: &Path) -> bool {
@@ -1011,21 +1195,50 @@ mod tests {
     /// e il tipo di disco sono finti.
     #[derive(Default)]
     struct FakeLinks {
+        /// Destinazioni (testo); i flag sono quelli di un collegamento normale
+        /// (ID-list e `LinkInfo`) se `flags` non dice altro.
         targets: HashMap<PathBuf, Vec<String>>,
+        flags: HashMap<PathBuf, u32>,
+        /// Destinazioni in UTF-16 grezzo (per i nomi non Unicode validi).
+        wide: HashMap<PathBuf, Vec<std::ffi::OsString>>,
         /// Lettere di unità non fisse (rimovibili, di rete, assenti).
         not_fixed: Vec<char>,
+        common: CommonDirs,
     }
+
+    /// `LinkFlags` di un collegamento normale a un file: ID-list e `LinkInfo`.
+    const NORMAL: u32 = 0x1 | SLDF_HAS_LINK_INFO;
 
     impl Shortcuts for FakeLinks {
         fn list(&self, dir: &Path, recursive: bool) -> Vec<PathBuf> {
             list_lnk(dir, recursive)
         }
-        fn targets(&self, lnk: &Path) -> Vec<String> {
-            self.targets.get(lnk).cloned().unwrap_or_default()
+        fn targets(&self, lnk: &Path) -> Option<LinkTargets> {
+            let flags = self.flags.get(lnk).copied().unwrap_or(NORMAL);
+            if let Some(w) = self.wide.get(lnk) {
+                return Some(LinkTargets { flags, paths: w.clone() });
+            }
+            let t = self.targets.get(lnk)?;
+            Some(LinkTargets { flags, paths: t.iter().map(std::ffi::OsString::from).collect() })
         }
         fn volume_is_fixed(&self, p: &Path) -> bool {
             drive_letter(p).is_some_and(|d| !self.not_fixed.contains(&(d as char).to_ascii_uppercase()))
         }
+        fn common_dirs(&self) -> CommonDirs {
+            self.common.clone()
+        }
+    }
+
+    /// Giunzione `link` → `target` (`mklink /J`, nessun privilegio).
+    fn junction(link: &Path, target: &Path) {
+        let st = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(st.success(), "mklink /J");
     }
 
     fn env_in(root: &Path) -> Env {
@@ -1186,8 +1399,8 @@ mod tests {
         // Variabile espansa con l'ambiente fidato.
         sc.targets.insert(on_desktop.clone(), vec![r"%ProgramFiles%\Gioco\gioco.exe".into()]);
 
-        assert_eq!(broken_target(&sc, &env, &broken), Some(gone.clone()));
-        assert_eq!(broken_target(&sc, &env, &fine), None);
+        assert_eq!(broken_target(&sc, &env, &broken, false), Some(gone.clone()));
+        assert_eq!(broken_target(&sc, &env, &fine, false), None);
         let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
         let mut items = found.items.clone();
         items.sort();
@@ -1224,21 +1437,21 @@ mod tests {
             let lnk = dir.join(format!("{name}.lnk"));
             touch(&lnk);
             sc.targets.insert(lnk.clone(), targets.clone());
-            assert_eq!(broken_target(&sc, &env, &lnk), None, "{name}");
+            assert_eq!(broken_target(&sc, &env, &lnk, false), None, "{name}");
         }
         // Gemella WOW64: `%ProgramFiles%` letto a 64 bit, programma a 32 bit.
         let wow = dir.join("wow.lnk");
         touch(&wow);
         touch(&t.path().join("PF86").join("Vecchio").join("app.exe"));
         sc.targets.insert(wow.clone(), vec![t.path().join("PF").join("Vecchio").join("app.exe").to_string_lossy().into_owned()]);
-        assert_eq!(broken_target(&sc, &env, &wow), None, "gemella in Program Files (x86)");
+        assert_eq!(broken_target(&sc, &env, &wow, false), None, "gemella in Program Files (x86)");
         // Una destinazione che esiste fra due lette basta a tenerlo.
         let two = dir.join("due.lnk");
         touch(&two);
         let here = t.path().join("qui.exe");
         touch(&here);
         sc.targets.insert(two.clone(), vec![t.path().join("manca.exe").to_string_lossy().into_owned(), here.to_string_lossy().into_owned()]);
-        assert_eq!(broken_target(&sc, &env, &two), None);
+        assert_eq!(broken_target(&sc, &env, &two, false), None);
 
         let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
         assert_eq!(found.count, 0, "{:?}", found.items);
@@ -1269,7 +1482,13 @@ mod tests {
         }
         sc.targets.insert(healed.clone(), vec![back.to_string_lossy().into_owned()]);
 
-        let found = found_items(&[&broken, &outside, &not_lnk, &deep_desktop, &healed]);
+        // `..` che esce dal menu Start, e un `.lnk` raggiunto da una giunzione nel menu Start.
+        let dotdot = start_menu(&env).join(r"..\..\..\..\..\..\..").join("Altrove").join("Rotto.lnk");
+        let jdir = start_menu(&env).join("Giunzione");
+        junction(&jdir, outside.parent().unwrap());
+        let via_junction = jdir.join("Rotto.lnk");
+        sc.targets.insert(via_junction.clone(), vec![gone.clone()]);
+        let found = found_items(&[&broken, &outside, &not_lnk, &deep_desktop, &healed, &dotdot, &via_junction]);
         let out = clean_shortcuts(&sc, &env, &guard, &found, &AtomicBool::new(false));
         assert!(!broken.exists(), "il collegamento trovato e ancora rotto si cancella");
         assert_eq!(out.removed, 1);
@@ -1277,7 +1496,8 @@ mod tests {
         for p in [&outside, &not_lnk, &deep_desktop, &healed, &not_found] {
             assert!(p.exists(), "{} non si tocca", p.display());
         }
-        assert_eq!(out.failed, 3, "{:?}", out.notes);
+        assert_eq!(out.failed, 5, "{:?}", out.notes);
+        assert_eq!(out.done, vec![broken.to_string_lossy().into_owned()]);
         assert!(out.notes.iter().any(|n| n.contains("Tornato.lnk")), "{:?}", out.notes);
 
         // Annullata prima di cominciare: niente.
@@ -1328,19 +1548,207 @@ mod tests {
             ("programfiles".to_string(), r"C:\Program Files".to_string()),
             ("username".to_string(), "u".to_string()),
         ]));
-        let dirs = shortcut_dirs(&env);
-        let want: Vec<(PathBuf, bool)> = vec![
-            (r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu".into(), true),
-            (r"C:\ProgramData\Microsoft\Windows\Start Menu".into(), true),
-            (r"C:\Users\u\Desktop".into(), false),
-            (r"C:\Users\Public\Desktop".into(), false),
+        let common = CommonDirs {
+            start_menu: Some(r"C:\ProgramData\Microsoft\Windows\Start Menu".into()),
+            public_desktop: Some(r"C:\Users\Public\Desktop".into()),
+        };
+        let (dirs, notes) = shortcut_dirs(&env, &common);
+        let d = |p: &str, recursive: bool, common: bool| ShortcutDir { path: p.into(), recursive, common };
+        let want = vec![
+            d(r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu", true, false),
+            d(r"C:\ProgramData\Microsoft\Windows\Start Menu", true, true),
+            d(r"C:\Users\u\Desktop", false, false),
+            d(r"C:\Users\Public\Desktop", false, true),
         ];
         assert_eq!(dirs, want);
+        assert!(notes.is_empty());
         let guard = Guard::new(&env);
-        for (d, rec) in &dirs {
-            let lnk = if *rec { d.join("Programs").join("App").join("App.lnk") } else { d.join("App.lnk") };
+        for dir in &dirs {
+            let lnk = if dir.recursive { dir.path.join("Programs").join("App").join("App.lnk") } else { dir.path.join("App.lnk") };
             assert_eq!(guard.protected(&lnk), None, "{}", lnk.display());
         }
+    }
+
+    #[test]
+    fn common_folders_come_from_known_folders_or_are_skipped() {
+        // Le variabili `programdata` e `public` non contano: solo `CommonDirs`.
+        let env = Env(HashMap::from([
+            ("appdata".to_string(), r"C:\Users\u\AppData\Roaming".to_string()),
+            ("desktop".to_string(), r"C:\Users\u\Desktop".to_string()),
+            ("programdata".to_string(), r"C:\Finta".to_string()),
+            ("public".to_string(), r"C:\FintoPubblico".to_string()),
+        ]));
+        let common = CommonDirs { start_menu: None, public_desktop: Some(r"\\server\Desktop".into()) };
+        let (dirs, notes) = shortcut_dirs(&env, &common);
+        assert_eq!(dirs.iter().map(|d| d.path.clone()).collect::<Vec<_>>(), vec![
+            PathBuf::from(r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu"),
+            PathBuf::from(r"C:\Users\u\Desktop"),
+        ]);
+        assert_eq!(notes, vec![
+            "Menu Start comune: cartella non trovata, saltata".to_string(),
+            "Desktop pubblico: cartella non trovata, saltata".to_string(),
+        ]);
+        // La nota arriva nel resoconto dell'analisi.
+        let found = analyze_shortcuts(&FakeLinks { common, ..Default::default() }, &env, &Guard::new(&env), &AtomicBool::new(false));
+        assert!(found.detail.iter().any(|l| l.contains("Menu Start comune")), "{:?}", found.detail);
+    }
+
+    #[test]
+    fn per_user_targets_in_common_folders_are_never_listed() {
+        let t = tempfile::tempdir().unwrap();
+        // Profili in `<tmp>\Users`, `%LocalAppData%` fuori dalla radice dei
+        // profili: così la sola variabile per utente basta a escludere.
+        let mut env = env_in(t.path());
+        let users = t.path().join("Users");
+        env.0.insert("userprofile".into(), users.join("u").to_string_lossy().into_owned());
+        env.0.insert("localappdata".into(), t.path().join("Fuori").join("Local").to_string_lossy().into_owned());
+        let common_menu = t.path().join("ProgramData").join(r"Microsoft\Windows\Start Menu");
+        let sc_common = CommonDirs { start_menu: Some(common_menu.clone()), public_desktop: None };
+        let mut sc = FakeLinks { common: sc_common, ..Default::default() };
+        let per_var = common_menu.join("Programs").join("PerUtente.lnk");
+        let in_profile = common_menu.join("Programs").join("NelProfilo.lnk");
+        let shared = common_menu.join("Programs").join("Comune.lnk");
+        for l in [&per_var, &in_profile, &shared] {
+            touch(l);
+        }
+        sc.targets.insert(per_var.clone(), vec![r"%LocalAppData%\Programs\X\x.exe".into()]);
+        // La radice dei profili è la cartella di `userprofile` (qui la tempdir).
+        sc.targets.insert(in_profile.clone(), vec![users.join("altro").join("x.exe").to_string_lossy().into_owned()]);
+        let gone = users.join("Public").join("manca.exe");
+        sc.targets.insert(shared.clone(), vec![gone.to_string_lossy().into_owned()]);
+        assert_eq!(broken_target(&sc, &env, &per_var, true), None);
+        assert_eq!(broken_target(&sc, &env, &in_profile, true), None);
+        assert_eq!(broken_target(&sc, &env, &shared, true), Some(gone));
+        // Nella cartella dell'utente la stessa variabile si giudica.
+        assert!(broken_target(&sc, &env, &per_var, false).is_some());
+        let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
+        assert_eq!(found.items, vec![shared.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn target_behind_a_junction_or_symlink_is_never_missing() {
+        let t = tempfile::tempdir().unwrap();
+        let env = env_in(t.path());
+        let real = t.path().join("Giochi_E");
+        fs::create_dir_all(&real).unwrap();
+        let j = t.path().join("Giochi");
+        junction(&j, &real);
+        fs::remove_dir(&real).unwrap(); // disco «staccato»: la giunzione resta
+        let through = j.join("gioco.exe");
+        assert!(!truly_missing(&through), "giunzione verso una cartella che non c'è");
+        let plain = t.path().join("Vecchio").join("app.exe");
+        assert!(truly_missing(&plain));
+        assert!(truly_missing(&t.path().join("manca.exe")));
+        // Una giunzione viva: il file esiste dall'altra parte, quindi non manca.
+        let alive = t.path().join("vivo");
+        fs::create_dir_all(&alive).unwrap();
+        let j2 = t.path().join("Vivo_j");
+        junction(&j2, &alive);
+        assert!(!truly_missing(&j2.join("assente.exe")), "anche una giunzione viva ferma il giudizio");
+        // `..` e nomi non validi non si giudicano.
+        assert!(!truly_missing(&t.path().join("a").join("..").join("manca.exe")));
+        assert!(!truly_missing(&t.path().join("bad<name>.exe")));
+
+        let lnk = start_menu(&env).join("Gioco.lnk");
+        touch(&lnk);
+        let mut sc = FakeLinks::default();
+        sc.targets.insert(lnk.clone(), vec![through.to_string_lossy().into_owned()]);
+        assert_eq!(broken_target(&sc, &env, &lnk, false), None);
+        let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
+        assert_eq!(found.count, 0);
+        let out = clean_shortcuts(&sc, &env, &Guard::new(&env), &found_items(&[&lnk]), &AtomicBool::new(false));
+        assert!(lnk.exists());
+        assert_eq!(out.removed, 0);
+
+        // Collegamento simbolico verso un UNC che non risponde: solo se si può
+        // creare (modalità sviluppatore o amministratore), altrimenti saltato.
+        let s_unc = t.path().join("s_unc");
+        if std::os::windows::fs::symlink_dir(r"\\host-inesistente.invalid\share", &s_unc).is_ok() {
+            assert!(!truly_missing(&s_unc.join("app.exe")), "symlink verso UNC");
+        }
+    }
+
+    #[test]
+    fn advertised_msi_and_id_list_only_shortcuts_are_never_listed() {
+        let t = tempfile::tempdir().unwrap();
+        let env = env_in(t.path());
+        let gone = t.path().join("manca").join("Icon.exe").to_string_lossy().into_owned();
+        let mut sc = FakeLinks::default();
+        let darwin = start_menu(&env).join("Msi.lnk");
+        let id_only = start_menu(&env).join("App.lnk");
+        let empty = start_menu(&env).join("Vuoto.lnk");
+        let unreadable = start_menu(&env).join("Illeggibile.lnk");
+        for l in [&darwin, &id_only, &empty, &unreadable] {
+            touch(l);
+        }
+        sc.targets.insert(darwin.clone(), vec![gone.clone()]);
+        sc.flags.insert(darwin.clone(), NORMAL | SLDF_HAS_DARWINID);
+        sc.targets.insert(id_only.clone(), vec![gone.clone()]);
+        sc.flags.insert(id_only.clone(), 0x1);
+        sc.targets.insert(empty.clone(), vec!["   ".into()]);
+        assert_eq!(broken_target(&sc, &env, &darwin, false), None, "Darwin");
+        assert_eq!(broken_target(&sc, &env, &id_only, false), None, "solo ID-list");
+        assert_eq!(broken_target(&sc, &env, &empty, false), None, "destinazione vuota");
+        assert_eq!(broken_target(&sc, &env, &unreadable, false), None, "illeggibile");
+        assert_eq!(analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false)).count, 0);
+    }
+
+    #[test]
+    fn link_flags_are_read_from_a_real_header() {
+        let mut h = vec![0u8; 0x4C];
+        h[0] = 0x4C;
+        h[4..20].copy_from_slice(&[0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
+        h[0x14..0x18].copy_from_slice(&0x50ddu32.to_le_bytes()); // flag letti su un collegamento MSI vero
+        assert_eq!(link_flags(&h), Some(0x50dd));
+        assert_ne!(link_flags(&h).unwrap() & SLDF_HAS_DARWINID, 0);
+        let mut bad = h.clone();
+        bad[4] = 0x02;
+        assert_eq!(link_flags(&bad), None, "CLSID diverso");
+        assert_eq!(link_flags(&h[..0x30]), None, "troppo corta");
+        let mut size = h.clone();
+        size[0] = 0x50;
+        assert_eq!(link_flags(&size), None, "HeaderSize diverso");
+    }
+
+    #[test]
+    fn long_or_non_unicode_targets_are_never_listed() {
+        use std::os::windows::ffi::OsStringExt;
+        let t = tempfile::tempdir().unwrap();
+        let env = env_in(t.path());
+        let mut sc = FakeLinks::default();
+        let long = start_menu(&env).join("Lungo.lnk");
+        let odd = start_menu(&env).join("Strano.lnk");
+        touch(&long);
+        touch(&odd);
+        let base = t.path().to_string_lossy().into_owned();
+        // Tante cartelle corte (non un nome troppo lungo): senza il limite
+        // risulterebbe «mancante» (errore 3).
+        let long_target = format!("{base}\\{}app.exe", "cartella\\".repeat(30));
+        sc.targets.insert(long.clone(), vec![long_target]);
+        let mut w: Vec<u16> = format!("{base}\\manca").encode_utf16().collect();
+        w.push(0xD800); // surrogato spaiato
+        w.extend(".exe".encode_utf16());
+        sc.wide.insert(odd.clone(), vec![std::ffi::OsString::from_wide(&w)]);
+        assert_eq!(broken_target(&sc, &env, &long, false), None, "≥ MAX_PATH: forse troncato");
+        assert_eq!(broken_target(&sc, &env, &odd, false), None, "non Unicode valido");
+        // Lunghezza appena sotto il limite: si giudica.
+        let ok = start_menu(&env).join("Giusto.lnk");
+        touch(&ok);
+        let pad = MAX_TARGET_LEN - 1 - base.encode_utf16().count() - "\\.exe".len();
+        let short = format!("{base}\\{}.exe", "y".repeat(pad));
+        assert_eq!(short.encode_utf16().count(), MAX_TARGET_LEN - 1);
+        sc.targets.insert(ok.clone(), vec![short]);
+        assert!(broken_target(&sc, &env, &ok, false).is_some());
+    }
+
+    #[test]
+    fn parent_dir_components_never_match_a_folder() {
+        let dir = Path::new(r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu");
+        let evil = Path::new(r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\..\..\..\..\..\..\Altrove\Vittima.lnk");
+        assert!(!strictly_under(evil, dir));
+        assert!(strictly_under(&dir.join("Programs").join("A.lnk"), dir));
+        assert!(!same_path(Path::new(r"C:\Users\u\Desktop\x\.."), Path::new(r"C:\Users\u\Desktop\x\..")));
+        assert!(same_path(Path::new(r"C:\Users\u\Desktop"), Path::new(r"c:\users\U\desktop")));
     }
 
     #[test]
