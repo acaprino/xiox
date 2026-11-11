@@ -19,7 +19,7 @@ use pc_rules::{
     CollectCtl, Env, Guard, Opt, Origin, RegItem, RegRoot,
 };
 
-use crate::sys;
+use crate::{regbackup, sys};
 
 /// Titolo del gruppo dei cleaner inglobati.
 pub const EMBEDDED_GROUP: &str = "Sviluppo e AI";
@@ -690,23 +690,17 @@ pub trait RegBackend {
     fn export(&self, root: RegRoot, path: &str, out: &Path) -> Result<(), String>;
 }
 
-/// Quanti nomi `<stem>_N.reg` si provano prima di arrendersi.
-const MAX_BACKUP_NAMES: u32 = 1000;
-
-/// Scrive in `dest` un `.reg` con tutte le chiavi esistenti di `items`.
+/// Scrive in `dest` un `.reg` con tutte le chiavi esistenti di `items`, con
+/// l'esportazione sicura di [`regbackup::write_backup`] (cartella di lavoro
+/// `work`, destinazione che non sia un collegamento, nomi `<stem>_N.reg` mai
+/// sovrascritti, `Err` se una chiave non si esporta).
 ///
 /// - Una voce che non si sa se esista fa fallire tutto (nessuna cancellazione).
 /// - Nessuna voce esistente: nessun file (`path: None`).
-/// - `dest` dev'essere una cartella vera, non un collegamento o una giunzione.
-/// - Le esportazioni vanno in una cartella di lavoro nuova data da `work`
-///   (in produzione solo per amministratori, nome casuale); se non si ottiene
-///   il backup fallisce. La cartella e i suoi file si tolgono alla fine.
-/// - Il file finale si crea con `create_new`: `<stem>.reg`, poi `<stem>_2.reg`,
-///   `<stem>_3.reg`… (mai sovrascritto).
 pub fn backup_to(
     dest: &Path,
     stem: &str,
-    work: &dyn Fn() -> Result<PathBuf, String>,
+    work: &regbackup::WorkDir,
     be: &dyn RegBackend,
     items: &[RegItem],
 ) -> Result<Backup, String> {
@@ -714,7 +708,7 @@ pub fn backup_to(
         .iter()
         .map(|i| be.exists(i).map_err(|e| format!("{}: {e}", reg_text(i))))
         .collect::<Result<Vec<bool>, String>>()?;
-    let mut keys: Vec<(RegRoot, String)> = items
+    let keys: Vec<(RegRoot, String)> = items
         .iter()
         .zip(&present)
         .filter(|(_, p)| **p)
@@ -723,79 +717,9 @@ pub fn backup_to(
             (root, path.to_string())
         })
         .collect();
-    keys.sort_by_key(|(r, p)| (root_name(*r), p.to_lowercase()));
-    keys.dedup_by(|a, b| a.0 == b.0 && a.1.eq_ignore_ascii_case(&b.1));
-    if keys.is_empty() {
-        return Ok(Backup { path: None, present });
-    }
-    check_real_dir(dest)?;
-    let dir = work()?;
-    let mut tmp_files = Vec::new();
-    let text = export_all(&keys, &dir, be, &mut tmp_files);
-    for f in &tmp_files {
-        // `remove_file` toglie un collegamento come collegamento.
-        let _ = std::fs::remove_file(f);
-    }
-    let _ = std::fs::remove_dir(&dir);
-    let text = text?;
-    let mut data = vec![0xFF, 0xFE];
-    for w in text.encode_utf16() {
-        data.extend_from_slice(&w.to_le_bytes());
-    }
-    check_real_dir(dest)?;
-    let path = write_new(dest, stem, &data)?;
-    Ok(Backup { path: Some(path), present })
-}
-
-fn export_all(
-    keys: &[(RegRoot, String)],
-    dir: &Path,
-    be: &dyn RegBackend,
-    tmp_files: &mut Vec<PathBuf>,
-) -> Result<String, String> {
-    let mut text = String::from("Windows Registry Editor Version 5.00\r\n");
-    for (n, (root, path)) in keys.iter().enumerate() {
-        let tmp = dir.join(format!("{n}.reg"));
-        tmp_files.push(tmp.clone());
-        let full = format!("{}\\{path}", root_name(*root));
-        be.export(*root, path, &tmp).map_err(|e| format!("{full} non esportata: {e}"))?;
-        let bytes = std::fs::read(&tmp).map_err(|e| format!("{full}: {e}"))?;
-        let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
-        let s = String::from_utf16_lossy(&words);
-        let s = s.trim_start_matches('\u{feff}');
-        let body = s.split_once('\n').map(|x| x.1).unwrap_or("");
-        text.push_str(body);
-    }
-    Ok(text)
-}
-
-/// `Ok` se `dir` è una cartella vera (non un collegamento né una giunzione).
-fn check_real_dir(dir: &Path) -> Result<(), String> {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let md = std::fs::symlink_metadata(dir).map_err(|e| format!("cartella dei backup {}: {e}", dir.display()))?;
-    if md.file_type().is_symlink() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !md.is_dir() {
-        return Err(format!("cartella dei backup non valida (collegamento?): {}", dir.display()));
-    }
-    Ok(())
-}
-
-/// Crea `<stem>.reg` (o `<stem>_N.reg`) in `dir` senza mai sovrascrivere.
-fn write_new(dir: &Path, stem: &str, data: &[u8]) -> Result<PathBuf, String> {
-    use std::io::Write;
-    for n in 1..=MAX_BACKUP_NAMES {
-        let name = if n == 1 { format!("{stem}.reg") } else { format!("{stem}_{n}.reg") };
-        let path = dir.join(name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                f.write_all(data).map_err(|e| format!("{}: {e}", path.display()))?;
-                return Ok(path);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        }
-    }
-    Err("troppi backup con lo stesso nome".into())
+    let export = |root: RegRoot, path: &str, out: &Path| be.export(root, path, out);
+    let path = regbackup::write_backup(dest, stem, work, &export, &keys)?;
+    Ok(Backup { path, present })
 }
 
 /// Il registro vero.
@@ -804,7 +728,7 @@ pub struct RealRegistry;
 impl RuleRegistry for RealRegistry {
     fn backup(&self, items: &[RegItem]) -> Result<Backup, String> {
         let stem = format!("backup_regole_{}", sys::stamp());
-        backup_to(&sys::data_dir(), &stem, &win::admin_work_dir, &win::RealBackend, items)
+        backup_to(&sys::data_dir(), &stem, &regbackup::admin_work_dir, &win::RealBackend, items)
     }
     fn delete(&self, item: &RegItem) -> Result<bool, String> {
         win::delete(item)
@@ -860,7 +784,7 @@ pub fn enum_verdict(rc: u32) -> Option<bool> {
 }
 
 mod win {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::OnceLock;
 
     use pc_rules::{RegItem, RegRoot};
@@ -877,10 +801,9 @@ mod win {
         HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_READ,
         KEY_SET_VALUE, KEY_WOW64_64KEY, REG_LINK, REG_OPTION_OPEN_LINK,
     };
-    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    use super::{classes_link_ok, enum_verdict, reg_parts, reg_text, root_name, split_parent, RegBackend};
+    use super::{classes_link_ok, enum_verdict, reg_parts, reg_text, split_parent, RegBackend};
 
     /// Diritto standard `DELETE` (serve a `RegDeleteTreeW` sulla chiave padre).
     const DELETE: u32 = 0x0001_0000;
@@ -1149,14 +1072,6 @@ mod win {
         }
     }
 
-    /// `%SystemRoot%\System32` da `GetSystemDirectoryW`.
-    fn system_dir() -> Option<PathBuf> {
-        let mut buf = [0u16; 520];
-        // SAFETY: buffer e dimensione validi.
-        let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
-        (n > 0 && n < buf.len()).then(|| PathBuf::from(String::from_utf16_lossy(&buf[..n])))
-    }
-
     /// Il registro vero per il backup: esistenza con [`open_chain`] (la
     /// stessa apertura della pulizia), esportazione con il `reg.exe` di sistema
     /// (percorso assoluto), vista a 64 bit.
@@ -1167,57 +1082,8 @@ mod win {
             exists(item)
         }
         fn export(&self, root: RegRoot, path: &str, out: &Path) -> Result<(), String> {
-            let reg = system_dir().map(|d| d.join("reg.exe")).filter(|p| p.is_file()).ok_or("reg.exe non trovato")?;
-            let full = format!("{}\\{path}", root_name(root));
-            let mut cmd = std::process::Command::new(&reg);
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-            }
-            let st = cmd
-                .args(["export", &full])
-                .arg(out)
-                .args(["/y", "/reg:64"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|e| e.to_string())?;
-            if st.success() {
-                Ok(())
-            } else {
-                Err(format!("reg.exe terminato con codice {}", st.code().unwrap_or(-1)))
-            }
+            crate::regbackup::reg_exe_export(root, path, out)
         }
-    }
-
-    /// Cartella di lavoro nuova per l'esportazione: `%ProgramData%\PulisciPC\tmp\<casuale>`,
-    /// modificabile solo dagli amministratori (`updater::secure_dir`, che
-    /// rifiuta collegamenti nel percorso e verifica l'ACL). Se non si riesce
-    /// il backup fallisce: niente esportazioni in una cartella dell'utente.
-    pub fn admin_work_dir() -> Result<PathBuf, String> {
-        let app = pc_rules::updater::data_dir();
-        let base = app.parent().ok_or("cartella dati senza padre")?.join("tmp");
-        pc_rules::updater::secure_dir(&base).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
-        let dir = base.join(random_name());
-        if dir.exists() {
-            return Err("cartella di lavoro già esistente".into());
-        }
-        pc_rules::updater::secure_dir(&dir).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
-        Ok(dir)
-    }
-
-    /// Nome difficile da indovinare (hash casuale della libreria standard,
-    /// processo e ora).
-    fn random_name() -> String {
-        use std::hash::{BuildHasher, Hasher};
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u32(std::process::id());
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
-        let a = h.finish();
-        let mut h2 = std::collections::hash_map::RandomState::new().build_hasher();
-        h2.write_u64(a);
-        format!("reg-{a:016x}{:016x}", h2.finish())
     }
 
     pub fn processes() -> Vec<String> {

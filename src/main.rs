@@ -2,6 +2,7 @@
 
 mod cleaner;
 mod dev;
+mod regbackup;
 mod registry;
 mod rules;
 mod services;
@@ -37,7 +38,8 @@ enum RegMsg {
     Progress(String, f32),
     Found(Vec<registry::Issue>),
     Done,
-    Fixed { ok: usize, failed: usize, backup: Option<String> },
+    /// `refused`: backup chiesto e non riuscito (il motivo); allora nessuna riparazione.
+    Fixed { ok: usize, failed: usize, backup: Option<String>, refused: Option<String> },
 }
 
 enum SvcMsg {
@@ -283,27 +285,19 @@ impl App {
         self.reg_job = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(RegMsg::Progress("Salvataggio del backup…".into(), 0.0));
-            let backup = if with_backup {
-                let refs: Vec<&registry::Issue> = chosen.iter().collect();
-                registry::backup(&refs).ok().map(|p| p.to_string_lossy().to_string())
-            } else {
-                None
-            };
-            let (mut ok, mut failed) = (0, 0);
+            if with_backup {
+                let _ = tx.send(RegMsg::Progress("Salvataggio del backup…".into(), 0.0));
+            }
             let total = chosen.len().max(1) as f32;
-            for (k, issue) in chosen.iter().enumerate() {
+            // Backup chiesto e non riuscito: non si ripara nulla.
+            let out = registry::fix_all(&chosen, with_backup, &registry::backup, &mut registry::apply, &mut |k| {
                 if k % 20 == 0 {
                     let _ = tx.send(RegMsg::Progress("Riparazione in corso…".into(), k as f32 / total));
                     ctx.request_repaint();
                 }
-                if registry::apply(&issue.fix) {
-                    ok += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            let _ = tx.send(RegMsg::Fixed { ok, failed, backup });
+            });
+            let backup = out.backup.map(|p| p.to_string_lossy().to_string());
+            let _ = tx.send(RegMsg::Fixed { ok: out.ok, failed: out.failed, backup, refused: out.refused });
             ctx.request_repaint();
         });
     }
@@ -378,7 +372,11 @@ impl App {
                     }
                     RegMsg::Found(v) => self.issues.extend(v),
                     RegMsg::Done => done = true,
-                    RegMsg::Fixed { ok, failed, backup } => {
+                    RegMsg::Fixed { refused: Some(why), .. } => {
+                        self.reg_msg = format!("Backup del registro non riuscito ({why}): nessuna riparazione eseguita.");
+                        done = true;
+                    }
+                    RegMsg::Fixed { ok, failed, backup, refused: None } => {
                         self.reg_msg = format!("Riparati {ok} problemi.");
                         if failed > 0 {
                             self.reg_msg.push_str(&format!(" {failed} non riparati (servono i diritti di amministratore)."));

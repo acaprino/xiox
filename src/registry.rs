@@ -1,7 +1,7 @@
 //! Registry scanner. Categories and keys from MECHANICS.md section 2.
 
-use crate::sys;
-use std::path::Path;
+use crate::{regbackup, sys};
+use std::path::{Path, PathBuf};
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -16,6 +16,12 @@ impl Root {
         match self {
             Root::Hkcu => "HKCU",
             Root::Hklm => "HKLM",
+        }
+    }
+    fn rule_root(self) -> pc_rules::RegRoot {
+        match self {
+            Root::Hkcu => pc_rules::RegRoot::Hkcu,
+            Root::Hklm => pc_rules::RegRoot::Hklm,
         }
     }
     fn key(self) -> RegKey {
@@ -362,36 +368,90 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
     out
 }
 
-/// Writes one .reg file with every key the fixes touch (via `reg export`). Returns its path.
-pub fn backup(issues: &[&Issue]) -> Result<std::path::PathBuf, String> {
-    let dir = sys::data_dir();
-    let out = dir.join(format!("backup_registro_{}.reg", sys::stamp()));
-    let tmp = dir.join("export_tmp.reg");
-    let mut keys: Vec<(Root, String)> = issues.iter().map(|i| i.fix.export_key()).collect();
-    keys.sort_by(|a, b| (a.0.short(), &a.1).cmp(&(b.0.short(), &b.1)));
-    keys.dedup();
-    let mut text = String::from("Windows Registry Editor Version 5.00\r\n");
-    for (root, path) in keys {
-        let _ = std::fs::remove_file(&tmp);
-        let full = format!("{}\\{}", root.short(), path);
-        let st = sys::hidden_cmd("reg").args(["export", &full]).arg(&tmp).arg("/y").status();
-        if !matches!(st, Ok(s) if s.success()) {
-            continue;
+/// Backup `.reg` delle chiavi che le riparazioni toccano, in
+/// `Documenti\PulisciPC\backup_registro_<stamp>.reg` (`_2`, `_3`… se il nome
+/// c'è già), con l'esportazione sicura di [`regbackup`]. `Ok(None)` se nessuna
+/// chiave esiste più. `Err` se anche una sola chiave esistente non si salva:
+/// allora non si ripara nulla (vedi [`fix_all`]).
+pub fn backup(issues: &[&Issue]) -> Result<Option<PathBuf>, String> {
+    let stem = format!("backup_registro_{}", sys::stamp());
+    backup_to(&sys::data_dir(), &stem, &regbackup::admin_work_dir, &key_exists, &regbackup::reg_exe_export, issues)
+}
+
+/// Come [`backup`], con cartelle, esistenza delle chiavi ed esportazione
+/// iniettate. Una chiave che non si sa se esista fa fallire tutto; una che non
+/// c'è si salta.
+pub fn backup_to(
+    dest: &Path,
+    stem: &str,
+    work: &regbackup::WorkDir,
+    exists: &dyn Fn(Root, &str) -> Result<bool, String>,
+    export: &regbackup::Export,
+    issues: &[&Issue],
+) -> Result<Option<PathBuf>, String> {
+    let mut keys = Vec::new();
+    for issue in issues {
+        let (root, path) = issue.fix.export_key();
+        let full = format!("{}\\{path}", root.short());
+        if exists(root, &path).map_err(|e| format!("{full}: {e}"))? {
+            keys.push((root.rule_root(), path));
         }
-        let Ok(bytes) = std::fs::read(&tmp) else { continue };
-        let words: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-        let s = String::from_utf16_lossy(&words);
-        let s = s.trim_start_matches('\u{feff}');
-        let body = s.split_once('\n').map(|x| x.1).unwrap_or("");
-        text.push_str(body);
     }
-    let _ = std::fs::remove_file(&tmp);
-    let mut data = vec![0xFF, 0xFE];
-    for w in text.encode_utf16() {
-        data.extend_from_slice(&w.to_le_bytes());
+    regbackup::write_backup(dest, stem, work, export, &keys)
+}
+
+/// Esistenza vera di una chiave (sola lettura, vista a 64 bit): `Err` se non
+/// si apre per un motivo diverso da «non trovata».
+fn key_exists(root: Root, path: &str) -> Result<bool, String> {
+    match root.key().open_subkey_with_flags(path, KEY_READ | KEY_WOW64_64KEY) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.to_string()),
     }
-    std::fs::write(&out, data).map_err(|e| e.to_string())?;
-    Ok(out)
+}
+
+/// Backup delle chiavi di una riparazione (in produzione [`backup`]).
+pub type BackupFn<'a> = dyn Fn(&[&Issue]) -> Result<Option<PathBuf>, String> + 'a;
+
+/// Esito di una riparazione.
+#[derive(Debug, Default)]
+pub struct FixOutcome {
+    pub ok: usize,
+    pub failed: usize,
+    pub backup: Option<PathBuf>,
+    /// Backup chiesto e non riuscito: il motivo. Allora non si è riparato nulla.
+    pub refused: Option<String>,
+}
+
+/// Ripara `chosen`. Con `with_backup` prima chiama `backup`: se fallisce non si
+/// ripara nulla e `refused` dice perché. `progress(k)` prima della voce `k`.
+pub fn fix_all(
+    chosen: &[Issue],
+    with_backup: bool,
+    backup: &BackupFn,
+    apply: &mut dyn FnMut(&Fix) -> bool,
+    progress: &mut dyn FnMut(usize),
+) -> FixOutcome {
+    let mut out = FixOutcome::default();
+    if with_backup {
+        let refs: Vec<&Issue> = chosen.iter().collect();
+        match backup(&refs) {
+            Ok(path) => out.backup = path,
+            Err(e) => {
+                out.refused = Some(e);
+                return out;
+            }
+        }
+    }
+    for (k, issue) in chosen.iter().enumerate() {
+        progress(k);
+        if apply(&issue.fix) {
+            out.ok += 1;
+        } else {
+            out.failed += 1;
+        }
+    }
+    out
 }
 
 pub fn apply(fix: &Fix) -> bool {
@@ -421,6 +481,204 @@ mod tests {
         assert_eq!(extract_path("C:\\x\\y.dll,-100").as_deref(), Some("C:\\x\\y.dll"));
         assert_eq!(extract_path("mscoree.dll"), None);
         assert_eq!(extract_path("C:\\a\\b.exe.FriendlyAppName").as_deref(), Some("C:\\a\\b.exe"));
+    }
+}
+
+/// Backup e riparazione con registro, esportazione e cartelle finti: nessun
+/// test tocca il registro vero o `%ProgramData%`.
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn issue(root: Root, path: &str, value: Option<&str>) -> Issue {
+        let fix = match value {
+            Some(v) => Fix::DeleteValue { root, path: path.into(), value: v.into() },
+            None => Fix::DeleteKey { root, path: path.into() },
+        };
+        Issue { category: 0, problem: "p".into(), data: "d".into(), fix, selected: true }
+    }
+
+    /// Esportazione finta: scrive un `.reg` UTF-16 come `reg.exe`.
+    fn fake_export(root: pc_rules::RegRoot, path: &str, out: &Path) -> Result<(), String> {
+        let text = format!(
+            "Windows Registry Editor Version 5.00\r\n\r\n[{}\\{path}]\r\n\"x\"=\"1\"\r\n",
+            crate::regbackup::root_name(root)
+        );
+        let mut data = vec![0xFF, 0xFE];
+        for w in text.encode_utf16() {
+            data.extend_from_slice(&w.to_le_bytes());
+        }
+        fs::write(out, data).map_err(|e| e.to_string())
+    }
+
+    fn all_exist(_: Root, _: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    /// Cartella di lavoro finta (in produzione: solo amministratori, nome casuale).
+    fn work_in(root: &Path) -> impl Fn() -> Result<PathBuf, String> + '_ {
+        move || {
+            for n in 0.. {
+                let d = root.join(format!("work{n}"));
+                if fs::create_dir(&d).is_ok() {
+                    return Ok(d);
+                }
+            }
+            unreachable!()
+        }
+    }
+
+    fn reg_text(p: &Path) -> String {
+        let b = fs::read(p).unwrap();
+        let w: Vec<u16> = b[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        String::from_utf16(&w).unwrap()
+    }
+
+    fn dirs(t: &Path) -> (PathBuf, PathBuf) {
+        let dest = t.join("Documenti");
+        let work = t.join("admin");
+        fs::create_dir_all(&dest).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        (dest, work)
+    }
+
+    #[test]
+    fn two_registry_backups_in_the_same_second_get_two_files() {
+        let t = tempfile::tempdir().unwrap();
+        let (dest, work_root) = dirs(t.path());
+        let work = work_in(&work_root);
+        let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
+        let b = issue(Root::Hklm, r"SOFTWARE\FakeApp", Some("Mru"));
+        let stem = "backup_registro_20261111_120000";
+        let p1 = backup_to(&dest, stem, &work, &all_exist, &fake_export, &[&a]).unwrap().unwrap();
+        let p2 = backup_to(&dest, stem, &work, &all_exist, &fake_export, &[&b]).unwrap().unwrap();
+        assert_ne!(p1, p2);
+        assert_eq!(p1.file_name().unwrap(), "backup_registro_20261111_120000.reg");
+        assert_eq!(p2.file_name().unwrap(), "backup_registro_20261111_120000_2.reg");
+        assert!(reg_text(&p1).contains(r"[HKCU\Software\FakeApp\A]"));
+        assert!(reg_text(&p2).contains(r"[HKLM\SOFTWARE\FakeApp]"));
+        // Né cartelle di lavoro né temporanei restano.
+        assert_eq!(fs::read_dir(&work_root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn registry_backup_fails_closed_when_a_key_does_not_export() {
+        let t = tempfile::tempdir().unwrap();
+        let (dest, work_root) = dirs(t.path());
+        let work = work_in(&work_root);
+        let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
+        let b = issue(Root::Hkcu, r"Software\FakeApp\B", None);
+        let export = |root: pc_rules::RegRoot, path: &str, out: &Path| {
+            if path.ends_with('B') { Err("accesso negato".to_string()) } else { fake_export(root, path, out) }
+        };
+        let r = backup_to(&dest, "b", &work, &all_exist, &export, &[&a, &b]);
+        assert!(r.as_ref().is_err_and(|e| e.contains(r"HKCU\Software\FakeApp\B")), "{r:?}");
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&work_root).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn registry_backup_fails_closed_without_an_admin_work_folder() {
+        let t = tempfile::tempdir().unwrap();
+        let (dest, _) = dirs(t.path());
+        let no_work = || Err::<PathBuf, String>("cartella di lavoro non protetta".into());
+        let exported = Cell::new(0);
+        let export = |root: pc_rules::RegRoot, path: &str, out: &Path| {
+            exported.set(exported.get() + 1);
+            fake_export(root, path, out)
+        };
+        let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
+        assert!(backup_to(&dest, "b", &no_work, &all_exist, &export, &[&a]).is_err());
+        assert_eq!(exported.get(), 0);
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    /// Una chiave che non si sa se esista (errore di apertura) fa fallire il
+    /// backup; una che non c'è si salta (non c'è niente da riparare).
+    #[test]
+    fn registry_backup_checks_existence_strictly() {
+        let t = tempfile::tempdir().unwrap();
+        let (dest, work_root) = dirs(t.path());
+        let work = work_in(&work_root);
+        let gone = issue(Root::Hkcu, r"Software\FakeApp\Gone", None);
+        let broken = issue(Root::Hkcu, r"Software\FakeApp\Broken", None);
+        let exists = |_: Root, p: &str| match p {
+            r"Software\FakeApp\Gone" => Ok(false),
+            r"Software\FakeApp\Broken" => Err("accesso negato".to_string()),
+            _ => Ok(true),
+        };
+        assert_eq!(backup_to(&dest, "b", &work, &exists, &fake_export, &[&gone]), Ok(None));
+        assert!(backup_to(&dest, "b", &work, &exists, &fake_export, &[&gone, &broken]).is_err());
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn registry_backup_refuses_a_destination_that_is_a_link() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("altrove");
+        fs::create_dir_all(&target).unwrap();
+        let dest = t.path().join("Documenti");
+        let ok = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&dest)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("giunzione non creata: test saltato");
+            return;
+        }
+        let work = work_in(t.path());
+        let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
+        let r = backup_to(&dest, "b", &work, &all_exist, &fake_export, &[&a]);
+        assert!(r.is_err(), "{r:?}");
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    }
+
+    /// Backup chiesto e non riuscito: nessuna riparazione, e il motivo.
+    #[test]
+    fn failed_backup_stops_the_repair() {
+        let chosen = vec![issue(Root::Hkcu, r"Software\FakeApp\A", None)];
+        let applied = RefCell::new(Vec::new());
+        let out = fix_all(
+            &chosen,
+            true,
+            &|_| Err("reg.exe terminato con codice 1".to_string()),
+            &mut |f| {
+                applied.borrow_mut().push(f.key_text());
+                true
+            },
+            &mut |_| {},
+        );
+        assert!(applied.borrow().is_empty());
+        assert_eq!((out.ok, out.failed, out.backup.clone()), (0, 0, None));
+        assert!(out.refused.as_deref().is_some_and(|r| r.contains("reg.exe terminato con codice 1")), "{:?}", out.refused);
+    }
+
+    #[test]
+    fn repair_runs_after_a_good_backup_or_without_one() {
+        let chosen = vec![
+            issue(Root::Hkcu, r"Software\FakeApp\A", None),
+            issue(Root::Hkcu, r"Software\FakeApp\B", Some("v")),
+        ];
+        let backups = Cell::new(0);
+        let backup = |_: &[&Issue]| {
+            backups.set(backups.get() + 1);
+            Ok(Some(PathBuf::from(r"C:\finto\backup_registro_x.reg")))
+        };
+        let mut n = 0;
+        let out = fix_all(&chosen, true, &backup, &mut |_| { n += 1; n == 1 }, &mut |_| {});
+        assert_eq!((out.ok, out.failed, out.refused.clone()), (1, 1, None));
+        assert_eq!(out.backup, Some(PathBuf::from(r"C:\finto\backup_registro_x.reg")));
+        assert_eq!(backups.get(), 1);
+        // Senza backup chiesto: non si chiama e si ripara come prima.
+        let out = fix_all(&chosen, false, &backup, &mut |_| true, &mut |_| {});
+        assert_eq!((out.ok, out.failed, out.backup, out.refused), (2, 0, None, None));
+        assert_eq!(backups.get(), 1);
     }
 }
 
