@@ -7,6 +7,11 @@
 //! - I file temporanei vanno in una cartella di lavoro nuova, solo per
 //!   amministratori e con nome casuale (`%ProgramData%\PulisciPC\tmp\<casuale>`,
 //!   protetta con `updater::secure_dir`); se non si ottiene, il backup fallisce.
+//!   Un processo non elevato usa invece una cartella nuova dell'utente
+//!   ([`work_dir`], [`user_work_dir`]).
+//! - I backup con segreti (password FTP cifrate) vanno in
+//!   `%LOCALAPPDATA%\PulisciPC\backup` con l'ACL solo per l'utente, SYSTEM e
+//!   gli amministratori ([`private_backup_dir`]).
 //! - Il file finale va nella cartella di destinazione (`Documenti\PulisciPC`)
 //!   solo se è una cartella vera (né collegamento né giunzione), con
 //!   `create_new`: `<stem>.reg`, poi `<stem>_2.reg`, `<stem>_3.reg`… mai
@@ -172,6 +177,101 @@ pub fn admin_work_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Cartella di lavoro per l'esportazione adatta al processo: con i diritti
+/// di amministratore [`admin_work_dir`] (un utente non elevato non deve poter
+/// preparare collegamenti dove scrive un processo elevato); senza, una
+/// cartella nuova dell'utente stesso ([`user_work_dir`]): lì nessun confine di
+/// privilegi da difendere, e il backup del PATH utente si fa anche senza
+/// elevazione.
+pub fn work_dir() -> Result<PathBuf, String> {
+    if crate::sys::is_admin() {
+        admin_work_dir()
+    } else {
+        user_work_dir()
+    }
+}
+
+/// `%LOCALAPPDATA%\PulisciPC\tmp\<casuale>` (cartella nota, non la variabile),
+/// nuova, senza collegamenti nel percorso. Solo per un processo **non**
+/// elevato (vedi [`work_dir`]).
+pub fn user_work_dir() -> Result<PathBuf, String> {
+    let local = crate::sysclean::local_app_data_dir().ok_or("cartella AppData\\Local non trovata")?;
+    let base = local.join("PulisciPC").join("tmp");
+    if has_link_in_chain(&base) {
+        return Err("cartella di lavoro dietro un collegamento".into());
+    }
+    std::fs::create_dir_all(&base).map_err(|e| format!("cartella di lavoro {}: {e}", base.display()))?;
+    check_real_dir(&base)?;
+    let dir = base.join(random_name());
+    // `create_dir` (non `_all`): fallisce se esiste già.
+    std::fs::create_dir(&dir).map_err(|e| format!("cartella di lavoro {}: {e}", dir.display()))?;
+    check_real_dir(&dir)?;
+    Ok(dir)
+}
+
+/// Cartella dei backup che contengono segreti (le password FTP cifrate):
+/// `%LOCALAPPDATA%\PulisciPC\backup`, fuori da `Documenti` (spesso
+/// sincronizzata con OneDrive) e non sincronizzata, con l'ACL ristretta
+/// all'utente `user_sid`, a SYSTEM e agli amministratori ([`private_dir`]).
+pub fn private_backup_dir(user_sid: &str) -> Result<PathBuf, String> {
+    let local = crate::sysclean::local_app_data_dir().ok_or("cartella AppData\\Local non trovata")?;
+    let dir = local.join("PulisciPC").join("backup");
+    private_dir(&dir, user_sid)?;
+    Ok(dir)
+}
+
+/// Argomenti di `icacls` che lasciano `dir` solo all'utente `user_sid`, a
+/// SYSTEM e agli amministratori: niente ereditarietà, controllo completo
+/// (anche per file e sottocartelle) solo a loro tre, SID e mai nomi.
+pub fn private_icacls_args(dir: &Path, user_sid: &str) -> Vec<std::ffi::OsString> {
+    let mut a = vec![dir.as_os_str().to_os_string()];
+    let user = format!("*{user_sid}:(OI)(CI)F");
+    for s in ["/inheritance:r", "/grant:r", &user, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "/Q"] {
+        a.push(s.into());
+    }
+    a
+}
+
+/// Crea `dir` (se manca) e ne restringe l'ACL con l'`icacls.exe` di sistema
+/// ([`private_icacls_args`]). Rifiuta un collegamento nel percorso; se
+/// `icacls` non riesce: `Err` (il backup non si fa).
+pub fn private_dir(dir: &Path, user_sid: &str) -> Result<(), String> {
+    if user_sid.is_empty() || !user_sid.starts_with("S-1-") || !user_sid.bytes().all(|b| b.is_ascii_digit() || b == b'-' || b == b'S') {
+        return Err(format!("SID dell'utente non valido: {user_sid}"));
+    }
+    if has_link_in_chain(dir) {
+        return Err(format!("cartella dei backup dietro un collegamento: {}", dir.display()));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("cartella dei backup {}: {e}", dir.display()))?;
+    check_real_dir(dir)?;
+    let icacls = system_dir().map(|d| d.join("icacls.exe")).filter(|p| p.is_file()).ok_or("icacls.exe non trovato")?;
+    let mut cmd = std::process::Command::new(&icacls);
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let st = cmd
+        .args(private_icacls_args(dir, user_sid))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("icacls.exe: {e}"))?;
+    if !st.success() {
+        return Err(format!("permessi della cartella dei backup non impostati (icacls, codice {})", st.code().unwrap_or(-1)));
+    }
+    check_real_dir(dir)
+}
+
+/// `true` se `path` o una cartella che lo contiene (fra quelle che esistono)
+/// è un collegamento o una giunzione.
+fn has_link_in_chain(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    path.ancestors().any(|p| {
+        std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink() || m.file_attributes() & 0x400 != 0)
+    })
+}
+
 /// Nome difficile da indovinare (hash casuale della libreria standard,
 /// processo e ora).
 fn random_name() -> String {
@@ -183,4 +283,41 @@ fn random_name() -> String {
     let mut h2 = std::collections::hash_map::RandomState::new().build_hasher();
     h2.write_u64(a);
     format!("reg-{a:016x}{:016x}", h2.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_dir_acl_is_only_user_system_and_administrators() {
+        let args: Vec<String> = private_icacls_args(Path::new(r"C:\Users\me\AppData\Local\PulisciPC\backup"), "S-1-5-21-1-2-3-1001")
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                r"C:\Users\me\AppData\Local\PulisciPC\backup",
+                "/inheritance:r",
+                "/grant:r",
+                "*S-1-5-21-1-2-3-1001:(OI)(CI)F",
+                "*S-1-5-18:(OI)(CI)F",
+                "*S-1-5-32-544:(OI)(CI)F",
+                "/Q",
+            ]
+        );
+        // Mai Users (S-1-5-32-545) né Everyone (S-1-1-0).
+        assert!(!args.iter().any(|a| a.contains("S-1-5-32-545") || a.contains("S-1-1-0")));
+    }
+
+    #[test]
+    fn private_dir_refuses_a_bad_sid_before_touching_the_disk() {
+        let dir = Path::new(r"Z:\non\esiste\mai");
+        for sid in ["", "Everyone", "S-1-5-21-1:(OI)(CI)F", "*S-1-1-0", "S-1-5 /grant"] {
+            let e = private_dir(dir, sid).unwrap_err();
+            assert!(e.contains("SID"), "{sid}: {e}");
+        }
+        assert!(!dir.exists());
+    }
 }

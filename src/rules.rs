@@ -473,6 +473,25 @@ pub fn native_warnings(items: &[&NativeItem]) -> Vec<String> {
         .collect()
 }
 
+/// Una riga per ogni voce con `needs_preview` scelta: con «Pulizia» agisce
+/// solo su ciò che l'ultima Analisi ha mostrato. `shown(item)` dà quanti
+/// elementi quell'Analisi ha mostrato, `None` se non ce n'è una ancora
+/// valida (allora la voce non farà nulla, e la conferma lo dice).
+pub fn preview_notes(items: &[&NativeItem], shown: &dyn Fn(&NativeItem) -> Option<u64>) -> Vec<String> {
+    items
+        .iter()
+        .filter(|i| i.needs_preview)
+        .map(|i| match shown(i) {
+            Some(0) => format!("{}: l'ultima Analisi non ha mostrato nulla da togliere, non si tocca nulla", i.label),
+            Some(n) => {
+                let what = if n == 1 { "1 elemento".to_string() } else { format!("{n} elementi") };
+                format!("{}: si tocca solo ciò che ha mostrato l'ultima Analisi ({what})", i.label)
+            }
+            None => format!("{}: nessuna Analisi da usare, la voce non farà nulla. {}", i.label, crate::native::NO_PREVIEW),
+        })
+        .collect()
+}
+
 /// Gruppi del pannello: i gruppi dei cleaner inglobati (`groups`) con, in
 /// ciascuno, le voci native dello stesso `group` (indici in `natives`), che
 /// vengono **prima** dei cleaner XML. Un gruppo che ha solo voci native si
@@ -846,6 +865,13 @@ impl RuleRegistry for RealRegistry {
     fn delete(&self, item: &RegItem) -> Result<bool, String> {
         win::delete(item)
     }
+}
+
+/// Backup sul registro vero (come [`RealRegistry`]) ma nella cartella `dest`
+/// invece che in `Documenti\PulisciPC`, con la cartella di lavoro adatta al
+/// processo (`regbackup::work_dir`). Per i backup con segreti (`netcreds`).
+pub fn real_backup_in(dest: &Path, stem: &str, items: &[RegItem]) -> Result<Backup, String> {
+    backup_to(dest, stem, &regbackup::work_dir, &win::RealBackend, items)
 }
 
 /// Esistenza di una chiave o di un valore con la stessa apertura della
@@ -2550,6 +2576,24 @@ mod tests {
         let with_extra = NativeItem { warning_extra: Some(|| "lista: 0 domini".to_string()), ..items[1] };
         assert_eq!(native_warnings(&[&with_extra]), vec!["Voce nativa: attenzione (lista: 0 domini)".to_string()]);
         assert_eq!(running_among(&["Chrome.exe", "msedge"], &["MSEDGE.EXE".to_string()]), vec!["msedge"]);
+    }
+
+    #[test]
+    fn confirm_says_what_preview_items_will_touch() {
+        let plain = native("a", "Windows", &[]);
+        let seen = NativeItem { needs_preview: true, label: "Vista", ..native("b", "Windows", &[]) };
+        let never = NativeItem { needs_preview: true, label: "Mai vista", ..native("c", "Windows", &[]) };
+        let empty = NativeItem { needs_preview: true, label: "Vuota", ..native("d", "Windows", &[]) };
+        let shown = |i: &NativeItem| match i.id {
+            "b" => Some(3),
+            "d" => Some(0),
+            _ => None,
+        };
+        let notes = preview_notes(&[&plain, &seen, &never, &empty], &shown);
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[0].starts_with("Vista:") && notes[0].contains("3 elementi"), "{notes:?}");
+        assert!(notes[1].starts_with("Mai vista:") && notes[1].contains(crate::native::NO_PREVIEW), "{notes:?}");
+        assert!(notes[2].starts_with("Vuota:") && notes[2].contains("non si tocca nulla"), "{notes:?}");
     }
 
     #[test]

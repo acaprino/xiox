@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod account;
 mod browserdb;
 mod cleaner;
 mod dev;
@@ -904,7 +905,15 @@ impl App {
     /// per ogni opzione dinamica spuntata, non bloccata, con un avviso.
     fn rule_warnings(&self) -> Vec<String> {
         // Solo le scelte che si pulirebbero davvero (non quelle bloccate).
-        let mut out = rules::native_warnings(&rules::active_natives(&self.natives, &self.rule_sel, &self.processes));
+        let active = rules::active_natives(&self.natives, &self.rule_sel, &self.processes);
+        let mut out = rules::native_warnings(&active);
+        // Le voci con anteprima usano l'ultima «Analisi» solo se la vista è ancora quella (vedi `start_clean`).
+        let analyzed = self.clean_view == CleanView::Analyzed;
+        let shown = |i: &native::NativeItem| {
+            let key = rules::native_key(i);
+            analyzed.then(|| self.native_found.iter().find(|(k, _, _)| *k == key).map(|(_, _, f)| f.items.len() as u64)).flatten()
+        };
+        out.extend(rules::preview_notes(&active, &shown));
         if let Some(rs) = &self.rules {
             out.extend(rules::choice_warnings(&rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes)));
         }

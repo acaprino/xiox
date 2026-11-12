@@ -145,13 +145,14 @@ pub fn items() -> Vec<NativeItem> {
         label: LABEL,
         description: "Elimina la cartella Windows.old, cioè la copia della versione precedente di Windows che resta \
              dopo un aggiornamento. La elimina Pulizia disco di Windows (cleanmgr), mai una cancellazione a mano; la \
-             dimensione mostrata è una stima.",
+             dimensione mostrata è una stima. Pulizia agisce solo se l'ultima Analisi ha mostrato la cartella.",
         warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
         needs_admin: true,
         running: &["cleanmgr.exe"],
-        needs_preview: false,
+        // Si elimina solo dopo aver visto cartella e dimensione nell'Analisi.
+        needs_preview: true,
         analyze: real::analyze,
         clean: real::clean,
     }]

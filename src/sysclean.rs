@@ -195,6 +195,12 @@ pub fn documents_dir() -> Option<PathBuf> {
     win::documents()
 }
 
+/// `AppData\Local` dell'utente del processo dalla cartella nota di Windows,
+/// mai da `%LOCALAPPDATA%`. La usa `regbackup` per i backup privati.
+pub fn local_app_data_dir() -> Option<PathBuf> {
+    win::local_app_data()
+}
+
 /// La cartella di sistema (`GetSystemDirectoryW`), mai da `%SystemRoot%`. La
 /// usa `browserdb` per il Blocco note che apre la lista dei cookie.
 pub fn system32_dir() -> Option<PathBuf> {
@@ -841,7 +847,7 @@ mod win {
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
     use windows_sys::Win32::UI::Shell::{
-        FOLDERID_CommonStartMenu, FOLDERID_Documents, FOLDERID_PublicDesktop, SHGetKnownFolderPath, ShellLink,
+        FOLDERID_CommonStartMenu, FOLDERID_Documents, FOLDERID_LocalAppData, FOLDERID_PublicDesktop, SHGetKnownFolderPath, ShellLink,
         KF_FLAG_DONT_VERIFY, SLGP_RAWPATH,
     };
 
@@ -875,6 +881,11 @@ mod win {
     /// Documenti dell'utente del processo (segue il reindirizzamento a OneDrive).
     pub fn documents() -> Option<PathBuf> {
         known_folder(&FOLDERID_Documents)
+    }
+
+    /// `AppData\Local` dell'utente del processo.
+    pub fn local_app_data() -> Option<PathBuf> {
+        known_folder(&FOLDERID_LocalAppData)
     }
 
     fn wide(s: &str) -> Vec<u16> {

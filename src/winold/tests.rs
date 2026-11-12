@@ -205,6 +205,8 @@ fn item_is_off_with_warning_needs_admin_and_waits_for_cleanmgr() {
     assert_eq!(i.label, "Vecchia installazione di Windows");
     assert!(!i.default_on);
     assert!(i.needs_admin);
+    // Si elimina solo dopo aver visto Windows.old e la sua dimensione nell'Analisi.
+    assert!(i.needs_preview);
     assert_eq!(
         i.warning,
         Some("Elimina i file della versione precedente di Windows: dopo non potrai più tornare indietro alla versione di prima.")

@@ -13,6 +13,7 @@ use windows_sys::Win32::Security::Credentials::{
 };
 
 use super::*;
+use crate::account::Account;
 use crate::native::{NativeCleaned, NativeFound};
 use crate::rules::{Backup, RuleRegistry};
 
@@ -143,7 +144,7 @@ impl RuleRegistry for FakeReg {
         let present = self.present.lock().unwrap();
         let flags: Vec<bool> = items.iter().map(|i| present.iter().any(|p| p.eq_ignore_ascii_case(&key_path(i)))).collect();
         self.backed_up.lock().unwrap().extend(items.iter().zip(&flags).filter(|(_, f)| **f).map(|(i, _)| key_path(i)));
-        Ok(Backup { path: Some(PathBuf::from(r"C:\Users\x\Documents\PulisciPC\backup_regole_1.reg")), present: flags })
+        Ok(Backup { path: Some(PathBuf::from(r"C:\Users\x\AppData\Local\PulisciPC\backup\backup_password_ftp_1.reg")), present: flags })
     }
     fn delete(&self, item: &RegItem) -> Result<bool, String> {
         let path = key_path(item);
@@ -168,6 +169,20 @@ fn ftp_key(server: &str) -> String {
 
 fn no_cancel() -> AtomicBool {
     AtomicBool::new(false)
+}
+
+fn me() -> Account {
+    Account::Same(r"PC\mario".into())
+}
+
+/// Analisi con l'account della sessione.
+fn scan(creds: &FakeCreds, f: &FakeFtp) -> NativeFound {
+    analyze(creds, f, &me())
+}
+
+/// Pulizia con l'account della sessione.
+fn wipe(creds: &FakeCreds, f: &FakeFtp, reg: &FakeReg, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
+    clean(creds, f, reg, &me(), found, cancel)
 }
 
 /// Tutto il testo che l'utente può vedere.
@@ -234,7 +249,8 @@ fn filter_keeps_only_domain_passwords_without_excluded_prefixes() {
 #[test]
 fn analysis_lists_only_network_passwords_with_target_and_user() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
     assert_eq!(found.count, 2, "{:?}", found.detail);
     assert_eq!(found.items.len(), 2);
     assert_eq!((found.files, found.bytes), (0, 0));
@@ -252,11 +268,12 @@ fn analysis_lists_only_network_passwords_with_target_and_user() {
 #[test]
 fn no_secret_ever_reaches_the_report() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &["mario"])]));
+    let fs = ftp(&[("ftp.example.com", &["mario"])]);
+    let found = scan(&creds, &fs);
     assert!(!all_text(&found, None).contains(SECRET));
     assert!(!found.items.iter().any(|i| i.contains(SECRET)));
     let reg = FakeReg::with(&[&ftp_key("ftp.example.com")]);
-    let cleaned = clean(&creds, &reg, &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &reg, &found, &no_cancel());
     assert!(!all_text(&found, Some(&cleaned)).contains(SECRET));
 }
 
@@ -267,14 +284,16 @@ fn unreadable_names_are_skipped_and_counted() {
     list.push(Cred { kind: CRED_TYPE_DOMAIN_PASSWORD, target: Some("srv".into()), user: None, secret: SECRET.into() });
     // Un nome illeggibile di un altro tipo non conta: non è della voce.
     list.push(Cred { kind: CRED_TYPE_GENERIC, target: None, user: None, secret: SECRET.into() });
-    let found = analyze(&FakeCreds::with(list), &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&FakeCreds::with(list), &fs);
     assert_eq!(found.count, 1);
     assert_eq!(found.skipped, 2);
 }
 
 #[test]
 fn nothing_found_means_empty_result() {
-    let found = analyze(&FakeCreds::with(vec![cred(CRED_TYPE_GENERIC, "git:x", "m")]), &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&FakeCreds::with(vec![cred(CRED_TYPE_GENERIC, "git:x", "m")]), &fs);
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty() && found.detail.is_empty());
 }
@@ -282,11 +301,13 @@ fn nothing_found_means_empty_result() {
 #[test]
 fn enumeration_errors_are_reported_and_ftp_still_listed() {
     let creds = FakeCreds { list_err: Some("errore 1312".into()), ..Default::default() };
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[])]);
+    let found = scan(&creds, &fs);
     assert_eq!(found.count, 1);
     let text = all_text(&found, None);
     assert!(text.contains("Credenziali di Windows non leggibili: errore 1312"), "{text}");
-    let found = analyze(&FakeCreds::with(sample()), &FakeFtp(Err("collegamento del registro".into())));
+    let fs = FakeFtp(Err("collegamento del registro".into()));
+    let found = scan(&FakeCreds::with(sample()), &fs);
     assert_eq!(found.count, 2);
     assert!(all_text(&found, None).contains("Account FTP non leggibili: collegamento del registro"));
 }
@@ -297,10 +318,11 @@ fn enumeration_errors_are_reported_and_ftp_still_listed() {
 #[test]
 fn clean_rereads_then_deletes_only_what_the_analysis_found() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
     // Nata dopo l'analisi: non si tocca.
     creds.store.borrow_mut().push(cred(CRED_TYPE_DOMAIN_PASSWORD, "nuovo.lan", "mario"));
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (2, 0), "{:?}", cleaned.notes);
     assert_eq!(*creds.reads.borrow(), vec!["nas.casa.lan", "TERMSRV/server01"]);
     assert_eq!(*creds.deleted.borrow(), vec!["nas.casa.lan", "TERMSRV/server01"]);
@@ -312,9 +334,10 @@ fn clean_rereads_then_deletes_only_what_the_analysis_found() {
 #[test]
 fn credential_gone_between_analysis_and_clean_is_already_absent() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
     creds.store.borrow_mut().retain(|c| c.target.as_deref() != Some("nas.casa.lan"));
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (1, 0));
     assert!(cleaned.notes.iter().any(|n| n.contains("Già assente") && n.contains("nas.casa.lan")), "{:?}", cleaned.notes);
     assert_eq!(*creds.deleted.borrow(), vec!["TERMSRV/server01"]);
@@ -324,8 +347,9 @@ fn credential_gone_between_analysis_and_clean_is_already_absent() {
 fn delete_error_counts_as_failed_and_the_others_go_on() {
     let mut creds = FakeCreds::with(sample());
     creds.delete_err = vec!["nas.casa.lan".into()];
-    let found = analyze(&creds, &no_ftp());
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (1, 1));
     assert!(cleaned.notes.iter().any(|n| n.contains("nas.casa.lan") && n.contains("Accesso negato")), "{:?}", cleaned.notes);
     assert_eq!(*creds.deleted.borrow(), vec!["TERMSRV/server01"]);
@@ -335,8 +359,9 @@ fn delete_error_counts_as_failed_and_the_others_go_on() {
 fn reread_error_leaves_the_credential() {
     let mut creds = FakeCreds::with(sample());
     creds.read_err = vec!["nas.casa.lan".into()];
-    let found = analyze(&creds, &no_ftp());
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (1, 1));
     assert_eq!(*creds.deleted.borrow(), vec!["TERMSRV/server01"]);
 }
@@ -344,14 +369,15 @@ fn reread_error_leaves_the_credential() {
 #[test]
 fn credential_changed_after_analysis_is_left() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&creds, &fs);
     // Salvata di nuovo con un altro utente: non è quella che l'utente ha visto.
     for c in creds.store.borrow_mut().iter_mut() {
         if c.target.as_deref() == Some("nas.casa.lan") {
             c.user = Some(r"NAS\admin".into());
         }
     }
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!(cleaned.removed, 1);
     assert!(cleaned.notes.iter().any(|n| n.contains("nas.casa.lan") && n.contains("cambiata")), "{:?}", cleaned.notes);
     assert_eq!(*creds.deleted.borrow(), vec!["TERMSRV/server01"]);
@@ -369,7 +395,8 @@ fn forged_items_outside_the_filter_are_never_deleted() {
         ],
         ..Default::default()
     };
-    let cleaned = clean(&creds, &FakeReg::default(), &found, &no_cancel());
+    let fs = no_ftp();
+    let cleaned = wipe(&creds, &fs, &FakeReg::default(), &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (0, 3), "{:?}", cleaned.notes);
     assert!(creds.deleted.borrow().is_empty());
     assert!(creds.reads.borrow().is_empty(), "nemmeno riletta");
@@ -378,9 +405,10 @@ fn forged_items_outside_the_filter_are_never_deleted() {
 #[test]
 fn cancel_stops_before_any_delete() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[])]);
+    let found = scan(&creds, &fs);
     let reg = FakeReg::with(&[&ftp_key("ftp.example.com")]);
-    let cleaned = clean(&creds, &reg, &found, &AtomicBool::new(true));
+    let cleaned = wipe(&creds, &fs, &reg, &found, &AtomicBool::new(true));
     assert_eq!(cleaned.removed, 0);
     assert!(creds.deleted.borrow().is_empty());
     assert!(reg.deleted.lock().unwrap().is_empty() && reg.backed_up.lock().unwrap().is_empty());
@@ -391,7 +419,8 @@ fn cancel_stops_before_any_delete() {
 
 #[test]
 fn ftp_analysis_shows_server_and_user_names_only() {
-    let found = analyze(&FakeCreds::default(), &ftp(&[("ftp.example.com", &["mario", "anna"]), ("192.168.1.5", &[])]));
+    let fs = ftp(&[("ftp.example.com", &["mario", "anna"]), ("192.168.1.5", &[])]);
+    let found = scan(&FakeCreds::default(), &fs);
     assert_eq!(found.count, 2);
     assert_eq!(found.detail[0], "2 account FTP");
     let text = all_text(&found, None);
@@ -401,9 +430,11 @@ fn ftp_analysis_shows_server_and_user_names_only() {
 
 #[test]
 fn summary_line_counts_both_kinds() {
-    let found = analyze(&FakeCreds::with(sample()), &ftp(&[("ftp.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[])]);
+    let found = scan(&FakeCreds::with(sample()), &fs);
     assert_eq!(found.detail[0], "2 password di rete, 1 account FTP");
-    let found = analyze(&FakeCreds::with(vec![cred(CRED_TYPE_DOMAIN_PASSWORD, "a", "b")]), &no_ftp());
+    let fs = no_ftp();
+    let found = scan(&FakeCreds::with(vec![cred(CRED_TYPE_DOMAIN_PASSWORD, "a", "b")]), &fs);
     assert_eq!(found.detail[0], "1 password di rete");
 }
 
@@ -414,7 +445,8 @@ fn invalid_ftp_names_are_skipped() {
         list.servers.push(FtpServer { name: n.into(), users: vec![] });
     }
     list.skipped = 1;
-    let found = analyze(&FakeCreds::default(), &FakeFtp(Ok(list)));
+    let fs = FakeFtp(Ok(list));
+    let found = scan(&FakeCreds::default(), &fs);
     assert_eq!(found.count, 1);
     assert_eq!(found.skipped, 6);
     assert!(valid_server_name("ok.example.com") && valid_server_name("ftp.x"));
@@ -424,37 +456,44 @@ fn invalid_ftp_names_are_skipped() {
 #[test]
 fn ftp_keys_are_backed_up_then_deleted() {
     let creds = FakeCreds::default();
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &["mario"]), ("old.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &["mario"]), ("old.example.com", &[])]);
+    let found = scan(&creds, &fs);
     let reg = FakeReg::with(&[&ftp_key("ftp.example.com"), &ftp_key("old.example.com"), &ftp_key("altro.example.com")]);
-    let cleaned = clean(&creds, &reg, &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &reg, &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (2, 0), "{:?}", cleaned.notes);
     assert_eq!(*reg.backed_up.lock().unwrap(), vec![ftp_key("ftp.example.com"), ftp_key("old.example.com")]);
     assert_eq!(*reg.deleted.lock().unwrap(), vec![ftp_key("ftp.example.com"), ftp_key("old.example.com")]);
     // Solo ciò che l'analisi ha trovato: la chiave nata dopo resta.
     assert_eq!(*reg.present.lock().unwrap(), vec![ftp_key("altro.example.com")]);
-    assert!(cleaned.notes.iter().any(|n| n.contains("backup_regole_1.reg")), "{:?}", cleaned.notes);
+    let note = cleaned.notes.iter().find(|n| n.contains("backup_password_ftp_1.reg")).expect("nota del backup");
+    assert!(note.contains(r"AppData\Local\PulisciPC\backup") && !note.contains("Documents"), "{note}");
+    assert!(note.contains("password FTP cifrate") && note.contains("eliminalo quando tutto funziona"), "{note}");
 }
 
 #[test]
 fn failed_backup_deletes_no_ftp_key_but_credentials_still_go() {
     let creds = FakeCreds::with(sample());
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[])]);
+    let found = scan(&creds, &fs);
     let mut reg = FakeReg::with(&[&ftp_key("ftp.example.com")]);
     reg.backup_err = Some("reg.exe terminato con codice 1".into());
-    let cleaned = clean(&creds, &reg, &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &reg, &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (2, 1), "{:?}", cleaned.notes);
     assert!(reg.deleted.lock().unwrap().is_empty());
-    assert!(cleaned.notes.iter().any(|n| n.contains("Backup del registro non riuscito")), "{:?}", cleaned.notes);
+    let note = cleaned.notes.iter().find(|n| n.contains("Backup degli account FTP non riuscito")).expect("nota");
+    assert!(note.contains("nessun account FTP eliminato") && note.contains("password di rete eliminate: 2"), "{note}");
+    assert_eq!(*creds.deleted.borrow(), vec!["nas.casa.lan", "TERMSRV/server01"]);
 }
 
 #[test]
 fn ftp_key_gone_before_backup_is_not_deleted() {
     let creds = FakeCreds::default();
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &[]), ("old.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[]), ("old.example.com", &[])]);
+    let found = scan(&creds, &fs);
     let mut reg = FakeReg::with(&[&ftp_key("ftp.example.com"), &ftp_key("old.example.com")]);
     reg.present.get_mut().unwrap().retain(|p| !p.ends_with("old.example.com"));
     reg.delete_err = vec![];
-    let cleaned = clean(&creds, &reg, &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &reg, &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (1, 0));
     assert!(cleaned.notes.iter().any(|n| n.contains("Già assente") && n.contains("old.example.com")), "{:?}", cleaned.notes);
 }
@@ -462,10 +501,11 @@ fn ftp_key_gone_before_backup_is_not_deleted() {
 #[test]
 fn ftp_delete_error_counts_as_failed_and_the_others_go_on() {
     let creds = FakeCreds::default();
-    let found = analyze(&creds, &ftp(&[("ftp.example.com", &[]), ("old.example.com", &[])]));
+    let fs = ftp(&[("ftp.example.com", &[]), ("old.example.com", &[])]);
+    let found = scan(&creds, &fs);
     let mut reg = FakeReg::with(&[&ftp_key("ftp.example.com"), &ftp_key("old.example.com")]);
     reg.delete_err = vec![ftp_key("ftp.example.com")];
-    let cleaned = clean(&creds, &reg, &found, &no_cancel());
+    let cleaned = wipe(&creds, &fs, &reg, &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (1, 1));
     assert_eq!(*reg.deleted.lock().unwrap(), vec![ftp_key("old.example.com")]);
 }
@@ -474,13 +514,79 @@ fn ftp_delete_error_counts_as_failed_and_the_others_go_on() {
 fn forged_ftp_items_never_reach_the_registry() {
     let found = NativeFound {
         count: 2,
-        items: vec![ftp_item(".."), ftp_item(r"..\..\Run")],
+        items: vec![ftp_item("..", &[]), ftp_item(r"..\..\Run", &[])],
         ..Default::default()
     };
     let reg = FakeReg::default();
-    let cleaned = clean(&FakeCreds::default(), &reg, &found, &no_cancel());
+    let fs = ftp(&[("..", &[])]);
+    let cleaned = wipe(&FakeCreds::default(), &fs, &reg, &found, &no_cancel());
     assert_eq!((cleaned.removed, cleaned.failed), (0, 2));
     assert!(reg.backed_up.lock().unwrap().is_empty() && reg.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn ftp_account_changed_after_the_analysis_is_left() {
+    let creds = FakeCreds::default();
+    let fs = ftp(&[("ftp.example.com", &["mario"]), ("old.example.com", &["anna"])]);
+    let found = scan(&creds, &fs);
+    // Dopo l'analisi: un utente in più su un server, l'altro uguale.
+    let now = ftp(&[("ftp.example.com", &["mario", "nuovo"]), ("OLD.example.com", &["anna"])]);
+    let reg = FakeReg::with(&[&ftp_key("ftp.example.com"), &ftp_key("old.example.com")]);
+    let cleaned = wipe(&creds, &now, &reg, &found, &no_cancel());
+    assert_eq!((cleaned.removed, cleaned.failed), (1, 0), "{:?}", cleaned.notes);
+    assert_eq!(*reg.deleted.lock().unwrap(), vec![ftp_key("old.example.com")]);
+    assert!(cleaned.notes.iter().any(|n| n.contains("ftp.example.com") && n.contains("cambiato")), "{:?}", cleaned.notes);
+    // Sparito dall'elenco: già assente, nessun backup né cancellazione.
+    let reg = FakeReg::with(&[&ftp_key("ftp.example.com")]);
+    let cleaned = wipe(&creds, &no_ftp(), &reg, &found, &no_cancel());
+    assert_eq!((cleaned.removed, cleaned.failed), (0, 0));
+    assert!(reg.backed_up.lock().unwrap().is_empty() && reg.deleted.lock().unwrap().is_empty());
+    // Elenco non rileggibile: nessun account FTP toccato.
+    let cleaned = wipe(&creds, &FakeFtp(Err("errore 5".into())), &reg, &found, &no_cancel());
+    assert_eq!((cleaned.removed, cleaned.failed), (0, 2));
+    assert!(reg.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn ftp_items_carry_the_users_that_were_shown() {
+    let users = vec!["mario".to_string(), "anna".to_string()];
+    let item = ftp_item("ftp.example.com", &users);
+    assert_eq!(parse_item(&item), Some(Item::Ftp { server: "ftp.example.com", users: vec!["mario", "anna"] }));
+    assert_eq!(parse_item(&ftp_item("x", &[])), Some(Item::Ftp { server: "x", users: vec![] }));
+    // Il vecchio formato senza utenti non vale più.
+    assert_eq!(parse_item("ftp\0x"), None);
+}
+
+#[test]
+fn another_account_is_neither_listed_nor_touched() {
+    let creds = FakeCreds::with(sample());
+    let fs = ftp(&[("ftp.example.com", &[])]);
+    let reg = FakeReg::with(&[&ftp_key("ftp.example.com")]);
+    let seen = scan(&creds, &fs);
+    for acct in [Account::Other(r"PC\admin".into()), Account::Unknown("errore 5".into())] {
+        let found = analyze(&creds, &fs, &acct);
+        assert_eq!(found.count, 0);
+        assert!(found.items.is_empty());
+        assert_eq!(found.detail.len(), 1, "{:?}", found.detail);
+        assert!(found.detail[0].contains("non toccate"), "{:?}", found.detail);
+        // Anche con un'anteprima (fatta prima con l'account giusto).
+        let cleaned = clean(&creds, &fs, &reg, &acct, &seen, &no_cancel());
+        assert_eq!((cleaned.removed, cleaned.failed), (0, 3), "{:?}", cleaned.notes);
+        assert!(cleaned.notes[0].contains("non toccate"), "{:?}", cleaned.notes);
+        assert!(creds.reads.borrow().is_empty() && creds.deleted.borrow().is_empty());
+        assert!(reg.backed_up.lock().unwrap().is_empty() && reg.deleted.lock().unwrap().is_empty());
+    }
+    let found = analyze(&creds, &fs, &Account::Other(r"PC\admin".into()));
+    assert_eq!(found.detail[0], r"Credenziali di un altro account: non toccate (il programma gira come PC\admin)");
+}
+
+#[test]
+fn every_found_item_is_listed_in_the_analysis() {
+    // La pulizia agisce su ciò che si è visto: nessun limite alle righe.
+    let list: Vec<Cred> = (0..80).map(|n| cred(CRED_TYPE_DOMAIN_PASSWORD, &format!("srv{n}.lan"), "mario")).collect();
+    let found = scan(&FakeCreds::with(list), &no_ftp());
+    assert_eq!(found.items.len(), 80);
+    assert_eq!(found.detail.iter().filter(|l| l.starts_with("Rete:")).count(), 80);
 }
 
 // ---------------------------------------------------------------------------
@@ -495,17 +601,16 @@ fn item_is_off_with_the_warning_and_no_admin() {
     assert_eq!(i.group, "Windows");
     assert_eq!(i.label, "Password di rete");
     assert!(!i.default_on && !i.needs_admin);
-    assert_eq!(
-        i.warning,
-        Some(
-            "Elimina le password salvate per unità di rete, condivisioni e Desktop remoto: dovrai reinserirle. \
-             Le password dei browser e degli account Microsoft non si toccano."
-        )
-    );
+    assert!(i.needs_preview, "si elimina solo ciò che l'Analisi ha mostrato");
+    let w = i.warning.unwrap();
+    for part in ["unità di rete", "Desktop remoto", "account FTP", "Outlook", "Exchange", "ultima Analisi", "account Microsoft"] {
+        assert!(w.contains(part), "{part} manca: {w}");
+    }
     assert!(i.warning_extra.is_none() && i.running.is_empty());
     let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap());
     assert!(!text.to_lowercase().contains("bleachbit") && !text.contains("AGG -"), "{text}");
-    assert!(i.description.contains(".reg"), "{}", i.description);
+    assert!(i.description.contains(".reg") && i.description.contains(r"AppData\Local\PulisciPC\backup"), "{}", i.description);
+    assert!(!i.description.contains("Documenti"), "{}", i.description);
     assert!(crate::native::all().iter().any(|n| n.id == ID));
 }
 
@@ -519,7 +624,7 @@ fn item_is_off_with_the_warning_and_no_admin() {
 #[test]
 #[ignore]
 fn live_netcreds_analysis_read_only() {
-    let found = analyze(&win::RealCredentials, &win::RealFtp);
+    let found = analyze(&win::RealCredentials, &win::RealFtp, &crate::account::current());
     println!("elementi: {}, lasciati: {}", found.count, found.skipped);
     for line in &found.detail {
         if !line.starts_with("Rete:") && !line.starts_with("FTP:") {
@@ -534,7 +639,7 @@ fn live_netcreds_analysis_read_only() {
                 assert!(again.as_ref().is_some_and(|c| c.kind == CRED_TYPE_DOMAIN_PASSWORD), "{target}");
                 println!("credenziale: {target}");
             }
-            Some(Item::Ftp(name)) => println!("FTP: {name}"),
+            Some(Item::Ftp { server, .. }) => println!("FTP: {server}"),
             None => panic!("elemento non riconosciuto"),
         }
     }

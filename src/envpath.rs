@@ -12,15 +12,19 @@
 //!   definisce da sé ([`SYSTEM_VARS`]). Mai `pc_rules::Env::for_rules`, che
 //!   sostituisce i valori con quelli «sicuri» per cancellare.
 //! - **Cosa si propone**: un doppione (stesso percorso risolto, senza
-//!   maiuscole e senza `\` finali; si tiene la prima; le voci fra virgolette
-//!   o con spazi intorno non sono mai doppioni) o una cartella che manca
+//!   maiuscole ASCII e senza `\` finali; si tiene la prima; le voci fra
+//!   virgolette o con spazi intorno non sono mai doppioni, e una voce con una
+//!   `%VAR%` non è mai doppione di una letterale né viceversa) o una cartella che manca
 //!   davvero (`sysclean::truly_missing`: errore 2 o 3, nessun antenato punto
 //!   di reparse) su un disco fisso presente (`GetDriveTypeW == DRIVE_FIXED`).
 //!   Mai: variabili non espandibili, UNC e percorsi `\\?\`, relativi, con
 //!   `..` o con virgolette in mezzo, dischi rimovibili, di rete o assenti, voci
 //!   vuote, voci sotto `%SystemRoot%`. Il PATH di sistema non si svuota mai.
 //! - **Account**: il PATH utente si tocca solo se il processo (elevato) gira
-//!   come l'utente della sessione; altrimenti solo quello di sistema.
+//!   come l'utente della sessione; altrimenti solo quello di sistema
+//!   ([`crate::account`]). Senza diritti di amministratore il PATH di sistema
+//!   si mostra ma non si propone ([`ADMIN_ONLY`]); quello utente sì (il backup
+//!   usa allora una cartella di lavoro dell'utente, `regbackup::work_dir`).
 //! - **Scrittura**: solo con le voci mostrate dall'ultima «Analisi»
 //!   (`NativeItem::needs_preview`). Backup `.reg` delle chiavi da scrivere
 //!   (`regbackup`, verificato: deve contenere `"Path"`; fallito = niente
@@ -65,6 +69,9 @@ const WARNING: &str = "Toglie dal PATH le cartelle che non esistono più e i dop
                        programmi. Pulizia toglie solo le voci mostrate dall'ultima Analisi. Backup .reg in \
                        Documenti\\PulisciPC.";
 
+/// Nota delle voci del PATH di sistema quando il processo non è elevato.
+pub const ADMIN_ONLY: &str = "solo con diritti di amministratore: non verrà modificato";
+
 /// Tipo del valore `Path` nel registro (si riscrive sempre con lo stesso).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -79,17 +86,7 @@ pub struct PathValue {
     pub text: String,
 }
 
-/// L'account del processo rispetto all'utente della sessione interattiva.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Account {
-    /// Lo stesso utente (nome dell'account).
-    Same(String),
-    /// Un altro account (UAC approvato con le credenziali di un altro
-    /// amministratore): nome dell'account del processo.
-    Other(String),
-    /// Non verificato (motivo).
-    Unknown(String),
-}
+pub use crate::account::Account;
 
 /// Registro, dischi, account, backup e avviso a Windows.
 pub trait PathSys {
@@ -109,6 +106,9 @@ pub trait PathSys {
     fn broadcast(&self) -> Result<(), String>;
     /// Di chi è `HKCU` rispetto all'utente della sessione.
     fn account(&self) -> Account;
+    /// `true` se il processo può scrivere il PATH di sistema (`HKLM`): gira
+    /// con i diritti di amministratore.
+    fn system_writable(&self) -> bool;
 }
 
 /// Il valore di una variabile d'ambiente come Windows lo dà ai programmi
@@ -327,8 +327,8 @@ pub fn proposals(root: RegRoot, value: &PathValue, sys: &dyn PathSys, exp: &dyn 
         // Solo le voci scritte in modo semplice fanno da doppione (e da
         // «prima»): `"C:\x"` funziona solo in cmd.exe, `C:\x` ovunque.
         if let Some(r) = resolved.as_ref().filter(|r| r.plain) {
-            let key = norm_key(&r.path);
-            if seen.contains(&key) {
+            let key = dup_key(raw, r);
+            if seen.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
                 duplicate = true;
             } else {
                 seen.push(key);
@@ -358,6 +358,8 @@ struct Resolved {
     path: String,
     /// Né virgolette né spazi intorno: può essere un doppione.
     plain: bool,
+    /// Scritta con almeno una `%VAR%` espansa.
+    from_var: bool,
 }
 
 /// La voce senza spazi intorno, senza le virgolette che la racchiudono e,
@@ -378,7 +380,8 @@ fn resolve(root: RegRoot, kind: Kind, raw: &str, exp: &dyn Expander) -> Option<R
         Kind::Sz => t.to_string(),
         Kind::ExpandSz => expand_vars(root, t, exp)?,
     };
-    (!path.contains([';', '%', '"'])).then_some(Resolved { path, plain })
+    let from_var = t.contains('%');
+    (!path.contains([';', '%', '"'])).then_some(Resolved { path, plain, from_var })
 }
 
 /// `%Var%` sostituite con il valore vero; `None` se una variabile non c'è, è
@@ -405,12 +408,30 @@ fn expand_vars(root: RegRoot, s: &str, exp: &dyn Expander) -> Option<String> {
     Some(out)
 }
 
-/// Chiave di confronto dei doppioni: minuscole, senza `\` finali (ma `C:\`
-/// resta `c:\`, diverso da `C:`).
-fn norm_key(e: &str) -> String {
-    let mut k = e.to_lowercase();
+/// Chiave di confronto dei doppioni (da confrontare con
+/// `eq_ignore_ascii_case`: solo le maiuscole ASCII contano come uguali; un
+/// carattere non ASCII diverso, come il segno Kelvin U+212A contro `K`, che
+/// NTFS tiene distinti, fa due voci diverse, tenute tutte e due).
+///
+/// Una voce con una `%VAR%` si confronta solo con le voci scritte con lo
+/// stesso testo (prefisso `v:`), mai con una letterale (prefisso `l:`): se
+/// Windows, componendo il PATH, espande la variabile in un altro modo (ordine
+/// delle variabili utente), togliere la copia letterale lascerebbe solo
+/// quella che non funziona. Così una coppia «variabile contro letterale» resta
+/// intera; la cartella che manca davvero si toglie comunque, voce per voce.
+fn dup_key(raw: &str, r: &Resolved) -> String {
+    if r.from_var {
+        format!("v:{}", trim_slashes(raw.trim()))
+    } else {
+        format!("l:{}", trim_slashes(&r.path))
+    }
+}
+
+/// Senza `\` finali (ma `C:\` resta `C:\`, diverso da `C:`).
+fn trim_slashes(e: &str) -> &str {
+    let mut k = e;
     while k.ends_with('\\') && !(k.len() == 3 && k.as_bytes()[1] == b':') {
-        k.pop();
+        k = &k[..k.len() - 1];
     }
     k
 }
@@ -544,7 +565,9 @@ pub fn analyze_path(sys: &dyn PathSys, exp: &dyn Expander) -> NativeFound {
     let mut found = NativeFound::default();
     let mut lines: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
+    let mut admin_only: Vec<String> = Vec::new();
     let account = sys.account();
+    let system_writable = sys.system_writable();
     for root in ROOTS {
         let label = root_label(root);
         if root == RegRoot::Hkcu {
@@ -568,6 +591,14 @@ pub fn analyze_path(sys: &dyn PathSys, exp: &dyn Expander) -> NativeFound {
                 continue;
             }
         };
+        // Senza diritti di amministratore il PATH di sistema non si scrive:
+        // le sue voci si mostrano, ma non si contano e non vanno a `clean`.
+        if root == RegRoot::Hklm && !system_writable {
+            admin_only.extend(ps.iter().map(|p| {
+                format!("{label}: {} ({}) – {ADMIN_ONLY}", p.entry, reason_text(p.reason))
+            }));
+            continue;
+        }
         for p in &ps {
             found.count += 1;
             lines.push(format!("{label}: {} ({})", p.entry, reason_text(p.reason)));
@@ -581,6 +612,11 @@ pub fn analyze_path(sys: &dyn PathSys, exp: &dyn Expander) -> NativeFound {
     if found.count > 0 {
         found.detail.push(plural(found.count, "cartella da togliere dal PATH", "cartelle da togliere dal PATH"));
         found.detail.extend(lines);
+    } else if !admin_only.is_empty() {
+        found.detail.push("Nessuna cartella da togliere senza diritti di amministratore".to_string());
+    }
+    found.detail.extend(admin_only.iter().cloned());
+    if found.count > 0 || !admin_only.is_empty() {
         if let Account::Same(name) = &account {
             found.detail.push(format!("Account: {name}"));
         }
@@ -632,6 +668,13 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
             out.failed += p.wanted.len() as u64;
             out.note(why);
             plans.retain(|p| p.root != RegRoot::Hkcu);
+        }
+    }
+    if let Some(p) = plans.iter().find(|p| p.root == RegRoot::Hklm) {
+        if !sys.system_writable() {
+            out.failed += p.wanted.len() as u64;
+            out.note(format!("Sistema: {ADMIN_ONLY}"));
+            plans.retain(|p| p.root != RegRoot::Hklm);
         }
     }
     // Un valore cambiato dall'analisi: l'utente non ha visto quello attuale.
@@ -708,6 +751,11 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
     let mut wrote = false;
     for (root, _, new, removed) in ready {
         let label = root_label(root);
+        // TOCTOU inevitabile: fra la rilettura qui sopra e `RegSetValueExW`
+        // un altro programma può ancora cambiare `Path`, e la sua modifica
+        // andrebbe persa. Il registro non ha un «confronta e scrivi»
+        // atomico; la finestra è di pochi microsecondi e il backup appena
+        // fatto ha il valore di prima.
         match sys.write(root, &new) {
             Ok(()) => {
                 wrote = true;
@@ -781,15 +829,8 @@ mod win {
         PathSys, PathValue, HKCU_KEY, HKLM_KEY, VALUE,
     };
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{
-        EqualSid, GetTokenInformation, LookupAccountNameW, LookupAccountSidW, TokenUser, SID_NAME_USE, TOKEN_DUPLICATE,
-        TOKEN_IMPERSONATE, TOKEN_QUERY, TOKEN_USER,
-    };
+    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
     use windows_sys::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
-    use windows_sys::Win32::System::RemoteDesktop::{
-        WTSDomainName, WTSFreeMemory, WTSQuerySessionInformationW, WTSUserName, WTS_CURRENT_SERVER_HANDLE,
-        WTS_CURRENT_SESSION, WTS_INFO_CLASS,
-    };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     fn last_error() -> String {
@@ -842,89 +883,6 @@ mod win {
             .filter_map(|(k, v)| Some((k.into_string().ok()?.to_lowercase(), v.into_string().ok()?)))
             .collect();
         Ok(BlockExpander { block, process })
-    }
-
-    /// SID dell'utente del token (in un buffer allineato).
-    fn token_sid() -> Result<Vec<u64>, String> {
-        let t = token(TOKEN_QUERY)?;
-        let mut len = 0u32;
-        // SAFETY: prima chiamata solo per la lunghezza.
-        unsafe { GetTokenInformation(t.0, TokenUser, null_mut(), 0, &mut len) };
-        let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
-        // SAFETY: buffer di almeno `len` byte.
-        if unsafe { GetTokenInformation(t.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) } == 0 {
-            return Err(format!("utente del processo non letto: {}", last_error()));
-        }
-        Ok(buf)
-    }
-
-    fn sid_of(token_user: &[u64]) -> *mut core::ffi::c_void {
-        // SAFETY: il buffer contiene una TOKEN_USER valida (da `token_sid`).
-        unsafe { (*(token_user.as_ptr() as *const TOKEN_USER)).User.Sid }
-    }
-
-    fn wts_string(class: WTS_INFO_CLASS) -> Result<String, String> {
-        let mut p: *mut u16 = null_mut();
-        let mut bytes = 0u32;
-        // SAFETY: sessione corrente del server locale; `p` allocata dal
-        // sistema e liberata con `WTSFreeMemory`.
-        let ok = unsafe { WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, class, &mut p, &mut bytes) };
-        if ok == 0 || p.is_null() {
-            return Err(format!("utente della sessione non letto: {}", last_error()));
-        }
-        // SAFETY: stringa terminata da zero restituita dal sistema.
-        let n = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
-        // SAFETY: `n` caratteri validi.
-        let s = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, n) });
-        // SAFETY: memoria di `WTSQuerySessionInformationW`, liberata una volta.
-        unsafe { WTSFreeMemory(p.cast()) };
-        Ok(s)
-    }
-
-    /// `DOMINIO\utente` del SID.
-    fn sid_name(sid: *mut core::ffi::c_void) -> Option<String> {
-        let (mut name, mut domain) = ([0u16; 257], [0u16; 257]);
-        let (mut nl, mut dl) = (name.len() as u32, domain.len() as u32);
-        let mut use_: SID_NAME_USE = 0;
-        // SAFETY: SID valido, buffer e lunghezze coerenti.
-        let ok = unsafe {
-            LookupAccountSidW(null(), sid, name.as_mut_ptr(), &mut nl, domain.as_mut_ptr(), &mut dl, &mut use_)
-        };
-        (ok != 0).then(|| {
-            format!("{}\\{}", String::from_utf16_lossy(&domain[..dl as usize]), String::from_utf16_lossy(&name[..nl as usize]))
-        })
-    }
-
-    /// SID di un account per nome (`DOMINIO\utente`).
-    fn name_sid(account: &str) -> Result<Vec<u64>, String> {
-        let w = wide(account);
-        let mut sid = vec![0u64; 16]; // 128 byte: più del SID più lungo (68)
-        let mut sl = (sid.len() * 8) as u32;
-        let mut domain = [0u16; 257];
-        let mut dl = domain.len() as u32;
-        let mut use_: SID_NAME_USE = 0;
-        // SAFETY: nome terminato da zero, buffer e lunghezze coerenti.
-        let ok = unsafe {
-            LookupAccountNameW(null(), w.as_ptr(), sid.as_mut_ptr().cast(), &mut sl, domain.as_mut_ptr(), &mut dl, &mut use_)
-        };
-        if ok == 0 {
-            return Err(format!("account della sessione {account} non trovato: {}", last_error()));
-        }
-        Ok(sid)
-    }
-
-    fn account() -> Result<Account, String> {
-        let user = token_sid()?;
-        let me = sid_of(&user);
-        let name = sid_name(me).unwrap_or_else(|| "account sconosciuto".to_string());
-        let (u, d) = (wts_string(WTSUserName)?, wts_string(WTSDomainName)?);
-        if u.is_empty() {
-            return Err("nessun utente nella sessione".into());
-        }
-        let session = name_sid(&if d.is_empty() { u } else { format!("{d}\\{u}") })?;
-        // SAFETY: due SID validi.
-        let same = unsafe { EqualSid(me, session.as_ptr() as *mut _) } != 0;
-        Ok(if same { Account::Same(name) } else { Account::Other(name) })
     }
 
     /// Tentativi di lettura se il valore cambia fra la domanda della
@@ -1044,7 +1002,7 @@ mod win {
             let path = crate::regbackup::write_backup(
                 &crate::sys::data_dir(),
                 &stem,
-                &crate::regbackup::admin_work_dir,
+                &crate::regbackup::work_dir,
                 &crate::regbackup::reg_exe_export,
                 &keys,
             )?
@@ -1058,7 +1016,11 @@ mod win {
         }
 
         fn account(&self) -> Account {
-            account().unwrap_or_else(Account::Unknown)
+            crate::account::current()
+        }
+
+        fn system_writable(&self) -> bool {
+            crate::sys::is_admin()
         }
 
         fn volume_is_fixed(&self, p: &Path) -> bool {

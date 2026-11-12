@@ -8,11 +8,23 @@
 //!   leggono solo tipo, `TargetName` e `UserName`, mai `CredentialBlob`.
 //!   Dell'FTP solo i nomi delle sottochiavi (server) e dei loro valori
 //!   (utenti), mai i dati.
-//! - Pulizia: solo gli elementi dell'analisi dello stesso job. Ogni
+//! - Pulizia: solo gli elementi mostrati dall'ultima «Analisi»
+//!   (`NativeItem::needs_preview`): ciò che è nato dopo non si tocca. Ogni
 //!   credenziale si rilegge con `CredReadW` subito prima di `CredDeleteW` e
-//!   si lascia se è sparita («già assente») o cambiata; le chiavi FTP passano
-//!   da [`crate::rules::RuleRegistry`] (backup `.reg` fail-closed,
-//!   `reg_allowed`, apertura senza seguire collegamenti).
+//!   si lascia se è sparita («già assente») o cambiata (tipo, nome, utente);
+//!   un account FTP si rilegge e si lascia se i suoi utenti non sono più
+//!   quelli mostrati. Le chiavi FTP passano da [`crate::rules::RuleRegistry`]
+//!   (`reg_allowed`, apertura senza seguire collegamenti, backup `.reg`
+//!   fail-closed). Il backup contiene le password FTP cifrate con DPAPI: va in
+//!   `%LOCALAPPDATA%\PulisciPC\backup` (fuori da `Documenti`, spesso
+//!   sincronizzata con OneDrive), con l'ACL solo per l'utente, SYSTEM e gli
+//!   amministratori (`regbackup::private_backup_dir`).
+//! - Account: se il processo (elevato) non gira come l'utente della sessione
+//!   ([`crate::account`]), Gestione credenziali e `HKCU` sono di un altro
+//!   account: non si propone e non si tocca nulla.
+//! - `CredEnumerateW` porta nella memoria del processo anche i segreti delle
+//!   credenziali generiche (le API non filtrano per tipo): non si leggono e
+//!   `CredFree` li libera subito, ma non garantisce di azzerarli.
 //!
 //! Ogni accesso al sistema passa da un trait ([`Credentials`],
 //! [`FtpAccounts`], `RuleRegistry`): le funzioni [`analyze`] e [`clean`]
@@ -24,6 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pc_rules::{RegItem, RegRoot};
 use windows_sys::Win32::Security::Credentials::CRED_TYPE_DOMAIN_PASSWORD;
 
+use crate::account::Account;
 use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 use crate::rules::RuleRegistry;
 
@@ -36,8 +49,10 @@ pub const FTP_ACCOUNTS: &str = r"Software\Microsoft\Ftp\Accounts";
 /// «vecchio stile».
 pub const EXCLUDED_PREFIXES: [&str; 4] = ["MicrosoftAccount:", "WindowsLive:", "virtualapp/didlogical", "LegacyGeneric:"];
 /// Avviso della conferma (§2.6, brief Fase 3b).
-pub const WARNING: &str = "Elimina le password salvate per unità di rete, condivisioni e Desktop remoto: dovrai \
-     reinserirle. Le password dei browser e degli account Microsoft non si toccano.";
+pub const WARNING: &str = "Elimina le password salvate per unità di rete, condivisioni, Desktop remoto e gli account \
+     FTP di Esplora file: dovrai reinserirle. Anche altre app che usano queste password (per esempio Outlook con un \
+     server Exchange aziendale, o le connessioni Desktop remoto salvate) le chiederanno di nuovo. Pulizia elimina solo \
+     ciò che ha mostrato l'ultima Analisi. Le password dei browser e degli account Microsoft non si toccano.";
 
 /// Una credenziale come la dà Windows, **senza** il segreto: tipo, nome di
 /// destinazione e utente. `None` = testo non valido in UTF-16 (o nome
@@ -94,32 +109,56 @@ pub fn items() -> Vec<NativeItem> {
         label: "Password di rete",
         description: "Elimina da Gestione credenziali di Windows le password salvate per unità di rete, cartelle \
              condivise e Desktop remoto, e gli account FTP salvati da Esplora file. Le credenziali generiche (app, \
-             Git, browser) e gli account Microsoft non si toccano. Le credenziali eliminate non hanno copia; le \
-             chiavi degli account FTP si salvano prima in un file .reg in Documenti\\PulisciPC.",
+             Git, browser) e gli account Microsoft non si toccano. Pulizia elimina solo ciò che ha mostrato l'ultima \
+             Analisi. Le credenziali eliminate non hanno copia; le chiavi degli account FTP si salvano prima in un \
+             file .reg (con le password FTP cifrate) in AppData\\Local\\PulisciPC\\backup, leggibile solo da te e \
+             dagli amministratori.",
         warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
         needs_admin: false,
         running: &[],
-        needs_preview: false,
+        needs_preview: true,
         analyze: real_analyze,
         clean: real_clean,
     }]
 }
 
 fn real_analyze(_: &NativeCtx) -> NativeFound {
-    analyze(&win::RealCredentials, &win::RealFtp)
+    analyze(&win::RealCredentials, &win::RealFtp, &crate::account::current())
 }
 
 fn real_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
-    clean(&win::RealCredentials, &crate::rules::RealRegistry, found, ctx.cancel)
+    clean(&win::RealCredentials, &win::RealFtp, &PrivateRegistry, &crate::account::current(), found, ctx.cancel)
+}
+
+/// Il registro vero con il backup degli account FTP (password cifrate) nella
+/// cartella privata `%LOCALAPPDATA%\PulisciPC\backup`, mai in `Documenti`.
+struct PrivateRegistry;
+
+impl RuleRegistry for PrivateRegistry {
+    fn backup(&self, items: &[RegItem]) -> Result<crate::rules::Backup, String> {
+        let sid = crate::account::user_sid_string()?;
+        let dir = crate::regbackup::private_backup_dir(&sid)?;
+        crate::rules::real_backup_in(&dir, &format!("backup_password_ftp_{}", crate::sys::stamp()), items)
+    }
+    fn delete(&self, item: &RegItem) -> Result<bool, String> {
+        crate::rules::RealRegistry.delete(item)
+    }
+}
+
+/// `Some(nota)` se le credenziali di questo account non si toccano.
+fn account_refusal(account: &Account) -> Option<String> {
+    match account {
+        Account::Same(_) => None,
+        Account::Other(name) => Some(format!("Credenziali di un altro account: non toccate (il programma gira come {name})")),
+        Account::Unknown(e) => Some(format!("Account della sessione non verificato ({e}): credenziali non toccate")),
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Logica (provata con i finti).
 
-/// Righe di dettaglio per elemento tenute nel resoconto.
-const MAX_DETAIL: usize = 50;
 /// Utenti FTP mostrati per server.
 const MAX_SHOWN_USERS: usize = 5;
 
@@ -149,8 +188,12 @@ fn ftp_key_path(server: &str) -> String {
 }
 
 /// Credenziali di rete e account FTP. Guarda e basta: nessuna rilettura,
-/// nessuna cancellazione.
-pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts) -> NativeFound {
+/// nessuna cancellazione. Con un altro account (o non verificato) non si
+/// legge nulla: solo una nota.
+pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts, account: &Account) -> NativeFound {
+    if let Some(why) = account_refusal(account) {
+        return NativeFound { detail: vec![why], ..Default::default() };
+    }
     let mut errors: Vec<String> = Vec::new();
     let mut skipped = 0u64;
     let mut found_creds: Vec<(String, String)> = Vec::new();
@@ -175,7 +218,10 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts) -> NativeFound {
         Ok(list) => {
             skipped += list.skipped;
             for s in list.servers {
-                if valid_server_name(&s.name) && !servers.iter().any(|x| x.name.eq_ignore_ascii_case(&s.name)) {
+                if valid_server_name(&s.name)
+                    && !s.users.iter().any(|u| u.contains(SEP))
+                    && !servers.iter().any(|x| x.name.eq_ignore_ascii_case(&s.name))
+                {
                     servers.push(s);
                 } else {
                     skipped += 1;
@@ -214,22 +260,38 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts) -> NativeFound {
                 format!("FTP: {} (utenti: {users})", s.name)
             }
         }));
-    detail.extend(lines.take(MAX_DETAIL));
-    let items = found_creds.iter().map(|(t, u)| cred_item(t, u)).chain(servers.iter().map(|s| ftp_item(&s.name))).collect();
+    // Tutte le righe: la pulizia agisce solo su ciò che l'utente ha visto qui.
+    detail.extend(lines);
+    let items = found_creds.iter().map(|(t, u)| cred_item(t, u)).chain(servers.iter().map(|s| ftp_item(&s.name, &s.users))).collect();
     NativeFound { detail, count, skipped, items, ..Default::default() }
 }
 
-/// Elimina ciò che l'analisi dello stesso job ha trovato (`found.items`) e
+/// Elimina ciò che l'ultima «Analisi» ha mostrato (`found.items`) e
 /// nient'altro:
+/// - con un altro account (o non verificato) non si tocca nulla;
 /// - ogni credenziale si ricontrolla col filtro, si rilegge con `CredReadW` e
 ///   si cancella solo se c'è ancora con lo stesso tipo, nome e utente;
 ///   sparita = «Già assente», un errore = `failed` e si passa alla prossima;
-/// - gli account FTP: `reg_allowed`, poi un solo backup `.reg` (se fallisce
-///   nessuna chiave si tocca), poi si cancellano solo le chiavi che
-///   esistevano al backup.
-pub fn clean(creds: &dyn Credentials, reg: &dyn RuleRegistry, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
+/// - gli account FTP: `reg_allowed`, poi si rileggono (utenti uguali a quelli
+///   mostrati, altrimenti si lasciano), poi un solo backup `.reg` privato (se
+///   fallisce nessuna chiave si tocca, e la nota lo dice accanto a quante
+///   password di rete si sono eliminate), poi si cancellano solo le chiavi
+///   che esistevano al backup.
+pub fn clean(
+    creds: &dyn Credentials,
+    ftp_list: &dyn FtpAccounts,
+    reg: &dyn RuleRegistry,
+    account: &Account,
+    found: &NativeFound,
+    cancel: &AtomicBool,
+) -> NativeCleaned {
     let mut out = NativeCleaned::default();
-    let mut ftp: Vec<(&str, RegItem)> = Vec::new();
+    if let Some(why) = account_refusal(account) {
+        out.failed = found.items.len() as u64;
+        out.note(why);
+        return out;
+    }
+    let mut ftp: Vec<(&str, Vec<&str>)> = Vec::new();
     for raw in &found.items {
         if cancel.load(Ordering::Relaxed) {
             out.note("Pulizia interrotta".to_string());
@@ -237,16 +299,16 @@ pub fn clean(creds: &dyn Credentials, reg: &dyn RuleRegistry, found: &NativeFoun
         }
         match parse_item(raw) {
             Some(Item::Cred { target, user }) => clean_cred(creds, target, user, &mut out),
-            Some(Item::Ftp(name)) => {
-                let path = ftp_key_path(name);
-                if !valid_server_name(name) {
+            Some(Item::Ftp { server, users }) => {
+                let path = ftp_key_path(server);
+                if !valid_server_name(server) {
                     out.failed += 1;
-                    out.note(format!("Account FTP non ammesso, lasciato: {}", name.replace(SEP, " ")));
+                    out.note(format!("Account FTP non ammesso, lasciato: {}", server.replace(SEP, " ")));
                 } else if let Err(why) = pc_rules::reg_allowed(RegRoot::Hkcu, &path, None) {
                     out.failed += 1;
-                    out.note(format!("Account FTP {name} non toccato ({why})"));
+                    out.note(format!("Account FTP {server} non toccato ({why})"));
                 } else {
-                    ftp.push((name, RegItem::Key { root: RegRoot::Hkcu, path }));
+                    ftp.push((server, users));
                 }
             }
             None => {
@@ -262,19 +324,57 @@ pub fn clean(creds: &dyn Credentials, reg: &dyn RuleRegistry, found: &NativeFoun
         out.note("Pulizia interrotta".to_string());
         return out;
     }
-    let keys: Vec<RegItem> = ftp.iter().map(|(_, i)| i.clone()).collect();
-    let backup = match reg.backup(&keys) {
-        Ok(b) => b,
+    let creds_done = out.removed;
+    let creds_part = if found.items.len() > ftp.len() {
+        format!("; password di rete eliminate: {creds_done}")
+    } else {
+        String::new()
+    };
+    // Gli account FTP com'erano nell'anteprima: un utente aggiunto dopo non
+    // si cancella con la chiave.
+    let now = match ftp_list.servers() {
+        Ok(l) => l.servers,
         Err(e) => {
             out.failed += ftp.len() as u64;
-            out.note(format!("Backup del registro non riuscito ({e}): nessun account FTP eliminato"));
+            out.note(format!("Account FTP non riletti ({e}): nessun account FTP eliminato{creds_part}"));
+            return out;
+        }
+    };
+    let mut keys: Vec<(&str, RegItem)> = Vec::new();
+    for (server, users) in ftp {
+        let Some(cur) = now.iter().find(|s| s.name.eq_ignore_ascii_case(server)) else {
+            out.note(format!("Già assente: account FTP {server}"));
+            continue;
+        };
+        let mut a: Vec<&str> = cur.users.iter().map(String::as_str).collect();
+        let mut b = users.clone();
+        a.sort_unstable();
+        b.sort_unstable();
+        if a != b {
+            out.note(format!("Account FTP {server}: cambiato dopo l'analisi, lasciato (rifai l'analisi)"));
+            continue;
+        }
+        keys.push((server, RegItem::Key { root: RegRoot::Hkcu, path: ftp_key_path(server) }));
+    }
+    if keys.is_empty() {
+        return out;
+    }
+    let items: Vec<RegItem> = keys.iter().map(|(_, i)| i.clone()).collect();
+    let backup = match reg.backup(&items) {
+        Ok(b) => b,
+        Err(e) => {
+            out.failed += keys.len() as u64;
+            out.note(format!("Backup degli account FTP non riuscito ({e}): nessun account FTP eliminato{creds_part}"));
             return out;
         }
     };
     if let Some(p) = &backup.path {
-        out.note(format!("Backup del registro: {}", p.display()));
+        out.note(format!(
+            "Backup degli account FTP: {}. Contiene le password FTP cifrate: eliminalo quando tutto funziona",
+            p.display()
+        ));
     }
-    for (i, (name, item)) in ftp.iter().enumerate() {
+    for (i, (name, item)) in keys.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             out.note("Pulizia interrotta".to_string());
             break;
@@ -352,16 +452,17 @@ pub fn cred_item(target: &str, user: &str) -> String {
     format!("cred{SEP}{target}{SEP}{user}")
 }
 
-/// Elemento di un account FTP: nome della sottochiave.
-pub fn ftp_item(server: &str) -> String {
-    format!("ftp{SEP}{server}")
+/// Elemento di un account FTP: nome della sottochiave e nomi degli utenti
+/// visti dall'analisi.
+pub fn ftp_item(server: &str, users: &[String]) -> String {
+    format!("ftp{SEP}{server}{SEP}{}", users.join(&SEP.to_string()))
 }
 
 /// Un elemento letto da `NativeFound::items`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Item<'a> {
     Cred { target: &'a str, user: &'a str },
-    Ftp(&'a str),
+    Ftp { server: &'a str, users: Vec<&'a str> },
 }
 
 /// `None` per un elemento che non viene da [`cred_item`] o [`ftp_item`].
@@ -369,7 +470,9 @@ pub fn parse_item(s: &str) -> Option<Item<'_>> {
     let mut parts = s.splitn(3, SEP);
     match (parts.next()?, parts.next(), parts.next()) {
         ("cred", Some(target), Some(user)) => Some(Item::Cred { target, user }),
-        ("ftp", Some(server), None) => Some(Item::Ftp(server)),
+        ("ftp", Some(server), Some(users)) => {
+            Some(Item::Ftp { server, users: if users.is_empty() { Vec::new() } else { users.split(SEP).collect() } })
+        }
         _ => None,
     }
 }
@@ -395,8 +498,9 @@ mod win {
     const MAX_TEXT: usize = 32_767;
     /// Sottochiavi FTP lette al più.
     const MAX_SERVERS: usize = 1000;
-    /// Nomi di utente letti al più per ogni server FTP (solo per il resoconto).
-    const MAX_USERS: usize = 20;
+    /// Nomi di utente letti al più per ogni server FTP (nel resoconto se ne
+    /// mostrano meno; tutti servono a vedere se l'account è cambiato).
+    const MAX_USERS: usize = 1000;
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()

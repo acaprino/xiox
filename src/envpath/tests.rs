@@ -47,6 +47,8 @@ struct Fake {
     /// Un'altra app cambia il PATH mentre si fa il backup.
     change_on_backup: Option<(RegRoot, PathValue)>,
     account: Account,
+    /// Il processo ha i diritti di amministratore (può scrivere HKLM).
+    admin: bool,
     /// Chiavi chieste all'ultimo backup.
     backed_up: RefCell<Vec<RegRoot>>,
     log: RefCell<Vec<String>>,
@@ -64,6 +66,7 @@ impl Fake {
             broadcast_err: None,
             change_on_backup: None,
             account: Account::Same(r"PC\me".to_string()),
+            admin: true,
             backed_up: RefCell::new(Vec::new()),
             log: RefCell::new(Vec::new()),
         }
@@ -135,6 +138,9 @@ impl PathSys for Fake {
     fn account(&self) -> Account {
         self.account.clone()
     }
+    fn system_writable(&self) -> bool {
+        self.admin
+    }
     fn broadcast(&self) -> Result<(), String> {
         self.log.borrow_mut().push("broadcast".to_string());
         match &self.broadcast_err {
@@ -192,11 +198,44 @@ fn missing_folder_on_a_fixed_volume_is_proposed() {
 }
 
 #[test]
-fn duplicates_after_expansion_and_normalization_keep_the_first() {
+fn duplicates_after_normalization_keep_the_first() {
     let fake = Fake::new(None, None);
-    let text = r"%USERPROFILE%\bin;C:\Users\me\BIN\;C:\Tools;c:\users\ME\bin\\;C:\Tools";
+    let text = r"C:\Users\me\bin;C:\Users\me\BIN\;C:\Tools;c:\users\ME\bin\\;C:\Tools;%USERPROFILE%\x;%userprofile%\X\";
     let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
-    assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (3, Reason::Duplicate), (4, Reason::Duplicate)]);
+    assert_eq!(
+        indexes(&p),
+        vec![(1, Reason::Duplicate), (3, Reason::Duplicate), (4, Reason::Duplicate), (6, Reason::Duplicate)]
+    );
+}
+
+#[test]
+fn a_variable_copy_and_a_literal_copy_are_both_kept() {
+    // Se Windows espande `%USERPROFILE%` in un altro modo componendo il PATH,
+    // togliere la copia letterale lascerebbe solo quella che non funziona:
+    // nessuna delle due è un doppione, in qualunque ordine.
+    let fake = Fake::new(None, None);
+    for text in [r"%USERPROFILE%\bin;C:\Users\me\bin", r"C:\Users\me\bin;%USERPROFILE%\bin", r"C:\Users\me\bin\;%UserProfile%\BIN"] {
+        let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
+        assert!(p.is_empty(), "{text}: {p:?}");
+    }
+    // Una cartella che manca davvero si toglie comunque, ciascuna per conto suo.
+    let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\gone"]);
+    let p = proposals(RegRoot::Hkcu, &ex(r"%USERPROFILE%\gone;C:\Users\me\gone"), &fake, &env()).unwrap();
+    assert_eq!(indexes(&p), vec![(0, Reason::Missing), (1, Reason::Missing)]);
+}
+
+#[test]
+fn only_ascii_case_differences_make_duplicates() {
+    // Il segno Kelvin U+212A diventa `k` con `to_lowercase`, ma NTFS lo tiene
+    // diverso da `K`: due cartelle diverse, tenute tutte e due.
+    let fake = Fake::new(None, None);
+    let p = proposals(RegRoot::Hkcu, &ex("C:\\Tools\\K;C:\\Tools\\\u{212A}"), &fake, &env()).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    let p = proposals(RegRoot::Hkcu, &ex("C:\\Tools\\\u{212A};C:\\tools\\k"), &fake, &env()).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    // Altre lettere non ASCII: uguali solo se scritte uguali.
+    let p = proposals(RegRoot::Hkcu, &ex("C:\\Città;C:\\CITTÀ;C:\\città"), &fake, &env()).unwrap();
+    assert_eq!(indexes(&p), vec![(2, Reason::Duplicate)]);
 }
 
 #[test]
@@ -210,7 +249,8 @@ fn per_user_variables_in_the_system_path_are_never_judged() {
     assert!(p.is_empty(), "{p:?}");
     // Nel PATH dell'utente invece valgono solo per lui.
     let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
-    assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (2, Reason::Missing), (3, Reason::Missing)]);
+    // (La seconda non è un doppione della prima: variabile contro letterale.)
+    assert_eq!(indexes(&p), vec![(2, Reason::Missing), (3, Reason::Missing)]);
 }
 
 #[test]
@@ -299,9 +339,10 @@ fn reg_sz_values_are_literal_and_never_expanded() {
     let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\gone"]);
     let p = proposals(RegRoot::Hkcu, &sz(r"%USERPROFILE%\bin;C:\Users\me\bin;%USERPROFILE%\gone"), &fake, &env()).unwrap();
     assert!(p.is_empty(), "{p:?}");
-    // Lo stesso testo in un REG_EXPAND_SZ: doppione e cartella mancante.
+    // Lo stesso testo in un REG_EXPAND_SZ: la cartella mancante si toglie;
+    // variabile e letterale restano tutte e due (mai doppioni fra loro).
     let p = proposals(RegRoot::Hkcu, &ex(r"%USERPROFILE%\bin;C:\Users\me\bin;%USERPROFILE%\gone"), &fake, &env()).unwrap();
-    assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (2, Reason::Missing)]);
+    assert_eq!(indexes(&p), vec![(2, Reason::Missing)]);
     // Nella pulizia vera, dall'analisi.
     let fake = Fake::new(None, Some(sz(r"%USERPROFILE%\bin;C:\Users\me\bin"))).with_missing(&[]);
     let found = analyze_path(&fake, &env());
@@ -381,7 +422,7 @@ fn the_system_path_is_never_emptied() {
 
 #[test]
 fn analysis_reads_both_keys_and_reports_entries_without_writing() {
-    let fake = Fake::new(Some(sz(r"C:\Windows\system32;D:\gone")), Some(ex(r"%USERPROFILE%\bin;C:\Users\me\bin")))
+    let fake = Fake::new(Some(sz(r"C:\Windows\system32;D:\gone")), Some(ex(r"C:\Users\me\bin;C:\Users\me\bin\")))
         .with_missing(&[r"D:\gone"]);
     let found = analyze_path(&fake, &env());
     assert_eq!(found.count, 2);
@@ -418,7 +459,7 @@ fn a_missing_value_or_a_clean_path_gives_nothing() {
 fn clean_backs_up_then_rewrites_with_same_type_and_order_then_broadcasts() {
     let fake = Fake::new(
         Some(sz(r"C:\Windows\system32;D:\gone;C:\Tools;")),
-        Some(ex(r"%USERPROFILE%\bin;;D:\old;C:\Users\me\bin;C:\B")),
+        Some(ex(r"%USERPROFILE%\bin;;D:\old;%userprofile%\bin;C:\B")),
     )
     .with_missing(&[r"D:\gone", r"D:\old"]);
     let found = analyze_path(&fake, &env());
@@ -534,6 +575,46 @@ fn another_account_skips_the_user_path_but_not_the_system_one() {
         assert!(fake.writes().is_empty());
         assert!(out.notes.iter().any(|n| n.contains("PATH utente")), "{:?}", out.notes);
     }
+}
+
+#[test]
+fn without_admin_the_system_path_is_shown_but_never_proposed() {
+    let mut fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), Some(ex(r"D:\old;C:\a"))).with_missing(&[r"D:\gone", r"D:\old"]);
+    fake.admin = false;
+    let found = analyze_path(&fake, &env());
+    // Solo la voce dell'utente si conta e va a `clean`.
+    assert_eq!(found.count, 1, "{:?}", found.detail);
+    assert_eq!(found.items.len(), 1);
+    assert!(found.items[0].starts_with("HKCU"), "{:?}", found.items);
+    assert!(found.detail[0].contains("1 cartella"), "{:?}", found.detail);
+    let line = found.detail.iter().find(|d| d.starts_with("Sistema:")).expect("riga di sistema");
+    assert!(line.contains(r"D:\gone") && line.contains(ADMIN_ONLY), "{line}");
+    assert_eq!(ADMIN_ONLY, "solo con diritti di amministratore: non verrà modificato");
+    // La pulizia scrive solo HKCU, con il backup solo di HKCU.
+    let out = clean_path(&fake, &env(), &found, &no_cancel());
+    assert_eq!((out.removed, out.failed), (1, 0), "{:?}", out.notes);
+    assert_eq!(*fake.backed_up.borrow(), vec![RegRoot::Hkcu]);
+    assert_eq!(fake.value(RegRoot::Hklm), Some(sz(r"C:\Windows;D:\gone")));
+    assert_eq!(fake.value(RegRoot::Hkcu), Some(ex(r"C:\a")));
+
+    // Solo voci di sistema: nessuna da contare, ma si vedono.
+    let mut fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), None).with_missing(&[r"D:\gone"]);
+    fake.admin = false;
+    let found = analyze_path(&fake, &env());
+    assert_eq!((found.count, found.items.len()), (0, 0));
+    assert!(found.detail[0].contains("senza diritti di amministratore"), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains(ADMIN_ONLY)), "{:?}", found.detail);
+
+    // Elementi di HKLM (da un'analisi elevata) con un processo non elevato: rifiutati.
+    let fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), None).with_missing(&[r"D:\gone"]);
+    let found = analyze_path(&fake, &env());
+    assert_eq!(found.count, 1);
+    let mut fake = fake;
+    fake.admin = false;
+    let out = clean_path(&fake, &env(), &found, &no_cancel());
+    assert_eq!((out.removed, out.failed), (0, 1));
+    assert!(fake.log().is_empty(), "{:?}", fake.log());
+    assert!(out.notes.iter().any(|n| n.contains(ADMIN_ONLY)), "{:?}", out.notes);
 }
 
 #[test]
