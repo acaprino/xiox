@@ -177,7 +177,9 @@ fn phase3_options_are_off_unless_ccleaner_default_on() {
                 .iter()
                 .find(|r| r.len() == 7 && r[4].contains(&needle))
                 .unwrap_or_else(|| panic!("{id}/{}: nessuna riga della tabella", o.id));
-            assert_eq!(row[3], "Nuovo XML", "{id}/{}", o.id);
+            // La cella può avere in coda lo stato («Nuovo XML · **Stato:** fatto …»).
+            let coverage = row[3].split(" · ").next().unwrap_or("");
+            assert_eq!(coverage, "Nuovo XML", "{id}/{}", o.id);
             let ccleaner_default = row[2];
             assert!(
                 ccleaner_default.starts_with("Sì") || ccleaner_default.starts_with("No"),
