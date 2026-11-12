@@ -158,18 +158,7 @@ pub fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
 }
 
-pub fn fmt_size(bytes: u64) -> String {
-    let b = bytes as f64;
-    if b >= 1024.0 * 1024.0 * 1024.0 {
-        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0)).replace('.', ",")
-    } else if b >= 1024.0 * 1024.0 {
-        format!("{:.1} MB", b / (1024.0 * 1024.0)).replace('.', ",")
-    } else if b >= 1024.0 {
-        format!("{:.0} KB", b / 1024.0)
-    } else {
-        format!("{} byte", bytes)
-    }
-}
+pub use dc_model::fmt_size;
 
 /// Folder where the app keeps its backups (Documents\PulisciPC).
 pub fn data_dir() -> std::path::PathBuf {

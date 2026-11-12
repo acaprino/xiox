@@ -495,6 +495,91 @@ pub trait Remover: Send + Sync {
     fn execute(&self, plan: &CleanPlan, dry_run: bool) -> CleanResult;
 }
 
+/// Size as shown in the UI: "1,50 GB", "12,3 MB", "640 KB", "512 byte" (Italian decimal comma).
+pub fn fmt_size(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0)).replace('.', ",")
+    } else if b >= 1024.0 * 1024.0 {
+        format!("{:.1} MB", b / (1024.0 * 1024.0)).replace('.', ",")
+    } else if b >= 1024.0 {
+        format!("{:.0} KB", b / 1024.0)
+    } else {
+        format!("{} byte", bytes)
+    }
+}
+
+/// Duration as "350 ms", "42 s", "3 min 05 s", "1 h 02 min".
+fn fmt_duration(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms} ms");
+    }
+    let s = ms / 1000;
+    if s < 60 {
+        format!("{s} s")
+    } else if s < 3600 {
+        format!("{} min {:02} s", s / 60, s % 60)
+    } else {
+        format!("{} h {:02} min", s / 3600, (s % 3600) / 60)
+    }
+}
+
+/// Final summary of a cleanup, shown in the UI and saved as text.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanReport {
+    /// Bytes really freed (permanent deletion).
+    pub freed_bytes: u64,
+    /// Bytes moved to the Recycle Bin: freed only when it is emptied.
+    pub recycled_bytes: u64,
+    pub files: u64,
+    pub dirs: u64,
+    pub elapsed_ms: u64,
+    pub cancelled: bool,
+    /// Label → bytes, largest first.
+    pub by_category: Vec<(String, u64)>,
+    pub skipped: Vec<(PathBuf, String)>,
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+impl CleanReport {
+    /// Plain text, one item per line.
+    pub fn to_text(&self) -> String {
+        let mut out = vec!["Resoconto della pulizia".to_string()];
+        if self.cancelled {
+            out.push("Annullato: la pulizia è stata interrotta prima della fine".into());
+        }
+        out.push(format!("Spazio liberato: {}", fmt_size(self.freed_bytes)));
+        if self.recycled_bytes > 0 {
+            out.push(format!(
+                "Nel Cestino: {} (si libera svuotando il Cestino)",
+                fmt_size(self.recycled_bytes)
+            ));
+        }
+        out.push(format!("File eliminati: {}", self.files));
+        out.push(format!("Cartelle eliminate: {}", self.dirs));
+        out.push(format!("Durata: {}", fmt_duration(self.elapsed_ms)));
+        if !self.by_category.is_empty() {
+            out.push(String::new());
+            out.push("Per categoria:".into());
+            for (label, bytes) in &self.by_category {
+                out.push(format!("  {label}: {}", fmt_size(*bytes)));
+            }
+        }
+        for (title, list) in [("Saltati", &self.skipped), ("Non riusciti", &self.failed)] {
+            if !list.is_empty() {
+                out.push(String::new());
+                out.push(format!("{title} ({}):", list.len()));
+                for (path, reason) in list {
+                    out.push(format!("  {}: {reason}", path.display()));
+                }
+            }
+        }
+        out.push(String::new());
+        out.join("\n")
+    }
+}
+
 // ───────────────────────────── app-level (UI) types ─────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -535,6 +620,39 @@ fn yes() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_report_text_lists_everything() {
+        let r = CleanReport {
+            freed_bytes: 3 * 1024 * 1024 * 1024 / 2,
+            recycled_bytes: 200 * 1024 * 1024,
+            files: 1234,
+            dirs: 56,
+            elapsed_ms: 65_000,
+            cancelled: false,
+            by_category: vec![("Build Rust".into(), 1024 * 1024 * 1024), ("Cache npm".into(), 512 * 1024)],
+            skipped: vec![(PathBuf::from(r"C:\p\dist"), "Non verificata".into())],
+            failed: vec![(PathBuf::from(r"C:\p\target"), "File in uso".into())],
+        };
+        let t = r.to_text();
+        assert!(t.contains("Spazio liberato: 1,50 GB"), "{t}");
+        assert!(t.contains("Build Rust: 1,00 GB"), "{t}");
+        assert!(t.contains("Cache npm: 512 KB"), "{t}");
+        assert!(t.contains("Saltati (1)"), "{t}");
+        assert!(t.contains("Non riusciti (1)"), "{t}");
+        assert!(t.contains("200,0 MB (si libera svuotando il Cestino)"), "{t}");
+        assert!(t.contains("File eliminati: 1234"), "{t}");
+        assert!(t.contains("Cartelle eliminate: 56"), "{t}");
+        assert!(t.contains("Durata: 1 min 05 s"), "{t}");
+        assert!(!t.contains("Annullato"), "{t}");
+        println!("{t}");
+
+        let c = CleanReport { cancelled: true, elapsed_ms: 300, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("Annullato"), "{t}");
+        assert!(t.contains("Durata: 300 ms"), "{t}");
+        assert!(!t.contains("Cestino") && !t.contains("Saltati"), "{t}");
+    }
 
     #[test]
     fn old_settings_file_keeps_roots_but_scans_sessions_only() {
