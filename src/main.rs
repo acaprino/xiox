@@ -3,6 +3,7 @@
 mod browserdb;
 mod cleaner;
 mod dev;
+mod envpath;
 #[cfg(test)]
 mod live_checks;
 mod native;
