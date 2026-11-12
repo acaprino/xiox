@@ -1105,7 +1105,12 @@ impl App {
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         let Some(path) = self.screenshot.clone() else { return };
         ctx.request_repaint();
-        let busy = self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() || self.rules_rx.is_some();
+        let busy = self.clean_job.is_some()
+            || self.reg_job.is_some()
+            || self.svc_job.is_some()
+            || self.dev.busy()
+            || self.dev.demo_pending()
+            || self.rules_rx.is_some();
         // L'analisi Sviluppatori dura circa un minuto senza amministratore: la si aspetta fino a 5 minuti.
         let dev_wait = self.dev.busy() && self.started.elapsed() < Duration::from_secs(300);
         if self.frame >= 120 && (!busy || self.frame >= 900) && !dev_wait && !self.shot_sent {
@@ -1418,6 +1423,8 @@ fn main() -> eframe::Result<()> {
     let mut analyze = false;
     let mut about = false;
     let mut section = dev::Section::Projects;
+    let mut only_root: Option<PathBuf> = None;
+    let mut demo = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1441,6 +1448,16 @@ fn main() -> eframe::Result<()> {
                 section = dev::Section::parse(&args[i + 1]).unwrap_or(section);
                 i += 1;
             }
+            // Verifiche su un albero finto: si cerca solo lì, impostazioni in memoria.
+            "--only-root" if i + 1 < args.len() => {
+                only_root = Some(PathBuf::from(&args[i + 1]));
+                i += 1;
+            }
+            // Solo build di debug e solo con --only-root: conferma, pulizia o annulla da soli.
+            "--dev-demo" if i + 1 < args.len() => {
+                demo = dev::Demo::parse(&args[i + 1]);
+                i += 1;
+            }
             _ => {}
         }
         i += 1;
@@ -1458,7 +1475,17 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             style(&cc.egui_ctx);
-            let mut app = App::new(screenshot, tab, dev::DevState::new(section, analyze), about);
+            let mut dev = match only_root {
+                Some(dir) => dev::DevState::only_root(dir, section, analyze),
+                None => dev::DevState::new(section, analyze),
+            };
+            if screenshot.is_some() {
+                dev.set_screenshot();
+            }
+            if let Some(d) = demo {
+                dev.set_demo(d);
+            }
+            let mut app = App::new(screenshot, tab, dev, about);
             app.start_rules(&cc.egui_ctx);
             Ok(Box::new(app))
         }),

@@ -217,6 +217,7 @@ pub enum DirCheck {
     /// A symlink or junction: only the link may be removed.
     Link,
     /// Another kind of reparse point (cloud placeholder, ...): neither entered nor removed.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Reparse,
     NotDir,
 }

@@ -7,16 +7,21 @@
 
 use crate::sys;
 use crate::theme::*;
-use dc_app::{DevScan, ANALYSIS_FAILED};
-use dc_model::{path_key, Agent, CleanPlan, ItemOutcome, PlanAction, PlanItem, ProjectReport, ProjectStatus, RemoveMode, Settings};
+use dc_app::{Cancel, DevScan, Tick, ANALYSIS_FAILED};
+use dc_model::{
+    path_key, Agent, Artifact, CleanPlan, CleanReport, ItemOutcome, Level, PlanAction, PlanItem, ProjectReport, ProjectStatus,
+    RemoveMode, Selection, Settings,
+};
 use dc_mukade::ArchivedSession;
 use dc_sessions::{SystemCli, SystemTrash};
+use eframe::egui::collapsing_header::{paint_default_icon, CollapsingState};
 use eframe::egui::{self, Align, Color32, Layout, Margin, RichText, Stroke, Ui, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::time::Instant;
 
 const ROW_H: f32 = 22.0;
 const CHECK_W: f32 = 22.0;
@@ -52,19 +57,38 @@ impl Section {
 
 pub enum DevMsg {
     Step(String, f32),
+    /// Avanzamento della cancellazione di cartelle e worktree.
+    Tick(Tick),
     Scanned(DevScan),
     Cleaned(DevCleaned),
 }
 
-/// Esito di una pulizia: una riga per elemento (cartella, worktree o sessione).
+/// Esito di una pulizia: il resoconto (cartelle, worktree o sessioni).
 pub struct DevCleaned {
-    pub rows: Vec<(String, ItemOutcome)>,
-    pub freed: u64,
+    pub report: CleanReport,
+    /// `path_key` → «progetto · cartella», per le righe di saltati e non riusciti.
+    pub labels: HashMap<String, String>,
     /// Richieste rifiutate per intero (nulla è stato toccato).
     pub errors: Vec<String>,
-    pub mode: RemoveMode,
-    /// Un errore interno ha fermato la pulizia a metà: `rows` ha solo gli esiti raccolti prima.
+    /// Un errore interno ha fermato la pulizia a metà: `report` ha solo gli esiti raccolti prima.
     pub interrupted: bool,
+}
+
+impl DevCleaned {
+    fn new() -> Self {
+        DevCleaned { report: CleanReport::default(), labels: HashMap::new(), errors: Vec::new(), interrupted: false }
+    }
+
+    /// Nulla è stato tolto, saltato o tentato.
+    fn is_empty(&self) -> bool {
+        let r = &self.report;
+        r.by_category.is_empty() && r.skipped.is_empty() && r.failed.is_empty() && r.files == 0 && r.dirs == 0
+    }
+
+    /// Come mostrare un percorso del resoconto: l'etichetta del piano, se c'è.
+    fn label(&self, path: &Path) -> String {
+        self.labels.get(&path_key(path)).cloned().unwrap_or_else(|| path.display().to_string())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -79,7 +103,15 @@ struct Confirm {
     /// L'analisi da cui è nato il piano: la pulizia gira su questa, non su `DevState::scan`.
     scan: Arc<DevScan>,
     section: Section,
+    /// La scelta da cui è nato il piano (per rifarlo «Definitiva»).
+    sel: Selection,
     plan: Option<CleanPlan>,
+    /// Le cartelle Attenzione del piano: (elemento, avviso). Non vuoto → serve «Ho letto gli avvisi».
+    cautions: Vec<(String, String)>,
+    /// «Ho letto gli avvisi» spuntato.
+    ack: bool,
+    /// I Cestini che non bastano: (unità, byte da spostare, byte liberi nel Cestino).
+    shortfall: Vec<(char, u64, u64)>,
     sessions: Vec<(Agent, String)>,
     /// (elemento, dimensione) per l'elenco nel dialogo.
     rows: Vec<(String, String)>,
@@ -94,7 +126,8 @@ pub struct DevState {
     section: Section,
     view: View,
     scan: Option<Arc<DevScan>>,
-    sel_projects: Vec<bool>,
+    /// Le cartelle scelte nei progetti (`Artifact::id`).
+    sel_artifacts: HashSet<String>,
     sel_worktrees: Vec<bool>,
     sel_sessions: Vec<bool>,
     cleaned: Option<DevCleaned>,
@@ -107,6 +140,40 @@ pub struct DevState {
     notice: Option<String>,
     root_sel: Option<usize>,
     auto_scan: bool,
+    /// Falso con `--only-root`: le impostazioni restano in memoria.
+    persist: bool,
+    /// `--screenshot`: progetti aperti, nessun dialogo di sistema.
+    screenshot: bool,
+    /// Avanzamento e «Annulla» della pulizia in corso.
+    tick: Option<Tick>,
+    cancel: Option<Cancel>,
+    /// Esito di «Salva come testo…»: (testo, riuscito).
+    saved: Option<(String, bool)>,
+    /// Solo build di debug: `--dev-demo`, per gli screenshot della conferma e del resoconto.
+    demo: Option<Demo>,
+    /// Fotogrammi dall'ultimo passo della dimostrazione (lo screenshot aspetta che il dialogo compaia).
+    demo_frames: u32,
+}
+
+/// `--dev-demo` (solo build di debug, solo con `--only-root`): dopo l'analisi sceglie tutte le
+/// cartelle e apre la conferma (`Confirm`), oppure pulisce in modo definitivo (`Clean`), oppure
+/// pulisce e annulla subito (`Cancel`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Demo {
+    Confirm,
+    Clean,
+    Cancel,
+}
+
+impl Demo {
+    pub fn parse(s: &str) -> Option<Demo> {
+        match s {
+            "confirm" => Some(Demo::Confirm),
+            "clean" => Some(Demo::Clean),
+            "cancel" => Some(Demo::Cancel),
+            _ => None,
+        }
+    }
 }
 
 /// Progetti e worktree non si puliscono da un'analisi più vecchia di `dc_app::MAX_SCAN_AGE_MS`.
@@ -127,7 +194,7 @@ impl DevState {
             section,
             view: View::Empty,
             scan: None,
-            sel_projects: Vec::new(),
+            sel_artifacts: HashSet::new(),
             sel_worktrees: Vec::new(),
             sel_sessions: Vec::new(),
             cleaned: None,
@@ -139,7 +206,39 @@ impl DevState {
             notice: None,
             root_sel: None,
             auto_scan: analyze,
+            persist: true,
+            screenshot: false,
+            tick: None,
+            cancel: None,
+            saved: None,
+            demo: None,
+            demo_frames: 0,
         }
+    }
+
+    /// `--only-root <dir>`: si cerca solo in `dir`, niente sessioni né altri dischi, e le
+    /// impostazioni non si salvano.
+    pub fn only_root(dir: PathBuf, section: Section, analyze: bool) -> Self {
+        let mut st = Self::with_settings(only_root_settings(dc_app::default_settings(), dir), section, analyze);
+        st.persist = false;
+        st
+    }
+
+    /// `--screenshot`: i progetti si mostrano aperti e «Salva come testo…» non apre dialoghi.
+    pub fn set_screenshot(&mut self) {
+        self.screenshot = true;
+    }
+
+    /// Solo build di debug e solo con `--only-root` (mai sui progetti veri).
+    pub fn set_demo(&mut self, demo: Demo) {
+        if cfg!(debug_assertions) && !self.persist {
+            self.demo = Some(demo);
+        }
+    }
+
+    /// Lo screenshot aspetta: la dimostrazione non ha ancora finito o il dialogo sta comparendo.
+    pub fn demo_pending(&self) -> bool {
+        self.demo.is_some() || (self.demo_frames > 0 && self.demo_frames < 30)
     }
 
     pub fn busy(&self) -> bool {
@@ -158,7 +257,7 @@ impl DevState {
 
     fn drop_data(&mut self) {
         self.scan = None;
-        self.sel_projects = Vec::new();
+        self.sel_artifacts = HashSet::new();
         self.sel_worktrees = Vec::new();
         self.sel_sessions = Vec::new();
         self.cleaned = None;
@@ -187,6 +286,7 @@ impl DevState {
                     self.text = t;
                     self.progress = p;
                 }
+                DevMsg::Tick(t) => self.tick = Some(t),
                 DevMsg::Scanned(scan) => {
                     self.set_scan(scan);
                     done = true;
@@ -212,12 +312,14 @@ impl DevState {
         }
         if done {
             self.job = None;
+            self.tick = None;
+            self.cancel = None;
         }
     }
 
     fn set_scan(&mut self, scan: DevScan) {
         self.notice = None;
-        self.sel_projects = preselect_reports(&scan.projects);
+        self.sel_artifacts = preselect_artifacts(&scan.projects);
         self.sel_worktrees = preselect_reports(&scan.worktrees);
         self.sel_sessions = preselect_sessions(&scan.archived);
         self.scan = Some(Arc::new(scan));
@@ -253,7 +355,7 @@ impl DevState {
     /// (selezionati, totale, byte selezionati) della sezione visibile.
     fn selection(&self) -> (usize, usize, u64) {
         match &self.scan {
-            Some(scan) => section_stats(scan, self.section, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions),
+            Some(scan) => section_stats(scan, self.section, &self.sel_artifacts, &self.sel_worktrees, &self.sel_sessions),
             None => (0, 0, 0),
         }
     }
@@ -268,7 +370,7 @@ impl DevState {
         self.notice = None;
     }
 
-    /// «Continua» nel dialogo: l'età dell'analisi si ricontrolla a `now_ms` (il dialogo può
+    /// «Pulisci» nel dialogo: l'età dell'analisi si ricontrolla a `now_ms` (il dialogo può
     /// essere rimasto aperto a lungo). Troppo vecchia per progetti e worktree: nessuna pulizia,
     /// avviso nella striscia gialla. `Some` = la conferma da passare a `start_clean`.
     fn accept_confirm(&mut self, c: Confirm, now_ms: i64) -> Option<Confirm> {
@@ -279,11 +381,16 @@ impl DevState {
         Some(c)
     }
 
+    fn open_confirm_at(&mut self, now_ms: i64) {
+        self.open_confirm_with(now_ms, dc_app::recycle_shortfall);
+    }
+
     /// Costruisce il piano dalla selezione della sezione visibile (lo stesso che verrà
     /// eseguito) e apre la conferma. Le righe scelte nelle altre sezioni non ci entrano.
     /// Progetti e worktree: un'analisi vecchia (`DevScan::is_stale` a `now_ms`) non apre nulla
     /// e lo dice nella striscia gialla; le sessioni si ricontrollano comunque prima di cancellarle.
-    fn open_confirm_at(&mut self, now_ms: i64) {
+    /// `shortfall`: i Cestini che non bastano per il piano (`dc_app::recycle_shortfall`).
+    fn open_confirm_with(&mut self, now_ms: i64, shortfall: impl Fn(&CleanPlan) -> Vec<(char, u64, u64)>) {
         let Some(scan) = self.scan.clone() else { return };
         let mode = self.settings.remove_mode;
         let section = self.section;
@@ -292,8 +399,8 @@ impl DevState {
             self.notice = Some(STALE_SCAN.into());
             return;
         }
-        let action = section_action(&scan, section, &self.sel_projects, &self.sel_worktrees, &self.sel_sessions);
-        let ids = action.ids;
+        let action = section_action(&scan, section, &self.sel_artifacts, &self.sel_worktrees, &self.sel_sessions);
+        let sel = action.selection(&scan);
         let sessions: Vec<&ArchivedSession> = scan
             .archived
             .iter()
@@ -303,8 +410,10 @@ impl DevState {
         let mut summary = Vec::new();
         let mut plan = None;
         let mut error = None;
-        if !ids.is_empty() {
-            match dc_app::build_plan(&scan, &dc_app::selection_for_projects(&scan, &ids), mode) {
+        let mut cautions = Vec::new();
+        let mut short = Vec::new();
+        if !sel.artifacts.is_empty() || !sel.worktrees.is_empty() {
+            match dc_app::build_plan(&scan, &sel, mode) {
                 Ok(p) => {
                     for it in &p.items {
                         rows.push((plan_label(&scan, it), sys::fmt_size(it.expected_bytes)));
@@ -316,6 +425,8 @@ impl DevState {
                             sys::fmt_size(p.expected_bytes)
                         ));
                     }
+                    cautions = plan_cautions(&scan, &p);
+                    short = shortfall(&p);
                     plan = Some(p);
                 }
                 Err(e) => error = Some(e),
@@ -333,7 +444,20 @@ impl DevState {
             }
         }
         let sessions = sessions.iter().map(|s| (s.agent, s.id.clone())).collect();
-        self.confirm = Some(Confirm { scan, section, plan, sessions, rows, summary, error, mode });
+        self.confirm = Some(Confirm {
+            scan,
+            section,
+            sel,
+            plan,
+            cautions,
+            ack: false,
+            shortfall: short,
+            sessions,
+            rows,
+            summary,
+            error,
+            mode,
+        });
     }
 
     fn start_clean(&mut self, ctx: &egui::Context, c: Confirm) {
@@ -348,11 +472,22 @@ impl DevState {
             .map(|s| ((s.agent, s.id.clone()), session_label(s)))
             .collect();
         let Confirm { scan, plan, sessions, mode, .. } = c;
+        let plan = plan.filter(|p| !p.items.is_empty());
         self.cleaned = None;
         self.error = None;
+        self.saved = None;
         self.view = View::Cleaned;
         self.text = "Pulizia in corso…".into();
         self.progress = 0.0;
+        // La barra e «Annulla» ci sono da subito, prima del primo avanzamento.
+        self.tick = plan.as_ref().map(|p| Tick {
+            done_bytes: 0,
+            total_bytes: p.expected_bytes,
+            done_items: 0,
+            total_items: p.items.len(),
+        });
+        let cancel = Cancel::default();
+        self.cancel = plan.is_some().then(|| cancel.clone());
         let (tx, rx) = channel();
         self.job = Some(rx);
         let ctx = ctx.clone();
@@ -361,26 +496,22 @@ impl DevState {
                 let _ = tx.send(DevMsg::Step(t.to_string(), p));
                 ctx.request_repaint();
             };
-            let mut out = DevCleaned { rows: Vec::new(), freed: 0, errors: Vec::new(), mode, interrupted: false };
+            let tick = |t: Tick| {
+                let _ = tx.send(DevMsg::Tick(t));
+                ctx.request_repaint();
+            };
+            let mut out = DevCleaned::new();
+            out.labels = plan_labels;
             guarded(&mut out, |out| {
-                if let Some(plan) = plan.filter(|p| !p.items.is_empty()) {
+                if let Some(plan) = &plan {
                     step("Eliminazione di cartelle e worktree…", 0.1);
-                    // Avanzamento e «Annulla» veri nel Task 10.
-                    match dc_app::execute_plan(&scan, &plan, &|_| {}, &dc_app::Cancel::default()) {
-                        Ok(res) => {
-                            out.freed = out.freed.saturating_add(res.bytes_freed);
-                            for it in res.items {
-                                let label = plan_labels
-                                    .get(&path_key(&it.path))
-                                    .cloned()
-                                    .unwrap_or_else(|| it.path.display().to_string());
-                                out.rows.push((label, it.outcome));
-                            }
-                        }
+                    match dc_app::execute_plan(&scan, plan, &tick, &cancel) {
+                        Ok(res) => merge_report(&mut out.report, dc_app::report(&scan, plan, &res)),
                         Err(e) => out.errors.push(e),
                     }
                 }
                 if !sessions.is_empty() {
+                    let started = Instant::now();
                     let label = |agent: Agent, id: &str| {
                         session_labels
                             .get(&(agent, id.to_string()))
@@ -392,7 +523,7 @@ impl DevState {
                     match dc_app::revalidate_archived(&scan, &sessions, &dc_app::fresh_archived) {
                         Ok(checked) => {
                             for o in checked.skipped {
-                                out.rows.push((label(o.agent, &o.id), o.outcome));
+                                add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
                             }
                             if !checked.keep.is_empty() {
                                 step("Cancellazione delle sessioni archiviate…", 0.6);
@@ -400,10 +531,7 @@ impl DevState {
                                 match dc_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
                                     Ok(done) => {
                                         for o in done {
-                                            if let ItemOutcome::Removed { bytes_freed } = &o.outcome {
-                                                out.freed = out.freed.saturating_add(*bytes_freed);
-                                            }
-                                            out.rows.push((label(o.agent, &o.id), o.outcome));
+                                            add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
                                         }
                                     }
                                     Err(e) => out.errors.push(e),
@@ -412,6 +540,7 @@ impl DevState {
                         }
                         Err(e) => out.errors.push(e),
                     }
+                    out.report.elapsed_ms = out.report.elapsed_ms.saturating_add(started.elapsed().as_millis() as u64);
                 }
             });
             drop(scan);
@@ -420,8 +549,71 @@ impl DevState {
         });
     }
 
+    /// «Annulla» durante la pulizia: i worker si fermano prima del file successivo.
+    fn cancel_clean(&mut self) {
+        if let Some(c) = &self.cancel {
+            c.cancel();
+        }
+    }
+
+    fn cancelling(&self) -> bool {
+        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
+    }
+
     fn save(&mut self) {
-        self.settings_err = dc_app::save_settings(&self.settings).err();
+        if self.persist {
+            self.settings_err = dc_app::save_settings(&self.settings).err();
+        }
+    }
+
+    /// «Salva come testo…»: il resoconto in un file scelto dall'utente.
+    fn save_report(&mut self) {
+        let Some(c) = &self.cleaned else { return };
+        if self.screenshot {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Salva il resoconto")
+            .set_file_name("Resoconto PulisciPC.txt")
+            .add_filter("Testo", &["txt"])
+            .save_file()
+        else {
+            return;
+        };
+        self.saved = Some(match std::fs::write(&path, c.report.to_text()) {
+            Ok(()) => (format!("Resoconto salvato in {}", path.display()), true),
+            Err(e) => (format!("Resoconto non salvato: {e}"), false),
+        });
+    }
+
+    /// Un passo di `--dev-demo` (solo build di debug, solo `--only-root`).
+    fn run_demo(&mut self, ctx: &egui::Context) {
+        if self.demo_frames > 0 {
+            self.demo_frames += 1;
+        }
+        let Some(demo) = self.demo else { return };
+        if self.busy() || self.view != View::Scanned {
+            return;
+        }
+        let Some(scan) = self.scan.clone() else { return };
+        self.demo = None;
+        self.demo_frames = 1;
+        self.section = Section::Projects;
+        select_all_artifacts(&scan.projects, &mut self.sel_artifacts, true);
+        if demo != Demo::Confirm {
+            self.settings.remove_mode = RemoveMode::Permanent;
+        }
+        self.open_confirm();
+        if demo == Demo::Confirm {
+            return;
+        }
+        if let Some(mut c) = self.confirm.take() {
+            c.ack = true;
+            self.start_clean(ctx, c);
+            if demo == Demo::Cancel {
+                self.cancel_clean();
+            }
+        }
     }
 
     // ---------- drawing ----------
@@ -513,10 +705,25 @@ impl DevState {
 
     fn body(&mut self, ui: &mut Ui, busy: bool) {
         if busy {
-            ui.label(RichText::new(&self.text).size(16.0).color(TEXT));
-            ui.add_space(6.0);
-            ui.add(egui::ProgressBar::new(self.progress).fill(ACCENT).show_percentage());
-            ui.add_space(10.0);
+            match self.tick {
+                Some(t) => {
+                    let text = if self.cancelling() { "Annullamento in corso…" } else { "Pulizia in corso…" };
+                    ui.label(RichText::new(text).size(16.0).color(TEXT));
+                    ui.add_space(6.0);
+                    ui.add(egui::ProgressBar::new(tick_fraction(&t)).fill(ACCENT).text(tick_text(&t)));
+                    ui.add_space(8.0);
+                    if secondary(ui, "Annulla", !self.cancelling()).clicked() {
+                        self.cancel_clean();
+                    }
+                    ui.add_space(10.0);
+                }
+                None => {
+                    ui.label(RichText::new(&self.text).size(16.0).color(TEXT));
+                    ui.add_space(6.0);
+                    ui.add(egui::ProgressBar::new(self.progress).fill(ACCENT).show_percentage());
+                    ui.add_space(10.0);
+                }
+            }
         }
         match self.view {
             View::Empty if busy => {
@@ -538,6 +745,7 @@ impl DevState {
                 });
             }
             View::Scanned => self.scanned_view(ui),
+            View::Cleaned if busy && self.tick.is_some() => {}
             View::Cleaned => self.cleaned_view(ui, busy),
         }
     }
@@ -552,7 +760,7 @@ impl DevState {
                 let all = ui.small_button("Tutti").clicked();
                 if none || all {
                     match self.section {
-                        Section::Projects => select_reports(&scan.projects, &mut self.sel_projects, all),
+                        Section::Projects => select_all_artifacts(&scan.projects, &mut self.sel_artifacts, all),
                         Section::Worktrees => select_reports(&scan.worktrees, &mut self.sel_worktrees, all),
                         Section::Sessions => select_sessions(&scan.archived, &mut self.sel_sessions, all),
                     }
@@ -566,16 +774,28 @@ impl DevState {
         );
         let how = if scan.backend == "mft" { "dimensioni dalla MFT del disco" } else { "cartelle misurate una per una" };
         ui.label(RichText::new(format!("{} · {how}", fmt_elapsed(scan.elapsed_ms))).size(12.0).color(MUTED));
-        if self.section == Section::Worktrees {
-            ui.label(
-                RichText::new("I worktree si rimuovono con git e sempre in modo definitivo; quelli con modifiche non salvate restano.")
-                    .size(12.0)
-                    .color(MUTED),
-            );
+        match self.section {
+            Section::Projects => {
+                ui.label(
+                    RichText::new("Ogni cartella ha la sua casella: «Consigliato» è proposto nei progetti inattivi, le altre le scegli tu.")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+            }
+            Section::Worktrees => {
+                ui.label(
+                    RichText::new("I worktree si rimuovono con git e sempre in modo definitivo; quelli con modifiche non salvate restano.")
+                        .size(12.0)
+                        .color(MUTED),
+                );
+            }
+            Section::Sessions => {}
         }
         ui.add_space(8.0);
         match self.section {
-            Section::Projects => projects_table(ui, &scan.projects, &mut self.sel_projects, analysis_failed(&scan)),
+            Section::Projects => {
+                projects_table(ui, &scan.projects, &mut self.sel_artifacts, analysis_failed(&scan), self.screenshot)
+            }
             Section::Worktrees => {
                 worktrees_table(ui, &scan.worktrees, &scan.other_worktrees, &mut self.sel_worktrees, analysis_failed(&scan))
             }
@@ -583,41 +803,82 @@ impl DevState {
         }
     }
 
-    fn cleaned_view(&self, ui: &mut Ui, busy: bool) {
-        let title = match &self.cleaned {
-            _ if busy => "Pulizia in corso…",
-            Some(c) if c.interrupted => "Pulizia interrotta",
-            Some(c) if c.rows.is_empty() && !c.errors.is_empty() => "Pulizia non eseguita",
-            _ => "Pulizia completata",
-        };
-        ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+    fn cleaned_view(&mut self, ui: &mut Ui, busy: bool) {
+        let title = cleaned_title(self.cleaned.as_ref(), busy);
+        let can_save = !busy && self.cleaned.as_ref().is_some_and(|c| !c.is_empty());
+        let mut save = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+            if can_save {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    save = secondary(ui, "Salva come testo…", true).clicked();
+                });
+            }
+        });
+        if save {
+            self.save_report();
+        }
+        if let Some((text, ok)) = &self.saved {
+            ui.add(egui::Label::new(RichText::new(text).size(12.0).color(if *ok { GREEN } else { RED })).wrap());
+        }
         let Some(c) = &self.cleaned else { return };
         if c.interrupted {
             let text = "Un errore interno ha fermato la pulizia: altri elementi potrebbero essere stati toccati senza comparire qui. Premi «Analizza» per vedere cosa resta.";
             ui.add(egui::Label::new(RichText::new(text).color(RED)).wrap());
         }
-        if c.rows.is_empty() {
+        if c.is_empty() {
             if c.errors.is_empty() && !c.interrupted {
                 ui.add_space(10.0);
                 ui.label(RichText::new("Nessun elemento da pulire.").color(MUTED));
             }
             return;
         }
-        ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(c.freed))).size(15.0).color(GREEN));
-        if c.mode == RemoveMode::Recycle {
-            ui.label(RichText::new("Quello che è andato nel Cestino libera spazio quando lo svuoti.").size(12.0).color(MUTED));
+        let r = &c.report;
+        ui.label(RichText::new(format!("Spazio liberato: {}", sys::fmt_size(r.freed_bytes))).size(15.0).color(GREEN));
+        if r.recycled_bytes > 0 {
+            ui.label(RichText::new(recycled_text(r.recycled_bytes)).color(TEXT));
+        }
+        ui.label(
+            RichText::new(format!(
+                "File eliminati: {} · Cartelle eliminate: {} · Durata: {}",
+                r.files,
+                r.dirs,
+                fmt_duration(r.elapsed_ms)
+            ))
+            .size(12.0)
+            .color(MUTED),
+        );
+        if r.cancelled {
+            ui.label(RichText::new("Annullata: le voci non ancora iniziate sono rimaste dov'erano.").color(MUTED));
         }
         ui.add_space(10.0);
-        let w = col_widths(ui.available_width() - SCROLLBAR, &[0.0, 240.0], ui.spacing().item_spacing.x);
-        header(ui, &w, &["Elemento", "Esito"]);
-        egui::ScrollArea::vertical().id_salt("dev_cleaned").auto_shrink([false, false]).show_rows(ui, ROW_H, c.rows.len(), |ui, range| {
-            for i in range {
-                let (label, outcome) = &c.rows[i];
-                let (text, color) = outcome_text(outcome);
-                striped_row(ui, i, |ui| {
-                    crate::cell(ui, w[0], RichText::new(label).color(TEXT));
-                    crate::cell(ui, w[1], RichText::new(text).color(color));
-                });
+        let gap = ui.spacing().item_spacing.x;
+        egui::ScrollArea::vertical().id_salt("dev_cleaned").auto_shrink([false, false]).show(ui, |ui| {
+            let total = ui.available_width() - SCROLLBAR;
+            if !r.by_category.is_empty() {
+                let w = col_widths(total, &[0.0, 120.0], gap);
+                header(ui, &w, &["Categoria", "Spazio"]);
+                for (i, (label, bytes)) in r.by_category.iter().enumerate() {
+                    striped_row(ui, i, |ui| {
+                        crate::cell(ui, w[0], RichText::new(label).color(TEXT));
+                        crate::cell(ui, w[1], RichText::new(sys::fmt_size(*bytes)).color(TEXT));
+                    });
+                }
+            }
+            for (title, list, color) in [("Saltati", &r.skipped, MUTED), ("Non riusciti", &r.failed, RED)] {
+                if list.is_empty() {
+                    continue;
+                }
+                ui.add_space(12.0);
+                ui.label(RichText::new(format!("{title} ({})", list.len())).strong().color(TEXT));
+                let w = col_widths(total, &[0.0, 300.0], gap);
+                header(ui, &w, &["Elemento", "Motivo"]);
+                for (i, (path, why)) in list.iter().enumerate() {
+                    striped_row(ui, i, |ui| {
+                        crate::cell(ui, w[0], RichText::new(c.label(path)).color(TEXT)).on_hover_text(path.display().to_string());
+                        crate::cell(ui, w[1], RichText::new(why).color(color)).on_hover_text(why);
+                    });
+                }
             }
         });
     }
@@ -630,6 +891,8 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
         let ctx = ui.ctx().clone();
         state.start_scan(&ctx, admin);
     }
+    let ctx = ui.ctx().clone();
+    state.run_demo(&ctx);
     let busy = state.busy();
     egui::SidePanel::left("dev_opts")
         .exact_width(270.0)
@@ -679,11 +942,12 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
 }
 
 fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
-    let Some(c) = &state.confirm else { return };
+    let Some(c) = &mut state.confirm else { return };
     let mut go = false;
+    let mut permanent = false;
     let mut close = false;
     egui::Modal::new(egui::Id::new("dev_confirm")).show(ctx, |ui| {
-        ui.set_width(460.0);
+        ui.set_width(520.0);
         ui.label(RichText::new(confirm_title(c.section)).size(18.0).strong());
         ui.add_space(6.0);
         ui.add(egui::Label::new(confirm_text(c.section, c.mode)).wrap());
@@ -699,7 +963,7 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
             let w = col_widths(ui.available_width() - SCROLLBAR, &[0.0, 90.0], ui.spacing().item_spacing.x);
             egui::ScrollArea::vertical()
                 .id_salt("dev_confirm_list")
-                .max_height(220.0)
+                .max_height(180.0)
                 .auto_shrink([false, true])
                 .show_rows(ui, ROW_H, c.rows.len(), |ui, range| {
                     for i in range {
@@ -711,16 +975,45 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
                     }
                 });
         }
+        if !c.cautions.is_empty() {
+            ui.add_space(10.0);
+            ui.label(RichText::new(caution_title(c.cautions.len())).strong().color(RED));
+            egui::ScrollArea::vertical().id_salt("dev_confirm_cautions").max_height(150.0).auto_shrink([false, true]).show(
+                ui,
+                |ui| {
+                    for (label, note) in &c.cautions {
+                        ui.label(RichText::new(label).color(TEXT));
+                        ui.add(egui::Label::new(RichText::new(note).size(12.0).color(MUTED)).wrap());
+                        ui.add_space(2.0);
+                    }
+                },
+            );
+            ui.checkbox(&mut c.ack, "Ho letto gli avvisi");
+        }
+        if !c.shortfall.is_empty() {
+            ui.add_space(10.0);
+            ui.add(egui::Label::new(RichText::new(shortfall_text(&c.shortfall)).strong().color(TEXT)).wrap());
+        }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if primary(ui, &confirm_button(c), c.error.is_none() && !c.rows.is_empty()).clicked() {
-                go = true;
+            let ready = confirm_ready(c);
+            if c.shortfall.is_empty() {
+                go = primary(ui, &confirm_button(c), ready).clicked();
+            } else {
+                permanent = primary(ui, "Definitiva", ready).clicked();
             }
-            if secondary(ui, "Annulla", true).clicked() {
-                close = true;
-            }
+            close = secondary(ui, "Annulla", true).clicked();
         });
     });
+    if permanent {
+        if let Some(c) = state.confirm.as_mut() {
+            if let Err(e) = make_permanent(c) {
+                c.error = Some(e);
+                return;
+            }
+        }
+        go = true;
+    }
     if go {
         if let Some(c) = state.confirm.take().and_then(|c| state.accept_confirm(c, dc_app::now_ms())) {
             state.start_clean(ctx, c);
@@ -730,9 +1023,44 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
     }
 }
 
+/// «Definitiva» dopo l'avviso sul Cestino: lo stesso piano, rifatto in modo definitivo.
+fn make_permanent(c: &mut Confirm) -> Result<(), String> {
+    let plan = dc_app::build_plan(&c.scan, &c.sel, RemoveMode::Permanent)?;
+    c.plan = Some(plan);
+    c.mode = RemoveMode::Permanent;
+    c.shortfall.clear();
+    Ok(())
+}
+
+/// «Pulisci» (o «Definitiva») si può premere: un piano valido e non vuoto, e gli avvisi letti
+/// quando ci sono cartelle al livello Attenzione.
+fn confirm_ready(c: &Confirm) -> bool {
+    c.error.is_none() && !c.rows.is_empty() && (c.cautions.is_empty() || c.ack)
+}
+
+fn caution_title(n: usize) -> String {
+    if n == 1 {
+        "1 cartella al livello Attenzione:".into()
+    } else {
+        format!("{n} cartelle al livello Attenzione:")
+    }
+}
+
+/// L'avviso sul Cestino troppo piccolo, una frase per unità e poi la domanda.
+fn shortfall_text(short: &[(char, u64, u64)]) -> String {
+    let mut parts: Vec<String> = short
+        .iter()
+        .map(|(d, need, room)| {
+            format!("Il Cestino di {d}: ha {} liberi, la pulizia ne sposta {}.", sys::fmt_size(*room), sys::fmt_size(*need))
+        })
+        .collect();
+    parts.push("Eliminare definitivamente questa volta?".into());
+    parts.join(" ")
+}
+
 fn confirm_title(section: Section) -> &'static str {
     match section {
-        Section::Projects => "Pulire i progetti selezionati?",
+        Section::Projects => "Pulire le cartelle selezionate?",
         Section::Worktrees => "Rimuovere i worktree selezionati?",
         Section::Sessions => "Cancellare le sessioni archiviate selezionate?",
     }
@@ -753,33 +1081,100 @@ fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
 fn confirm_button(c: &Confirm) -> String {
     match c.section {
         Section::Sessions => format!("Cancella {}", plural(c.sessions.len(), "sessione", "sessioni")),
-        Section::Projects | Section::Worktrees => "Continua".into(),
+        Section::Projects | Section::Worktrees => "Pulisci".into(),
     }
 }
 
 // ---------- tables ----------
 
-fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut [bool], failed: bool) {
+/// Colonne dei progetti: freccia, casella, nome e stato (cartella e avviso), ultimo uso
+/// (livello), dimensione.
+const PROJECT_COLS: [f32; 5] = [CHECK_W, CHECK_W, 0.0, 120.0, 80.0];
+
+/// Ogni progetto è una riga con la casella a tre stati e si apre sulle sue cartelle, ognuna con
+/// la sua casella, il livello, la dimensione e l'avviso. Nulla è nascosto: le cartelle dei
+/// progetti in uso o bloccati restano visibili, con la casella spenta.
+fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut HashSet<String>, failed: bool, open_all: bool) {
     if reports.is_empty() {
         empty_note(ui, empty_text(Section::Projects, failed));
         return;
     }
-    let w = col_widths(ui.available_width() - SCROLLBAR, &[CHECK_W, 140.0, 0.0, 80.0, 80.0], ui.spacing().item_spacing.x);
-    header(ui, &w, &["", "Progetto", "Stato", "Ultimo uso", "Da liberare"]);
-    egui::ScrollArea::vertical().id_salt("dev_projects").auto_shrink([false, false]).show_rows(ui, ROW_H, reports.len(), |ui, range| {
-        for i in range {
-            let r = &reports[i];
-            let on = selectable(r);
-            let color = if on { TEXT } else { MUTED };
-            striped_row(ui, i, |ui| {
-                check_cell(ui, w[0], &mut sel[i], on);
-                crate::cell(ui, w[1], RichText::new(&r.name).color(color)).on_hover_text(r.root.display().to_string());
-                crate::cell(ui, w[2], RichText::new(&r.reason).color(color));
+    let w = col_widths(ui.available_width() - SCROLLBAR, &PROJECT_COLS, ui.spacing().item_spacing.x);
+    header(ui, &w, &["", "", "Progetto · cartella", "Ultimo uso · livello", "Dimensione"]);
+    egui::ScrollArea::vertical().id_salt("dev_projects").auto_shrink([false, false]).show(ui, |ui| {
+        let mut row = 0;
+        for r in reports {
+            let free = status_allows(r);
+            let color = if free { TEXT } else { MUTED };
+            let mut open = CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id(("dev_project", &r.id)), open_all);
+            if open_all {
+                open.set_open(true);
+            }
+            striped_row(ui, row, |ui| {
+                ui.allocate_ui_with_layout(Vec2::new(w[0], ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_min_width(w[0]);
+                    ui.set_max_width(w[0]);
+                    if !r.artifacts.is_empty() {
+                        open.show_toggle_button(ui, paint_default_icon);
+                    }
+                });
+                let tri = tri_state(r, sel);
+                let mut all = tri == Tri::All;
+                let check = ui
+                    .allocate_ui_with_layout(Vec2::new(w[1], ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                        ui.set_min_width(w[1]);
+                        ui.set_max_width(w[1]);
+                        ui.add_enabled(
+                            free && !r.artifacts.is_empty(),
+                            egui::Checkbox::without_text(&mut all).indeterminate(tri == Tri::Some),
+                        )
+                    })
+                    .inner;
+                if check.clicked() {
+                    toggle_project(r, sel);
+                }
+                ui.allocate_ui_with_layout(Vec2::new(w[2], ROW_H), Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_min_width(w[2]);
+                    ui.set_max_width(w[2]);
+                    ui.add(egui::Label::new(RichText::new(&r.name).strong().color(color)))
+                        .on_hover_text(r.root.display().to_string());
+                    ui.add(egui::Label::new(RichText::new(&r.reason).size(12.0).color(MUTED)).truncate())
+                        .on_hover_text(&r.reason);
+                });
                 crate::cell(ui, w[3], RichText::new(r.last_activity_ms.map_or_else(|| "—".to_string(), fmt_date)).color(color));
                 crate::cell(ui, w[4], RichText::new(sys::fmt_size(r.reclaimable_bytes)).color(color));
             });
+            row += 1;
+            open.show_body_unindented(ui, |ui| {
+                for a in &r.artifacts {
+                    striped_row(ui, row, |ui| artifact_cells(ui, &w, a, sel, free));
+                    row += 1;
+                }
+            });
         }
     });
+}
+
+/// Una cartella di un progetto: casella, etichetta con l'avviso sotto, livello, dimensione.
+fn artifact_cells(ui: &mut Ui, w: &[f32], a: &Artifact, sel: &mut HashSet<String>, free: bool) {
+    crate::cell(ui, w[0], "");
+    let mut on = sel.contains(&a.id);
+    if check_cell(ui, w[1], &mut on, free).changed() {
+        set_artifact(sel, a, on);
+    }
+    let color = if free { TEXT } else { MUTED };
+    ui.allocate_ui_with_layout(Vec2::new(w[2], ROW_H), Layout::top_down(Align::Min), |ui| {
+        ui.set_min_width(w[2]);
+        ui.set_max_width(w[2]);
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.add(egui::Label::new(RichText::new(&a.label).color(color)).truncate()).on_hover_text(a.path.display().to_string());
+        if !a.note.is_empty() {
+            ui.add(egui::Label::new(RichText::new(&a.note).size(12.0).color(MUTED)).truncate()).on_hover_text(&a.note);
+        }
+    });
+    let (level, level_color) = level_text(a.level);
+    crate::cell(ui, w[3], RichText::new(level).color(if free { level_color } else { MUTED }));
+    crate::cell(ui, w[4], RichText::new(sys::fmt_size(a.size.effective_bytes())).color(color));
 }
 
 fn worktrees_table(ui: &mut Ui, reports: &[ProjectReport], others: &[ProjectReport], sel: &mut [bool], failed: bool) {
@@ -1037,31 +1432,52 @@ fn guarded(out: &mut DevCleaned, work: impl FnOnce(&mut DevCleaned)) {
     }
 }
 
-/// (selezionati, totale, byte selezionati) di una sola sezione.
-fn section_stats(scan: &DevScan, section: Section, sp: &[bool], sw: &[bool], ss: &[bool]) -> (usize, usize, u64) {
+/// (selezionati, totale, byte selezionati) di una sola sezione; nei progetti si contano le cartelle.
+fn section_stats(scan: &DevScan, section: Section, sa: &HashSet<String>, sw: &[bool], ss: &[bool]) -> (usize, usize, u64) {
     match section {
-        Section::Projects => report_stats(&scan.projects, sp),
+        Section::Projects => artifact_stats(&scan.projects, sa),
         Section::Worktrees => report_stats(&scan.worktrees, sw),
         Section::Sessions => session_stats(&scan.archived, ss),
     }
 }
 
-/// Cosa farebbe «Avvia pulizia» nella sezione visibile: i progetti o worktree da passare a
-/// `build_plan`, le sessioni da passare a `delete_archived`. Mai righe di un'altra sezione.
+/// Cosa farebbe «Avvia pulizia» nella sezione visibile: le cartelle dei progetti
+/// (`Artifact::id`) e i worktree da passare a `build_plan`, le sessioni da passare a
+/// `delete_archived`. Mai righe di un'altra sezione.
 #[derive(Debug, Default, PartialEq)]
 struct Action {
-    ids: Vec<String>,
+    artifacts: Vec<String>,
+    worktrees: Vec<String>,
     sessions: Vec<(Agent, String)>,
 }
 
-fn section_action(scan: &DevScan, section: Section, sp: &[bool], sw: &[bool], ss: &[bool]) -> Action {
-    let ids = |reports: &[ProjectReport], sel: &[bool]| chosen_reports(reports, sel).map(|r| r.id.clone()).collect::<Vec<_>>();
+impl Action {
+    /// La scelta per `dc_app::build_plan`: le cartelle come sono; ogni worktree d'agente intero,
+    /// o le sue cartelle consigliate (la regola di `dc_app::selection_for_projects`).
+    fn selection(&self, scan: &DevScan) -> Selection {
+        let mut sel = if self.worktrees.is_empty() {
+            Selection::default()
+        } else {
+            dc_app::selection_for_projects(scan, &self.worktrees)
+        };
+        sel.artifacts.extend(self.artifacts.iter().cloned());
+        sel
+    }
+}
+
+fn section_action(scan: &DevScan, section: Section, sa: &HashSet<String>, sw: &[bool], ss: &[bool]) -> Action {
     match section {
-        Section::Projects => Action { ids: ids(&scan.projects, sp), sessions: vec![] },
-        Section::Worktrees => Action { ids: ids(&scan.worktrees, sw), sessions: vec![] },
+        Section::Projects => Action {
+            artifacts: chosen_artifacts(&scan.projects, sa).map(|(_, a)| a.id.clone()).collect(),
+            ..Default::default()
+        },
+        Section::Worktrees => Action {
+            worktrees: chosen_reports(&scan.worktrees, sw).map(|r| r.id.clone()).collect(),
+            ..Default::default()
+        },
         Section::Sessions => Action {
-            ids: vec![],
             sessions: chosen_sessions(&scan.archived, ss).map(|s| (s.agent, s.id.clone())).collect(),
+            ..Default::default()
         },
     }
 }
@@ -1069,10 +1485,219 @@ fn section_action(scan: &DevScan, section: Section, sp: &[bool], sw: &[bool], ss
 /// Seconda riga della barra in basso: il conteggio della sola sezione visibile.
 fn selection_text(section: Section, n: usize) -> String {
     match section {
-        Section::Projects => plural(n, "progetto", "progetti"),
+        Section::Projects => plural(n, "cartella", "cartelle"),
         Section::Worktrees => plural(n, "worktree", "worktree"),
         Section::Sessions => plural(n, "sessione", "sessioni"),
     }
+}
+
+// ---------- cartelle dei progetti ----------
+
+/// La casella di un progetto: tutte le sue cartelle scelte, nessuna o alcune.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tri {
+    All,
+    None,
+    Some,
+}
+
+fn tri_state(r: &ProjectReport, sel: &HashSet<String>) -> Tri {
+    let on = r.artifacts.iter().filter(|a| sel.contains(&a.id)).count();
+    match on {
+        0 => Tri::None,
+        n if n == r.artifacts.len() => Tri::All,
+        _ => Tri::Some,
+    }
+}
+
+/// Clic sulla casella del progetto: da «tutte» a nessuna, da «nessuna» o «alcune» a tutte.
+/// Un progetto in uso o bloccato non cambia.
+fn toggle_project(r: &ProjectReport, sel: &mut HashSet<String>) {
+    if !status_allows(r) {
+        return;
+    }
+    let all = tri_state(r, sel) != Tri::All;
+    for a in &r.artifacts {
+        set_artifact(sel, a, all);
+    }
+}
+
+fn set_artifact(sel: &mut HashSet<String>, a: &Artifact, on: bool) {
+    if on {
+        sel.insert(a.id.clone());
+    } else {
+        sel.remove(&a.id);
+    }
+}
+
+/// La preselezione del motore (`Artifact::preselected`), mai nei progetti in uso o bloccati.
+fn preselect_artifacts(reports: &[ProjectReport]) -> HashSet<String> {
+    reports
+        .iter()
+        .filter(|r| status_allows(r))
+        .flat_map(|r| r.artifacts.iter().filter(|a| a.preselected).map(|a| a.id.clone()))
+        .collect()
+}
+
+/// «Tutti» e «Nessuno» nei progetti: ogni cartella dei progetti liberi, qualunque livello.
+fn select_all_artifacts(reports: &[ProjectReport], sel: &mut HashSet<String>, all: bool) {
+    sel.clear();
+    if all {
+        sel.extend(reports.iter().filter(|r| status_allows(r)).flat_map(|r| r.artifacts.iter().map(|a| a.id.clone())));
+    }
+}
+
+/// Le cartelle scelte dei progetti liberi.
+fn chosen_artifacts<'a>(
+    reports: &'a [ProjectReport],
+    sel: &'a HashSet<String>,
+) -> impl Iterator<Item = (&'a ProjectReport, &'a Artifact)> {
+    reports
+        .iter()
+        .filter(|r| status_allows(r))
+        .flat_map(move |r| r.artifacts.iter().filter(|a| sel.contains(&a.id)).map(move |a| (r, a)))
+}
+
+/// (cartelle scelte, cartelle in tutto, byte scelti).
+fn artifact_stats(reports: &[ProjectReport], sel: &HashSet<String>) -> (usize, usize, u64) {
+    let total = reports.iter().map(|r| r.artifacts.len()).sum();
+    let (n, bytes) = chosen_artifacts(reports, sel)
+        .fold((0, 0u64), |(n, b), (_, a)| (n + 1, b.saturating_add(a.size.effective_bytes())));
+    (n, total, bytes)
+}
+
+fn level_text(level: Level) -> (&'static str, Color32) {
+    match level {
+        Level::Recommended => ("Consigliato", GREEN),
+        Level::Optional => ("Facoltativo", ACCENT),
+        Level::Caution => ("Attenzione", RED),
+    }
+}
+
+/// Le cartelle Attenzione di un piano, con il loro avviso: la conferma le elenca.
+fn plan_cautions(scan: &DevScan, plan: &CleanPlan) -> Vec<(String, String)> {
+    let artifacts: HashMap<String, &Artifact> =
+        scan.projects.iter().chain(&scan.worktrees).flat_map(|r| &r.artifacts).map(|a| (path_key(&a.path), a)).collect();
+    plan.items
+        .iter()
+        .filter(|i| matches!(i.action, PlanAction::RemoveDir))
+        .filter_map(|i| {
+            let a = artifacts.get(&path_key(&i.path))?;
+            (a.level == Level::Caution).then(|| {
+                let note = if a.note.is_empty() { "Controlla che cosa contiene prima di cancellarla." } else { a.note.as_str() };
+                (plan_label(scan, i), note.to_string())
+            })
+        })
+        .collect()
+}
+
+// ---------- resoconto ----------
+
+/// Aggiunge il resoconto di `execute_plan` a quello della pulizia.
+fn merge_report(into: &mut CleanReport, r: CleanReport) {
+    into.freed_bytes = into.freed_bytes.saturating_add(r.freed_bytes);
+    into.recycled_bytes = into.recycled_bytes.saturating_add(r.recycled_bytes);
+    into.files = into.files.saturating_add(r.files);
+    into.dirs = into.dirs.saturating_add(r.dirs);
+    into.elapsed_ms = into.elapsed_ms.saturating_add(r.elapsed_ms);
+    into.cancelled |= r.cancelled;
+    for (label, bytes) in r.by_category {
+        add_category(into, &label, bytes);
+    }
+    into.skipped.extend(r.skipped);
+    into.failed.extend(r.failed);
+}
+
+/// Categoria delle sessioni archiviate nel resoconto.
+const SESSIONS_CATEGORY: &str = "Sessioni archiviate";
+
+/// L'esito di una sessione nel resoconto: il file conta tra i file eliminati, i byte tra
+/// liberati o nel Cestino secondo il modo.
+fn add_session_outcome(into: &mut CleanReport, label: &str, outcome: &ItemOutcome, mode: RemoveMode) {
+    match outcome {
+        ItemOutcome::Removed { bytes_freed } => {
+            if *bytes_freed > 0 {
+                into.files = into.files.saturating_add(1);
+            }
+            match mode {
+                RemoveMode::Recycle => into.recycled_bytes = into.recycled_bytes.saturating_add(*bytes_freed),
+                RemoveMode::Permanent => into.freed_bytes = into.freed_bytes.saturating_add(*bytes_freed),
+            }
+            add_category(into, SESSIONS_CATEGORY, *bytes_freed);
+        }
+        ItemOutcome::Skipped { reason } => into.skipped.push((PathBuf::from(label), reason.clone())),
+        ItemOutcome::Failed { error, locked_by } if locked_by.is_empty() => into.failed.push((PathBuf::from(label), error.clone())),
+        ItemOutcome::Failed { error, locked_by } => {
+            into.failed.push((PathBuf::from(label), format!("{error} (in uso da: {})", locked_by.join(", "))))
+        }
+    }
+}
+
+/// Somma `bytes` alla categoria `label`; l'elenco resta dal più grande.
+fn add_category(into: &mut CleanReport, label: &str, bytes: u64) {
+    match into.by_category.iter_mut().find(|(l, _)| l == label) {
+        Some((_, b)) => *b = b.saturating_add(bytes),
+        None => into.by_category.push((label.to_string(), bytes)),
+    }
+    into.by_category.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+}
+
+fn cleaned_title(c: Option<&DevCleaned>, busy: bool) -> &'static str {
+    match c {
+        _ if busy => "Pulizia in corso…",
+        Some(c) if c.interrupted => "Pulizia interrotta",
+        Some(c) if c.is_empty() && !c.errors.is_empty() => "Pulizia non eseguita",
+        Some(c) if c.report.cancelled => "Pulizia annullata",
+        _ => "Pulizia completata",
+    }
+}
+
+fn recycled_text(bytes: u64) -> String {
+    format!("{} nel Cestino: si liberano svuotandolo", sys::fmt_size(bytes))
+}
+
+/// Avanzamento della barra: a byte, o a voci quando i byte non si conoscono.
+fn tick_fraction(t: &Tick) -> f32 {
+    if t.total_bytes > 0 {
+        (t.done_bytes as f64 / t.total_bytes as f64).clamp(0.0, 1.0) as f32
+    } else if t.total_items > 0 {
+        (t.done_items as f32 / t.total_items as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// «1,2 GB di 3,4 GB · 2 di 5 voci».
+fn tick_text(t: &Tick) -> String {
+    format!(
+        "{} di {} · {} di {} {}",
+        sys::fmt_size(t.done_bytes),
+        sys::fmt_size(t.total_bytes),
+        t.done_items,
+        t.total_items,
+        if t.total_items == 1 { "voce" } else { "voci" }
+    )
+}
+
+/// Durata del resoconto: «850 ms», «12 s», «2 min 05 s».
+fn fmt_duration(ms: u64) -> String {
+    let s = ms / 1000;
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if s < 60 {
+        format!("{s} s")
+    } else {
+        format!("{} min {:02} s", s / 60, s % 60)
+    }
+}
+
+/// `--only-root`: solo la cartella data, niente sessioni né altri dischi.
+fn only_root_settings(mut s: Settings, dir: PathBuf) -> Settings {
+    s.session_projects = false;
+    s.roots = vec![dir];
+    s.scan_roots = true;
+    s.all_drives = false;
+    s
 }
 
 fn analysis_failed(scan: &DevScan) -> bool {
@@ -1161,16 +1786,6 @@ fn plan_label(scan: &DevScan, item: &PlanItem) -> String {
     }
 }
 
-fn outcome_text(o: &ItemOutcome) -> (String, Color32) {
-    match o {
-        ItemOutcome::Removed { bytes_freed: 0 } => ("Rimosso".into(), GREEN),
-        ItemOutcome::Removed { bytes_freed } => (format!("Rimosso · {}", sys::fmt_size(*bytes_freed)), GREEN),
-        ItemOutcome::Skipped { reason } => (format!("Saltato ({reason})"), MUTED),
-        ItemOutcome::Failed { error, locked_by } if locked_by.is_empty() => (format!("Non riuscito ({error})"), RED),
-        ItemOutcome::Failed { error, locked_by } => (format!("Non riuscito ({error}; in uso da {})", locked_by.join(", ")), RED),
-    }
-}
-
 fn folder_name(p: &Path) -> String {
     p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -1228,6 +1843,15 @@ mod tests {
             is_agent_worktree: false,
             git: GitState::default(),
         }
+    }
+
+    /// L'id della cartella `target` del progetto `id` di [`report`].
+    fn tid(id: &str) -> String {
+        dc_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target")))
+    }
+
+    fn ids(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|id| tid(id)).collect()
     }
 
     fn session(id: &str, blocked: Option<&str>, file: bool, bytes: u64) -> ArchivedSession {
@@ -1420,12 +2044,14 @@ mod tests {
     #[test]
     fn stats_count_only_the_selectable_rows_of_one_section() {
         let scan = three_sections();
-        let (sp, sw, ss) = ([true, true], [true], [true, true]);
+        let (sp, sw, ss) = (ids(&["a", "b"]), [true], [true, true]);
+        // La cartella del progetto bloccato non conta anche se risultasse spuntata.
         assert_eq!(section_stats(&scan, Section::Projects, &sp, &sw, &ss), (1, 2, 100));
         assert_eq!(section_stats(&scan, Section::Worktrees, &sp, &sw, &ss), (1, 1, 30));
         assert_eq!(section_stats(&scan, Section::Sessions, &sp, &sw, &ss), (2, 2, 4));
-        assert_eq!(section_stats(&scan, Section::Projects, &[false, true], &sw, &ss), (0, 2, 0));
-        assert_eq!(selection_text(Section::Projects, 1), "1 progetto");
+        assert_eq!(section_stats(&scan, Section::Projects, &ids(&["b"]), &sw, &ss), (0, 2, 0));
+        assert_eq!(selection_text(Section::Projects, 1), "1 cartella");
+        assert_eq!(selection_text(Section::Projects, 2), "2 cartelle");
         assert_eq!(selection_text(Section::Worktrees, 3), "3 worktree");
         assert_eq!(selection_text(Section::Sessions, 665), "665 sessioni");
     }
@@ -1433,13 +2059,15 @@ mod tests {
     #[test]
     fn the_action_list_holds_only_the_visible_section() {
         let scan = three_sections();
-        let (sp, sw, ss) = ([true, false], [true], [true, true]);
+        let (sp, sw, ss) = (ids(&["a"]), [true], [true, true]);
         let p = section_action(&scan, Section::Projects, &sp, &sw, &ss);
-        assert_eq!(p, Action { ids: vec!["a".into()], sessions: vec![] });
+        assert_eq!(p, Action { artifacts: vec![tid("a")], ..Default::default() });
         let w = section_action(&scan, Section::Worktrees, &sp, &sw, &ss);
-        assert_eq!(w, Action { ids: vec!["w".into()], sessions: vec![] });
+        assert_eq!(w, Action { worktrees: vec!["w".into()], ..Default::default() });
         let s = section_action(&scan, Section::Sessions, &sp, &sw, &ss);
-        assert_eq!(s, Action { ids: vec![], sessions: vec![(Agent::Codex, "1".into()), (Agent::Codex, "2".into())] });
+        assert_eq!(s, Action { sessions: vec![(Agent::Codex, "1".into()), (Agent::Codex, "2".into())], ..Default::default() });
+        let sel = p.selection(&scan);
+        assert_eq!((sel.artifacts, sel.worktrees), (vec![tid("a")], vec![]));
         // Nulla scelto nella sezione visibile: niente da fare, qualunque cosa ci sia nelle altre.
         assert_eq!(section_action(&scan, Section::Worktrees, &sp, &[false], &ss), Action::default());
         assert_eq!(section_action(&scan, Section::Sessions, &sp, &sw, &[false, false]), Action::default());
@@ -1449,7 +2077,7 @@ mod tests {
     fn the_confirmation_names_the_section_and_lists_only_its_items() {
         let mut st = state();
         st.set_scan(three_sections());
-        assert_eq!((&st.sel_projects, &st.sel_worktrees, &st.sel_sessions), (&vec![true, false], &vec![false], &vec![true, true]));
+        assert_eq!((&st.sel_artifacts, &st.sel_worktrees, &st.sel_sessions), (&ids(&["a"]), &vec![false], &vec![true, true]));
         st.sel_worktrees = vec![true];
 
         st.section = Section::Sessions;
@@ -1468,8 +2096,8 @@ mod tests {
         let plan = c.plan.as_ref().unwrap();
         assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
         assert_eq!(c.rows.len(), plan.items.len());
-        assert_eq!(confirm_title(c.section), "Pulire i progetti selezionati?");
-        assert_eq!(confirm_button(&c), "Continua");
+        assert_eq!(confirm_title(c.section), "Pulire le cartelle selezionate?");
+        assert_eq!(confirm_button(&c), "Pulisci");
 
         st.section = Section::Worktrees;
         st.open_confirm();
@@ -1500,7 +2128,11 @@ mod tests {
         let one = Confirm {
             scan: Arc::new(DevScan::default()),
             section: Section::Sessions,
+            sel: Selection::default(),
             plan: None,
+            cautions: vec![],
+            ack: false,
+            shortfall: vec![],
             sessions: vec![(Agent::Pi, "x".into())],
             rows: vec![],
             summary: vec![],
@@ -1528,17 +2160,6 @@ mod tests {
         assert_eq!(plural(0, "cartella", "cartelle"), "0 cartelle");
         assert_eq!(fmt_elapsed(58_400), "Analisi in 58 s");
         assert_eq!(fmt_elapsed(125_000), "Analisi in 2 min 5 s");
-    }
-
-    #[test]
-    fn outcome_texts() {
-        assert_eq!(outcome_text(&ItemOutcome::Removed { bytes_freed: 0 }).0, "Rimosso");
-        assert_eq!(outcome_text(&ItemOutcome::Removed { bytes_freed: 1024 }).0, "Rimosso · 1 KB");
-        assert_eq!(outcome_text(&ItemOutcome::Skipped { reason: "in uso".into() }).0, "Saltato (in uso)");
-        let f = ItemOutcome::Failed { error: "accesso negato".into(), locked_by: vec![] };
-        assert_eq!(outcome_text(&f), ("Non riuscito (accesso negato)".into(), RED));
-        let f = ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe".into()] };
-        assert_eq!(outcome_text(&f).0, "Non riuscito (bloccato; in uso da code.exe)");
     }
 
     #[test]
@@ -1622,14 +2243,14 @@ mod tests {
         st.poll();
         assert!(!st.busy());
         assert_eq!(st.view, View::Scanned);
-        assert_eq!(st.sel_projects, vec![true, false]);
+        assert_eq!(st.sel_artifacts, ids(&["a"]));
         assert_eq!(st.sel_sessions, vec![true, false]);
         assert_eq!(st.selection(), (1, 2, 10));
 
         st.release();
         assert!(st.scan.is_none());
         assert_eq!(st.view, View::Empty);
-        assert!(st.sel_projects.is_empty() && st.sel_sessions.is_empty());
+        assert!(st.sel_artifacts.is_empty() && st.sel_sessions.is_empty());
     }
 
     #[test]
@@ -1658,7 +2279,7 @@ mod tests {
         st.poll();
         assert!(!st.busy());
         assert!(st.scan.is_none());
-        assert!(st.sel_projects.is_empty() && st.sel_worktrees.is_empty() && st.sel_sessions.is_empty());
+        assert!(st.sel_artifacts.is_empty() && st.sel_worktrees.is_empty() && st.sel_sessions.is_empty());
         assert!(!st.can_clean());
         assert_eq!(st.error.as_deref(), Some(CLEANUP_DIED));
         assert!(CLEANUP_DIED.contains("potrebbero essere già stati rimossi"));
@@ -1667,19 +2288,19 @@ mod tests {
 
     #[test]
     fn a_panic_keeps_the_outcomes_collected_so_far() {
-        let mut out = DevCleaned { rows: vec![], freed: 0, errors: vec![], mode: RemoveMode::Recycle, interrupted: false };
+        let mut out = DevCleaned::new();
         guarded(&mut out, |o| {
-            o.rows.push(("a · Rust target/".into(), ItemOutcome::Removed { bytes_freed: 7 }));
-            o.freed = 7;
+            add_session_outcome(&mut o.report, "Codex · a", &ItemOutcome::Removed { bytes_freed: 7 }, RemoveMode::Permanent);
         });
         assert!(!out.interrupted);
         guarded(&mut out, |o| {
-            o.rows.push(("b · node_modules/".into(), ItemOutcome::Removed { bytes_freed: 3 }));
+            add_session_outcome(&mut o.report, "Codex · b", &ItemOutcome::Skipped { reason: "in uso".into() }, RemoveMode::Permanent);
             panic!("prova");
         });
         assert!(out.interrupted);
-        assert_eq!(out.rows.len(), 2);
-        assert_eq!(out.freed, 7);
+        assert_eq!(out.report.skipped.len(), 1);
+        assert_eq!(out.report.freed_bytes, 7);
+        assert_eq!(cleaned_title(Some(&out), false), "Pulizia interrotta");
     }
 
     #[test]
@@ -1707,13 +2328,244 @@ mod tests {
         st.set_scan(DevScan { projects: vec![report("a", ProjectStatus::Inactive, true, 10)], ..Default::default() });
         let (tx, rx) = channel();
         st.job = Some(rx);
-        let rows = vec![("a · Rust target/".to_string(), ItemOutcome::Removed { bytes_freed: 10 })];
-        tx.send(DevMsg::Cleaned(DevCleaned { rows, freed: 10, errors: vec![], mode: RemoveMode::Recycle, interrupted: false })).unwrap();
+        st.tick = Some(Tick { done_bytes: 0, total_bytes: 10, done_items: 0, total_items: 1 });
+        st.cancel = Some(Cancel::default());
+        tx.send(DevMsg::Tick(Tick { done_bytes: 5, total_bytes: 10, done_items: 0, total_items: 1 })).unwrap();
+        st.poll();
+        assert_eq!(st.tick.map(|t| t.done_bytes), Some(5));
+        let mut c = DevCleaned::new();
+        c.report.freed_bytes = 10;
+        c.report.by_category = vec![("Rust target/".into(), 10)];
+        tx.send(DevMsg::Cleaned(c)).unwrap();
         st.poll();
         assert!(!st.busy());
+        assert!(st.tick.is_none() && st.cancel.is_none());
         assert!(st.scan.is_none());
         assert_eq!(st.view, View::Cleaned);
-        assert_eq!(st.cleaned.as_ref().map(|c| c.freed), Some(10));
+        assert_eq!(st.cleaned.as_ref().map(|c| c.report.freed_bytes), Some(10));
         assert_eq!(st.selection(), (0, 0, 0));
+    }
+
+    /// Un progetto inattivo con tre cartelle: target consigliato e preselezionato,
+    /// node_modules facoltativo, dist al livello Attenzione.
+    fn levels_project() -> ProjectReport {
+        let mut r = report("web", ProjectStatus::Inactive, true, 100);
+        let base = r.artifacts[0].clone();
+        let mk = |dir: &str, label: &str, class, level, note: &str, bytes| {
+            let path = PathBuf::from(format!(r"D:\p\web\{dir}"));
+            Artifact {
+                id: path_key(&path),
+                path,
+                label: label.into(),
+                class,
+                level,
+                note: note.into(),
+                preselected: false,
+                size: SizeInfo { logical_bytes: bytes, allocated_bytes: None, file_count: 1 },
+                ..base.clone()
+            }
+        };
+        r.artifacts.push(mk(
+            "node_modules",
+            "Dipendenze Node (node_modules)",
+            dc_model::Class::Dependency,
+            Level::Optional,
+            "Si riscarica con npm install (o pnpm, yarn, bun install)",
+            50,
+        ));
+        r.artifacts.push(mk(
+            "dist",
+            "Build JavaScript (dist)",
+            dc_model::Class::Build,
+            Level::Caution,
+            "Potrebbe contenere sorgenti: git non la ignora",
+            20,
+        ));
+        r.artifacts[1].kind = ArtifactKind::NodeModules;
+        r.artifacts[2].kind = ArtifactKind::Catalog;
+        r.reclaimable_bytes = 170;
+        r
+    }
+
+    #[test]
+    fn the_project_checkbox_has_three_states() {
+        let r = levels_project();
+        let mut sel = preselect_artifacts(std::slice::from_ref(&r));
+        assert_eq!(sel, ids(&["web"]), "solo target è preselezionato");
+        assert_eq!(tri_state(&r, &sel), Tri::Some);
+        // «alcune» → tutte
+        toggle_project(&r, &mut sel);
+        assert_eq!(tri_state(&r, &sel), Tri::All);
+        assert_eq!(sel.len(), 3);
+        // «tutte» → nessuna
+        toggle_project(&r, &mut sel);
+        assert_eq!(tri_state(&r, &sel), Tri::None);
+        assert!(sel.is_empty());
+        // «nessuna» → tutte
+        toggle_project(&r, &mut sel);
+        assert_eq!(tri_state(&r, &sel), Tri::All);
+
+        // Un progetto in uso non cambia e non conta, ma le sue cartelle restano elencate.
+        let mut busy = levels_project();
+        busy.status = ProjectStatus::InUse;
+        let mut none = HashSet::new();
+        toggle_project(&busy, &mut none);
+        assert!(none.is_empty());
+        assert!(preselect_artifacts(std::slice::from_ref(&busy)).is_empty());
+        assert_eq!(artifact_stats(std::slice::from_ref(&busy), &sel), (0, 3, 0));
+    }
+
+    #[test]
+    fn the_total_follows_each_folder() {
+        let rs = vec![levels_project()];
+        let mut sel = preselect_artifacts(&rs);
+        assert_eq!(artifact_stats(&rs, &sel), (1, 3, 100));
+        set_artifact(&mut sel, &rs[0].artifacts[1], true);
+        assert_eq!(artifact_stats(&rs, &sel), (2, 3, 150));
+        set_artifact(&mut sel, &rs[0].artifacts[0], false);
+        assert_eq!(artifact_stats(&rs, &sel), (1, 3, 50));
+        select_all_artifacts(&rs, &mut sel, true);
+        assert_eq!(artifact_stats(&rs, &sel), (3, 3, 170));
+        select_all_artifacts(&rs, &mut sel, false);
+        assert_eq!(artifact_stats(&rs, &sel), (0, 3, 0));
+    }
+
+    #[test]
+    fn levels_have_their_words_and_colors() {
+        assert_eq!(level_text(Level::Recommended), ("Consigliato", GREEN));
+        assert_eq!(level_text(Level::Optional), ("Facoltativo", ACCENT));
+        assert_eq!(level_text(Level::Caution), ("Attenzione", RED));
+    }
+
+    fn levels_state() -> DevState {
+        let mut st = state();
+        st.set_scan(DevScan { projects: vec![levels_project()], scanned_at_ms: dc_app::now_ms(), ..Default::default() });
+        st
+    }
+
+    #[test]
+    fn a_caution_folder_needs_the_warnings_read() {
+        let mut st = levels_state();
+        // Solo target: niente avvisi, «Pulisci» subito.
+        st.open_confirm_with(dc_app::now_ms(), |_| vec![]);
+        let c = st.confirm.take().unwrap();
+        assert!(c.cautions.is_empty());
+        assert!(confirm_ready(&c));
+        assert_eq!(c.plan.as_ref().unwrap().items.len(), 1, "solo la cartella scelta");
+
+        // Con dist: elencata con il suo avviso, «Pulisci» spento finché non si legge.
+        st.sel_artifacts.insert(tid("web").replace("target", "dist"));
+        st.open_confirm_with(dc_app::now_ms(), |_| vec![]);
+        let mut c = st.confirm.take().unwrap();
+        assert_eq!(c.plan.as_ref().unwrap().items.len(), 2);
+        assert_eq!(c.cautions, vec![("web · Build JavaScript (dist)".to_string(), "Potrebbe contenere sorgenti: git non la ignora".to_string())]);
+        assert!(!confirm_ready(&c));
+        c.ack = true;
+        assert!(confirm_ready(&c));
+        assert_eq!(caution_title(1), "1 cartella al livello Attenzione:");
+        assert_eq!(caution_title(2), "2 cartelle al livello Attenzione:");
+    }
+
+    #[test]
+    fn a_small_recycle_bin_offers_permanent_deletion() {
+        let mut st = levels_state();
+        st.settings.remove_mode = RemoveMode::Recycle;
+        st.open_confirm_with(dc_app::now_ms(), |p| vec![('D', p.expected_bytes, 0)]);
+        let mut c = st.confirm.take().unwrap();
+        assert_eq!(c.shortfall, vec![('D', 100, 0)]);
+        assert_eq!(
+            shortfall_text(&c.shortfall),
+            "Il Cestino di D: ha 0 byte liberi, la pulizia ne sposta 100 byte. Eliminare definitivamente questa volta?"
+        );
+        make_permanent(&mut c).unwrap();
+        assert_eq!(c.mode, RemoveMode::Permanent);
+        assert_eq!(c.plan.as_ref().unwrap().mode, RemoveMode::Permanent);
+        assert_eq!(c.plan.as_ref().unwrap().items.len(), 1, "lo stesso piano");
+        assert!(c.shortfall.is_empty());
+        let two = [('C', 10 << 30, 2 << 30), ('E', 3 << 20, 0)];
+        assert_eq!(
+            shortfall_text(&two),
+            "Il Cestino di C: ha 2,00 GB liberi, la pulizia ne sposta 10,00 GB. Il Cestino di E: ha 0 byte liberi, la pulizia ne sposta 3,0 MB. Eliminare definitivamente questa volta?"
+        );
+    }
+
+    #[test]
+    fn the_report_adds_up_folders_and_sessions() {
+        let mut out = DevCleaned::new();
+        assert!(out.is_empty());
+        assert_eq!(cleaned_title(Some(&out), false), "Pulizia completata");
+        merge_report(
+            &mut out.report,
+            CleanReport {
+                freed_bytes: 100,
+                files: 4,
+                dirs: 2,
+                elapsed_ms: 1500,
+                by_category: vec![("Rust target/".into(), 100)],
+                skipped: vec![(PathBuf::from(r"D:\p\web\dist"), "Annullato".into())],
+                cancelled: true,
+                ..Default::default()
+            },
+        );
+        out.labels.insert(path_key(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)".into());
+        add_session_outcome(&mut out.report, "Codex · x", &ItemOutcome::Removed { bytes_freed: 300 }, RemoveMode::Recycle);
+        let f = ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe".into()] };
+        add_session_outcome(&mut out.report, "Codex · y", &f, RemoveMode::Recycle);
+        let r = &out.report;
+        assert_eq!((r.freed_bytes, r.recycled_bytes, r.files, r.dirs), (100, 300, 5, 2));
+        assert_eq!(r.by_category, vec![(SESSIONS_CATEGORY.to_string(), 300), ("Rust target/".to_string(), 100)]);
+        assert_eq!(r.failed, vec![(PathBuf::from("Codex · y"), "bloccato (in uso da: code.exe)".to_string())]);
+        assert_eq!(out.label(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)");
+        assert_eq!(cleaned_title(Some(&out), false), "Pulizia annullata");
+        assert_eq!(cleaned_title(Some(&out), true), "Pulizia in corso…");
+        assert_eq!(recycled_text(300), "300 byte nel Cestino: si liberano svuotandolo");
+        let text = r.to_text();
+        assert!(text.contains("Spazio liberato") && text.contains("Saltati (1)") && text.contains("Non riusciti (1)"), "{text}");
+
+        let mut refused = DevCleaned::new();
+        refused.errors.push("Piano rifiutato".into());
+        assert_eq!(cleaned_title(Some(&refused), false), "Pulizia non eseguita");
+    }
+
+    #[test]
+    fn progress_text_and_bar() {
+        let t = Tick { done_bytes: 512, total_bytes: 2048, done_items: 1, total_items: 4 };
+        assert_eq!(tick_text(&t), "512 byte di 2 KB · 1 di 4 voci");
+        assert_eq!(tick_fraction(&t), 0.25);
+        let unknown = Tick { done_bytes: 0, total_bytes: 0, done_items: 1, total_items: 2 };
+        assert_eq!(tick_fraction(&unknown), 0.5);
+        assert_eq!(tick_text(&Tick { total_items: 1, ..unknown }), "0 byte di 0 byte · 1 di 1 voce");
+        assert_eq!(fmt_duration(850), "850 ms");
+        assert_eq!(fmt_duration(12_300), "12 s");
+        assert_eq!(fmt_duration(125_000), "2 min 05 s");
+    }
+
+    #[test]
+    fn cancel_stops_the_running_cleanup() {
+        let mut st = state();
+        assert!(!st.cancelling());
+        st.cancel = Some(Cancel::default());
+        let shared = st.cancel.clone().unwrap();
+        st.cancel_clean();
+        assert!(st.cancelling() && shared.is_cancelled(), "lo stesso Cancel dei worker");
+    }
+
+    #[test]
+    fn only_root_keeps_everything_in_memory() {
+        let dir = PathBuf::from(r"Z:\albero\finto");
+        let s = only_root_settings(dc_app::default_settings(), dir.clone());
+        assert!(!s.session_projects && s.scan_roots && !s.all_drives);
+        assert_eq!(s.roots, vec![dir.clone()]);
+        let mut st = DevState::only_root(dir, Section::Projects, false);
+        assert!(!st.persist);
+        st.settings.inactive_days = 3;
+        st.save();
+        assert!(st.settings_err.is_none());
+        // Le dimostrazioni valgono solo con --only-root.
+        st.set_demo(Demo::Clean);
+        assert_eq!(st.demo.is_some(), cfg!(debug_assertions));
+        let mut normal = state();
+        normal.set_demo(Demo::Clean);
+        assert!(normal.demo.is_none());
     }
 }
