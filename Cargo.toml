@@ -23,6 +23,11 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 winreg = "0.56"
+# Same version and features as dc-mukade (already in the build): browser databases (cookies, VACUUM, Firefox history).
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+# Already in the build: browser `Preferences`. `float_roundtrip` and `preserve_order` keep numbers and key order
+# exactly as the browser wrote them when the file is rewritten.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Shell",
@@ -39,6 +44,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_DataExchange",
     "Win32_System_EventLog",
     "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

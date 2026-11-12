@@ -1,0 +1,1390 @@
+//! Database dei browser (proposte N9-N12 di `docs/ccleaner-coverage.md`):
+//! cookie con la lista da conservare, compattazione dei database, cronologia
+//! di Firefox e Thunderbird, ultimo percorso di download.
+//!
+//! Regole comuni a tutte le voci:
+//! - i profili vengono da [`profiles`]: cartelle note dei browser sotto
+//!   `%LocalAppData%` e `%AppData%` dell'`Env` fidato delle regole, mai dietro
+//!   una giunzione o un collegamento;
+//! - prima di toccare un profilo (anche solo per guardare quali file ha) si
+//!   rileggono i processi: se il suo browser è aperto, o se il suo file di
+//!   blocco (`lockfile` di Chromium, `parent.lock` di Firefox) è tenuto aperto,
+//!   il profilo si salta con «<profilo>: chiudi <exe> per pulire», in analisi
+//!   e in pulizia. Le voci hanno `running` vuoto: un browser aperto non ferma
+//!   gli altri;
+//! - ogni modifica a un database è in `BEGIN IMMEDIATE`, con `ROLLBACK` su
+//!   errore; il database si apre normalmente (mai creato se manca) e i suoi
+//!   file `-wal`/`-shm` restano a SQLite;
+//! - `clean_*` agisce solo sui file di `found.items` che sono file attesi dei
+//!   profili, e controlla l'annullamento fra un database e l'altro.
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use pc_rules::Env;
+use rusqlite::types::Value;
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+
+use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
+
+pub const GROUP: &str = "Browser";
+pub const COOKIES_ID: &str = "cookies_keep_list";
+pub const COMPACT_ID: &str = "compact_databases";
+pub const FIREFOX_HISTORY_ID: &str = "firefox_history";
+pub const DOWNLOAD_DIR_ID: &str = "last_download_dir";
+
+/// In `NativeFound::items` dei cookie: un dominio della lista letta
+/// dall'analisi (`keep:google.com`), così la pulizia non rilegge il file.
+pub const KEEP_PREFIX: &str = "keep:";
+
+/// Contenuto della lista creata al primo uso: solo commenti.
+pub const KEEP_LIST_TEMPLATE: &str = "\
+# Cookie da conservare (PulisciPC)
+#
+# Un dominio per riga. Un dominio conserva anche i suoi sottodomini:
+# google.com conserva accounts.google.com, ma non notgoogle.com.
+# Le righe che iniziano con # non contano: togli il # dagli esempi
+# che vuoi usare, poi salva il file.
+#
+# google.com
+# microsoft.com
+# live.com
+";
+
+/// File della lista più grande di così: illeggibile (è un elenco di domini).
+const KEEP_LIST_MAX: u64 = 1 << 20;
+/// `Preferences` più grande di così non si legge.
+const PREFS_MAX: u64 = 64 << 20;
+/// Attesa massima di un database bloccato da un altro processo.
+const BUSY_TIMEOUT: Duration = Duration::from_millis(500);
+
+// ---------------------------------------------------------------------------
+// Browser e profili.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Chromium,
+    Gecko,
+}
+
+#[derive(Clone, Copy)]
+enum Base {
+    Local,
+    Roaming,
+}
+
+#[derive(Clone, Copy)]
+enum Layout {
+    /// `User Data` con un profilo per sottocartella (`Default`, `Profile 2`).
+    UserData,
+    /// Opera: la cartella stessa è un profilo, le sue sottocartelle con
+    /// `Preferences` anche (versioni recenti), e `_side_profiles\*`.
+    Opera,
+    /// `Profiles\*` di Firefox e Thunderbird.
+    Gecko,
+}
+
+/// Una cartella di un browser: `rel` sotto la base, `variant` nel nome del
+/// profilo («Chrome Beta, Default»).
+struct Root {
+    base: Base,
+    rel: &'static str,
+    variant: Option<&'static str>,
+}
+
+const fn local(rel: &'static str, variant: Option<&'static str>) -> Root {
+    Root { base: Base::Local, rel, variant }
+}
+
+const fn roaming(rel: &'static str) -> Root {
+    Root { base: Base::Roaming, rel, variant: None }
+}
+
+struct BrowserDef {
+    name: &'static str,
+    layout: Layout,
+    /// Eseguibili del browser (minuscolo, con `.exe`).
+    processes: &'static [&'static str],
+    roots: &'static [Root],
+}
+
+/// I browser della tabella §3.1 e §2.2. Percorsi dalle voci di Winapp2
+/// (`<prefisso> Web Browsing Cookies *`); i nomi degli eseguibili dei browser
+/// di Gen Digital e di Arc sono da verificare (il file di blocco del profilo
+/// copre un nome sbagliato, vedi [`busy`]).
+const BROWSERS: &[BrowserDef] = &[
+    BrowserDef {
+        name: "Google Chrome",
+        layout: Layout::UserData,
+        processes: &["chrome.exe"],
+        roots: &[
+            local(r"Google\Chrome\User Data", None),
+            local(r"Google\Chrome Beta\User Data", Some("Chrome Beta")),
+            local(r"Google\Chrome Dev\User Data", Some("Chrome Dev")),
+            local(r"Google\Chrome SxS\User Data", Some("Chrome Canary")),
+        ],
+    },
+    BrowserDef {
+        name: "Microsoft Edge",
+        layout: Layout::UserData,
+        processes: &["msedge.exe"],
+        roots: &[
+            local(r"Microsoft\Edge\User Data", None),
+            local(r"Microsoft\Edge Beta\User Data", Some("Edge Beta")),
+            local(r"Microsoft\Edge Dev\User Data", Some("Edge Dev")),
+            local(r"Microsoft\Edge SxS\User Data", Some("Edge Canary")),
+        ],
+    },
+    BrowserDef {
+        name: "Brave",
+        layout: Layout::UserData,
+        processes: &["brave.exe"],
+        roots: &[
+            local(r"BraveSoftware\Brave-Browser\User Data", None),
+            local(r"BraveSoftware\Brave-Browser-Beta\User Data", Some("Beta")),
+            local(r"BraveSoftware\Brave-Browser-Nightly\User Data", Some("Nightly")),
+        ],
+    },
+    BrowserDef { name: "Vivaldi", layout: Layout::UserData, processes: &["vivaldi.exe"], roots: &[local(r"Vivaldi\User Data", None)] },
+    BrowserDef { name: "Opera", layout: Layout::Opera, processes: &["opera.exe"], roots: &[roaming(r"Opera Software\Opera Stable")] },
+    BrowserDef { name: "Opera GX", layout: Layout::Opera, processes: &["opera.exe"], roots: &[roaming(r"Opera Software\Opera GX Stable")] },
+    BrowserDef {
+        name: "CCleaner Browser",
+        layout: Layout::UserData,
+        processes: &["ccleanerbrowser.exe"],
+        roots: &[local(r"CCleaner Browser\User Data", None)],
+    },
+    BrowserDef {
+        name: "Avast Secure Browser",
+        layout: Layout::UserData,
+        processes: &["avastbrowser.exe"],
+        roots: &[local(r"Avast Software\Browser\User Data", None)],
+    },
+    BrowserDef {
+        name: "AVG Secure Browser",
+        layout: Layout::UserData,
+        processes: &["avgbrowser.exe"],
+        roots: &[local(r"AVG\Browser\User Data", None)],
+    },
+    BrowserDef {
+        name: "Avira Secure Browser",
+        layout: Layout::UserData,
+        processes: &["avirabrowser.exe"],
+        roots: &[local(r"Avira\Browser\User Data", None)],
+    },
+    BrowserDef {
+        name: "Norton Secure Browser",
+        layout: Layout::UserData,
+        processes: &["nortonbrowser.exe"],
+        roots: &[local(r"Norton\Browser\User Data", None)],
+    },
+    BrowserDef {
+        name: "Arc",
+        layout: Layout::UserData,
+        processes: &["arc.exe"],
+        roots: &[local(r"Packages\TheBrowserCompany.Arc_ttt1ap7aakyb4\LocalCache\Local\Arc\User Data", None)],
+    },
+    BrowserDef {
+        name: "Mozilla Firefox",
+        layout: Layout::Gecko,
+        processes: &["firefox.exe"],
+        roots: &[
+            roaming(r"Mozilla\Firefox\Profiles"),
+            local(r"Packages\Mozilla.Firefox_n80bbvh6b1yt2\LocalCache\Roaming\Mozilla\Firefox\Profiles", None),
+        ],
+    },
+    BrowserDef {
+        name: "Thunderbird",
+        layout: Layout::Gecko,
+        processes: &["thunderbird.exe"],
+        roots: &[
+            roaming(r"Thunderbird\Profiles"),
+            local(r"Packages\MozillaThunderbird.MozillaThunderbirdRelease_h5892qc0xkpca\LocalCache\Roaming\Thunderbird\Profiles", None),
+            local(r"Packages\MozillaThunderbird.MZLA_h5892qc0xkpca\LocalCache\Roaming\Thunderbird\Profiles", None),
+        ],
+    },
+];
+
+/// Sottocartelle di `User Data` che non sono profili dell'utente.
+const NOT_PROFILES: &[&str] = &["System Profile", "Guest Profile"];
+
+/// Un profilo di un browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    pub browser: &'static str,
+    pub kind: Kind,
+    pub dir: PathBuf,
+    /// Nome fra parentesi nel resoconto: cartella, con la variante del browser.
+    pub name: String,
+    pub processes: &'static [&'static str],
+    /// File che il browser aperto tiene bloccato: `User Data\lockfile`
+    /// (Chromium) o `parent.lock` del profilo (Gecko).
+    pub lock: PathBuf,
+}
+
+impl Profile {
+    /// «Google Chrome (Default)».
+    pub fn label(&self) -> String {
+        format!("{} ({})", self.browser, self.name)
+    }
+}
+
+/// I profili dei browser della tabella, nell'ordine di [`BROWSERS`], poi per
+/// nome della cartella. Una cartella dietro una giunzione o un collegamento
+/// (in qualunque punto sotto `%LocalAppData%`/`%AppData%`) non si usa mai.
+pub fn profiles(env: &Env) -> Vec<Profile> {
+    let mut out = Vec::new();
+    for b in BROWSERS {
+        for r in b.roots {
+            let key = match r.base {
+                Base::Local => "localappdata",
+                Base::Roaming => "appdata",
+            };
+            let Some(base) = env.get(key).filter(|v| !v.trim().is_empty()) else {
+                continue;
+            };
+            let Some(root) = plain_path(Path::new(base), r.rel, false) else {
+                continue;
+            };
+            let kind = match b.layout {
+                Layout::Gecko => Kind::Gecko,
+                _ => Kind::Chromium,
+            };
+            let named = |name: String| match r.variant {
+                Some(v) => format!("{v}, {name}"),
+                None => name,
+            };
+            let mut push = |dir: PathBuf, name: String, lock: PathBuf| {
+                out.push(Profile { browser: b.name, kind, dir, name: named(name), processes: b.processes, lock });
+            };
+            let chromium_lock = root.join("lockfile");
+            match b.layout {
+                Layout::UserData => {
+                    for (name, dir) in subdirs(&root) {
+                        if is_chromium_profile(&name, &dir) {
+                            push(dir, name, chromium_lock.clone());
+                        }
+                    }
+                }
+                Layout::Opera => {
+                    if plain_file(&root.join("Preferences")) {
+                        push(root.clone(), "profilo principale".to_string(), chromium_lock.clone());
+                    }
+                    for (name, dir) in subdirs(&root) {
+                        if name != "_side_profiles" && is_chromium_profile(&name, &dir) {
+                            push(dir, name, chromium_lock.clone());
+                        }
+                    }
+                    let side = root.join("_side_profiles");
+                    if plain_dir(&side) {
+                        for (name, dir) in subdirs(&side) {
+                            if is_chromium_profile(&name, &dir) {
+                                push(dir, format!("profilo laterale {name}"), chromium_lock.clone());
+                            }
+                        }
+                    }
+                }
+                Layout::Gecko => {
+                    for (name, dir) in subdirs(&root) {
+                        if ["prefs.js", "places.sqlite", "cookies.sqlite"].iter().any(|f| plain_file(&dir.join(f))) {
+                            let lock = dir.join("parent.lock");
+                            push(dir, name, lock);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn is_chromium_profile(name: &str, dir: &Path) -> bool {
+    !NOT_PROFILES.iter().any(|n| n.eq_ignore_ascii_case(name)) && plain_file(&dir.join("Preferences"))
+}
+
+/// Le sottocartelle vere (non giunzioni né collegamenti) di `dir`, per nome.
+fn subdirs(dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut v: Vec<(String, PathBuf)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let p = e.path();
+            plain_dir(&p).then_some((name, p))
+        })
+        .collect();
+    v.sort_by_key(|(n, _)| n.to_lowercase());
+    v
+}
+
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+fn plain(p: &Path) -> Option<fs::Metadata> {
+    use std::os::windows::fs::MetadataExt;
+    fs::symlink_metadata(p).ok().filter(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+}
+
+fn plain_dir(p: &Path) -> bool {
+    plain(p).is_some_and(|m| m.is_dir())
+}
+
+fn plain_file(p: &Path) -> bool {
+    plain(p).is_some_and(|m| m.is_file())
+}
+
+/// `base\rel` se ogni componente di `rel` è una cartella vera (e l'ultimo un
+/// file vero se `file`), senza giunzioni né collegamenti lungo la strada.
+fn plain_path(base: &Path, rel: &str, file: bool) -> Option<PathBuf> {
+    let parts: Vec<&str> = rel.split('\\').filter(|s| !s.is_empty()).collect();
+    let mut p = base.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        if *part == "." || *part == ".." {
+            return None;
+        }
+        p.push(part);
+        let last = i + 1 == parts.len();
+        let ok = if last && file { plain_file(&p) } else { plain_dir(&p) };
+        if !ok {
+            return None;
+        }
+    }
+    Some(p)
+}
+
+type Procs<'a> = &'a dyn Fn() -> Vec<String>;
+
+/// `Some(nota)` se il profilo non si deve aprire adesso: il suo browser è fra
+/// i processi (riletti qui) o il suo file di blocco è tenuto aperto. Il file
+/// di blocco si guarda solo se il browser non risulta aperto.
+fn busy(p: &Profile, procs: Procs) -> Option<String> {
+    let hits = crate::rules::running_among(p.processes, &procs());
+    if !hits.is_empty() {
+        return Some(format!("{}: chiudi {} per pulire", p.label(), hits.join(", ")));
+    }
+    lock_held(&p.lock).then(|| format!("{}: profilo in uso, chiudi {} per pulire", p.label(), p.processes.join(", ")))
+}
+
+/// `true` se un altro processo tiene aperto `lock`: Chromium lo apre con la
+/// sola condivisione in lettura, Firefox senza condivisione, quindi
+/// un'apertura in scrittura (che non scrive niente) fallisce. Un file che non
+/// c'è non blocca; un collegamento o un errore qualunque sì (si salta).
+fn lock_held(lock: &Path) -> bool {
+    match fs::symlink_metadata(lock) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(_) if plain(lock).is_none() => return true,
+        Ok(_) => {}
+    }
+    fs::OpenOptions::new().read(true).write(true).open(lock).is_err()
+}
+
+fn path_text(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
+fn in_found(found: &NativeFound, p: &Path) -> bool {
+    found.items.contains(&path_text(p))
+}
+
+/// Nome di un file del profilo nel resoconto (`History`, `Network\Cookies`).
+fn short(p: &Profile, file: &Path) -> String {
+    file.strip_prefix(&p.dir).map(path_text).unwrap_or_else(|_| path_text(file))
+}
+
+fn open_db(path: &Path) -> rusqlite::Result<Connection> {
+    // Mai `SQLITE_OPEN_CREATE`: un database che manca non si crea.
+    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    c.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(c)
+}
+
+fn has_column(c: &Connection, table: &str, col: &str) -> bool {
+    c.query_row("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2", [table, col], |_| Ok(())).is_ok()
+}
+
+fn plural(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+// ---------------------------------------------------------------------------
+// Lista dei cookie da conservare.
+
+/// Domini della lista: una riga per dominio, `#` per i commenti (anche in
+/// fondo alla riga), senza maiuscole, senza punto o `*.` iniziale; da un
+/// indirizzo (`https://accounts.example.net:443/login`) si tiene l'host. Le
+/// righe che non sono un nome di dominio ASCII si ignorano; niente doppioni.
+pub fn parse_keep_list(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        let mut d = line.to_ascii_lowercase();
+        if let Some(i) = d.find("://") {
+            d = d[i + 3..].to_string();
+        }
+        if let Some(i) = d.find(['/', '?']) {
+            d.truncate(i);
+        }
+        if let Some(i) = d.find('@') {
+            d = d[i + 1..].to_string();
+        }
+        if let Some(i) = d.find(':') {
+            d.truncate(i);
+        }
+        let d = d.trim_start_matches("*.").trim_start_matches('.').trim_end_matches('.').to_string();
+        let valid = !d.is_empty()
+            && d.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        if valid && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// `true` se il cookie di `host` (con o senza punto iniziale) appartiene a un
+/// dominio della lista o a un suo sottodominio. `notgoogle.com` non è
+/// `google.com`.
+pub fn is_kept(host: &str, keep: &[String]) -> bool {
+    let h = host.trim().trim_start_matches('.').to_ascii_lowercase();
+    keep.iter().any(|d| h == *d || (h.len() > d.len() && h.ends_with(d.as_str()) && h.as_bytes()[h.len() - d.len() - 1] == b'.'))
+}
+
+/// `<documenti>\PulisciPC\cookie_da_conservare.txt`.
+pub fn keep_list_in(documents: &Path) -> PathBuf {
+    documents.join("PulisciPC").join("cookie_da_conservare.txt")
+}
+
+/// Legge la lista: assente o vuota = nessun dominio (`Ok(vec![])`). UTF-8 con
+/// o senza BOM, UTF-16 con BOM (Blocco note «Unicode»); un testo non UTF-8
+/// non fa errore, valgono le righe che restano domini validi. `Err` solo se
+/// il file c'è ma non si legge: allora nessun cookie si elimina.
+pub fn read_keep_list(path: &Path) -> Result<Vec<String>, String> {
+    match fs::metadata(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Ok(m) if m.len() > KEEP_LIST_MAX => return Err("file troppo grande".to_string()),
+        _ => {}
+    }
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    Ok(parse_keep_list(&decode_text(&bytes)))
+}
+
+fn decode_text(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], le: bool| {
+        let (pairs, _) = rest.as_chunks::<2>();
+        let units: Vec<u16> = pairs.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// Crea la lista con gli esempi commentati se non c'è; mai sovrascritta.
+pub fn ensure_keep_list(path: &Path) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    match fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut f) => f.write_all(KEEP_LIST_TEMPLATE.replace('\n', "\r\n").as_bytes()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Testo per la conferma e per il resoconto: «lista: N domini», oppure, se la
+/// lista non si legge, che nessun cookie verrà eliminato.
+pub fn keep_list_summary(list: &Result<Vec<String>, String>) -> String {
+    match list {
+        Ok(v) => format!("lista: {}", plural(v.len() as u64, "dominio", "domini")),
+        Err(e) => format!("lista illeggibile ({e}): nessun cookie verrà eliminato"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cookie (N9).
+
+/// Database dei cookie del profilo che ci sono davvero, con tabella e colonna
+/// dell'host. Chromium: `Network\Cookies` e, nelle versioni vecchie,
+/// `Cookies`; Gecko: `cookies.sqlite`.
+fn cookie_dbs(p: &Profile) -> Vec<(PathBuf, &'static str, &'static str)> {
+    let (names, table, col): (&[&str], _, _) = match p.kind {
+        Kind::Chromium => (&[r"Network\Cookies", "Cookies"], "cookies", "host_key"),
+        Kind::Gecko => (&["cookies.sqlite"], "moz_cookies", "host"),
+    };
+    names.iter().filter_map(|n| plain_path(&p.dir, n, true)).map(|f| (f, table, col)).collect()
+}
+
+/// Host distinti dei cookie con il numero di righe di ciascuno.
+fn cookie_hosts(c: &Connection, table: &str, col: &str) -> Result<Vec<(Option<String>, u64)>, String> {
+    if !has_column(c, table, col) {
+        return Err(format!("manca la tabella {table}"));
+    }
+    let read = || -> rusqlite::Result<Vec<(Option<String>, u64)>> {
+        let mut st = c.prepare(&format!("SELECT \"{col}\", COUNT(*) FROM \"{table}\" GROUP BY \"{col}\""))?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?.max(0) as u64)))?;
+        rows.collect()
+    };
+    read().map_err(|e| e.to_string())
+}
+
+/// Analisi dei cookie: in `items` i database con cookie da eliminare, poi i
+/// domini della lista (`keep:<dominio>`). Lista illeggibile = niente.
+pub fn analyze_cookies(profiles: &[Profile], list: Result<Vec<String>, String>, procs: Procs, cancel: &AtomicBool) -> NativeFound {
+    let summary = keep_list_summary(&list);
+    let mut f = NativeFound::default();
+    let keep = match list {
+        Ok(k) => k,
+        Err(_) => {
+            f.detail.push(format!("Nessun cookie proposto: {summary}"));
+            return f;
+        }
+    };
+    let mut lines = Vec::new();
+    for p in profiles {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            f.skipped += 1;
+            lines.push(note);
+            continue;
+        }
+        for (db, table, col) in cookie_dbs(p) {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let hosts = open_db(&db).map_err(|e| e.to_string()).and_then(|c| cookie_hosts(&c, table, col));
+            match hosts {
+                Ok(hosts) => {
+                    let (mut del, mut kept) = (0, 0);
+                    for (h, n) in hosts {
+                        if is_kept(h.as_deref().unwrap_or(""), &keep) {
+                            kept += n;
+                        } else {
+                            del += n;
+                        }
+                    }
+                    if del > 0 {
+                        f.count += del;
+                        f.items.push(path_text(&db));
+                    }
+                    if del + kept > 0 {
+                        lines.push(format!("{} – {}: {} da eliminare, {kept} da conservare", p.label(), short(p, &db), plural(del, "cookie", "cookie")));
+                    }
+                }
+                Err(e) => {
+                    f.skipped += 1;
+                    lines.push(format!("{} – {}: non leggibile ({e})", p.label(), short(p, &db)));
+                }
+            }
+        }
+    }
+    if !f.items.is_empty() {
+        f.items.extend(keep.iter().map(|d| format!("{KEEP_PREFIX}{d}")));
+    }
+    f.detail.push(if f.count > 0 {
+        format!("{} da eliminare ({summary})", plural(f.count, "cookie", "cookie"))
+    } else {
+        format!("Nessun cookie da eliminare ({summary})")
+    });
+    f.detail.extend(lines);
+    f
+}
+
+/// Elimina i cookie dei database di `found.items` che non sono dei domini
+/// `keep:` scritti dall'analisi (il file della lista non si rilegge).
+pub fn clean_cookies(profiles: &[Profile], found: &NativeFound, procs: Procs, cancel: &AtomicBool) -> NativeCleaned {
+    let keep: Vec<String> = found.items.iter().filter_map(|i| i.strip_prefix(KEEP_PREFIX)).map(str::to_string).collect();
+    let mut done = NativeCleaned::default();
+    for p in profiles {
+        let wanted = |db: &Path| in_found(found, db);
+        if !expected_cookie_paths(p).iter().any(|db| wanted(db)) {
+            continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            done.note(note);
+            continue;
+        }
+        for (db, table, col) in cookie_dbs(p).into_iter().filter(|(db, ..)| wanted(db)) {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let before = file_size(&db);
+            match delete_cookies(&db, table, col, &keep) {
+                Ok((n, inside)) => {
+                    done.removed += n;
+                    done.freed += before.saturating_sub(file_size(&db));
+                    done.done.push(format!(
+                        "{} – {}: {} eliminati, {} liberati nel database",
+                        p.label(),
+                        short(p, &db),
+                        plural(n, "cookie", "cookie"),
+                        crate::sys::fmt_size(inside)
+                    ));
+                }
+                Err(e) => {
+                    done.failed += 1;
+                    done.note(format!("{} – {}: cookie non eliminati, nessuna modifica ({e})", p.label(), short(p, &db)));
+                }
+            }
+        }
+    }
+    done
+}
+
+/// I percorsi dei database dei cookie del profilo, senza guardare il disco.
+fn expected_cookie_paths(p: &Profile) -> Vec<PathBuf> {
+    match p.kind {
+        Kind::Chromium => vec![p.dir.join(r"Network\Cookies"), p.dir.join("Cookies")],
+        Kind::Gecko => vec![p.dir.join("cookies.sqlite")],
+    }
+}
+
+/// Dimensione del file su disco (0 se non si legge).
+fn file_size(p: &Path) -> u64 {
+    fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Byte diventati liberi dentro il database dopo `free_before` (le righe
+/// tolte liberano pagine, il file si accorcia solo compattandolo).
+fn freed_inside(c: &Connection, free_before: u64) -> u64 {
+    free_bytes(c).map(|b| b.saturating_sub(free_before)).unwrap_or(0)
+}
+
+/// Una transazione `BEGIN IMMEDIATE`: un errore a metà la annulla (`ROLLBACK`
+/// alla chiusura senza `commit`). Restituisce le righe tolte e i byte
+/// liberati dentro il database.
+fn delete_cookies(db: &Path, table: &str, col: &str, keep: &[String]) -> Result<(u64, u64), String> {
+    let mut c = open_db(db).map_err(|e| e.to_string())?;
+    let free_before = free_bytes(&c).map_err(|e| e.to_string())?;
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+    let hosts = cookie_hosts(&tx, table, col)?;
+    let run = || -> rusqlite::Result<u64> {
+        let mut n = 0u64;
+        let mut del = tx.prepare(&format!("DELETE FROM \"{table}\" WHERE \"{col}\" IS ?1"))?;
+        for (h, _) in &hosts {
+            if !is_kept(h.as_deref().unwrap_or(""), keep) {
+                n += del.execute([h])? as u64;
+            }
+        }
+        Ok(n)
+    };
+    let n = run().map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok((n, freed_inside(&c, free_before)))
+}
+
+// ---------------------------------------------------------------------------
+// Compattazione (N10).
+
+const CHROMIUM_DBS: &[&str] =
+    &["History", "Favicons", "Top Sites", "Shortcuts", "Web Data", "Network Action Predictor", r"Network\Cookies", "Cookies"];
+const GECKO_DBS: &[&str] =
+    &["places.sqlite", "cookies.sqlite", "formhistory.sqlite", "favicons.sqlite", "permissions.sqlite", "content-prefs.sqlite"];
+
+fn compact_names(p: &Profile) -> &'static [&'static str] {
+    match p.kind {
+        Kind::Chromium => CHROMIUM_DBS,
+        Kind::Gecko => GECKO_DBS,
+    }
+}
+
+/// Byte recuperabili: `freelist_count × page_size`.
+fn free_bytes(c: &Connection) -> rusqlite::Result<u64> {
+    let free: i64 = c.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+    let page: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+    Ok((free.max(0) as u64).saturating_mul(page.max(0) as u64))
+}
+
+/// Database dei profili con pagine libere (`freelist_count > 0`).
+pub fn analyze_compact(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) -> NativeFound {
+    let mut f = NativeFound::default();
+    let mut lines = Vec::new();
+    for p in profiles {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            f.skipped += 1;
+            lines.push(note);
+            continue;
+        }
+        for db in compact_names(p).iter().filter_map(|n| plain_path(&p.dir, n, true)) {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            match open_db(&db).and_then(|c| free_bytes(&c)) {
+                Ok(0) => {}
+                Ok(b) => {
+                    f.count += 1;
+                    f.bytes += b;
+                    f.items.push(path_text(&db));
+                    lines.push(format!("{} – {}: {} recuperabili", p.label(), short(p, &db), crate::sys::fmt_size(b)));
+                }
+                Err(e) => {
+                    f.skipped += 1;
+                    lines.push(format!("{} – {}: non leggibile ({e})", p.label(), short(p, &db)));
+                }
+            }
+        }
+    }
+    f.detail.push(if f.count > 0 {
+        format!("{}, {} recuperabili", plural(f.count, "database", "database"), crate::sys::fmt_size(f.bytes))
+    } else {
+        "Nessun database da compattare".to_string()
+    });
+    f.detail.extend(lines);
+    f
+}
+
+/// `VACUUM` dei database di `found.items`, ciascuno solo se
+/// `PRAGMA integrity_check` dà `ok`; uno rovinato si lascia com'è.
+pub fn clean_compact(profiles: &[Profile], found: &NativeFound, procs: Procs, cancel: &AtomicBool) -> NativeCleaned {
+    let mut done = NativeCleaned::default();
+    for p in profiles {
+        let mine: Vec<PathBuf> = compact_names(p).iter().map(|n| p.dir.join(n)).filter(|db| in_found(found, db)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            done.note(note);
+            continue;
+        }
+        for db in mine {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let name = short(p, &db);
+            if !plain_file(&db) {
+                done.note(format!("{} – {name}: non c'è più", p.label()));
+                continue;
+            }
+            match compact(&db) {
+                Ok((before, after)) => {
+                    done.removed += 1;
+                    done.freed += before.saturating_sub(after);
+                    done.done.push(format!(
+                        "{} – {name}: {} → {}",
+                        p.label(),
+                        crate::sys::fmt_size(before),
+                        crate::sys::fmt_size(after)
+                    ));
+                }
+                Err(CompactError::NotOk(why)) => {
+                    done.note(format!("{} – {name}: il controllo di integrità non dà «ok» ({why}): non si tocca", p.label()));
+                }
+                Err(CompactError::Db(e)) => {
+                    done.failed += 1;
+                    done.note(format!("{} – {name}: non compattato ({e})", p.label()));
+                }
+            }
+        }
+    }
+    done
+}
+
+enum CompactError {
+    NotOk(String),
+    Db(String),
+}
+
+/// Dimensione del file prima e dopo il `VACUUM` (dopo la chiusura, quando
+/// SQLite ha già riportato il `-wal` nel database).
+fn compact(db: &Path) -> Result<(u64, u64), CompactError> {
+    let size = || fs::metadata(db).map(|m| m.len()).unwrap_or(0);
+    let before = size();
+    let c = open_db(db).map_err(|e| CompactError::Db(e.to_string()))?;
+    let check: rusqlite::Result<String> = c.query_row("PRAGMA integrity_check", [], |r| r.get(0));
+    match check {
+        Ok(s) if s == "ok" => {}
+        Ok(s) => return Err(CompactError::NotOk(s)),
+        Err(e) => return Err(CompactError::NotOk(e.to_string())),
+    }
+    c.execute_batch("VACUUM").map_err(|e| CompactError::Db(e.to_string()))?;
+    c.close().map_err(|(_, e)| CompactError::Db(e.to_string()))?;
+    Ok((before, size()))
+}
+
+// ---------------------------------------------------------------------------
+// Cronologia di Firefox e Thunderbird (N11).
+
+/// Tabelle e colonne senza le quali `places.sqlite` non si tocca.
+const PLACES_REQUIRED: &[(&str, &str)] = &[
+    ("moz_places", "id"),
+    ("moz_places", "foreign_count"),
+    ("moz_places", "visit_count"),
+    ("moz_places", "last_visit_date"),
+    ("moz_historyvisits", "place_id"),
+    ("moz_bookmarks", "fk"),
+];
+
+fn places_ok(c: &Connection) -> bool {
+    PLACES_REQUIRED.iter().all(|(t, col)| has_column(c, t, col))
+}
+
+/// Pagine che si possono togliere: nessun riferimento (`foreign_count = 0`),
+/// e comunque mai una pagina di un segnalibro o di una parola chiave anche
+/// se `foreign_count` fosse sbagliato.
+fn removable_places(c: &Connection) -> String {
+    let mut w = "foreign_count = 0 AND id NOT IN (SELECT fk FROM moz_bookmarks WHERE fk IS NOT NULL)".to_string();
+    if has_column(c, "moz_keywords", "place_id") {
+        w.push_str(" AND id NOT IN (SELECT place_id FROM moz_keywords WHERE place_id IS NOT NULL)");
+    }
+    w
+}
+
+fn count(c: &Connection, sql: &str) -> rusqlite::Result<u64> {
+    c.query_row(sql, [], |r| r.get::<_, i64>(0)).map(|n| n.max(0) as u64)
+}
+
+/// (visite, pagine) che la pulizia toglierebbe.
+fn history_counts(c: &Connection) -> rusqlite::Result<(u64, u64)> {
+    let visits = count(c, "SELECT COUNT(*) FROM moz_historyvisits")?;
+    let pages = count(c, &format!("SELECT COUNT(*) FROM moz_places WHERE {}", removable_places(c)))?;
+    Ok((visits, pages))
+}
+
+/// I profili Gecko: visite e pagine senza segnalibri da togliere.
+pub fn analyze_history(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) -> NativeFound {
+    let mut f = NativeFound::default();
+    let mut lines = Vec::new();
+    for p in profiles.iter().filter(|p| p.kind == Kind::Gecko) {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            f.skipped += 1;
+            lines.push(note);
+            continue;
+        }
+        let Some(db) = plain_path(&p.dir, "places.sqlite", true) else {
+            continue;
+        };
+        let counts = open_db(&db).and_then(|c| if places_ok(&c) { history_counts(&c).map(Some) } else { Ok(None) });
+        match counts {
+            Ok(Some((visits, pages))) if visits + pages > 0 => {
+                f.count += visits + pages;
+                f.items.push(path_text(&db));
+                lines.push(format!(
+                    "{}: {} e {} senza segnalibri",
+                    p.label(),
+                    plural(visits, "visita", "visite"),
+                    plural(pages, "pagina", "pagine")
+                ));
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                f.skipped += 1;
+                lines.push(format!("{}: places.sqlite non riconosciuto, non si tocca", p.label()));
+            }
+            Err(e) => {
+                f.skipped += 1;
+                lines.push(format!("{}: places.sqlite non leggibile ({e})", p.label()));
+            }
+        }
+    }
+    f.detail.push(if f.count > 0 {
+        format!("{} da togliere, segnalibri esclusi", plural(f.count, "voce", "voci"))
+    } else {
+        "Nessuna cronologia da togliere".to_string()
+    });
+    f.detail.extend(lines);
+    f
+}
+
+/// Toglie la cronologia dei `places.sqlite` di `found.items`; `ROLLBACK` se i
+/// segnalibri (righe di `moz_bookmarks` e pagine a cui puntano) cambiano.
+pub fn clean_history(profiles: &[Profile], found: &NativeFound, procs: Procs, cancel: &AtomicBool) -> NativeCleaned {
+    let mut done = NativeCleaned::default();
+    for p in profiles.iter().filter(|p| p.kind == Kind::Gecko) {
+        let db = p.dir.join("places.sqlite");
+        if !in_found(found, &db) {
+            continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            done.note(note);
+            continue;
+        }
+        if plain_path(&p.dir, "places.sqlite", true).is_none() {
+            done.note(format!("{}: places.sqlite non c'è più", p.label()));
+            continue;
+        }
+        let before = file_size(&db);
+        match delete_history(&db) {
+            Ok(HistoryOutcome::Done(visits, pages, inside)) => {
+                done.removed += visits + pages;
+                done.freed += before.saturating_sub(file_size(&db));
+                done.done.push(format!(
+                    "{}: {} e {} tolte, segnalibri intatti, {} liberati nel database",
+                    p.label(),
+                    plural(visits, "visita", "visite"),
+                    plural(pages, "pagina", "pagine"),
+                    crate::sys::fmt_size(inside)
+                ));
+            }
+            Ok(HistoryOutcome::BookmarksChanged) => {
+                done.failed += 1;
+                done.note(format!(
+                    "{}: cronologia non tolta, perché sarebbero cambiati i segnalibri (nessuna modifica)",
+                    p.label()
+                ));
+            }
+            Ok(HistoryOutcome::Unknown) => {
+                done.note(format!("{}: places.sqlite non riconosciuto, non si tocca", p.label()));
+            }
+            Err(e) => {
+                done.failed += 1;
+                done.note(format!("{}: cronologia non tolta, nessuna modifica ({e})", p.label()));
+            }
+        }
+    }
+    done
+}
+
+enum HistoryOutcome {
+    /// Visite, pagine, byte liberati dentro il database.
+    Done(u64, u64, u64),
+    BookmarksChanged,
+    Unknown,
+}
+
+/// Le righe di `moz_bookmarks` (tutte le colonne) e quanti segnalibri e
+/// parole chiave puntano a una pagina che non c'è.
+fn bookmark_state(c: &Connection) -> rusqlite::Result<(Vec<Vec<Value>>, u64, u64)> {
+    let mut st = c.prepare("SELECT * FROM moz_bookmarks ORDER BY id")?;
+    let n = st.column_count();
+    let rows = st
+        .query_map([], |r| (0..n).map(|i| r.get::<_, Value>(i)).collect::<rusqlite::Result<Vec<Value>>>())?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let lost = count(c, "SELECT COUNT(*) FROM moz_bookmarks WHERE fk IS NOT NULL AND fk NOT IN (SELECT id FROM moz_places)")?;
+    let lost_kw = if has_column(c, "moz_keywords", "place_id") {
+        count(c, "SELECT COUNT(*) FROM moz_keywords WHERE place_id IS NOT NULL AND place_id NOT IN (SELECT id FROM moz_places)")?
+    } else {
+        0
+    };
+    Ok((rows, lost, lost_kw))
+}
+
+/// Righe di `table` il cui `col` punta a una riga che non c'è più in
+/// `parent` (solo se tabella e colonna esistono).
+fn delete_orphans(c: &Connection, table: &str, col: &str, parent: &str, parent_col: &str) -> rusqlite::Result<()> {
+    if has_column(c, table, col) {
+        c.execute(
+            &format!("DELETE FROM \"{table}\" WHERE \"{col}\" NOT IN (SELECT \"{parent_col}\" FROM \"{parent}\" WHERE \"{parent_col}\" IS NOT NULL)"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn delete_history(db: &Path) -> rusqlite::Result<HistoryOutcome> {
+    let mut c = open_db(db)?;
+    let free_before = free_bytes(&c)?;
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !places_ok(&tx) {
+        return Ok(HistoryOutcome::Unknown);
+    }
+    let before = bookmark_state(&tx)?;
+    let removable = removable_places(&tx);
+    let visits = tx.execute("DELETE FROM moz_historyvisits", [])? as u64;
+    let pages = tx.execute(&format!("DELETE FROM moz_places WHERE {removable}"), [])? as u64;
+    // Ciò che dipende dalle visite e dalle pagine tolte.
+    delete_orphans(&tx, "moz_historyvisits_extra", "visit_id", "moz_historyvisits", "id")?;
+    delete_orphans(&tx, "moz_annos", "place_id", "moz_places", "id")?;
+    if has_column(&tx, "moz_annos", "anno_attribute_id") && has_column(&tx, "moz_anno_attributes", "name") {
+        // Annotazioni dei download (cronologia download).
+        tx.execute(
+            "DELETE FROM moz_annos WHERE anno_attribute_id IN (SELECT id FROM moz_anno_attributes WHERE name LIKE 'downloads/%')",
+            [],
+        )?;
+    }
+    delete_orphans(&tx, "moz_inputhistory", "place_id", "moz_places", "id")?;
+    delete_orphans(&tx, "moz_places_metadata", "place_id", "moz_places", "id")?;
+    delete_orphans(&tx, "moz_places_extra", "place_id", "moz_places", "id")?;
+    if has_column(&tx, "moz_places_metadata", "search_query_id") {
+        delete_orphans(&tx, "moz_places_metadata_search_queries", "id", "moz_places_metadata", "search_query_id")?;
+    }
+    if has_column(&tx, "moz_places", "origin_id") {
+        delete_orphans(&tx, "moz_origins", "id", "moz_places", "origin_id")?;
+    }
+    // Le pagine dei segnalibri restano, senza il conto delle visite.
+    let typed = if has_column(&tx, "moz_places", "typed") { ", typed = 0" } else { "" };
+    tx.execute(&format!("UPDATE moz_places SET visit_count = 0, last_visit_date = NULL{typed}"), [])?;
+    if bookmark_state(&tx)? != before {
+        tx.rollback()?;
+        return Ok(HistoryOutcome::BookmarksChanged);
+    }
+    tx.commit()?;
+    Ok(HistoryOutcome::Done(visits, pages, freed_inside(&c, free_before)))
+}
+
+// ---------------------------------------------------------------------------
+// Ultimo percorso di download (N12).
+
+/// Chiave di `Preferences` con l'ultima cartella di «Salva con nome»
+/// (oggetto, chiave). `download.default_directory` è la cartella scelta
+/// nelle impostazioni, non l'ultimo percorso: non si tocca.
+const CHROMIUM_LAST_DIR: (&str, &str) = ("savefile", "default_directory");
+const GECKO_LAST_DIR: &[u8] = b"\"browser.download.lastDir\"";
+
+/// `Preferences` senza l'ultimo percorso: `Ok(None)` se la chiave non c'è
+/// («niente da fare»), `Err` se il file non è un oggetto JSON (non si
+/// tocca). Il risultato si rilegge come JSON uguale all'originale meno la
+/// chiave, con l'ordine delle chiavi e i numeri di prima.
+pub fn strip_chromium_prefs(bytes: &[u8]) -> Result<Option<(Vec<u8>, usize)>, String> {
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "non è JSON valido".to_string())?;
+    let root = v.as_object_mut().ok_or_else(|| "non è un oggetto JSON".to_string())?;
+    let (obj, key) = CHROMIUM_LAST_DIR;
+    let removed = root.get_mut(obj).and_then(|o| o.as_object_mut()).and_then(|o| o.shift_remove(key)).is_some();
+    if !removed {
+        return Ok(None);
+    }
+    let out = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+    match serde_json::from_slice::<serde_json::Value>(&out) {
+        Ok(back) if back == v => Ok(Some((out, 1))),
+        _ => Err("la riscrittura non si rilegge uguale".to_string()),
+    }
+}
+
+/// `prefs.js` senza le righe `user_pref("browser.download.lastDir", …);`
+/// (le altre righe, anche `browser.download.lastDir.savePerSite`, restano
+/// byte per byte). `None` se non ce ne sono.
+pub fn strip_prefs_js(bytes: &[u8]) -> Option<(Vec<u8>, usize)> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut n = 0;
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        if is_last_dir_line(line) {
+            n += 1;
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    (n > 0).then_some((out, n))
+}
+
+fn is_last_dir_line(line: &[u8]) -> bool {
+    let rest = line.trim_ascii_start();
+    let Some(rest) = rest.strip_prefix(b"user_pref(") else {
+        return false;
+    };
+    let Some(rest) = rest.trim_ascii_start().strip_prefix(GECKO_LAST_DIR) else {
+        return false;
+    };
+    rest.trim_ascii_start().starts_with(b",")
+}
+
+/// File delle preferenze del profilo (senza guardare il disco).
+fn prefs_file(p: &Profile) -> PathBuf {
+    p.dir.join(match p.kind {
+        Kind::Chromium => "Preferences",
+        Kind::Gecko => "prefs.js",
+    })
+}
+
+/// Il file delle preferenze letto e ripulito: `Ok(None)` = niente da fare.
+fn stripped_prefs(p: &Profile, file: &Path) -> Result<Option<(Vec<u8>, usize)>, String> {
+    let m = fs::metadata(file).map_err(|e| e.to_string())?;
+    if m.len() > PREFS_MAX {
+        return Err("file troppo grande".to_string());
+    }
+    let bytes = fs::read(file).map_err(|e| e.to_string())?;
+    match p.kind {
+        Kind::Chromium => strip_chromium_prefs(&bytes),
+        Kind::Gecko => Ok(strip_prefs_js(&bytes)),
+    }
+}
+
+pub fn analyze_download_dir(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) -> NativeFound {
+    let mut f = NativeFound::default();
+    let mut lines = Vec::new();
+    for p in profiles {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            f.skipped += 1;
+            lines.push(note);
+            continue;
+        }
+        let name = match p.kind {
+            Kind::Chromium => "Preferences",
+            Kind::Gecko => "prefs.js",
+        };
+        let Some(file) = plain_path(&p.dir, name, true) else {
+            continue;
+        };
+        match stripped_prefs(p, &file) {
+            Ok(Some((_, n))) => {
+                f.count += n as u64;
+                f.items.push(path_text(&file));
+                lines.push(format!("{}: ultima cartella in {name}", p.label()));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                f.skipped += 1;
+                lines.push(format!("{}: {name} {e}, non si tocca", p.label()));
+            }
+        }
+    }
+    f.detail.push(if f.count > 0 {
+        format!("Ultimo percorso di download in {}", plural(f.items.len() as u64, "profilo", "profili"))
+    } else {
+        "Niente da fare: nessun ultimo percorso salvato".to_string()
+    });
+    f.detail.extend(lines);
+    f
+}
+
+pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Procs, cancel: &AtomicBool) -> NativeCleaned {
+    let mut done = NativeCleaned::default();
+    for p in profiles {
+        let file = prefs_file(p);
+        if !in_found(found, &file) {
+            continue;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if let Some(note) = busy(p, procs) {
+            done.note(note);
+            continue;
+        }
+        let name = short(p, &file);
+        if !plain_file(&file) {
+            done.note(format!("{}: {name} non c'è più", p.label()));
+            continue;
+        }
+        let res = stripped_prefs(p, &file).and_then(|s| match s {
+            None => Ok(0),
+            Some((out, n)) => {
+                let kind = p.kind;
+                let expected = out.clone();
+                write_replacing(&file, &out, &move |back: &[u8]| match kind {
+                    Kind::Chromium => {
+                        let a = serde_json::from_slice::<serde_json::Value>(back);
+                        let b = serde_json::from_slice::<serde_json::Value>(&expected);
+                        matches!((a, b), (Ok(a), Ok(b)) if a == b)
+                    }
+                    Kind::Gecko => back == expected.as_slice(),
+                })
+                .map(|()| n)
+                .map_err(|e| e.to_string())
+            }
+        });
+        match res {
+            Ok(0) => {}
+            Ok(n) => {
+                done.removed += n as u64;
+                done.done.push(format!("{}: ultimo percorso tolto da {name}", p.label()));
+            }
+            Err(e) => {
+                done.failed += 1;
+                done.note(format!("{}: {name} non modificato ({e})", p.label()));
+            }
+        }
+    }
+    done
+}
+
+/// Scrive `bytes` in un file temporaneo nella stessa cartella, lo rilegge,
+/// e solo se `check` lo approva lo rinomina sopra `path` (sostituzione
+/// atomica). In errore il file temporaneo (creato qui) si toglie e `path`
+/// resta com'era.
+fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> io::Result<()> {
+    let name = path.file_name().ok_or_else(|| io::Error::other("nome mancante"))?;
+    let mut tmp_name = name.to_os_string();
+    tmp_name.push(".pulisci-pc.tmp");
+    let tmp = path.with_file_name(tmp_name);
+    let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let res = (|| {
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        if !check(&fs::read(&tmp)?) {
+            return Err(io::Error::other("il file riscritto non si rilegge uguale"));
+        }
+        fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    res
+}
+
+// ---------------------------------------------------------------------------
+// Voci.
+
+pub fn items() -> Vec<NativeItem> {
+    vec![
+        NativeItem {
+            id: COOKIES_ID,
+            group: GROUP,
+            label: "Cookie (con lista da conservare)",
+            description: "Elimina i cookie di Chrome, Edge, Firefox e degli altri browser, tranne quelli dei domini \
+                 scritti in Documenti\\PulisciPC\\cookie_da_conservare.txt (un dominio per riga, vale anche per i \
+                 sottodomini). Il profilo di un browser aperto si salta.",
+            warning: Some(
+                "si esce dai siti, e in Thunderbird anche dalla posta via web: verranno eliminati tutti i cookie \
+                 tranne i domini della lista",
+            ),
+            warning_extra: Some(real::keep_list_warning),
+            default_on: false,
+            needs_admin: false,
+            running: &[],
+            analyze: real::cookies_analyze,
+            clean: real::cookies_clean,
+        },
+        NativeItem {
+            id: COMPACT_ID,
+            group: GROUP,
+            label: "Compatta database",
+            description: "Ricompatta i database dei profili dei browser (cronologia, cookie, icone, moduli) per \
+                 recuperare lo spazio libero che hanno dentro. Nessun dato si cancella; un database che non \
+                 supera il controllo di integrità non si tocca. Il profilo di un browser aperto si salta.",
+            warning: Some(
+                "i database si riscrivono per intero: serve spazio libero quanto il database più grande, e \
+                 un browser aperto a metà lavoro lo troverebbe bloccato. Chiudi i browser prima.",
+            ),
+            warning_extra: None,
+            default_on: false,
+            needs_admin: false,
+            running: &[],
+            analyze: real::compact_analyze,
+            clean: real::compact_clean,
+        },
+        NativeItem {
+            id: FIREFOX_HISTORY_ID,
+            group: GROUP,
+            label: "Cronologia di Firefox e Thunderbird",
+            description: "Toglie da places.sqlite la cronologia di navigazione e dei download di Firefox e \
+                 Thunderbird. I segnalibri e le parole chiave restano: se cambiassero, la pulizia si annulla. \
+                 Il profilo di un browser aperto si salta.",
+            warning: Some("si perde la cronologia di navigazione e dei download di Firefox e Thunderbird; i segnalibri restano."),
+            warning_extra: None,
+            default_on: false,
+            needs_admin: false,
+            running: &[],
+            analyze: real::history_analyze,
+            clean: real::history_clean,
+        },
+        NativeItem {
+            id: DOWNLOAD_DIR_ID,
+            group: GROUP,
+            label: "Ultimo percorso di download",
+            description: "Fa dimenticare l'ultima cartella usata: quella di «Salva con nome» per Chrome, Edge e \
+                 gli altri browser (file Preferences), quella dei download per Firefox e Thunderbird (prefs.js). \
+                 La cartella dei download scelta nelle impostazioni non cambia.",
+            warning: Some(
+                "si riscrive il file delle preferenze del browser (Preferences o prefs.js), solo a browser chiuso \
+                 e solo se il risultato si rilegge senza errori.",
+            ),
+            warning_extra: None,
+            default_on: false,
+            needs_admin: false,
+            running: &[],
+            analyze: real::download_dir_analyze,
+            clean: real::download_dir_clean,
+        },
+    ]
+}
+
+/// La lista vera: `Documenti\PulisciPC\cookie_da_conservare.txt`, dalla
+/// cartella nota Documenti (mai dalle variabili del processo).
+fn keep_list_path() -> Option<PathBuf> {
+    crate::sysclean::documents_dir().map(|d| keep_list_in(&d))
+}
+
+/// Crea la lista se manca e la apre nell'editor predefinito
+/// (`ShellExecuteW "open"`). Da chiamare fuori dal thread della UI.
+pub fn open_keep_list() -> Result<(), String> {
+    let path = keep_list_path().ok_or_else(|| "cartella Documenti non trovata".to_string())?;
+    ensure_keep_list(&path).map_err(|e| e.to_string())?;
+    win::open(&path)
+}
+
+mod real {
+    use super::*;
+
+    fn keep_list() -> Result<Vec<String>, String> {
+        keep_list_path().ok_or_else(|| "cartella Documenti non trovata".to_string()).and_then(|p| read_keep_list(&p))
+    }
+
+    pub fn keep_list_warning() -> String {
+        keep_list_summary(&keep_list())
+    }
+    pub fn cookies_analyze(ctx: &NativeCtx) -> NativeFound {
+        analyze_cookies(&profiles(ctx.env), keep_list(), &crate::rules::processes, ctx.cancel)
+    }
+    pub fn cookies_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
+        clean_cookies(&profiles(ctx.env), found, &crate::rules::processes, ctx.cancel)
+    }
+    pub fn compact_analyze(ctx: &NativeCtx) -> NativeFound {
+        analyze_compact(&profiles(ctx.env), &crate::rules::processes, ctx.cancel)
+    }
+    pub fn compact_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
+        clean_compact(&profiles(ctx.env), found, &crate::rules::processes, ctx.cancel)
+    }
+    pub fn history_analyze(ctx: &NativeCtx) -> NativeFound {
+        analyze_history(&profiles(ctx.env), &crate::rules::processes, ctx.cancel)
+    }
+    pub fn history_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
+        clean_history(&profiles(ctx.env), found, &crate::rules::processes, ctx.cancel)
+    }
+    pub fn download_dir_analyze(ctx: &NativeCtx) -> NativeFound {
+        analyze_download_dir(&profiles(ctx.env), &crate::rules::processes, ctx.cancel)
+    }
+    pub fn download_dir_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
+        clean_download_dir(&profiles(ctx.env), found, &crate::rules::processes, ctx.cancel)
+    }
+}
+
+mod win {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    use std::ptr::null;
+
+    use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    /// Apre `path` con il programma predefinito. Inizializza COM nel thread
+    /// chiamante, come chiede `ShellExecuteW`.
+    pub fn open(path: &Path) -> Result<(), String> {
+        let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let verb: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: nessun puntatore; si annulla con CoUninitialize solo se riuscita.
+        let com = unsafe { CoInitializeEx(null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) } >= 0;
+        // SAFETY: stringhe UTF-16 terminate da zero che vivono fino al ritorno;
+        // finestra, parametri e cartella nulli sono ammessi.
+        let h = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), null(), null(), SW_SHOWNORMAL) };
+        if com {
+            // SAFETY: bilancia la CoInitializeEx riuscita qui sopra.
+            unsafe { CoUninitialize() };
+        }
+        // Valori fino a 32 sono errori (documentazione di ShellExecuteW).
+        if h as isize > 32 { Ok(()) } else { Err(format!("apertura non riuscita (codice {})", h as isize)) }
+    }
+}
+
+#[cfg(test)]
+mod tests;

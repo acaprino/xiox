@@ -126,7 +126,8 @@ pub fn items() -> Vec<NativeItem> {
             label: "Appunti",
             description: "Svuota gli Appunti di Windows, cioè quello che hai copiato. La cronologia di Win+V non si tocca.",
             warning: None,
-            default_on: true,
+            warning_extra: None,
+            default_on:true,
             needs_admin: false,
             running: &[],
             analyze: real::clipboard_analyze,
@@ -138,7 +139,8 @@ pub fn items() -> Vec<NativeItem> {
             label: "Cache DNS",
             description: "Svuota la cache dei nomi di dominio di Windows. Si riempie di nuovo da sola alle prossime visite.",
             warning: None,
-            default_on: false,
+            warning_extra: None,
+            default_on:false,
             needs_admin: false,
             running: &[],
             analyze: real::dns_analyze,
@@ -156,7 +158,8 @@ pub fn items() -> Vec<NativeItem> {
                  che serve per la diagnosi dei problemi, senza copia. Sicurezza, Windows Defender e gli altri \
                  registri restano come sono.",
             ),
-            default_on: false,
+            warning_extra: None,
+            default_on:false,
             needs_admin: true,
             running: &[],
             analyze: real::event_logs_analyze,
@@ -171,13 +174,21 @@ pub fn items() -> Vec<NativeItem> {
                 "un programma spostato o un disco che ha cambiato lettera fanno sembrare non valido un collegamento \
                  che serve ancora: controlla l'elenco dopo «Analizza».",
             ),
-            default_on: false,
+            warning_extra: None,
+            default_on:false,
             needs_admin: true,
             running: &[],
             analyze: real::shortcuts_analyze,
             clean: real::shortcuts_clean,
         },
     ]
+}
+
+/// La cartella Documenti dell'utente dalla cartella nota di Windows
+/// (`SHGetKnownFolderPath`), mai dalle variabili del processo. La usa
+/// `browserdb` per la lista dei cookie da conservare.
+pub fn documents_dir() -> Option<PathBuf> {
+    win::documents()
 }
 
 /// Collegamento fra le voci e le implementazioni vere.
@@ -808,8 +819,8 @@ mod win {
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
     use windows_sys::Win32::UI::Shell::{
-        FOLDERID_CommonStartMenu, FOLDERID_PublicDesktop, SHGetKnownFolderPath, ShellLink, KF_FLAG_DONT_VERIFY,
-        SLGP_RAWPATH,
+        FOLDERID_CommonStartMenu, FOLDERID_Documents, FOLDERID_PublicDesktop, SHGetKnownFolderPath, ShellLink,
+        KF_FLAG_DONT_VERIFY, SLGP_RAWPATH,
     };
 
     use std::ffi::OsString;
@@ -837,6 +848,11 @@ mod win {
         // SAFETY: memoria di SHGetKnownFolderPath (o nulla), liberata una volta.
         unsafe { CoTaskMemFree(raw as *const c_void) };
         out
+    }
+
+    /// Documenti dell'utente del processo (segue il reindirizzamento a OneDrive).
+    pub fn documents() -> Option<PathBuf> {
+        known_folder(&FOLDERID_Documents)
     }
 
     fn wide(s: &str) -> Vec<u16> {

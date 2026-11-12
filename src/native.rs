@@ -1,6 +1,6 @@
 //! Voci native di Pulizia file: ciò che non è «cancella file o chiavi»
-//! (Appunti, cache DNS, registri eventi, collegamenti non validi; i database
-//! dei browser arrivano con `browserdb`).
+//! (Appunti, cache DNS, registri eventi, collegamenti non validi in
+//! `sysclean`; i database dei browser in `browserdb`).
 //!
 //! Ogni voce ha un `analyze` che guarda e basta e un `clean` che agisce
 //! **solo** su `NativeFound::items`, cioè su ciò che l'analisi dello stesso
@@ -68,6 +68,9 @@ pub struct NativeItem {
     pub label: &'static str,
     pub description: &'static str,
     pub warning: Option<&'static str>,
+    /// Testo calcolato al momento della conferma, scritto fra parentesi dopo
+    /// `warning` (cookie: «lista: N domini»). Legge al più un file piccolo.
+    pub warning_extra: Option<fn() -> String>,
     pub default_on: bool,
     pub needs_admin: bool,
     /// Processi (con o senza `.exe`) che bloccano la voce finché sono attivi.
@@ -78,7 +81,9 @@ pub struct NativeItem {
 
 /// Tutte le voci native, nell'ordine del pannello.
 pub fn all() -> Vec<NativeItem> {
-    crate::sysclean::items()
+    let mut v = crate::sysclean::items();
+    v.extend(crate::browserdb::items());
+    v
 }
 
 /// Analizza (e con `also_clean` pulisce) le voci scelte, in sequenza, come
@@ -150,6 +155,7 @@ mod tests {
             label: "Voce",
             description: "",
             warning: None,
+            warning_extra: None,
             default_on: false,
             needs_admin: false,
             running,

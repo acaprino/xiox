@@ -426,21 +426,26 @@ pub fn native_defaults(items: &[NativeItem]) -> HashSet<String> {
 /// Come [`blocked`] per una voce nativa: `Some("Chiudi … per pulire")` se un
 /// processo di `running` è attivo (nomi senza maiuscole, `.exe` facoltativo).
 pub fn native_blocked(item: &NativeItem, processes: &[String]) -> Option<String> {
+    let hits = running_among(item.running, processes);
+    (!hits.is_empty()).then(|| format!("Chiudi {} per pulire", hits.join(", ")))
+}
+
+/// I nomi di `wanted` che sono fra i `processes` attivi, confrontati senza
+/// maiuscole e con `.exe` facoltativo (come `pc_rules::running`).
+pub fn running_among<'a>(wanted: &[&'a str], processes: &[String]) -> Vec<&'a str> {
     let norm = |s: &str| {
         let s = s.trim().to_lowercase();
         s.strip_suffix(".exe").map(str::to_string).unwrap_or(s)
     };
     let active: Vec<String> = processes.iter().map(|p| norm(p)).collect();
-    let hits: Vec<&str> = item
-        .running
+    wanted
         .iter()
         .copied()
         .filter(|r| {
             let n = norm(r);
             !n.is_empty() && active.contains(&n)
         })
-        .collect();
-    (!hits.is_empty()).then(|| format!("Chiudi {} per pulire", hits.join(", ")))
+        .collect()
 }
 
 /// Voci native spuntate e non bloccate (abilitano «Avvia pulizia»).
@@ -451,9 +456,19 @@ pub fn active_natives<'a>(items: &'a [NativeItem], sel: &HashSet<String>, proces
         .collect()
 }
 
-/// "<voce>: <avviso>" per ogni voce nativa con un avviso.
+/// "<voce>: <avviso>" per ogni voce nativa con un avviso, con fra parentesi
+/// il testo di `warning_extra` (calcolato adesso: «lista: N domini»).
 pub fn native_warnings(items: &[&NativeItem]) -> Vec<String> {
-    items.iter().filter_map(|i| i.warning.map(|w| format!("{}: {w}", i.label))).collect()
+    items
+        .iter()
+        .filter_map(|i| {
+            let w = i.warning?;
+            Some(match i.warning_extra {
+                Some(extra) => format!("{}: {w} ({})", i.label, extra()),
+                None => format!("{}: {w}", i.label),
+            })
+        })
+        .collect()
 }
 
 /// Gruppi del pannello: i gruppi dei cleaner inglobati (`groups`) con, in
@@ -2497,6 +2512,7 @@ mod tests {
             label: "Voce nativa",
             description: "",
             warning: Some("attenzione"),
+            warning_extra: None,
             default_on: id == "acceso",
             needs_admin: false,
             running,
@@ -2526,6 +2542,10 @@ mod tests {
         assert_eq!(native_warnings(&active), vec!["Voce nativa: attenzione".to_string()]);
         assert_eq!(native_key(&items[1]), "native:acceso");
         assert_eq!(native_defaults(&items), HashSet::from(["native:acceso".to_string()]));
+        // Testo calcolato al momento della conferma (cookie: «lista: N domini»).
+        let with_extra = NativeItem { warning_extra: Some(|| "lista: 0 domini".to_string()), ..items[1] };
+        assert_eq!(native_warnings(&[&with_extra]), vec!["Voce nativa: attenzione (lista: 0 domini)".to_string()]);
+        assert_eq!(running_among(&["Chrome.exe", "msedge"], &["MSEDGE.EXE".to_string()]), vec!["msedge"]);
     }
 
     #[test]

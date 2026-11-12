@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod browserdb;
 mod cleaner;
 mod dev;
 mod native;
@@ -79,6 +80,9 @@ struct App {
     cleaned: Vec<Option<cleaner::Cleaned>>,
     clean_view: CleanView,
     confirm_clean: bool,
+    /// Avvisi della finestra di conferma, calcolati una volta all'apertura
+    /// (la lista dei cookie si legge lì, non a ogni fotogramma).
+    confirm_warnings: Vec<String>,
 
     rules: Option<rules::RuleSet>,
     /// Aperto finché il thread delle regole (caricamento e aggiornamento di Winapp2) vive.
@@ -141,6 +145,7 @@ impl App {
             cleaned: vec![None; n],
             clean_view: CleanView::Empty,
             confirm_clean: false,
+            confirm_warnings: vec![],
             rules: None,
             rules_rx: None,
             winapp2_update: None,
@@ -613,6 +618,7 @@ impl App {
                         || !rules::active_natives(&self.natives, &self.rule_sel, &self.processes).is_empty()
                         || self.rules.as_ref().is_some_and(|rs| !rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes).is_empty());
                     if primary(ui, "Avvia pulizia", !busy && any).clicked() {
+                        self.confirm_warnings = self.rule_warnings();
                         self.confirm_clean = true;
                     }
                     if secondary(ui, "Analizza", !busy && any).clicked() {
@@ -646,7 +652,7 @@ impl App {
         });
         if self.confirm_clean {
             let mut close = false;
-            let warnings = self.rule_warnings();
+            let warnings = self.confirm_warnings.clone();
             egui::Modal::new(egui::Id::new("confirm_clean")).show(ui.ctx(), |ui| {
                 ui.set_width(380.0);
                 ui.label(RichText::new("Avviare la pulizia?").size(18.0).strong());
@@ -1255,6 +1261,29 @@ fn native_checkbox(ui: &mut Ui, item: &native::NativeItem, admin: bool, sel: &mu
             sel.remove(&key);
         }
     }
+    if item.id == browserdb::COOKIES_ID {
+        ui.add_space(2.0);
+        let hint = "Apre Documenti\\PulisciPC\\cookie_da_conservare.txt nell'editor predefinito (lo crea se manca). \
+                    Un dominio per riga: i suoi cookie restano.";
+        if secondary(ui, "Modifica lista cookie", true).on_hover_text(hint).clicked() {
+            open_keep_list();
+        }
+        ui.add_space(4.0);
+    }
+}
+
+/// Apre la lista dei cookie da conservare in un thread a parte (crearla e
+/// avviare l'editor non deve fermare la UI); un errore si mostra in una finestra.
+fn open_keep_list() {
+    std::thread::spawn(|| {
+        if let Err(e) = browserdb::open_keep_list() {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Lista dei cookie da conservare")
+                .set_description(format!("Non è stato possibile aprire la lista: {e}"))
+                .show();
+        }
+    });
 }
 
 /// Elenco completo di una voce nativa sotto la tabella (collegamenti trovati,
