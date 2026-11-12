@@ -3,6 +3,8 @@
 mod browserdb;
 mod cleaner;
 mod dev;
+#[cfg(test)]
+mod live_checks;
 mod native;
 mod regbackup;
 mod registry;
