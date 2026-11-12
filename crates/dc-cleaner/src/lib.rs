@@ -1,7 +1,9 @@
 //! Plan execution: Recycle Bin / permanent / git worktree remove (`Remover`).
 //!
 //! Safety model (see docs/DESIGN.md): every item is validated first (`guard`), measured
-//! right before removal (`fsops::measure`), removed, then verified gone. `bytes_freed` is
+//! right before removal (`fsops::measure`), removed by the worker pool (`parallel`), then
+//! verified gone. Validation and measurement run in sequence before anything is queued: the
+//! workers only delete. `bytes_freed` is
 //! the measured size and is only reported when the path is verified gone afterwards.
 //! A failed or partial removal is `Failed` and contributes 0 bytes. Processes are never
 //! killed; `locked_by` is informational (Windows Restart Manager).
@@ -9,22 +11,20 @@
 mod fsops;
 mod guard;
 mod locks;
+mod parallel;
 
 #[cfg(test)]
 mod tests;
 
 pub use fsops::measure as measure_dir;
+pub use parallel::{Cancel, ParallelRemover, Tick, remove_files_parallel, worker_count};
 
-use dc_model::{
-    CleanPlan, CleanResult, ItemOutcome, ItemResult, PlanAction, PlanItem, Remover, RemoveMode, SizeInfo,
-    normalize_path, path_key,
-};
-use std::collections::HashSet;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use dc_model::{CleanPlan, CleanResult, ItemOutcome, Remover, normalize_path, path_key};
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// The production [`Remover`].
+/// The production [`Remover`], kept for compatibility: [`ParallelRemover`] with
+/// [`worker_count`] workers, no progress and no cancel.
 ///
 /// * `RemoveMode::Permanent`: unrecoverable delete (read-only bits cleared, retries with
 ///   backoff, `\\?\` long paths, junctions/symlinks removed as links without following).
@@ -40,22 +40,7 @@ pub struct DefaultRemover;
 
 impl Remover for DefaultRemover {
     fn execute(&self, plan: &CleanPlan, dry_run: bool) -> CleanResult {
-        let mut result = CleanResult { dry_run, ..Default::default() };
-        let mut seen: HashSet<String> = HashSet::new();
-        for item in &plan.items {
-            let outcome = if !seen.insert(path_key(&item.path)) {
-                ItemOutcome::Skipped { reason: "duplicate of an earlier plan item".into() }
-            } else {
-                catch_unwind(AssertUnwindSafe(|| process(plan.mode, item, dry_run))).unwrap_or_else(|_| {
-                    ItemOutcome::Failed { error: "internal error while removing this item".into(), locked_by: vec![] }
-                })
-            };
-            if let ItemOutcome::Removed { bytes_freed } = &outcome {
-                result.bytes_freed += bytes_freed;
-            }
-            result.items.push(ItemResult { path: item.path.clone(), outcome });
-        }
-        result
+        ParallelRemover { workers: worker_count() }.execute(plan, dry_run)
     }
 }
 
@@ -67,57 +52,11 @@ fn failed(error: impl Into<String>, locked_by: Vec<String>) -> ItemOutcome {
     ItemOutcome::Failed { error: error.into(), locked_by }
 }
 
-fn process(mode: RemoveMode, item: &PlanItem, dry_run: bool) -> ItemOutcome {
-    let checked = match guard::validate(item) {
-        Ok(c) => c,
-        Err(reason) => return skipped(reason),
-    };
-    let path = checked.path.as_path();
-
-    if let PlanAction::GitWorktreeRemove { repo } = &item.action {
-        if checked.is_link {
-            return skipped("worktree path is a link: refusing git worktree remove");
-        }
-        if let Err(reason) = validate_repo(repo, path) {
-            return skipped(reason);
-        }
-    }
-
-    // Links: nothing to measure (the target is never touched, so nothing is freed).
-    let size = if checked.is_link { SizeInfo::default() } else { fsops::measure(path) };
-    let bytes = size.effective_bytes();
-
-    if dry_run {
-        return skipped(if checked.is_link {
-            "dry-run: would free 0 bytes (path is a link: only the link would be removed)".to_string()
-        } else {
-            format!("dry-run: would free {bytes} bytes")
-        });
-    }
-
-    let outcome = if checked.is_link {
-        remove_permanent(path, true)
-    } else {
-        match &item.action {
-            PlanAction::RemoveDir => match mode {
-                RemoveMode::Permanent => remove_permanent(path, false),
-                RemoveMode::Recycle => remove_recycle(path),
-            },
-            PlanAction::GitWorktreeRemove { repo } => remove_git_worktree(repo, path),
-        }
-    };
-    match outcome {
-        // Success only counts once the path is verified gone.
-        Ok(()) if fsops::is_gone(path) => ItemOutcome::Removed { bytes_freed: bytes },
-        Ok(()) => failed("removal reported success but the path still exists", vec![]),
-        Err(f) => f,
-    }
-}
-
 // ───────────────────────────────── permanent ─────────────────────────────────
 
-fn remove_permanent(path: &Path, link_only: bool) -> Result<(), ItemOutcome> {
-    let rep = if link_only { fsops::remove_link_only(path) } else { fsops::remove_path(path) };
+/// The `Failed` outcome of a permanent removal that hit errors (`rep.first` is set), naming
+/// the first blocking entry and, for an access/sharing/lock error, the processes holding it.
+fn permanent_failure(rep: fsops::RemoveReport) -> Result<(), ItemOutcome> {
     let Some((blocked, err)) = rep.first else { return Ok(()) };
     let locked_by = if matches!(err.raw_os_error(), Some(5 | 32 | 33)) {
         locks::locking_processes(&blocked)
@@ -129,6 +68,11 @@ fn remove_permanent(path: &Path, link_only: bool) -> Result<(), ItemOutcome> {
         format!("could not remove {}: {err}{more}; the folder may be partially deleted", blocked.display()),
         locked_by,
     ))
+}
+
+/// Remove only the link at `path`, never its target.
+fn remove_link_item(path: &Path) -> Result<(), ItemOutcome> {
+    permanent_failure(fsops::remove_link_only(path))
 }
 
 // ───────────────────────────────── recycle ─────────────────────────────────

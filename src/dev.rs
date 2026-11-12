@@ -365,7 +365,8 @@ impl DevState {
             guarded(&mut out, |out| {
                 if let Some(plan) = plan.filter(|p| !p.items.is_empty()) {
                     step("Eliminazione di cartelle e worktree…", 0.1);
-                    match dc_app::execute_plan(&scan, &plan) {
+                    // Avanzamento e «Annulla» veri nel Task 10.
+                    match dc_app::execute_plan(&scan, &plan, &|_| {}, &dc_app::Cancel::default()) {
                         Ok(res) => {
                             out.freed = out.freed.saturating_add(res.bytes_freed);
                             for it in res.items {

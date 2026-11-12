@@ -11,9 +11,10 @@
 //! against a fresh listing right before they go ([`revalidate_archived`]): an analysis can be
 //! hours old.
 
+pub use dc_cleaner::{Cancel, Tick};
 use dc_model::{
-    Agent, AnalysisResult, CleanPlan, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Level,
-    Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, Remover, ScanOptions,
+    Agent, AnalysisResult, CleanPlan, CleanReport, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Level,
+    Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
     Selection, SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
 use dc_mukade::{ArchivedSession, MukadeSessions};
@@ -485,29 +486,109 @@ pub fn build_plan(scan: &DevScan, sel: &Selection, mode: RemoveMode) -> Result<C
     dc_engine::build_plan(&selectable_reports(scan), sel, mode).map_err(|e| e.to_string())
 }
 
-/// Runs the plan for real (no dry run) through `dc_cleaner::DefaultRemover`, after
-/// [`checked_plan`]: only items the scan itself would plan are executed. An analysis older than
-/// [`MAX_SCAN_AGE_MS`] is refused ([`STALE_ANALYSIS`]) before anything is touched.
-pub fn execute_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanResult, String> {
-    execute_plan_at(scan, plan, now_ms())
+/// Runs the plan for real (no dry run) with [`dc_cleaner::ParallelRemover`] and
+/// [`dc_cleaner::worker_count`] workers, after [`checked_plan`]: only items the scan itself
+/// would plan are executed. An analysis older than [`MAX_SCAN_AGE_MS`] is refused
+/// ([`STALE_ANALYSIS`]) before anything is touched. `tick` reports progress (at most every
+/// 100 ms, from one thread); `cancel` stops before the next file.
+pub fn execute_plan(
+    scan: &DevScan,
+    plan: &CleanPlan,
+    tick: &(dyn Fn(Tick) + Sync),
+    cancel: &Cancel,
+) -> Result<CleanResult, String> {
+    execute_plan_at(scan, plan, now_ms(), tick, cancel)
 }
 
 /// [`execute_plan`] with the current time given: the age check uses `now_ms`.
-pub fn execute_plan_at(scan: &DevScan, plan: &CleanPlan, now_ms: i64) -> Result<CleanResult, String> {
-    execute_plan_with(scan, plan, now_ms, &dc_cleaner::DefaultRemover)
+pub fn execute_plan_at(
+    scan: &DevScan,
+    plan: &CleanPlan,
+    now_ms: i64,
+    tick: &(dyn Fn(Tick) + Sync),
+    cancel: &Cancel,
+) -> Result<CleanResult, String> {
+    let checked = runnable_plan(scan, plan, now_ms)?;
+    let remover = dc_cleaner::ParallelRemover { workers: dc_cleaner::worker_count() };
+    Ok(remover.execute_with(&checked, false, tick, cancel))
 }
 
+/// The age check, then [`checked_plan`].
+fn runnable_plan(scan: &DevScan, plan: &CleanPlan, now_ms: i64) -> Result<CleanPlan, String> {
+    if scan.is_stale(now_ms) {
+        return Err(STALE_ANALYSIS.into());
+    }
+    checked_plan(scan, plan)
+}
+
+/// [`execute_plan_at`] through any [`Remover`] (tests).
+#[cfg(test)]
 fn execute_plan_with(
     scan: &DevScan,
     plan: &CleanPlan,
     now_ms: i64,
-    remover: &dyn Remover,
+    remover: &dyn dc_model::Remover,
 ) -> Result<CleanResult, String> {
-    if scan.is_stale(now_ms) {
-        return Err(STALE_ANALYSIS.into());
+    Ok(remover.execute(&runnable_plan(scan, plan, now_ms)?, false))
+}
+
+/// Category of the agent worktrees removed whole, in [`report`].
+pub const WORKTREE_CATEGORY: &str = "Worktree degli agenti";
+
+/// The final summary of an [`execute_plan`] run. Category = the artifact's `label` (an agent
+/// worktree: [`WORKTREE_CATEGORY`]), largest first. Bytes moved to the Recycle Bin (a
+/// `RemoveDir` of a `Recycle` plan) are `recycled_bytes`, the rest `freed_bytes`.
+pub fn report(scan: &DevScan, plan: &CleanPlan, res: &CleanResult) -> CleanReport {
+    let labels: HashMap<String, &str> = selectable(scan)
+        .flat_map(|r| r.artifacts.iter().map(|a| (path_key(&a.path), a.label.as_str())))
+        .collect();
+    let worktrees: HashSet<String> = scan.worktrees.iter().map(|r| path_key(&r.root)).collect();
+    let actions: HashMap<String, &PlanAction> = plan.items.iter().map(|i| (path_key(&i.path), &i.action)).collect();
+
+    let mut out = CleanReport {
+        files: res.files_removed,
+        dirs: res.dirs_removed,
+        elapsed_ms: res.elapsed_ms,
+        cancelled: res.cancelled,
+        ..Default::default()
+    };
+    let mut by_category: Vec<(String, u64)> = Vec::new();
+    for it in &res.items {
+        let key = path_key(&it.path);
+        match &it.outcome {
+            ItemOutcome::Removed { bytes_freed } => {
+                let action = actions.get(&key).copied();
+                let label = match (action, labels.get(&key)) {
+                    (Some(PlanAction::GitWorktreeRemove { .. }), _) => WORKTREE_CATEGORY.to_string(),
+                    (_, Some(l)) => (*l).to_string(),
+                    _ if worktrees.contains(&key) => WORKTREE_CATEGORY.to_string(),
+                    _ => it.path.display().to_string(),
+                };
+                if plan.mode == RemoveMode::Recycle && matches!(action, Some(PlanAction::RemoveDir) | None) {
+                    out.recycled_bytes += bytes_freed;
+                } else {
+                    out.freed_bytes += bytes_freed;
+                }
+                match by_category.iter_mut().find(|(l, _)| *l == label) {
+                    Some((_, b)) => *b += bytes_freed,
+                    None => by_category.push((label, *bytes_freed)),
+                }
+            }
+            ItemOutcome::Skipped { reason } => out.skipped.push((it.path.clone(), reason.clone())),
+            ItemOutcome::Failed { error, locked_by } => {
+                let why = if locked_by.is_empty() {
+                    error.clone()
+                } else {
+                    format!("{error} (in uso da: {})", locked_by.join(", "))
+                };
+                out.failed.push((it.path.clone(), why));
+            }
+        }
     }
-    let checked = checked_plan(scan, plan)?;
-    Ok(remover.execute(&checked, false))
+    // Largest first; equal sizes by label, so the order is stable.
+    by_category.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out.by_category = by_category;
+    out
 }
 
 fn same_action(a: &PlanAction, b: &PlanAction) -> bool {

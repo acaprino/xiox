@@ -1,7 +1,7 @@
 use super::*;
 use dc_model::{
-    Artifact, ArtifactKind, Class, GitState, IndexedDir, ItemOutcome, Level, PlanAction, PlanItem, ProjectCandidate,
-    ProjectStatus, SizeInfo,
+    Artifact, ArtifactKind, Class, GitState, IndexedDir, ItemOutcome, ItemResult, Level, PlanAction, PlanItem,
+    ProjectCandidate, ProjectStatus, Remover, SizeInfo,
 };
 use std::path::Path;
 use std::sync::Mutex;
@@ -92,7 +92,7 @@ fn execute_plan_refuses_paths_not_in_the_last_scan() {
     for bad in refused {
         let shown = bad.path.display().to_string();
         let ok = item(Path::new(r"C:\dc-app-test-missing\proj\target"), ArtifactKind::RustTarget);
-        let err = execute_plan(&scan, &plan_of(vec![ok, bad])).expect_err(&shown);
+        let err = execute_plan(&scan, &plan_of(vec![ok, bad]), &|_| {}, &Cancel::default()).expect_err(&shown);
         assert!(err.contains("rifiutato"), "{shown}: {err}");
         assert!(err.contains(&shown), "{shown}: {err}");
     }
@@ -119,7 +119,7 @@ fn execute_plan_passes_scanned_paths_to_the_remover() {
         item_for(&proj, &upper, ArtifactKind::RustTarget, PlanAction::RemoveDir),
         item_for(&wt, &wt, ArtifactKind::WorktreeDir, PlanAction::GitWorktreeRemove { repo: repo_upper }),
     ]);
-    let res = execute_plan(&scan, &plan).expect("allowed");
+    let res = execute_plan(&scan, &plan, &|_| {}, &Cancel::default()).expect("allowed");
     assert!(!res.dry_run);
     // The canonical paths are executed, not the caller's spelling.
     let paths: Vec<_> = res.items.iter().map(|i| i.path.clone()).collect();
@@ -166,7 +166,8 @@ fn a_plan_from_an_old_analysis_is_refused_before_anything_runs() {
     assert_eq!(err, STALE_ANALYSIS);
     assert_eq!(err, "L'analisi è troppo vecchia: premi «Analizza» di nuovo.");
     assert_eq!(*remover.runs.lock().unwrap(), 0, "nothing executed");
-    assert_eq!(execute_plan_at(&scan, &plan, t + 31 * 60 * 1000).unwrap_err(), STALE_ANALYSIS);
+    let late = execute_plan_at(&scan, &plan, t + 31 * 60 * 1000, &|_| {}, &Cancel::default());
+    assert_eq!(late.unwrap_err(), STALE_ANALYSIS);
     // Unknown age: refused too.
     let unknown = DevScan { scanned_at_ms: 0, ..scan.clone() };
     assert_eq!(execute_plan_with(&unknown, &plan, t, &remover).unwrap_err(), STALE_ANALYSIS);
@@ -181,7 +182,7 @@ fn a_plan_from_an_old_analysis_is_refused_before_anything_runs() {
 fn refused(scan: &DevScan, items: Vec<PlanItem>) -> String {
     let err = checked_plan(scan, &plan_of(items.clone())).expect_err("must be refused");
     assert!(err.contains("rifiutato"), "{err}");
-    assert_eq!(execute_plan(scan, &plan_of(items)).unwrap_err(), err);
+    assert_eq!(execute_plan(scan, &plan_of(items), &|_| {}, &Cancel::default()).unwrap_err(), err);
     err
 }
 
@@ -556,7 +557,7 @@ fn one_folder_of_a_project_with_two_is_accepted_and_only_it_is_removed() {
     assert_eq!(plan.items.len(), 1);
     assert_eq!(plan.items[0].path, nm);
     assert_eq!(checked_plan(&scan, &plan).unwrap().items.len(), 1);
-    let res = execute_plan(&scan, &plan).expect("accepted");
+    let res = execute_plan(&scan, &plan, &|_| {}, &Cancel::default()).expect("accepted");
     assert_eq!(res.items.len(), 1);
     assert!(matches!(res.items[0].outcome, ItemOutcome::Removed { .. }), "{res:?}");
     assert!(!nm.exists(), "the picked folder is gone");
@@ -591,13 +592,87 @@ fn a_forged_child_of_a_picked_folder_or_a_changed_kind_is_refused() {
     child.items[0].path = proj.root.join("target").join("debug");
     let err = checked_plan(&scan, &child).unwrap_err();
     assert!(err.contains("Percorso non presente nell'ultima analisi, rifiutato"), "{err}");
-    assert_eq!(execute_plan(&scan, &child).unwrap_err(), err);
+    assert_eq!(execute_plan(&scan, &child, &|_| {}, &Cancel::default()).unwrap_err(), err);
 
     let mut kind = plan.clone();
     kind.items[0].kind = ArtifactKind::NodeModules;
     let err = checked_plan(&scan, &kind).unwrap_err();
     assert!(err.contains("Piano rifiutato: l'elemento non corrisponde all'ultima analisi"), "{err}");
-    assert_eq!(execute_plan(&scan, &kind).unwrap_err(), err);
+    assert_eq!(execute_plan(&scan, &kind, &|_| {}, &Cancel::default()).unwrap_err(), err);
+}
+
+// ───────────────────────────── report ─────────────────────────────
+
+#[test]
+fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
+    let base = Path::new(r"C:\dc-app-test-missing\report");
+    let (p1, p2, wt) = (base.join("p1"), base.join("p2"), base.join("wt"));
+    let mut proj1 = report(p1.to_str().unwrap(), false, false);
+    let mut nm = proj1.artifacts[0].clone();
+    nm.path = p1.join("node_modules");
+    nm.id = path_key(&nm.path);
+    nm.label = "Dipendenze npm".into();
+    proj1.artifacts.push(nm);
+    let scan = DevScan {
+        projects: vec![proj1, report(p2.to_str().unwrap(), false, false)],
+        worktrees: vec![whole_worktree(wt.to_str().unwrap(), base.join("repo").to_str().unwrap())],
+        scanned_at_ms: now_ms(),
+        ..Default::default()
+    };
+    let repo = PlanAction::GitWorktreeRemove { repo: base.join("repo") };
+    let plan = CleanPlan {
+        id: "r".into(),
+        mode: RemoveMode::Recycle,
+        items: vec![
+            item_for(&p1, &p1.join("target"), ArtifactKind::RustTarget, PlanAction::RemoveDir),
+            item_for(&p2, &p2.join("target"), ArtifactKind::RustTarget, PlanAction::RemoveDir),
+            item_for(&p1, &p1.join("node_modules"), ArtifactKind::NodeModules, PlanAction::RemoveDir),
+            item_for(&wt, &wt, ArtifactKind::WorktreeDir, repo),
+        ],
+        expected_bytes: 0,
+    };
+    let removed = |p: PathBuf, b: u64| ItemResult { path: p, outcome: ItemOutcome::Removed { bytes_freed: b } };
+    let res = CleanResult {
+        items: vec![
+            removed(p1.join("target"), 300),
+            removed(p2.join("target"), 200),
+            removed(p1.join("node_modules"), 400),
+            removed(wt.clone(), 1000),
+            ItemResult {
+                path: p2.join("node_modules"),
+                outcome: ItemOutcome::Skipped { reason: "Annullato: liberati 7 byte".into() },
+            },
+            ItemResult {
+                path: p1.join("dist"),
+                outcome: ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe (pid 4)".into()] },
+            },
+        ],
+        bytes_freed: 1900,
+        files_removed: 1234,
+        dirs_removed: 56,
+        elapsed_ms: 789,
+        cancelled: true,
+        ..Default::default()
+    };
+    let r = super::report(&scan, &plan, &res);
+    assert_eq!(
+        r.by_category,
+        vec![
+            (WORKTREE_CATEGORY.to_string(), 1000),
+            ("Rust target/".to_string(), 500),
+            ("Dipendenze npm".to_string(), 400),
+        ]
+    );
+    // Recycle plan: the folders went to the Recycle Bin, the worktree was removed by git.
+    assert_eq!((r.recycled_bytes, r.freed_bytes), (900, 1000));
+    assert_eq!((r.files, r.dirs, r.elapsed_ms, r.cancelled), (1234, 56, 789, true));
+    assert_eq!(r.skipped, vec![(p2.join("node_modules"), "Annullato: liberati 7 byte".to_string())]);
+    assert_eq!(r.failed, vec![(p1.join("dist"), "bloccato (in uso da: code.exe (pid 4))".to_string())]);
+
+    // The same run in a permanent plan: everything is freed.
+    let permanent = CleanPlan { mode: RemoveMode::Permanent, ..plan };
+    let r = super::report(&scan, &permanent, &res);
+    assert_eq!((r.recycled_bytes, r.freed_bytes), (0, 1900));
 }
 
 // ───────────────────────────── roots ─────────────────────────────

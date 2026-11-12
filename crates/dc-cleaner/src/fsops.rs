@@ -168,7 +168,13 @@ pub use sys::probe_blocking_file;
 /// the tree (otherwise deleting the tree frees nothing for it). Unreadable entries are
 /// skipped (so the figure is a lower bound, never an over-estimate).
 pub fn measure(root: &Path) -> SizeInfo {
-    let (mut logical, mut alloc, mut count) = (0u64, 0u64, 0u64);
+    measure_counted(root).0
+}
+
+/// [`measure`], plus the number of folders below `root` (links not counted, `root` itself
+/// not counted).
+pub fn measure_counted(root: &Path) -> (SizeInfo, u64) {
+    let (mut logical, mut alloc, mut count, mut dirs) = (0u64, 0u64, 0u64, 0u64);
     // id -> (alloc, links seen inside the tree, total links)
     let mut linked: HashMap<(u64, [u8; 16]), (u64, u32, u32)> = HashMap::new();
     let mut stack = vec![verbatim(root)];
@@ -180,6 +186,7 @@ pub fn measure(root: &Path) -> SizeInfo {
                 continue;
             }
             if ft.is_dir() {
+                dirs += 1;
                 stack.push(entry.path());
                 continue;
             }
@@ -199,7 +206,7 @@ pub fn measure(root: &Path) -> SizeInfo {
         }
     }
     alloc += linked.values().filter(|(_, seen, n)| seen >= n).map(|(a, _, _)| a).sum::<u64>();
-    SizeInfo { logical_bytes: logical, allocated_bytes: Some(alloc), file_count: count }
+    (SizeInfo { logical_bytes: logical, allocated_bytes: Some(alloc), file_count: count }, dirs)
 }
 
 // ─────────────────────────────── removal ───────────────────────────────
@@ -212,7 +219,7 @@ pub struct RemoveReport {
 }
 
 impl RemoveReport {
-    fn fail(&mut self, p: &Path, e: io::Error) {
+    pub fn fail(&mut self, p: &Path, e: io::Error) {
         self.failures += 1;
         if self.first.is_none() {
             self.first = Some((normalize_path(p), e));
@@ -236,7 +243,7 @@ fn clear_readonly(p: &Path) -> bool {
 /// Run `f`; on failure clear the read-only bit and retry immediately, then back off.
 /// `patient = false` (a failure was already seen in this tree) skips the sleeping retries
 /// so a tree full of locked files does not take minutes to report.
-fn with_retry(p: &Path, patient: bool, mut f: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+pub fn with_retry(p: &Path, patient: bool, mut f: impl FnMut() -> io::Result<()>) -> io::Result<()> {
     let mut slept = 0;
     let mut cleared = 0;
     loop {
@@ -258,68 +265,15 @@ fn with_retry(p: &Path, patient: bool, mut f: impl FnMut() -> io::Result<()>) ->
     }
 }
 
+/// Remove the link `p` itself (a directory link with `remove_dir`), never its target.
+pub fn remove_link_entry(p: &Path, patient: bool) -> io::Result<()> {
+    with_retry(p, patient, || if sys::link_is_dir(p) { fs::remove_dir(p) } else { fs::remove_file(p) })
+}
+
 fn remove_link(p: &Path, rep: &mut RemoveReport) {
-    let patient = rep.failures == 0;
-    let r = with_retry(p, patient, || if sys::link_is_dir(p) { fs::remove_dir(p) } else { fs::remove_file(p) });
-    if let Err(e) = r {
+    if let Err(e) = remove_link_entry(p, rep.failures == 0) {
         rep.fail(p, e);
     }
-}
-
-fn remove_dir_rec(dir: &Path, rep: &mut RemoveReport) {
-    let before = rep.failures;
-    match fs::read_dir(dir) {
-        Err(e) => {
-            rep.fail(dir, e);
-            return;
-        }
-        Ok(rd) => {
-            // Collect first: do not mutate the directory while iterating it.
-            let entries: Vec<_> = rd.collect();
-            for entry in entries {
-                let entry = match entry {
-                    Ok(e) => e,
-                    Err(e) => {
-                        rep.fail(dir, e);
-                        continue;
-                    }
-                };
-                let p = entry.path();
-                match entry.file_type() {
-                    Err(e) => rep.fail(&p, e),
-                    Ok(ft) if ft.is_symlink() => remove_link(&p, rep),
-                    Ok(ft) if ft.is_dir() => remove_dir_rec(&p, rep),
-                    Ok(_) => {
-                        let patient = rep.failures == 0;
-                        if let Err(e) = with_retry(&p, patient, || fs::remove_file(&p)) {
-                            rep.fail(&p, e);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Only try the directory itself if everything below it is gone.
-    if rep.failures == before {
-        let patient = rep.failures == 0;
-        if let Err(e) = with_retry(dir, patient, || fs::remove_dir(dir)) {
-            rep.fail(dir, e);
-        }
-    }
-}
-
-/// Permanently remove `path`. If `path` itself is a link only the link is removed.
-/// Links met inside the tree are removed as links, never followed.
-pub fn remove_path(path: &Path) -> RemoveReport {
-    let v = verbatim(path);
-    let mut rep = RemoveReport::default();
-    match fs::symlink_metadata(&v) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => rep.fail(&v, e),
-        Ok(md) if md.file_type().is_symlink() => remove_link(&v, &mut rep),
-        Ok(_) => remove_dir_rec(&v, &mut rep),
-    }
-    rep
 }
 
 /// Remove only the link at `path` (never its target).

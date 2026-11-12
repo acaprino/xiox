@@ -355,3 +355,188 @@ fn guard_accepts_every_catalog_dir() {
     fs::create_dir_all(p.join("other")).unwrap();
     assert!(guard::validate(&item(&p.join("other"), ArtifactKind::Catalog)).is_err());
 }
+
+// ───────────────────────────── parallel workers ─────────────────────────────
+
+/// `root/proj/target` with 20 chains of 10 nested folders (200 folders), 50 files of 100
+/// bytes in each: 10,000 files.
+fn make_big_target(root: &Path, chains: usize, depth: usize, per_dir: usize) -> PathBuf {
+    let t = root.join("proj").join("target");
+    for c in 0..chains {
+        let mut d = t.join(format!("c{c}"));
+        for level in 0..depth {
+            fs::create_dir_all(&d).unwrap();
+            for f in 0..per_dir {
+                fs::write(d.join(format!("f{f}.bin")), [b'x'; 100]).unwrap();
+            }
+            d = d.join(format!("l{level}"));
+        }
+    }
+    t
+}
+
+#[test]
+fn ten_thousand_files_go_with_one_or_eight_workers() {
+    let mut freed = Vec::new();
+    for workers in [1, 8] {
+        let tmp = TempDir::new().unwrap();
+        let t = make_big_target(tmp.path(), 20, 10, 50);
+        let size = measure_dir(&t);
+        assert_eq!(size.file_count, 10_000);
+        let ticks = std::sync::Mutex::new(Vec::<Tick>::new());
+        let res = ParallelRemover { workers }.execute_with(
+            &plan(RemoveMode::Permanent, vec![item(&t, ArtifactKind::RustTarget)]),
+            false,
+            &|t| ticks.lock().unwrap().push(t),
+            &Cancel::default(),
+        );
+        assert!(matches!(res.items[0].outcome, ItemOutcome::Removed { .. }), "{workers}: {:?}", res.items[0]);
+        assert!(!t.exists(), "{workers}: the tree is still there");
+        assert!(tmp.path().join("proj").exists(), "parent must stay");
+        assert_eq!(res.files_removed, 10_000, "{workers} workers");
+        assert_eq!(res.dirs_removed, 201, "{workers} workers: 200 folders and the item itself");
+        assert_eq!(res.bytes_freed, size.effective_bytes(), "{workers} workers");
+        assert!(!res.cancelled && res.recycled_bytes == 0);
+        for t in ticks.into_inner().unwrap() {
+            assert!(t.done_bytes <= t.total_bytes && t.done_items <= t.total_items && t.total_items == 1, "{t:?}");
+        }
+        freed.push(res.bytes_freed);
+    }
+    assert_eq!(freed[0], freed[1], "same bytes with 1 and 8 workers");
+}
+
+#[test]
+#[cfg(windows)]
+fn a_locked_file_fails_only_its_item_and_the_others_go() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let tmp = TempDir::new().unwrap();
+    let targets: Vec<PathBuf> = ["a", "b", "c"].iter().map(|n| make_target(&tmp.path().join(n))).collect();
+    let locked = targets[0].join("debug").join("locked.bin");
+    write(&locked, 10);
+    let others: u64 = targets[1..].iter().map(|t| measure_dir(t).effective_bytes()).sum();
+    let _held = fs::OpenOptions::new().read(true).share_mode(0).open(&locked).unwrap();
+
+    let items = targets.iter().map(|t| item(t, ArtifactKind::RustTarget)).collect();
+    let res = ParallelRemover { workers: 8 }.execute(&plan(RemoveMode::Permanent, items), false);
+    match &res.items[0].outcome {
+        ItemOutcome::Failed { error, locked_by } => {
+            assert!(error.contains("locked.bin"), "error should name the blocking file: {error}");
+            eprintln!("locked_by = {locked_by:?}");
+            assert!(!locked_by.is_empty(), "Restart Manager reported no holder");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    for (t, r) in targets[1..].iter().zip(&res.items[1..]) {
+        assert!(matches!(r.outcome, ItemOutcome::Removed { .. }), "{r:?}");
+        assert!(!t.exists());
+    }
+    assert!(locked.exists());
+    assert_eq!(res.bytes_freed, others, "the failed item frees nothing");
+    // 3 files of each removed item, and the 3 unlocked files of the failed one.
+    assert_eq!(res.files_removed, 9);
+    assert!(!res.cancelled);
+}
+
+/// "Annullato: liberati {n} byte" -> n; "Annullato" -> 0.
+fn cancelled_bytes(reason: &str) -> u64 {
+    match reason.strip_prefix("Annullato: liberati ") {
+        Some(rest) => rest.strip_suffix(" byte").unwrap().parse().unwrap(),
+        None => {
+            assert_eq!(reason, "Annullato");
+            0
+        }
+    }
+}
+
+#[test]
+fn cancel_after_the_first_tick_stops_and_counts_what_went() {
+    let tmp = TempDir::new().unwrap();
+    let targets: Vec<PathBuf> =
+        (0..4).map(|i| make_big_target(&tmp.path().join(format!("p{i}")), 10, 6, 50)).collect();
+    let total: u64 = targets.iter().map(|t| measure_dir(t).effective_bytes()).sum();
+    let cancel = Cancel::default();
+    let items = targets.iter().map(|t| item(t, ArtifactKind::RustTarget)).collect();
+    let res = ParallelRemover { workers: 1 }.execute_with(
+        &plan(RemoveMode::Permanent, items),
+        false,
+        &|_| cancel.cancel(),
+        &cancel,
+    );
+    assert!(cancel.is_cancelled(), "no tick came: the cleanup ended within 100 ms");
+    assert!(res.cancelled);
+    let mut skipped = 0;
+    for r in &res.items {
+        match &r.outcome {
+            ItemOutcome::Removed { .. } => {}
+            ItemOutcome::Skipped { reason } => skipped += cancelled_bytes(reason),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(res.items.iter().any(|r| matches!(r.outcome, ItemOutcome::Skipped { .. })), "{res:?}");
+    assert!(skipped + res.bytes_freed <= total, "{skipped} + {} > {total}", res.bytes_freed);
+    assert!(res.files_removed < 4 * 3000);
+}
+
+#[test]
+fn a_cancel_before_the_start_touches_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let t = make_target(tmp.path());
+    let cancel = Cancel::default();
+    cancel.cancel();
+    let res = ParallelRemover { workers: 2 }.execute_with(
+        &plan(RemoveMode::Permanent, vec![item(&t, ArtifactKind::RustTarget)]),
+        false,
+        &|_| {},
+        &cancel,
+    );
+    assert_eq!(skipped_reason(&res.items[0].outcome), "Annullato");
+    assert!(res.cancelled && res.bytes_freed == 0 && res.files_removed == 0);
+    assert_eq!(measure_dir(&t).logical_bytes, 30_000);
+}
+
+#[test]
+fn loose_files_go_folders_and_missing_files_do_not() {
+    let tmp = TempDir::new().unwrap();
+    let mut files: Vec<(PathBuf, u64)> = (0..100)
+        .map(|i| {
+            let p = tmp.path().join(format!("f{i}.tmp"));
+            write(&p, 10);
+            (p, 10)
+        })
+        .collect();
+    let dir = tmp.path().join("adir");
+    fs::create_dir_all(&dir).unwrap();
+    files.push((dir.clone(), 5));
+    files.push((tmp.path().join("missing.tmp"), 7));
+    let (bytes, n, failed) = remove_files_parallel(&files, 4, &|_| {}, &Cancel::default());
+    assert_eq!((bytes, n), (1000, 100));
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0].0, dir);
+    assert!(dir.exists());
+    assert!(files[..100].iter().all(|(p, _)| !p.exists()));
+}
+
+#[test]
+#[cfg(windows)]
+fn remove_files_parallel_leaves_the_three_locked_files() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let tmp = TempDir::new().unwrap();
+    let files: Vec<(PathBuf, u64)> = (0..1000)
+        .map(|i| {
+            let p = tmp.path().join(format!("f{i}.tmp"));
+            write(&p, 50);
+            (p, 50)
+        })
+        .collect();
+    let locked = [7, 500, 999];
+    let _held: Vec<fs::File> = locked
+        .iter()
+        .map(|&i| fs::OpenOptions::new().read(true).share_mode(0).open(&files[i].0).unwrap())
+        .collect();
+    let (bytes, n, failed) = remove_files_parallel(&files, 8, &|_| {}, &Cancel::default());
+    assert_eq!(n, 997);
+    assert_eq!(bytes, 997 * 50);
+    let failed_paths: Vec<_> = failed.iter().map(|(p, _)| p.clone()).collect();
+    assert_eq!(failed_paths, locked.iter().map(|&i| files[i].0.clone()).collect::<Vec<_>>());
+    assert!(locked.iter().all(|&i| files[i].0.exists()));
+}

@@ -485,9 +485,23 @@ pub struct ItemResult {
 #[serde(rename_all = "camelCase")]
 pub struct CleanResult {
     pub items: Vec<ItemResult>,
-    /// Sum of measured `Removed.bytes_freed`.
+    /// Sum of measured `Removed.bytes_freed` (Recycle Bin moves included).
     pub bytes_freed: u64,
     pub dry_run: bool,
+    /// Files deleted (or moved to the Recycle Bin), links inside the trees included.
+    #[serde(default)]
+    pub files_removed: u64,
+    /// Folders deleted (or moved to the Recycle Bin), each item's own folder included.
+    #[serde(default)]
+    pub dirs_removed: u64,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    /// At least one item was left out or interrupted by «Annulla».
+    #[serde(default)]
+    pub cancelled: bool,
+    /// The part of `bytes_freed` moved to the Recycle Bin: freed only when it is emptied.
+    #[serde(default)]
+    pub recycled_bytes: u64,
 }
 
 pub trait Remover: Send + Sync {
@@ -652,6 +666,14 @@ mod tests {
         assert!(t.contains("Annullato"), "{t}");
         assert!(t.contains("Durata: 300 ms"), "{t}");
         assert!(!t.contains("Cestino") && !t.contains("Saltati"), "{t}");
+    }
+
+    #[test]
+    fn old_clean_result_without_counts_still_loads() {
+        let r: CleanResult = serde_json::from_str(r#"{"items":[],"bytesFreed":5,"dryRun":false}"#).unwrap();
+        assert_eq!(r.bytes_freed, 5);
+        assert_eq!((r.files_removed, r.dirs_removed, r.elapsed_ms, r.recycled_bytes), (0, 0, 0, 0));
+        assert!(!r.cancelled);
     }
 
     #[test]
