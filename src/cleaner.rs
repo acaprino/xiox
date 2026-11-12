@@ -1,6 +1,7 @@
 //! Temporary-file cleaner. Locations and ages come from MECHANICS.md section 1.
 
 use crate::sys;
+use dc_cleaner::{remove_files_parallel, worker_count, Cancel, Tick};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -10,7 +11,6 @@ pub const TEMP_MIN_AGE_HOURS: u64 = 24;
 /// Age for "old" Prefetch data: estimated, not found in the code.
 pub const PREFETCH_MIN_AGE_DAYS: u64 = 14;
 
-const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 #[derive(Clone)]
@@ -122,6 +122,12 @@ pub struct Cleaned {
     pub freed: u64,
     pub removed: u64,
     pub failed: u64,
+    /// Emptied folders removed after the files.
+    pub dirs: u64,
+    /// The files that stayed, with the reason (in use, access denied…).
+    pub failures: Vec<(PathBuf, String)>,
+    /// «Annulla» stopped this category (or it never started).
+    pub cancelled: bool,
 }
 
 /// Case-insensitive match with `*` and `?`.
@@ -204,56 +210,60 @@ pub fn analyze(index: usize, only_old_temp: bool) -> Found {
     found
 }
 
-fn remove_empty_dirs(dir: &Path, is_root: bool) {
+/// Removes the empty folders below `dir` (never `dir` itself, never through a link).
+/// Returns how many went.
+fn remove_empty_dirs(dir: &Path, is_root: bool) -> u64 {
+    let mut n = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             if let Ok(md) = e.metadata() {
                 if md.is_dir() && md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-                    remove_empty_dirs(&e.path(), false);
+                    n += remove_empty_dirs(&e.path(), false);
                 }
             }
         }
     }
-    if !is_root {
-        let _ = std::fs::remove_dir(dir); // fails when not empty, that's fine
+    // Fails when not empty, that's fine.
+    if !is_root && std::fs::remove_dir(dir).is_ok() {
+        n += 1;
     }
+    n
 }
 
-pub fn clean(index: usize, found: &Found) -> Cleaned {
-    let cat = &CATEGORIES[index];
-    let mut r = Cleaned::default();
-    if cat.kind == Kind::RecycleBin {
-        if found.count > 0 && sys::empty_recycle_bin() {
+/// Cleans what `analyze(index, …)` found: the files with the worker pool
+/// (`dc_cleaner::remove_files_parallel`, read-only files included), then the
+/// emptied folders of the recursive targets. The Recycle Bin is emptied with
+/// `sys::empty_recycle_bin`. «Annulla» stops before the next file.
+pub fn clean(index: usize, found: &Found, tick: &(dyn Fn(Tick) + Sync), cancel: &Cancel) -> Cleaned {
+    if CATEGORIES[index].kind == Kind::RecycleBin {
+        let mut r = Cleaned::default();
+        if found.count == 0 {
+            return r;
+        }
+        if cancel.is_cancelled() {
+            r.cancelled = true;
+        } else if sys::empty_recycle_bin() {
             r.freed = found.bytes;
             r.removed = found.count;
-        } else if found.count > 0 {
+        } else {
             r.failed = found.count;
+            r.failures.push((PathBuf::from(CATEGORIES[index].name), "Svuotamento del Cestino non riuscito".into()));
         }
         return r;
     }
-    for (path, size) in &found.files {
-        let mut ok = std::fs::remove_file(path).is_ok();
-        if !ok {
-            if let Ok(md) = std::fs::metadata(path) {
-                if md.file_attributes() & FILE_ATTRIBUTE_READONLY != 0 {
-                    let mut p = md.permissions();
-                    #[allow(clippy::permissions_set_readonly_false)]
-                    p.set_readonly(false);
-                    let _ = std::fs::set_permissions(path, p);
-                    ok = std::fs::remove_file(path).is_ok();
-                }
-            }
-        }
-        if ok {
-            r.freed += size;
-            r.removed += 1;
-        } else {
-            r.failed += 1;
-        }
-    }
-    for target in targets(index) {
-        if target.recursive && target.dir.is_dir() {
-            remove_empty_dirs(&target.dir, true);
+    let roots: Vec<PathBuf> = targets(index).into_iter().filter(|t| t.recursive).map(|t| t.dir).collect();
+    clean_files(found, &roots, tick, cancel)
+}
+
+/// The files of `found` (and nothing else: they are what the analysis listed
+/// under the category's folders), then the empty folders below each of `roots`.
+fn clean_files(found: &Found, roots: &[PathBuf], tick: &(dyn Fn(Tick) + Sync), cancel: &Cancel) -> Cleaned {
+    let (freed, removed, failures) = remove_files_parallel(&found.files, worker_count(), tick, cancel);
+    let mut r = Cleaned { freed, removed, failed: failures.len() as u64, failures, ..Default::default() };
+    r.cancelled = cancel.is_cancelled();
+    for dir in roots {
+        if !dir.as_os_str().is_empty() && dir.is_dir() {
+            r.dirs += remove_empty_dirs(dir, true);
         }
     }
     r
@@ -302,6 +312,63 @@ mod tests {
             assert_eq!(g.protected(Path::new(p)), None, "{p}");
         }
         assert!(g.protected(Path::new(r"C:\Windows\System32\wbem\Logs\*.log")).is_some());
+    }
+
+    /// 500 file in una cartella finta, uno tenuto aperto senza condivisione:
+    /// 499 rimossi, uno fallito; le sottocartelle svuotate se ne vanno, la radice resta.
+    #[test]
+    fn clean_removes_all_but_the_locked_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let mut found = super::Found::default();
+        for i in 0..500 {
+            let dir = t.path().join(format!("d{}", i % 10));
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join(format!("f{i}.tmp"));
+            std::fs::write(&p, b"0123456789").unwrap();
+            found.files.push((p, 10));
+        }
+        // Uno in sola lettura: si toglie lo stesso.
+        let ro = &found.files[7].0;
+        let mut perm = std::fs::metadata(ro).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(ro, perm).unwrap();
+        found.count = 500;
+        found.bytes = 5000;
+        let locked_path = found.files[42].0.clone();
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(&locked_path).unwrap();
+        let ticks = std::sync::atomic::AtomicUsize::new(0);
+        let tick = |_: dc_cleaner::Tick| {
+            ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        };
+        let c = super::clean_files(&found, &[t.path().to_path_buf()], &tick, &dc_cleaner::Cancel::default());
+        drop(locked);
+        assert_eq!(c.removed, 499);
+        assert_eq!(c.failed, 1);
+        assert_eq!(c.freed, 4990);
+        assert_eq!(c.failures.len(), 1);
+        assert_eq!(c.failures[0].0, locked_path);
+        assert!(!c.cancelled);
+        assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        // 9 cartelle vuote tolte, quella con il file bloccato resta, la radice resta.
+        assert_eq!(c.dirs, 9);
+        assert!(locked_path.exists());
+        assert!(t.path().is_dir());
+    }
+
+    /// «Annulla» prima di iniziare: nessun file tolto.
+    #[test]
+    fn clean_cancelled_before_start_removes_nothing() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("a.tmp");
+        std::fs::write(&p, b"x").unwrap();
+        let found = super::Found { files: vec![(p.clone(), 1)], bytes: 1, count: 1, skipped_dirs: 0 };
+        let cancel = dc_cleaner::Cancel::default();
+        cancel.cancel();
+        let c = super::clean_files(&found, &[], &|_| {}, &cancel);
+        assert_eq!((c.removed, c.failed, c.freed), (0, 0, 0));
+        assert!(c.cancelled);
+        assert!(p.exists());
     }
 
     #[test]

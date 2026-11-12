@@ -21,7 +21,8 @@ mod wipe;
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 use theme::*;
@@ -85,6 +86,14 @@ struct App {
     found: Vec<Option<cleaner::Found>>,
     cleaned: Vec<Option<cleaner::Cleaned>>,
     clean_view: CleanView,
+    /// «Annulla» della pulizia o dell'analisi in corso: lo stesso clic ferma le categorie
+    /// (`dc_cleaner::Cancel`) e le voci native e dinamiche (`AtomicBool`).
+    clean_cancel: Option<(dc_cleaner::Cancel, Arc<AtomicBool>)>,
+    clean_started: Instant,
+    /// Resoconto della pulizia, costruito quando tutte le voci hanno finito.
+    clean_report: Option<dc_model::CleanReport>,
+    /// Esito di «Salva come testo…»: (testo, riuscito).
+    clean_saved: Option<(String, bool)>,
     confirm_clean: bool,
     /// Avvisi della finestra di conferma, calcolati una volta all'apertura
     /// (la lista dei cookie si legge lì, non a ogni fotogramma).
@@ -150,6 +159,10 @@ impl App {
             found: vec![None; n],
             cleaned: vec![None; n],
             clean_view: CleanView::Empty,
+            clean_cancel: None,
+            clean_started: Instant::now(),
+            clean_report: None,
+            clean_saved: None,
             confirm_clean: false,
             confirm_warnings: vec![],
             rules: None,
@@ -241,6 +254,12 @@ impl App {
         self.native_found.clear();
         self.native_cleaned.clear();
         self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
+        self.clean_report = None;
+        self.clean_saved = None;
+        self.clean_started = Instant::now();
+        let files_cancel = dc_cleaner::Cancel::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.clean_cancel = Some((files_cancel.clone(), cancel.clone()));
         let only_old = self.only_old;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -248,11 +267,27 @@ impl App {
             let total = (cats.len() + natives.len() + dynamic.len()).max(1) as f32;
             for (k, &i) in cats.iter().enumerate() {
                 let name = cleaner::CATEGORIES[i].name;
+                if files_cancel.is_cancelled() || cancel.load(Ordering::SeqCst) {
+                    // Annullata prima di iniziare: nel resoconto tra i saltati.
+                    if also_clean {
+                        let c = cleaner::Cleaned { cancelled: true, ..Default::default() };
+                        let _ = tx.send(CleanMsg::Cleaned(i, cleaner::Found::default(), c));
+                    }
+                    continue;
+                }
                 let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
                 ctx.request_repaint();
                 let f = cleaner::analyze(i, only_old);
                 if also_clean {
-                    let c = cleaner::clean(i, &f);
+                    // L'avanzamento dentro la categoria affina la barra.
+                    let tick = |t: dc_cleaner::Tick| {
+                        if t.total_items > 0 {
+                            let part = t.done_items as f32 / t.total_items as f32;
+                            let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), (k as f32 + part) / total));
+                            ctx.request_repaint();
+                        }
+                    };
+                    let c = cleaner::clean(i, &f, &tick, &files_cancel);
                     let _ = tx.send(CleanMsg::Cleaned(i, f, c));
                 } else {
                     let _ = tx.send(CleanMsg::Analyzed(i, f));
@@ -263,9 +298,8 @@ impl App {
             // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
             let env = env.unwrap_or_else(pc_rules::Env::for_rules);
             let guard = pc_rules::Guard::new(&env);
-            let cancel = AtomicBool::new(false);
             let processes = rules::processes;
-            let nctx = native::NativeCtx { env: &env, cancel: &cancel, guard: &guard };
+            let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
             let nprogress = |k: usize, text: String| {
                 let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
                 ctx.request_repaint();
@@ -279,7 +313,7 @@ impl App {
                 reg: &rules::RealRegistry,
                 reg_exists: &rules::reg_exists,
                 processes: &processes,
-                cancel: &cancel,
+                cancel: &*cancel,
             };
             let progress = |k: usize, text: String| {
                 let _ = tx.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));
@@ -291,6 +325,57 @@ impl App {
             let _ = tx.send(CleanMsg::Done);
             ctx.request_repaint();
         });
+    }
+
+    /// Fine dell'analisi o della pulizia: dopo una pulizia, il resoconto di tutte le voci.
+    fn finish_clean(&mut self) {
+        let cancelled = self.clean_cancel.take().is_some_and(|(f, a)| f.is_cancelled() || a.load(Ordering::SeqCst));
+        if self.clean_view == CleanView::Cleaned {
+            let elapsed = self.clean_started.elapsed().as_millis() as u64;
+            self.clean_report =
+                Some(clean_report(&self.cleaned, &self.native_cleaned, &self.rule_cleaned, elapsed, cancelled));
+        }
+    }
+
+    /// «Annulla»: ferma le categorie, le voci native e le opzioni dinamiche.
+    fn cancel_clean(&self) {
+        if let Some((files, other)) = &self.clean_cancel {
+            files.cancel();
+            other.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn clean_cancelling(&self) -> bool {
+        self.clean_cancel.as_ref().is_some_and(|(f, a)| f.is_cancelled() || a.load(Ordering::SeqCst))
+    }
+
+    /// Solo build di debug, `--clean-demo` con `--screenshot`: un resoconto inventato per
+    /// vedere la vista. Non legge né tocca alcun file.
+    #[cfg(debug_assertions)]
+    fn clean_demo(&mut self) {
+        let user = PathBuf::from(r"C:\Users\demo\AppData\Local\Temp");
+        self.clean_sel = vec![false; self.clean_sel.len()];
+        for (i, freed, removed) in [(1usize, 734_003_200u64, 1_204u64), (3, 52_428_800, 2), (6, 18_874_368, 9)] {
+            self.clean_sel[i] = true;
+            self.found[i] = Some(cleaner::Found { bytes: freed, count: removed, ..Default::default() });
+            let mut c = cleaner::Cleaned { freed, removed, dirs: if i == 1 { 37 } else { 0 }, ..Default::default() };
+            if i == 1 {
+                c.failed = 2;
+                c.failures = vec![
+                    (user.join("setup.log"), "Il file è in uso (in uso da: setup.exe)".into()),
+                    (user.join("~DF1A2B.tmp"), "Accesso negato. (os error 5)".into()),
+                ];
+            }
+            self.cleaned[i] = Some(c);
+        }
+        self.clean_sel[8] = true;
+        self.cleaned[8] = Some(cleaner::Cleaned { cancelled: true, ..Default::default() });
+        let native = native::NativeCleaned { freed: 0, removed: 1, done: vec!["Appunti svuotati".into()], ..Default::default() };
+        self.native_cleaned.push(("native:clipboard".into(), "Appunti".into(), native));
+        let rule = rules::RuleCleaned { freed: 157_286_400, removed: 3_310, failed: 1, notes: vec!["1 file in uso".into()], ..Default::default() };
+        self.rule_cleaned.push(("demo/cache".into(), "Google Chrome – Cache".into(), rule));
+        self.clean_view = CleanView::Cleaned;
+        self.clean_report = Some(clean_report(&self.cleaned, &self.native_cleaned, &self.rule_cleaned, 8_400, true));
     }
 
     fn start_reg_scan(&mut self, ctx: &egui::Context) {
@@ -402,6 +487,7 @@ impl App {
             }
             if done {
                 self.clean_job = None;
+                self.finish_clean();
             }
         }
         if let Some(rx) = &self.reg_job {
@@ -640,6 +726,11 @@ impl App {
                     ui.label(RichText::new(&self.clean_text).size(16.0).color(TEXT));
                     ui.add_space(6.0);
                     ui.add(egui::ProgressBar::new(self.clean_progress).fill(ACCENT).show_percentage());
+                    ui.add_space(6.0);
+                    let cancelling = self.clean_cancelling();
+                    if secondary(ui, if cancelling { "Annullamento…" } else { "Annulla" }, !cancelling).clicked() {
+                        self.cancel_clean();
+                    }
                     ui.add_space(10.0);
                 }
                 match self.clean_view {
@@ -652,7 +743,7 @@ impl App {
                         });
                     }
                     CleanView::Analyzed => self.analysis_table(ui),
-                    CleanView::Cleaned => self.cleaned_table(ui),
+                    CleanView::Cleaned => self.cleaned_view(ui),
                 }
             });
         });
@@ -765,65 +856,97 @@ impl App {
         });
     }
 
-    fn cleaned_table(&self, ui: &mut Ui) {
-        let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>()
-            + self.native_cleaned.iter().map(|r| r.2.freed).sum::<u64>()
-            + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
-        let title = if self.clean_job.is_some() { "Pulizia in corso…" } else { "Pulizia completata" };
-        ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
-        ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(freed))).size(15.0).color(GREEN));
-        ui.add_space(10.0);
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("cl").striped(true).min_col_width(80.0).spacing([24.0, 8.0]).show(ui, |ui| {
-                ui.label(RichText::new("Elemento").strong());
-                ui.label(RichText::new("Liberati").strong());
-                ui.label(RichText::new("Eliminati").strong());
-                ui.label(RichText::new("Lasciati (in uso)").strong());
-                ui.label("");
-                ui.end_row();
-                for (i, c) in self.cleaned.iter().enumerate() {
-                    if let Some(c) = c {
-                        ui.label(cleaner::CATEGORIES[i].name);
-                        ui.label(sys::fmt_size(c.freed));
-                        ui.label(c.removed.to_string());
-                        ui.label(c.failed.to_string());
-                        ui.label("");
-                        ui.end_row();
-                    }
-                }
-                for (_, label, c) in &self.native_cleaned {
-                    ui.label(label);
-                    ui.label(sys::fmt_size(c.freed));
-                    ui.label(c.removed.to_string());
-                    ui.label(c.failed.to_string());
-                    note_cell(ui, &c.notes);
-                    ui.end_row();
-                }
-                for (_, label, c) in &self.rule_cleaned {
-                    ui.label(label);
-                    ui.label(sys::fmt_size(c.freed));
-                    ui.label(c.removed.to_string());
-                    ui.label(c.failed.to_string());
-                    let mut notes = c.notes.clone();
-                    if let Some(b) = &c.backup {
-                        notes.push(format!("Backup del registro: {}", b.display()));
-                    }
-                    match notes.first() {
-                        Some(first) => {
-                            ui.label(RichText::new(first).color(MUTED).size(12.0)).on_hover_text(notes.join("\n"));
-                        }
-                        None => {
-                            ui.label("");
-                        }
-                    }
-                    ui.end_row();
-                }
+    fn cleaned_view(&mut self, ui: &mut Ui) {
+        let busy = self.clean_job.is_some();
+        let report = if busy { None } else { self.clean_report.as_ref() };
+        let Some(r) = report else {
+            // Durante la pulizia: il totale e le voci finite, come sempre.
+            let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>()
+                + self.native_cleaned.iter().map(|r| r.2.freed).sum::<u64>()
+                + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
+            let title = if busy { "Pulizia in corso…" } else { "Pulizia completata" };
+            ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+            ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(freed))).size(15.0).color(GREEN));
+            ui.add_space(10.0);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.cleaned_detail(ui));
+            return;
+        };
+        let title = if r.cancelled { "Pulizia annullata" } else { "Pulizia completata" };
+        let mut save = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                save = secondary(ui, "Salva come testo…", true).clicked();
             });
-            for (key, label, c) in &self.native_cleaned {
-                let lines: Vec<String> = c.done.iter().chain(&c.notes).cloned().collect();
-                native_list(ui, key, label, &lines);
+        });
+        // Con --screenshot nessun dialogo di sistema.
+        if save && self.screenshot.is_none() {
+            if let Some(out) = dev::save_report_text(r) {
+                self.clean_saved = Some(out);
+            }
+        }
+        if let Some((text, ok)) = &self.clean_saved {
+            ui.add(egui::Label::new(RichText::new(text).size(12.0).color(if *ok { GREEN } else { RED })).wrap());
+        }
+        let Some(r) = &self.clean_report else { return };
+        dev::report_view(ui, r, &|p| p.display().to_string(), "clean_report", |ui| {
+            ui.add_space(12.0);
+            ui.label(RichText::new("Dettaglio per voce").strong().color(TEXT));
+            self.cleaned_detail(ui);
+        });
+    }
+
+    /// Una riga per categoria, voce nativa e opzione dinamica: liberati, eliminati, lasciati, note.
+    fn cleaned_detail(&self, ui: &mut Ui) {
+        egui::Grid::new("cl").striped(true).min_col_width(80.0).spacing([24.0, 8.0]).show(ui, |ui| {
+            ui.label(RichText::new("Elemento").strong());
+            ui.label(RichText::new("Liberati").strong());
+            ui.label(RichText::new("Eliminati").strong());
+            ui.label(RichText::new("Lasciati (in uso)").strong());
+            ui.label("");
+            ui.end_row();
+            for (i, c) in self.cleaned.iter().enumerate() {
+                if let Some(c) = c {
+                    ui.label(cleaner::CATEGORIES[i].name);
+                    ui.label(sys::fmt_size(c.freed));
+                    ui.label(c.removed.to_string());
+                    ui.label(c.failed.to_string());
+                    ui.label("");
+                    ui.end_row();
+                }
+            }
+            for (_, label, c) in &self.native_cleaned {
+                ui.label(label);
+                ui.label(sys::fmt_size(c.freed));
+                ui.label(c.removed.to_string());
+                ui.label(c.failed.to_string());
+                note_cell(ui, &c.notes);
+                ui.end_row();
+            }
+            for (_, label, c) in &self.rule_cleaned {
+                ui.label(label);
+                ui.label(sys::fmt_size(c.freed));
+                ui.label(c.removed.to_string());
+                ui.label(c.failed.to_string());
+                let mut notes = c.notes.clone();
+                if let Some(b) = &c.backup {
+                    notes.push(format!("Backup del registro: {}", b.display()));
+                }
+                match notes.first() {
+                    Some(first) => {
+                        ui.label(RichText::new(first).color(MUTED).size(12.0)).on_hover_text(notes.join("\n"));
+                    }
+                    None => {
+                        ui.label("");
+                    }
+                }
+                ui.end_row();
             }
         });
+        for (key, label, c) in &self.native_cleaned {
+            let lines: Vec<String> = c.done.iter().chain(&c.notes).cloned().collect();
+            native_list(ui, key, label, &lines);
+        }
     }
 
     fn registry_tab(&mut self, ui: &mut Ui) {
@@ -1360,6 +1483,63 @@ fn rule_checkbox(ui: &mut Ui, c: &pc_rules::Cleaner, o: &pc_rules::Opt, label: &
     }
 }
 
+/// Il resoconto di Pulizia file: categorie (nome di `CATEGORIES`), voci native e opzioni
+/// dinamiche (la loro etichetta). Le categorie elencano i file rimasti uno per uno; le voci
+/// native e dinamiche, che contano soltanto, compaiono con il numero e la prima nota.
+fn clean_report(
+    cleaned: &[Option<cleaner::Cleaned>],
+    natives: &[(String, String, native::NativeCleaned)],
+    rules: &[(String, String, rules::RuleCleaned)],
+    elapsed_ms: u64,
+    cancelled: bool,
+) -> dc_model::CleanReport {
+    let mut r = dc_model::CleanReport { elapsed_ms, cancelled, ..Default::default() };
+    let counted = |n: u64, notes: &[String]| match notes.first() {
+        Some(first) => format!("{n} elementi lasciati: {first}"),
+        None => format!("{n} elementi lasciati (in uso o rifiutati)"),
+    };
+    for (i, c) in cleaned.iter().enumerate() {
+        let Some(c) = c else { continue };
+        let name = cleaner::CATEGORIES[i].name;
+        r.freed_bytes += c.freed;
+        r.files += c.removed;
+        r.dirs += c.dirs;
+        if c.freed > 0 {
+            r.by_category.push((name.to_string(), c.freed));
+        }
+        r.failed.extend(c.failures.iter().cloned());
+        // Fallimenti contati ma senza percorso (non dovrebbe accadere): una riga per la categoria.
+        let unnamed = c.failed.saturating_sub(c.failures.len() as u64);
+        if unnamed > 0 {
+            r.failed.push((PathBuf::from(name), counted(unnamed, &[])));
+        }
+        if c.cancelled {
+            let why = if c.removed == 0 && c.failed == 0 {
+                "Annullato".to_string()
+            } else {
+                format!("Annullato: liberati {}", sys::fmt_size(c.freed))
+            };
+            r.skipped.push((PathBuf::from(name), why));
+        }
+    }
+    let others = natives
+        .iter()
+        .map(|(_, label, c)| (label, c.freed, c.removed, c.failed, &c.notes))
+        .chain(rules.iter().map(|(_, label, c)| (label, c.freed, c.removed, c.failed, &c.notes)));
+    for (label, freed, removed, failed, notes) in others {
+        r.freed_bytes += freed;
+        r.files += removed;
+        if freed > 0 {
+            r.by_category.push((label.clone(), freed));
+        }
+        if failed > 0 {
+            r.failed.push((PathBuf::from(label), counted(failed, notes)));
+        }
+    }
+    r.by_category.sort_by(|a, b| b.1.cmp(&a.1));
+    r
+}
+
 fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
     ui.allocate_ui_with_layout(Vec2::new(w, 20.0), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(w);
@@ -1426,6 +1606,8 @@ fn main() -> eframe::Result<()> {
     let mut only_root: Option<PathBuf> = None;
     #[cfg(debug_assertions)]
     let mut demo = None;
+    #[cfg(debug_assertions)]
+    let mut clean_demo = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1461,6 +1643,10 @@ fn main() -> eframe::Result<()> {
                 demo = dev::Demo::parse(&args[i + 1]);
                 i += 1;
             }
+            // Solo build di debug e solo con --screenshot: un resoconto di Pulizia file inventato
+            // (nessun file letto o toccato). Nelle build di rilascio non esiste.
+            #[cfg(debug_assertions)]
+            "--clean-demo" => clean_demo = true,
             _ => {}
         }
         i += 1;
@@ -1492,9 +1678,63 @@ fn main() -> eframe::Result<()> {
                     return Err(e.into());
                 }
             }
+            #[cfg(debug_assertions)]
+            let clean_demo = clean_demo && screenshot.is_some();
             let mut app = App::new(screenshot, tab, dev, about);
+            #[cfg(debug_assertions)]
+            if clean_demo {
+                app.clean_demo();
+            }
             app.start_rules(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Il resoconto somma categorie, voci native e opzioni dinamiche, le ordina per spazio e
+    /// riporta i file rimasti, le voci con fallimenti contati e le categorie annullate.
+    #[test]
+    fn clean_report_merges_categories_natives_and_rules() {
+        let mut cleaned = vec![None; cleaner::CATEGORIES.len()];
+        let locked = PathBuf::from(r"C:\t\a.tmp");
+        cleaned[1] = Some(cleaner::Cleaned {
+            freed: 100,
+            removed: 4,
+            failed: 1,
+            dirs: 2,
+            failures: vec![(locked.clone(), "in uso".into())],
+            cancelled: false,
+        });
+        cleaned[3] = Some(cleaner::Cleaned { cancelled: true, ..Default::default() });
+        let natives = vec![(
+            "native:x".to_string(),
+            "Appunti".to_string(),
+            native::NativeCleaned { freed: 0, removed: 1, ..Default::default() },
+        )];
+        let rules = vec![(
+            "c/o".to_string(),
+            "Chrome – Cache".to_string(),
+            rules::RuleCleaned { freed: 500, removed: 10, failed: 2, notes: vec!["2 file in uso".into()], ..Default::default() },
+        )];
+        let r = clean_report(&cleaned, &natives, &rules, 1200, true);
+        assert_eq!(r.freed_bytes, 600);
+        assert_eq!(r.files, 15);
+        assert_eq!(r.dirs, 2);
+        assert_eq!(r.elapsed_ms, 1200);
+        assert!(r.cancelled);
+        assert_eq!(
+            r.by_category,
+            vec![("Chrome – Cache".to_string(), 500), (cleaner::CATEGORIES[1].name.to_string(), 100)]
+        );
+        assert_eq!(r.failed.len(), 2);
+        assert_eq!(r.failed[0], (locked, "in uso".to_string()));
+        assert_eq!(r.failed[1].0, PathBuf::from("Chrome – Cache"));
+        assert!(r.failed[1].1.contains("2 elementi lasciati: 2 file in uso"));
+        assert_eq!(r.skipped, vec![(PathBuf::from(cleaner::CATEGORIES[3].name), "Annullato".to_string())]);
+        assert!(r.to_text().contains("Spazio liberato"));
+    }
 }

@@ -585,18 +585,9 @@ impl DevState {
         if self.screenshot {
             return;
         }
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Salva il resoconto")
-            .set_file_name("Resoconto PulisciPC.txt")
-            .add_filter("Testo", &["txt"])
-            .save_file()
-        else {
-            return;
-        };
-        self.saved = Some(match std::fs::write(&path, c.report.to_text()) {
-            Ok(()) => (format!("Resoconto salvato in {}", path.display()), true),
-            Err(e) => (format!("Resoconto non salvato: {e}"), false),
-        });
+        if let Some(out) = save_report_text(&c.report) {
+            self.saved = Some(out);
+        }
     }
 
     /// Un passo di `--dev-demo` (solo build di debug, solo `--only-root` su un albero finto).
@@ -852,55 +843,77 @@ impl DevState {
             }
             return;
         }
-        let r = &c.report;
-        ui.label(RichText::new(format!("Spazio liberato: {}", sys::fmt_size(r.freed_bytes))).size(15.0).color(GREEN));
-        if r.recycled_bytes > 0 {
-            ui.label(RichText::new(recycled_text(r.recycled_bytes)).color(TEXT));
-        }
-        ui.label(
-            RichText::new(format!(
-                "File eliminati: {} · Cartelle eliminate: {} · Durata: {}",
-                r.files,
-                r.dirs,
-                fmt_duration(r.elapsed_ms)
-            ))
-            .size(12.0)
-            .color(MUTED),
-        );
-        if r.cancelled {
-            ui.label(RichText::new("Annullata: le voci non ancora iniziate sono rimaste dov'erano.").color(MUTED));
-        }
-        ui.add_space(10.0);
-        let gap = ui.spacing().item_spacing.x;
-        egui::ScrollArea::vertical().id_salt("dev_cleaned").auto_shrink([false, false]).show(ui, |ui| {
-            let total = ui.available_width() - SCROLLBAR;
-            if !r.by_category.is_empty() {
-                let w = col_widths(total, &[0.0, 120.0], gap);
-                header(ui, &w, &["Categoria", "Spazio"]);
-                for (i, (label, bytes)) in r.by_category.iter().enumerate() {
-                    striped_row(ui, i, |ui| {
-                        crate::cell(ui, w[0], RichText::new(label).color(TEXT));
-                        crate::cell(ui, w[1], RichText::new(sys::fmt_size(*bytes)).color(TEXT));
-                    });
-                }
-            }
-            for (title, list, color) in [("Saltati", &r.skipped, MUTED), ("Non riusciti", &r.failed, RED)] {
-                if list.is_empty() {
-                    continue;
-                }
-                ui.add_space(12.0);
-                ui.label(RichText::new(format!("{title} ({})", list.len())).strong().color(TEXT));
-                let w = col_widths(total, &[0.0, 300.0], gap);
-                header(ui, &w, &["Elemento", "Motivo"]);
-                for (i, (path, why)) in list.iter().enumerate() {
-                    striped_row(ui, i, |ui| {
-                        crate::cell(ui, w[0], RichText::new(c.label(path)).color(TEXT)).on_hover_text(path.display().to_string());
-                        crate::cell(ui, w[1], RichText::new(why).color(color)).on_hover_text(why);
-                    });
-                }
-            }
-        });
+        report_view(ui, &c.report, &|p| c.label(p), "dev_cleaned", |_| {});
     }
+}
+
+/// Il resoconto di una pulizia (Sviluppatori e Pulizia file): spazio liberato, conteggi,
+/// durata, tabella per categoria, saltati e non riusciti. `label` dice come mostrare un
+/// percorso dei saltati e dei non riusciti; `more` aggiunge righe in fondo, nello stesso
+/// riquadro scorrevole.
+pub fn report_view(ui: &mut Ui, r: &CleanReport, label: &dyn Fn(&Path) -> String, id_salt: &str, more: impl FnOnce(&mut Ui)) {
+    ui.label(RichText::new(format!("Spazio liberato: {}", sys::fmt_size(r.freed_bytes))).size(15.0).color(GREEN));
+    if r.recycled_bytes > 0 {
+        ui.label(RichText::new(recycled_text(r.recycled_bytes)).color(TEXT));
+    }
+    ui.label(
+        RichText::new(format!(
+            "File eliminati: {} · Cartelle eliminate: {} · Durata: {}",
+            r.files,
+            r.dirs,
+            fmt_duration(r.elapsed_ms)
+        ))
+        .size(12.0)
+        .color(MUTED),
+    );
+    if r.cancelled {
+        ui.label(RichText::new("Annullata: le voci non ancora iniziate sono rimaste dov'erano.").color(MUTED));
+    }
+    ui.add_space(10.0);
+    let gap = ui.spacing().item_spacing.x;
+    egui::ScrollArea::vertical().id_salt(id_salt).auto_shrink([false, false]).show(ui, |ui| {
+        let total = ui.available_width() - SCROLLBAR;
+        if !r.by_category.is_empty() {
+            let w = col_widths(total, &[0.0, 120.0], gap);
+            header(ui, &w, &["Categoria", "Spazio"]);
+            for (i, (label, bytes)) in r.by_category.iter().enumerate() {
+                striped_row(ui, i, |ui| {
+                    crate::cell(ui, w[0], RichText::new(label).color(TEXT));
+                    crate::cell(ui, w[1], RichText::new(sys::fmt_size(*bytes)).color(TEXT));
+                });
+            }
+        }
+        for (title, list, color) in [("Saltati", &r.skipped, MUTED), ("Non riusciti", &r.failed, RED)] {
+            if list.is_empty() {
+                continue;
+            }
+            ui.add_space(12.0);
+            ui.label(RichText::new(format!("{title} ({})", list.len())).strong().color(TEXT));
+            let w = col_widths(total, &[0.0, 300.0], gap);
+            header(ui, &w, &["Elemento", "Motivo"]);
+            for (i, (path, why)) in list.iter().enumerate() {
+                striped_row(ui, i, |ui| {
+                    crate::cell(ui, w[0], RichText::new(label(path)).color(TEXT)).on_hover_text(path.display().to_string());
+                    crate::cell(ui, w[1], RichText::new(why).color(color)).on_hover_text(why);
+                });
+            }
+        }
+        more(ui);
+    });
+}
+
+/// «Salva come testo…»: il resoconto in un file scelto dall'utente. `None` se l'utente
+/// chiude il dialogo; altrimenti (messaggio, riuscito).
+pub fn save_report_text(r: &CleanReport) -> Option<(String, bool)> {
+    let path = rfd::FileDialog::new()
+        .set_title("Salva il resoconto")
+        .set_file_name("Resoconto PulisciPC.txt")
+        .add_filter("Testo", &["txt"])
+        .save_file()?;
+    Some(match std::fs::write(&path, r.to_text()) {
+        Ok(()) => (format!("Resoconto salvato in {}", path.display()), true),
+        Err(e) => (format!("Resoconto non salvato: {e}"), false),
+    })
 }
 
 /// La voce «Sviluppatori»: pannello opzioni, pulsanti in basso, card centrale, conferma.
