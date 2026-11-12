@@ -304,11 +304,16 @@ Verificato in una sessione cloud Linux: compilazione per `x86_64-pc-windows-gnu`
 - Exe release (target gnu, indicativo: la build MSVC dell'utente sarà diversa): 10,6 MB.
 - Screenshot con wine + Xvfb su un albero finto (`--only-root`): livelli, conferma con "Ho letto gli avvisi", resoconto, annulla, Pulizia file invariata.
 
-**Restano da fare su Windows** (non eseguibili nel cloud):
+**Su Windows vero** (2026-11-12, Windows 11, toolchain MSVC, commit `0d41e93`):
+- `cargo test -j 1 --workspace --exclude mukade`: tutto verde, nessun avviso. dc-app 39, dc-cleaner 27, dc-disktree 20, dc-engine 50, dc-git 21, dc-model 11, dc-mukade 22 (1 ignorato), dc-scanner 44, dc-sessions 21, pc-rules 200 (6 ignorati) più i test di integrazione 2 + 20 + 28 + 12 + 10, pulisci-pc 269 (13 ignorati). Passano i test che sotto wine fallivano: radice sostituita da una junction o da un link simbolico dopo la convalida, file bloccato da un processo (Restart Manager), `guard_accepts_every_catalog_dir`, dc-git, browserdb, sysclean, pc-rules collect e safedelete. Con `--nocapture` nessun test si salta.
+- `target/verify-admin.ps1` da amministratore: aggiornamento di Winapp2 «TUTTO OK» (rete vera, ETag, copia vecchia tenuta senza rete, cartella non scrivibile dagli utenti); `real_registry_round_trip_as_admin` verde, chiave `Run` rifiutata, chiavi e backup di prova tolti.
+- Exe release MSVC (`cargo build -p pulisci-pc --release`): 12.253.184 byte (11,69 MB).
+
+**Non misurati** (l'utente ha scelto di non fare le prove a mano):
 - tempo dell'analisi su tutti i dischi e picco RAM (`Get-Process PulisciPC`, limite 300 MB su C:);
-- prova a mano della voce Sviluppatori (spuntare `dist`, Annulla a metà, Salva come testo, Cestino, avviso del Cestino stretto con un Cestino vero);
-- i test che sotto wine si saltano: radice sostituita da una junction dopo la convalida, file bloccato con il processo in `locked_by`;
-- Task 12 Step 5-6: rinomina in `.old` delle cartelle unificate, copia dei riferimenti di devclean in `docs/reference/` ed eliminazione solo dopo il sì dell'utente.
+- prova a mano della voce Sviluppatori (spuntare `dist`, Annulla a metà, Salva come testo, Cestino, avviso del Cestino stretto con un Cestino vero).
+
+**Resta da fare:** Task 12 Step 5-6, rinomina in `.old` delle cartelle unificate, copia dei riferimenti di devclean in `docs/reference/` ed eliminazione solo dopo il sì dell'utente.
 
 ## Lasciato al builder
 
