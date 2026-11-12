@@ -293,6 +293,23 @@ Totale: circa 38 ore e mezza.
 - Worker: un albero finto con 10.000 file si cancella tutto con 1 e con 8 worker, stesso risultato; un file tenuto aperto finisce nel resoconto come saltato e non ferma gli altri; "Annulla" a metà lascia un resoconto con i conteggi giusti. Tempi misurati solo su alberi finti.
 - Rilevamento: con registro e `PATH` finti (chiavi di prova sotto `HKCU\Software\PulisciPC-test`, `PATH` del processo puntato a una cartella temporanea) una categoria con le cartelle presenti compare anche senza voce di disinstallazione, una senza cartelle non compare; la ricerca dei progetti trova un `Cargo.toml` in un albero finto e ignora quello sotto `node_modules` e sotto `AppData`.
 
+### Esito del piano 1 del catalogo (2026-11-12, commit `7643f2b`)
+
+Verificato in una sessione cloud Linux: compilazione per `x86_64-pc-windows-gnu` (mingw) e test Windows eseguiti con wine. Nessuna prova sul PC dell'utente.
+
+- `cargo check --workspace --exclude mukade --tests` (debug e `--release`, target Windows): nessun avviso.
+- Test sotto wine (`cargo test --workspace --exclude mukade`): dc-app 39/39, dc-scanner 44/44, dc-model 11/11, dc-engine e dc-disktree verdi, dc-sessions 21/21, dc-mukade 22/22 (1 ignorato), dc-cleaner 24/27, pc-rules 195/200, pulisci-pc 230/235 (13 ignorati).
+- Tutti i fallimenti dipendono da wine e c'erano già prima del piano (verificato sul commit `17e7ac8`, o su crate non toccati): junction e link simbolici che wine non segnala come tali, Restart Manager senza processi, `git` assente (dc-git 18 test), `curl` di sistema. **Vanno rilanciati su Windows vero**: `cargo test -j 1 --workspace --exclude mukade`.
+- Il catalogo ha 95 cartelle distinte; un test guidato dalla tabella prova ogni coppia marcatore + cartella con il walker e con un indice finto, e il guard le accetta tutte.
+- Exe release (target gnu, indicativo: la build MSVC dell'utente sarà diversa): 10,6 MB.
+- Screenshot con wine + Xvfb su un albero finto (`--only-root`): livelli, conferma con "Ho letto gli avvisi", resoconto, annulla, Pulizia file invariata.
+
+**Restano da fare su Windows** (non eseguibili nel cloud):
+- tempo dell'analisi su tutti i dischi e picco RAM (`Get-Process PulisciPC`, limite 300 MB su C:);
+- prova a mano della voce Sviluppatori (spuntare `dist`, Annulla a metà, Salva come testo, Cestino, avviso del Cestino stretto con un Cestino vero);
+- i test che sotto wine si saltano: radice sostituita da una junction dopo la convalida, file bloccato con il processo in `locked_by`;
+- Task 12 Step 5-6: rinomina in `.old` delle cartelle unificate, copia dei riferimenti di devclean in `docs/reference/` ed eliminazione solo dopo il sì dell'utente.
+
 ## Lasciato al builder
 
 - Come rappresentare i tipi nuovi in `ArtifactKind`.
