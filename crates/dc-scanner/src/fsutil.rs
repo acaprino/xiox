@@ -120,18 +120,6 @@ pub fn has_any_identity(dir: &Path) -> bool {
 
 // ───────────────────────────── skip rules ─────────────────────────────
 
-/// System locations never entered: `$Recycle.Bin`, `System Volume Information` and `AppData`
-/// anywhere (programs' data, never a project of the user, and huge); `Windows`, `ProgramData`
-/// and `Program Files*` directly under a drive root (`parent_is_root`), so that a Flutter
-/// `windows/` folder deeper down is NOT skipped.
-pub fn is_system_dir(name: &str, parent_is_root: bool) -> bool {
-    let n = name.to_ascii_lowercase();
-    if n == "$recycle.bin" || n == "system volume information" || n == "appdata" {
-        return true;
-    }
-    parent_is_root && (n == "windows" || n == "programdata" || n.starts_with("program files"))
-}
-
 pub fn ignore_set(ignore: &[PathBuf]) -> HashSet<String> {
     ignore.iter().map(|p| path_key(p)).collect()
 }

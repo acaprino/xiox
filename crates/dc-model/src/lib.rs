@@ -262,6 +262,23 @@ pub trait DirIndex: Send + Sync {
     fn find_dirs_named(&self, names: &[&str], roots: &[PathBuf]) -> Vec<IndexedDir>;
 }
 
+/// System locations never searched for projects: `$Recycle.Bin`, `System Volume Information`
+/// and `AppData` anywhere (programs' data, never a project of the user, and huge); `Windows`,
+/// `ProgramData` and `Program Files*` directly under a drive root (`parent_is_root`), so that a
+/// Flutter `windows/` folder deeper down is NOT skipped. Shared by the scanner's walk and the
+/// MFT index search, which must agree.
+pub fn is_system_dir(name: &str, parent_is_root: bool) -> bool {
+    let is = |s: &str| name.eq_ignore_ascii_case(s);
+    if is("$recycle.bin") || is("system volume information") || is("appdata") {
+        return true;
+    }
+    const PF: &str = "program files";
+    parent_is_root
+        && (is("windows")
+            || is("programdata")
+            || name.get(..PF.len()).is_some_and(|h| h.eq_ignore_ascii_case(PF)))
+}
+
 /// Does folder `name` match `pattern`, ASCII case-insensitively? `pattern` is a plain name, a
 /// prefix (`checkpoint-*`) or a suffix (`*.egg-info`); the `*` stands for at least one
 /// character. A lone `*` matches nothing.
@@ -529,6 +546,21 @@ mod tests {
         assert!(!s.scan_roots);
         assert!(s.all_drives, "an old settings file searches every fixed drive");
         assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
+    }
+
+    #[test]
+    fn system_dirs() {
+        for n in ["Program Files", "Program Files (x86)", "PROGRAMDATA", "Windows", "AppData", "$Recycle.Bin", "System Volume Information"] {
+            assert!(is_system_dir(n, true), "{n} at the drive root");
+        }
+        for n in ["Program Files", "Program Files (x86)", "ProgramData", "Windows", "windows"] {
+            assert!(!is_system_dir(n, false), "{n} below the drive root");
+        }
+        assert!(is_system_dir("appdata", false), "AppData at any level");
+        assert!(is_system_dir("$RECYCLE.BIN", false));
+        assert!(!is_system_dir("Programs", true));
+        assert!(!is_system_dir("Program", true));
+        assert!(!is_system_dir("Projects", true));
     }
 
     #[test]

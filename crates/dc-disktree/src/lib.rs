@@ -7,7 +7,7 @@
 
 mod mft;
 
-use dc_model::{DirIndex, IndexedDir, SizeInfo, name_matches, normalize_path, path_key};
+use dc_model::{DirIndex, IndexedDir, SizeInfo, is_system_dir, name_matches, normalize_path, path_key};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -232,6 +232,27 @@ impl DiskIndex {
         SizeInfo { logical_bytes: e.logical, allocated_bytes: Some(e.alloc), file_count: e.files }
     }
 
+    /// Is an ancestor of entry `i`, strictly below the nearest search root of `root_ids`, a
+    /// system folder ([`is_system_dir`]) the scanner would never enter? Checked on the parent
+    /// chain, before a path is built, so the many matches of common names (`cache`, `bin`,
+    /// `logs`) under `Windows`, `Program Files` or `AppData` cost no allocation. With no search
+    /// root on the chain the answer is `false` (the root filter drops the match anyway).
+    fn under_system_dir(&self, i: u32, root_ids: &HashSet<u32>) -> bool {
+        let mut cur = self.entries[i as usize].parent;
+        while cur != NONE && !root_ids.contains(&cur) {
+            let e = &self.entries[cur as usize];
+            if e.parent == NONE {
+                return false; // volume root, not a search root
+            }
+            let parent_is_root = self.entries[e.parent as usize].parent == NONE;
+            if is_system_dir(&e.name, parent_is_root) {
+                return true;
+            }
+            cur = e.parent;
+        }
+        false
+    }
+
     fn path_of(&self, i: u32) -> PathBuf {
         let mut parts: Vec<&str> = Vec::new();
         let mut cur = i;
@@ -292,8 +313,9 @@ impl DirIndex for DiskIndex {
             }
         }
         hits.sort_unstable();
+        let root_ids: HashSet<u32> = root_keys.iter().filter_map(|k| self.by_key.get(k.as_str()).copied()).collect();
         hits.into_iter()
-            .filter(|&i| !self.entries[i as usize].reparse)
+            .filter(|&i| !self.entries[i as usize].reparse && !self.under_system_dir(i, &root_ids))
             .filter_map(|i| {
                 let path = self.path_of(i);
                 let key = path_key(&path);
@@ -354,6 +376,22 @@ fn classify(letter: char, drive_type: u32, fs_name: &str) -> Option<FixedDrive> 
 #[cfg(windows)]
 pub fn fixed_drives() -> Vec<FixedDrive> {
     use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
+    use windows_sys::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX, SetErrorMode};
+
+    /// Puts the previous error mode back, also on unwind.
+    struct RestoreMode(u32);
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            // SAFETY: plain value argument.
+            unsafe { SetErrorMode(self.0) };
+        }
+    }
+    // A fixed drive with no media (a card reader slot) must not pop up "insert a disk".
+    // SAFETY: plain value argument; returns the previous mode.
+    let prev = unsafe { SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX) };
+    // SAFETY: as above; keeps the flags the process already had.
+    unsafe { SetErrorMode(prev | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX) };
+    let _restore = RestoreMode(prev);
     // SAFETY: no arguments.
     let mask = unsafe { GetLogicalDrives() };
     let mut out = Vec::new();
@@ -577,6 +615,34 @@ mod tests {
                 PathBuf::from(r"C:\Projects\app\target"),
             ]
         );
+    }
+
+    #[test]
+    fn matches_under_system_dirs_are_not_returned() {
+        let mut n = nodes();
+        n.push(dir(0, "Windows")); // 8
+        n.push(dir(8, "Logs")); // 9: C:\Windows\Logs
+        n.push(dir(0, "Users")); // 10
+        n.push(dir(10, "x")); // 11
+        n.push(dir(11, "AppData")); // 12
+        n.push(dir(12, "Local")); // 13
+        n.push(dir(13, "logs")); // 14: C:\Users\x\AppData\Local\logs
+        n.push(dir(11, "site")); // 15
+        n.push(dir(15, "windows")); // 16: a Flutter-like windows\ deeper down
+        n.push(dir(16, "logs")); // 17: C:\Users\x\site\windows\logs, kept
+        n.push(dir(0, "Program Files (x86)")); // 18
+        n.push(dir(18, "logs")); // 19
+        n.push(dir(1, "logs")); // 20: C:\Projects\logs, kept
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let mut hits: Vec<PathBuf> =
+            ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\")]).into_iter().map(|h| h.path).collect();
+        hits.sort();
+        assert_eq!(hits, vec![PathBuf::from(r"C:\Projects\logs"), PathBuf::from(r"C:\Users\x\site\windows\logs")]);
+        // A search root inside a system folder: only what is below the root is checked.
+        let inside = ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\Users\x\AppData\Local")]);
+        assert_eq!(inside.into_iter().map(|h| h.path).collect::<Vec<_>>(), vec![PathBuf::from(r"C:\Users\x\AppData\Local\logs")]);
+        let users = ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\Users")]);
+        assert_eq!(users.into_iter().map(|h| h.path).collect::<Vec<_>>(), vec![PathBuf::from(r"C:\Users\x\site\windows\logs")]);
     }
 
     #[test]

@@ -155,16 +155,18 @@ impl<'a> Ctx<'a> {
     }
 
     /// Record the artifacts of the project at `root` (ignored ones are dropped, but still never
-    /// entered) and return its owner. An artifact inside another one of the same project
+    /// entered) and return its owner. An artifact inside another kept one of the same project
     /// (`vendor/bundle` inside `vendor`) is dropped: its bytes are already counted, and it would
-    /// be gone once the outer one is removed.
+    /// be gone once the outer one is removed. Under an ignored outer one it stays.
     fn add_project(&self, root: PathBuf, det: &Detected, arts: Vec<Art>) -> Arc<Owner> {
         let keys: Vec<String> = arts.iter().map(|a| path_key(&a.path)).collect();
+        let ignored: Vec<bool> = arts.iter().map(|a| self.is_ignored(&a.path)).collect();
         let o = Owner::new(root, det, keys.clone());
         let mut found = self.found.lock().unwrap();
         for (i, a) in arts.into_iter().enumerate() {
-            let nested = keys.iter().enumerate().any(|(j, k)| j != i && *k != keys[i] && inside(k, &keys[i]));
-            if nested || self.is_ignored(&a.path) {
+            let nested =
+                keys.iter().enumerate().any(|(j, k)| j != i && !ignored[j] && *k != keys[i] && inside(k, &keys[i]));
+            if nested || ignored[i] {
                 continue;
             }
             found.push(Found {

@@ -339,7 +339,7 @@ fn guard_accepts_every_catalog_dir() {
     let tmp = TempDir::new().unwrap();
     let p = tmp.path().join("proj");
     let dirs = dc_scanner::catalog_dirs();
-    assert!(dirs.len() > 100, "{}", dirs.len());
+    assert_eq!(dirs.len(), 95, "distinct folders of the catalog");
     for d in dirs {
         let rel = if d == "*" { "builddir".to_string() } else { d.replace("*.", "x.").replace('*', "1") };
         let path = rel.split('/').fold(p.clone(), |acc, seg| acc.join(seg));

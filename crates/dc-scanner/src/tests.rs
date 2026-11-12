@@ -1017,6 +1017,24 @@ fn nested_artifacts_of_one_project_count_once() {
     }
 }
 
+/// With the outer `vendor` on the ignore list, `vendor/bundle` is still offered (both modes).
+#[test]
+fn nested_artifact_stays_when_the_outer_one_is_ignored() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("app");
+    write(p.join("composer.json"), 10);
+    write(p.join("Gemfile"), 10);
+    write(p.join("vendor/autoload.php"), 10);
+    write(p.join("vendor/bundle/ruby/gem.rb"), 100);
+    let ix = index_everything(t.path());
+    let o = ScanOptions { ignore: vec![p.join("vendor")], ..opts() };
+    for (mode, r) in [("walk", scan(t.path(), &o)), ("index", DefaultScanner.scan(&[t.path().to_path_buf()], &o, Some(&ix)))] {
+        let c = find(&r, &p);
+        let paths: Vec<String> = c.artifacts.iter().map(|a| path_key(&a.path)).collect();
+        assert_eq!(paths, vec![path_key(&p.join("vendor").join("bundle"))], "{mode}");
+    }
+}
+
 /// M5.1: in index mode a project whose only artifact is a prefix entry is found too.
 #[test]
 fn index_finds_a_project_with_only_a_prefix_entry() {
