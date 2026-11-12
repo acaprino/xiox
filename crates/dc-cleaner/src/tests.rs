@@ -397,9 +397,13 @@ fn ten_thousand_files_go_with_one_or_eight_workers() {
         assert_eq!(res.dirs_removed, 201, "{workers} workers: 200 folders and the item itself");
         assert_eq!(res.bytes_freed, size.effective_bytes(), "{workers} workers");
         assert!(!res.cancelled && res.recycled_bytes == 0);
-        for t in ticks.into_inner().unwrap() {
+        let ticks = ticks.into_inner().unwrap();
+        for t in &ticks {
             assert!(t.done_bytes <= t.total_bytes && t.done_items <= t.total_items && t.total_items == 1, "{t:?}");
         }
+        // The final tick carries the final counters.
+        let last = ticks.last().expect("at least the final tick");
+        assert_eq!((last.done_items, last.done_bytes), (1, last.total_bytes), "{last:?}");
         freed.push(res.bytes_freed);
     }
     assert_eq!(freed[0], freed[1], "same bytes with 1 and 8 workers");
@@ -539,4 +543,69 @@ fn remove_files_parallel_leaves_the_three_locked_files() {
     let failed_paths: Vec<_> = failed.iter().map(|(p, _)| p.clone()).collect();
     assert_eq!(failed_paths, locked.iter().map(|&i| files[i].0.clone()).collect::<Vec<_>>());
     assert!(locked.iter().all(|&i| files[i].0.exists()));
+}
+
+/// The item folder is validated and measured, then (before the workers start) replaced by a
+/// link to a folder with a sentinel file: the link is not followed, the sentinel survives.
+#[cfg(windows)]
+fn root_swapped_for_a_link(make_link: fn(&Path, &Path) -> bool, required: bool) {
+    let tmp = TempDir::new().unwrap();
+    let t = make_target(tmp.path());
+    let outside = tmp.path().join("outside");
+    write(&outside.join("precious.txt"), 5_000);
+    write(&outside.join("sub").join("precious2.txt"), 5_000);
+    let moved = tmp.path().join("moved");
+    let created = std::cell::Cell::new(false);
+    let res = ParallelRemover { workers: 2 }.execute_hooked(
+        &plan(RemoveMode::Permanent, vec![item(&t, ArtifactKind::RustTarget)]),
+        false,
+        &|_| {},
+        &Cancel::default(),
+        &|| {
+            fs::rename(&t, &moved).unwrap();
+            // Wine makes unix symlinks that Windows APIs do not report as links: skip there.
+            let is_link = make_link(&t, &outside)
+                && fs::symlink_metadata(&t).is_ok_and(|m| m.file_type().is_symlink());
+            created.set(is_link);
+        },
+    );
+    if !created.get() {
+        assert!(!required || under_wine(), "the link could not be created");
+        eprintln!("no link the OS reports as one could be created here: test skipped");
+        return;
+    }
+    assert!(outside.join("precious.txt").exists(), "the link was followed: its target was deleted!");
+    assert!(outside.join("sub").join("precious2.txt").exists(), "the link was followed!");
+    assert_eq!(measure_dir(&moved).logical_bytes, 30_000, "the moved folder was touched");
+    match &res.items[0].outcome {
+        ItemOutcome::Removed { bytes_freed } => {
+            assert_eq!(*bytes_freed, 0, "only a link went: nothing was freed");
+            assert!(fs::symlink_metadata(&t).is_err(), "Removed but the link is still there");
+        }
+        ItemOutcome::Failed { .. } => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!((res.bytes_freed, res.files_removed, res.dirs_removed), (0, 0, 0));
+}
+
+/// Wine's links are unix symlinks that the Windows APIs do not report as links.
+#[cfg(windows)]
+fn under_wine() -> bool {
+    Path::new(r"C:\windows\system32\winecfg.exe").exists()
+}
+
+#[test]
+#[cfg(windows)]
+fn item_replaced_by_a_junction_after_validation_loses_only_the_link() {
+    root_swapped_for_a_link(|link, target| {
+        mklink_junction(link, target);
+        true
+    }, true);
+}
+
+#[test]
+#[cfg(windows)]
+fn item_replaced_by_a_dir_symlink_after_validation_loses_only_the_link() {
+    // Needs the symlink privilege (Developer Mode or admin): skipped without it.
+    root_swapped_for_a_link(|link, target| std::os::windows::fs::symlink_dir(target, link).is_ok(), false);
 }

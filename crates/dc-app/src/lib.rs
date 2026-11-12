@@ -536,8 +536,8 @@ fn execute_plan_with(
 pub const WORKTREE_CATEGORY: &str = "Worktree degli agenti";
 
 /// The final summary of an [`execute_plan`] run. Category = the artifact's `label` (an agent
-/// worktree: [`WORKTREE_CATEGORY`]), largest first. Bytes moved to the Recycle Bin (a
-/// `RemoveDir` of a `Recycle` plan) are `recycled_bytes`, the rest `freed_bytes`.
+/// worktree: [`WORKTREE_CATEGORY`]), largest first. `recycled_bytes` and `freed_bytes` come
+/// from the remover's totals (`res.recycled_bytes`, the rest of `res.bytes_freed`).
 pub fn report(scan: &DevScan, plan: &CleanPlan, res: &CleanResult) -> CleanReport {
     let labels: HashMap<String, &str> = selectable(scan)
         .flat_map(|r| r.artifacts.iter().map(|a| (path_key(&a.path), a.label.as_str())))
@@ -545,7 +545,10 @@ pub fn report(scan: &DevScan, plan: &CleanPlan, res: &CleanResult) -> CleanRepor
     let worktrees: HashSet<String> = scan.worktrees.iter().map(|r| path_key(&r.root)).collect();
     let actions: HashMap<String, &PlanAction> = plan.items.iter().map(|i| (path_key(&i.path), &i.action)).collect();
 
+    // The remover knows what went to the Recycle Bin: its totals are the source of truth.
     let mut out = CleanReport {
+        recycled_bytes: res.recycled_bytes,
+        freed_bytes: res.bytes_freed.saturating_sub(res.recycled_bytes),
         files: res.files_removed,
         dirs: res.dirs_removed,
         elapsed_ms: res.elapsed_ms,
@@ -564,11 +567,6 @@ pub fn report(scan: &DevScan, plan: &CleanPlan, res: &CleanResult) -> CleanRepor
                     _ if worktrees.contains(&key) => WORKTREE_CATEGORY.to_string(),
                     _ => it.path.display().to_string(),
                 };
-                if plan.mode == RemoveMode::Recycle && matches!(action, Some(PlanAction::RemoveDir) | None) {
-                    out.recycled_bytes += bytes_freed;
-                } else {
-                    out.freed_bytes += bytes_freed;
-                }
                 match by_category.iter_mut().find(|(l, _)| *l == label) {
                     Some((_, b)) => *b += bytes_freed,
                     None => by_category.push((label, *bytes_freed)),

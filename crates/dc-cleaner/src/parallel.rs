@@ -4,8 +4,10 @@
 //!    `Skipped` and never reaches a worker. The workers only delete what was validated.
 //! 2. A rayon pool of `workers` threads.
 //! 3. Permanent `RemoveDir`: each folder is a task that deletes its own files and spawns a task
-//!    for each subfolder; links are removed as links, never followed. When the last task of an
-//!    item ends, its folders are removed deepest first. `Removed` only once the path is gone.
+//!    for each subfolder; links are removed as links, never followed. Every folder, the item's
+//!    own one included, is checked again right before it is listed (`fsops::open_dir`): one
+//!    that has become a link since is not entered, only the link goes (an item: 0 bytes).
+//!    When the last task of an item ends, its folders are removed deepest first. `Removed` only once the path is gone.
 //! 4. Recycle Bin: one task per item, same pool.
 //! 5. `GitWorktreeRemove`: in sequence, after the rest.
 //! 6. «Annulla» ([`Cancel`]) is checked before every file: an interrupted item is
@@ -15,7 +17,7 @@
 use crate::{failed, fsops, guard, locks, permanent_failure, skipped};
 use dc_model::{CleanPlan, CleanResult, ItemOutcome, ItemResult, PlanAction, PlanItem, RemoveMode, Remover, path_key};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -77,17 +79,21 @@ impl Progress {
     }
 }
 
-/// Runs `work` on this thread while one other thread calls `tick` every [`TICK_EVERY`].
-/// A panicking `tick` only stops the ticks.
+/// Runs `work` on this thread while one other thread calls `tick` every [`TICK_EVERY`], and
+/// once more with the final counters when `work` has ended. A panicking `tick` only stops
+/// the ticks.
 fn with_ticker<R>(progress: &Progress, tick: &(dyn Fn(Tick) + Sync), work: impl FnOnce() -> R) -> R {
     let (stop, stopped) = channel::<()>();
     std::thread::scope(|s| {
         s.spawn(move || {
+            let call = || catch_unwind(AssertUnwindSafe(|| tick(progress.snapshot()))).is_ok();
             while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(TICK_EVERY) {
-                if catch_unwind(AssertUnwindSafe(|| tick(progress.snapshot()))).is_err() {
-                    break;
+                if !call() {
+                    return;
                 }
             }
+            // The work is done: one last tick with the final counters.
+            call();
         });
         let r = work();
         drop(stop);
@@ -189,6 +195,8 @@ struct ItemState {
     outcome: Mutex<Option<ItemOutcome>>,
     /// Bytes this item added to `Progress::done_bytes`.
     progressed: AtomicU64,
+    /// The item folder had become a link by the time it was listed: only the link went.
+    root_was_link: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -266,23 +274,31 @@ fn tree_dir<'s>(s: &rayon::Scope<'s>, ctx: &'s Ctx<'s>, job: &'s Prepared, st: &
         return;
     }
     st.started.store(true, SeqCst);
-    // A subfolder replaced by a link after it was listed is never entered.
-    if depth > 0 {
-        match fs::symlink_metadata(dir) {
-            Ok(m) if m.file_type().is_symlink() => {
-                match fsops::remove_link_entry(dir, st.patient()) {
-                    Ok(()) => {
-                        st.files.fetch_add(1, SeqCst);
-                    }
-                    Err(e) => st.fail(dir, e, dir.parent()),
-                }
-                return;
+    // Every folder, the item's own one included, is checked right before it is listed: a
+    // folder replaced by a link since it was validated (the item) or listed (a subfolder) is
+    // never entered, only the link goes. On Windows the check is made on a handle that also
+    // keeps the folder from being renamed or replaced until its files are deleted (`_pin`).
+    let _pin = match fsops::open_dir(dir) {
+        Ok(fsops::DirCheck::Dir(pin)) => pin,
+        Ok(fsops::DirCheck::Link) => {
+            match fsops::remove_link_entry(dir, st.patient()) {
+                Ok(()) if depth == 0 => st.root_was_link.store(true, SeqCst),
+                Ok(()) => {}
+                Err(e) => st.fail(dir, e, dir.parent()),
             }
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
-            Err(e) => return st.fail(dir, e, Some(dir)),
+            return;
         }
-    }
+        Ok(fsops::DirCheck::Reparse) => {
+            let e = io::Error::other("reparse point that is not a link: not entered");
+            return st.fail(dir, e, dir.parent());
+        }
+        Ok(fsops::DirCheck::NotDir) => {
+            return st.fail(dir, io::Error::other("no longer a folder"), dir.parent());
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        // Not in `seen_dirs`: block the parent directly.
+        Err(e) => return st.fail(dir, e, dir.parent()),
+    };
     lock(&st.seen_dirs).push((depth, dir.to_path_buf()));
     let entries: Vec<_> = match fs::read_dir(dir) {
         // Collect first: do not mutate the directory while iterating it.
@@ -308,28 +324,31 @@ fn tree_dir<'s>(s: &rayon::Scope<'s>, ctx: &'s Ctx<'s>, job: &'s Prepared, st: &
                 if ctx.cancelled(st) {
                     return;
                 }
+                // Links are removed but not counted as files (as in `fsops::measure`).
                 let r = if ft.is_symlink() {
                     fsops::remove_link_entry(&p, st.patient())
                 } else {
+                    // Logical length: a hardlinked file counts in full here (the link count is
+                    // not in the directory listing), so the «Annullato: liberati n» figure can
+                    // overstate by the files that have other links. `Removed` reports the
+                    // measured size, which accounts for hardlinks.
                     let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     fsops::with_retry(&p, st.patient(), || fs::remove_file(&p)).inspect(|()| {
                         st.deleted_bytes.fetch_add(len, SeqCst);
                         ctx.add_bytes(st, len);
+                        st.files.fetch_add(1, SeqCst);
                     })
                 };
-                match r {
-                    Ok(()) => {
-                        st.files.fetch_add(1, SeqCst);
-                    }
-                    Err(e) => st.fail(&p, e, Some(dir)),
+                if let Err(e) = r {
+                    st.fail(&p, e, Some(dir));
                 }
             }
         }
     }
 }
 
-/// The last task of a permanent delete: remove the folders deepest first (one level at a
-/// time, in parallel), then decide the outcome.
+/// The last task of a permanent delete: remove the folders deepest first, then decide the
+/// outcome.
 fn finish_tree(ctx: &Ctx<'_>, job: &Prepared, st: &ItemState) {
     let r = catch_unwind(AssertUnwindSafe(|| {
         if lock(&st.outcome).is_some() {
@@ -346,7 +365,9 @@ fn finish_tree(ctx: &Ctx<'_>, job: &Prepared, st: &ItemState) {
             ctx.cancelled_outcome(st.started.load(SeqCst), n)
         } else if fsops::is_gone(&job.path) {
             ctx.add_bytes(st, job.bytes.saturating_sub(st.progressed.load(SeqCst)));
-            ItemOutcome::Removed { bytes_freed: job.bytes }
+            // Only a link went: its target was never touched, nothing was freed.
+            let bytes_freed = if st.root_was_link.load(SeqCst) { 0 } else { job.bytes };
+            ItemOutcome::Removed { bytes_freed }
         } else {
             failed("removal reported success but the path still exists", vec![])
         };
@@ -358,35 +379,23 @@ fn finish_tree(ctx: &Ctx<'_>, job: &Prepared, st: &ItemState) {
     ctx.item_done();
 }
 
+/// Removes the item's folders deepest first, in sequence on this worker (removing an empty
+/// folder is cheap; no nested parallel work on a pool thread's stack).
 fn remove_dirs(st: &ItemState) {
-    let mut levels: BTreeMap<usize, Vec<PathBuf>> = BTreeMap::new();
-    for (depth, d) in std::mem::take(&mut *lock(&st.seen_dirs)) {
-        levels.entry(depth).or_default().push(d);
-    }
-    for (_, dirs) in levels.into_iter().rev() {
-        let results: Vec<(PathBuf, Option<io::Result<()>>)> = dirs
-            .into_par_iter()
-            .map(|d| {
-                if lock(&st.blocked).contains(&d) {
-                    (d, None)
-                } else {
-                    let r = fsops::with_retry(&d, st.patient(), || fs::remove_dir(&d));
-                    (d, Some(r))
-                }
-            })
-            .collect();
-        for (d, r) in results {
-            match r {
-                Some(Ok(())) => {
-                    st.dirs.fetch_add(1, SeqCst);
-                }
-                Some(Err(e)) => st.fail(&d, e, d.parent()),
-                None => {
-                    if let Some(parent) = d.parent() {
-                        lock(&st.blocked).insert(parent.to_path_buf());
-                    }
-                }
+    let mut dirs = std::mem::take(&mut *lock(&st.seen_dirs));
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, d) in dirs {
+        if lock(&st.blocked).contains(&d) {
+            if let Some(parent) = d.parent() {
+                lock(&st.blocked).insert(parent.to_path_buf());
             }
+            continue;
+        }
+        match fsops::with_retry(&d, st.patient(), || fs::remove_dir(&d)) {
+            Ok(()) => {
+                st.dirs.fetch_add(1, SeqCst);
+            }
+            Err(e) => st.fail(&d, e, d.parent()),
         }
     }
 }
@@ -457,6 +466,19 @@ impl ParallelRemover {
     /// Executes `plan`; `tick` is called from one thread at most every 100 ms while the
     /// workers run; `cancel` stops before the next file.
     pub fn execute_with(&self, plan: &CleanPlan, dry_run: bool, tick: &(dyn Fn(Tick) + Sync), cancel: &Cancel) -> CleanResult {
+        self.execute_hooked(plan, dry_run, tick, cancel, &|| {})
+    }
+
+    /// [`Self::execute_with`]; `before_work` runs after validation and measurement, right
+    /// before the workers start (tests use it to change the disk in between).
+    pub(crate) fn execute_hooked(
+        &self,
+        plan: &CleanPlan,
+        dry_run: bool,
+        tick: &(dyn Fn(Tick) + Sync),
+        cancel: &Cancel,
+        before_work: &dyn Fn(),
+    ) -> CleanResult {
         let start = Instant::now();
         let mut result = CleanResult { dry_run, ..Default::default() };
         let mut outcomes: Vec<Option<ItemOutcome>> = vec![None; plan.items.len()];
@@ -488,6 +510,7 @@ impl ParallelRemover {
         };
         let ctx = Ctx { cancel, progress: &progress, any_cancelled: AtomicBool::new(false) };
         let states: Vec<ItemState> = jobs.iter().map(|_| ItemState::default()).collect();
+        before_work();
 
         if !jobs.is_empty() {
             match pool(self.workers) {
@@ -572,6 +595,9 @@ fn remove_one_file(p: &Path, patient: bool) -> Result<bool, String> {
 /// being the sizes given with the files. A file already gone counts nowhere; «Annulla» stops
 /// before the next file (the files left are neither removed nor failed). Folders are refused
 /// and links are removed as links, never followed.
+///
+/// **No `guard` here**: the paths are not checked against the protected locations; the
+/// caller must have validated every file (Pulizia file, Task 11) before calling this.
 pub fn remove_files_parallel(
     files: &[(PathBuf, u64)],
     workers: usize,

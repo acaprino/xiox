@@ -652,6 +652,7 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
         dirs_removed: 56,
         elapsed_ms: 789,
         cancelled: true,
+        recycled_bytes: 900,
         ..Default::default()
     };
     let r = super::report(&scan, &plan, &res);
@@ -669,8 +670,9 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
     assert_eq!(r.skipped, vec![(p2.join("node_modules"), "Annullato: liberati 7 byte".to_string())]);
     assert_eq!(r.failed, vec![(p1.join("dist"), "bloccato (in uso da: code.exe (pid 4))".to_string())]);
 
-    // The same run in a permanent plan: everything is freed.
+    // A permanent run: nothing went to the Recycle Bin, everything is freed.
     let permanent = CleanPlan { mode: RemoveMode::Permanent, ..plan };
+    let res = CleanResult { recycled_bytes: 0, ..res };
     let r = super::report(&scan, &permanent, &res);
     assert_eq!((r.recycled_bytes, r.freed_bytes), (0, 1900));
 }

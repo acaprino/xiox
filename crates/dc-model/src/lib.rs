@@ -488,7 +488,8 @@ pub struct CleanResult {
     /// Sum of measured `Removed.bytes_freed` (Recycle Bin moves included).
     pub bytes_freed: u64,
     pub dry_run: bool,
-    /// Files deleted (or moved to the Recycle Bin), links inside the trees included.
+    /// Files deleted (or moved to the Recycle Bin). Links (symlinks, junctions) are not
+    /// counted, in either mode, as in the measured `SizeInfo::file_count`.
     #[serde(default)]
     pub files_removed: u64,
     /// Folders deleted (or moved to the Recycle Bin), each item's own folder included.

@@ -105,6 +105,43 @@ mod sys {
         fs::symlink_metadata(p).map(|m| m.file_attributes() & 0x10 != 0).unwrap_or(false)
     }
 
+    /// See [`super::open_dir`]. The folder itself is opened (`FILE_FLAG_OPEN_REPARSE_POINT`:
+    /// a link is never followed) with `FILE_LIST_DIRECTORY` access, so that the share mode
+    /// without `FILE_SHARE_DELETE` is enforced: while the handle is open nobody can rename,
+    /// delete or replace the folder. The checks are made on that same handle.
+    pub fn open_dir(p: &Path) -> io::Result<super::DirCheck> {
+        const FILE_LIST_DIRECTORY: u32 = 0x0001;
+        const REPARSE_POINT: u32 = 0x400;
+        const DIRECTORY: u32 = 0x10;
+        let open = |share: u32| {
+            OpenOptions::new()
+                .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
+                .share_mode(share)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(p)
+        };
+        let (f, pinned) = match open(FILE_SHARE_READ | FILE_SHARE_WRITE) {
+            Ok(f) => (f, true),
+            // Someone else holds the folder with DELETE access: check without pinning it.
+            Err(e) if e.raw_os_error() == Some(32) => {
+                (open(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)?, false)
+            }
+            Err(e) => return Err(e),
+        };
+        // `File::metadata` asks the handle (GetFileInformationByHandle + the reparse tag).
+        let md = f.metadata()?;
+        let attrs = md.file_attributes();
+        Ok(if md.file_type().is_symlink() {
+            super::DirCheck::Link
+        } else if attrs & REPARSE_POINT != 0 {
+            super::DirCheck::Reparse
+        } else if attrs & DIRECTORY == 0 {
+            super::DirCheck::NotDir
+        } else {
+            super::DirCheck::Dir(super::DirPin(pinned.then_some(f)))
+        })
+    }
+
     /// First file under `root` that cannot be opened for delete because of a sharing/lock
     /// violation (ERROR_SHARING_VIOLATION 32 / ERROR_LOCK_VIOLATION 33).
     pub fn probe_blocking_file(root: &Path) -> Option<(std::path::PathBuf, io::Error)> {
@@ -152,12 +189,37 @@ mod sys {
     pub fn link_is_dir(p: &Path) -> bool {
         std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
     }
+    pub fn open_dir(p: &Path) -> io::Result<super::DirCheck> {
+        let md = std::fs::symlink_metadata(p)?;
+        Ok(if md.file_type().is_symlink() {
+            super::DirCheck::Link
+        } else if md.is_dir() {
+            super::DirCheck::Dir(super::DirPin(None))
+        } else {
+            super::DirCheck::NotDir
+        })
+    }
     pub fn probe_blocking_file(_root: &Path) -> Option<(PathBuf, io::Error)> {
         None
     }
 }
 
-pub use sys::probe_blocking_file;
+pub use sys::{open_dir, probe_blocking_file};
+
+/// Keeps a folder from being renamed, deleted or replaced while it is held (Windows, when
+/// the folder could be opened without `FILE_SHARE_DELETE`; elsewhere it holds nothing).
+pub struct DirPin(#[allow(dead_code)] Option<fs::File>);
+
+/// What a path is, checked right before a folder is listed: see [`open_dir`].
+pub enum DirCheck {
+    /// A real folder; keep the pin while listing it and deleting its files.
+    Dir(DirPin),
+    /// A symlink or junction: only the link may be removed.
+    Link,
+    /// Another kind of reparse point (cloud placeholder, ...): neither entered nor removed.
+    Reparse,
+    NotDir,
+}
 
 // ─────────────────────────────── measuring ───────────────────────────────
 
