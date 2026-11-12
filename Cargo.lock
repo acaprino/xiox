@@ -2200,6 +2200,7 @@ dependencies = [
  "dc-sessions",
  "eframe",
  "embed-resource",
+ "idna",
  "image",
  "pc-rules",
  "rfd",

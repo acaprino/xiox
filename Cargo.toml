@@ -28,6 +28,8 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 # Already in the build: browser `Preferences`. `float_roundtrip` and `preserve_order` keep numbers and key order
 # exactly as the browser wrote them when the file is rewritten.
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+# Already in the build (url): domains of the cookie keep list written in Unicode become punycode, as browsers store them.
+idna = "=1.1.0"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Shell",

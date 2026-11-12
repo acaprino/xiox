@@ -94,8 +94,8 @@ fn go() -> AtomicBool {
     AtomicBool::new(false)
 }
 
-fn keep(list: &[&str]) -> Result<Vec<String>, String> {
-    Ok(list.iter().map(|s| s.to_string()).collect())
+fn keep(list: &[&str]) -> Result<KeepList, String> {
+    Ok(KeepList { domains: list.iter().map(|s| s.to_string()).collect(), rejected: vec![] })
 }
 
 // ----- profili -----
@@ -206,8 +206,16 @@ fn junction(link: &Path, target: &Path) {
 #[test]
 fn keep_list_ignores_comments_blank_lines_case_and_leading_dot() {
     let text = " Google.COM \n\n.live.com\n# x\n   # commento\nexample.org # in fondo\nhttps://Accounts.Example.NET:443/login\n*.wild.it\ngoogle.com\nnon valido\u{FFFD}.com\n";
-    assert_eq!(parse_keep_list(text), vec!["google.com", "live.com", "example.org", "accounts.example.net", "wild.it"]);
-    assert!(parse_keep_list(KEEP_LIST_TEMPLATE).is_empty(), "gli esempi sono commentati");
+    let list = parse_keep_list(text);
+    assert_eq!(list.domains, vec!["google.com", "live.com", "example.org", "accounts.example.net", "wild.it"]);
+    assert_eq!(list.rejected, vec!["non valido\u{FFFD}.com"], "la riga scartata si dice");
+    assert_eq!(parse_keep_list(KEEP_LIST_TEMPLATE), KeepList::default(), "gli esempi sono commentati");
+    // Domini internazionali: i browser salvano l'host in punycode.
+    let idn = parse_keep_list("Bücher.de\nhttps://www.münchen.de/x\n");
+    assert_eq!(idn.domains, vec!["xn--bcher-kva.de", "www.xn--mnchen-3ya.de"]);
+    assert!(idn.rejected.is_empty());
+    assert!(is_kept(".xn--bcher-kva.de", &idn.domains));
+    assert!(is_kept("shop.xn--bcher-kva.de", &idn.domains));
     assert!(is_kept(".google.com", &["google.com".to_string()]));
     assert!(is_kept("ACCOUNTS.google.com", &["google.com".to_string()]));
     assert!(!is_kept("evilgoogle.com", &["google.com".to_string()]));
@@ -220,7 +228,7 @@ fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     let path = keep_list_in(t.path());
     assert_eq!(path, t.path().join(r"PulisciPC\cookie_da_conservare.txt"));
     // Assente.
-    assert_eq!(read_keep_list(&path), Ok(vec![]));
+    assert_eq!(read_keep_list(&path), Ok(KeepList::default()));
     assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
     // Creata al primo uso con gli esempi commentati, mai sovrascritta.
     ensure_keep_list(&path).unwrap();
@@ -228,17 +236,23 @@ fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     fs::write(&path, "google.com\n").unwrap();
     ensure_keep_list(&path).unwrap();
     assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 1 dominio");
-    // Vuota.
+    // Vuota, o con soli commenti e righe vuote.
     fs::write(&path, "").unwrap();
-    assert_eq!(read_keep_list(&path), Ok(vec![]));
-    // Non UTF-8: nessun panico, i domini ASCII restano.
-    fs::write(&path, b"\xE9\xE8\xFF\nlive.com\n").unwrap();
-    assert_eq!(read_keep_list(&path), Ok(vec!["live.com".to_string()]));
-    // UTF-16 con BOM (Blocco note «Unicode»).
+    assert_eq!(read_keep_list(&path), Ok(KeepList::default()));
+    fs::write(&path, "# google.com\r\n\r\n   \n").unwrap();
+    assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
+    // UTF-8 con BOM.
+    fs::write(&path, b"\xEF\xBB\xBFgoogle.com\n").unwrap();
+    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com"]);
+    // UTF-16 con BOM (Blocco note «Unicode»), little e big endian.
     let mut wide = vec![0xFF, 0xFE];
     wide.extend("google.com\r\nlive.com\r\n".encode_utf16().flat_map(u16::to_le_bytes));
     fs::write(&path, wide).unwrap();
-    assert_eq!(read_keep_list(&path), Ok(vec!["google.com".to_string(), "live.com".to_string()]));
+    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com", "live.com"]);
+    let mut wide = vec![0xFE, 0xFF];
+    wide.extend("live.com\n".encode_utf16().flat_map(u16::to_be_bytes));
+    fs::write(&path, wide).unwrap();
+    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["live.com"]);
     // Illeggibile (una cartella): errore, e la finestra dice che non si tocca niente.
     let dir = t.path().join("cartella");
     fs::create_dir_all(&dir).unwrap();
@@ -258,6 +272,85 @@ fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty());
     assert!(found.detail[0].contains("nessun cookie verrà eliminato"), "{:?}", found.detail);
+}
+
+#[test]
+fn keep_list_that_cannot_be_trusted_blocks_the_cookies() {
+    let t = tempfile::tempdir().unwrap();
+    let path = keep_list_in(t.path());
+    ensure_keep_list(&path).unwrap();
+    let blocked = |bytes: &[u8]| {
+        fs::write(&path, bytes).unwrap();
+        let list = read_keep_list(&path);
+        assert!(list.is_err(), "{list:?}");
+        let s = keep_list_summary(&list);
+        assert!(s.starts_with("Lista dei cookie non valida: nessun cookie verrà eliminato"), "{s}");
+        s
+    };
+    // UTF-16 senza BOM: ogni carattere ha uno zero accanto.
+    let wide: Vec<u8> = "google.com\r\nlive.com\r\n".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    blocked(&wide);
+    // Non UTF-8 (per esempio ANSI con lettere accentate).
+    blocked(b"# conserva i siti \xE0 \xE8\nlive.com\n");
+    // Righe scritte ma nessun dominio valido: le righe compaiono nella conferma.
+    let s = blocked(b"google,com\nfoo bar\n");
+    assert!(s.contains("google,com") && s.contains("foo bar"), "{s}");
+    // Qualche dominio valido e righe scartate: si pulisce, ma la conferma le elenca (al più 5).
+    fs::write(&path, "google.com\na b\nc d\ne f\ng h\ni j\nk l\nm n\n").unwrap();
+    let list = read_keep_list(&path);
+    assert_eq!(list.as_ref().unwrap().domains, vec!["google.com"]);
+    let s = keep_list_summary(&list);
+    assert!(s.starts_with("lista: 1 dominio"), "{s}");
+    assert!(s.contains("a b, c d, e f, g h, i j") && s.contains("…e altre 2") && !s.contains("k l"), "{s}");
+
+    // L'analisi con una lista non valida non propone cookie.
+    fs::write(&path, wide).unwrap();
+    let env = env_in(t.path());
+    let prof = chromium_profile(&chrome_user_data(&env), "Default");
+    chromium_cookies(&prof.join(r"Network\Cookies"), &COOKIE_HOSTS);
+    let found = analyze_cookies(&profiles(&env), read_keep_list(&path), &none, &go());
+    assert_eq!(found.count, 0);
+    assert!(found.items.is_empty());
+    assert!(found.detail[0].contains("Lista dei cookie non valida"), "{:?}", found.detail);
+}
+
+#[test]
+fn keep_list_behind_a_junction_is_refused() {
+    let t = tempfile::tempdir().unwrap();
+    let docs = t.path().join("Documenti");
+    let elsewhere = t.path().join("altrove");
+    fs::create_dir_all(&docs).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    junction(&docs.join("PulisciPC"), &elsewhere);
+    let path = keep_list_in(&docs);
+    let launched = std::cell::Cell::new(0);
+    let launch = |_: &Path| {
+        launched.set(launched.get() + 1);
+        Ok(())
+    };
+    let err = open_keep_list_in(&docs, &launch).unwrap_err();
+    assert!(err.contains("lista dei cookie non sicura"), "{err}");
+    assert!(ensure_keep_list(&path).is_err());
+    let read = read_keep_list(&path);
+    assert!(read.as_ref().is_err_and(|e| e.contains("non sicura")), "{read:?}");
+    assert_eq!(launched.get(), 0);
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nessun file creato nella destinazione");
+
+    // Cartella normale: la lista si crea e l'editor riceve il suo percorso.
+    let docs = t.path().join("Documenti2");
+    fs::create_dir_all(&docs).unwrap();
+    let seen = std::cell::RefCell::new(Vec::new());
+    open_keep_list_in(&docs, &|p: &Path| {
+        seen.borrow_mut().push(p.to_path_buf());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(*seen.borrow(), vec![keep_list_in(&docs)]);
+    assert_eq!(keep_list_summary(&read_keep_list(&keep_list_in(&docs))), "lista: 0 domini");
+    // Il comando dell'editor: notepad.exe della cartella di sistema, percorso fra virgolette.
+    let (exe, arg) = editor_command(Path::new(r"C:\Windows\System32"), &keep_list_in(&docs));
+    assert_eq!(exe, Path::new(r"C:\Windows\System32\notepad.exe"));
+    assert_eq!(arg, format!("\"{}\"", keep_list_in(&docs).display()));
 }
 
 #[test]
@@ -281,6 +374,9 @@ fn cookies_outside_the_keep_list_are_deleted_chromium() {
     // Quante righe e quanti byte, per ogni database.
     assert_eq!(done.done.len(), 2, "{:?}", done.done);
     assert!(done.done.iter().all(|d| d.contains("3 cookie eliminati") && d.contains("liberati nel database")), "{:?}", done.done);
+    // Rifatto con la stessa lista: niente più da eliminare.
+    let again = analyze_cookies(&profiles(&env), keep(&["google.com", "live.com"]), &none, &go());
+    assert_eq!(again.count, 0);
     for db in [new.join(r"Network\Cookies"), old.join("Cookies")] {
         assert_eq!(hosts_in(&db, "cookies", "host_key"), vec![".google.com", "Mail.Live.com", "accounts.google.com", "google.com"]);
     }
@@ -738,6 +834,112 @@ fn cancel_stops_between_databases() {
     let stop = AtomicBool::new(true);
     assert_eq!(clean_cookies(&profiles(&env), &found, &none, &stop).removed, 0);
     assert_eq!(analyze_compact(&profiles(&env), &none, &stop).count, 0);
+}
+
+// ----- correzioni della revisione -----
+
+#[test]
+fn analysis_never_writes_a_database_with_a_leftover_wal() {
+    // Firefox chiuso male: `places.sqlite` con un `-wal` rimasto e senza `-shm`.
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let prof = gecko_profile(&firefox_profiles(&env), "a.default-release");
+    let db = places(&prof);
+    let wal = prof.join("places.sqlite-wal");
+    let c = Connection::open(&db).unwrap();
+    c.execute_batch("PRAGMA wal_autocheckpoint = 0; INSERT INTO moz_historyvisits VALUES (5, 0, 2, 5, 1);").unwrap();
+    let (main_bytes, wal_bytes) = (fs::read(&db).unwrap(), fs::read(&wal).unwrap());
+    drop(c);
+    fs::write(&db, &main_bytes).unwrap();
+    fs::write(&wal, &wal_bytes).unwrap();
+    let _ = fs::remove_file(prof.join("places.sqlite-shm"));
+
+    let found = analyze_history(&profiles(&env), &none, &go());
+    assert_eq!(found.count, 5 + 3, "la visita nel -wal si vede: {:?}", found.detail);
+    analyze_compact(&profiles(&env), &none, &go());
+    analyze_cookies(&profiles(&env), keep(&[]), &none, &go());
+    assert_eq!(fs::read(&db).unwrap(), main_bytes, "l'analisi non fa il checkpoint");
+    assert_eq!(fs::read(&wal).unwrap(), wal_bytes);
+}
+
+#[test]
+fn rewrite_failure_leaves_the_original_and_no_temporary() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let chrome = chromium_profile(&chrome_user_data(&env), "Default");
+    let prefs = chrome.join("Preferences");
+    let tmps = |dir: &Path| fs::read_dir(dir).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".tmp")).count();
+    // Il controllo della rilettura fallisce.
+    assert!(write_replacing(&prefs, b"{}", &|_| false).is_err());
+    assert_eq!(fs::read_to_string(&prefs).unwrap(), PREFS_JSON);
+    assert_eq!(tmps(&chrome), 0);
+    // La sostituzione fallisce: un altro processo tiene il file senza condividerlo in cancellazione.
+    let found = analyze_download_dir(&profiles(&env), &none, &go());
+    assert_eq!(found.count, 1);
+    const FILE_SHARE_READ: u32 = 1;
+    let held = hold(&prefs, FILE_SHARE_READ);
+    let done = clean_download_dir(&profiles(&env), &found, &none, &go());
+    drop(held);
+    assert_eq!((done.removed, done.failed), (0, 1), "{:?}", done.notes);
+    assert_eq!(fs::read_to_string(&prefs).unwrap(), PREFS_JSON);
+    assert_eq!(tmps(&chrome), 0);
+    // Un temporaneo rimasto da un'interruzione non blocca la voce.
+    fs::write(chrome.join("Preferences.pulisci-pc.tmp"), b"vecchio").unwrap();
+    let done = clean_download_dir(&profiles(&env), &found, &none, &go());
+    assert_eq!((done.removed, done.failed), (1, 0), "{:?}", done.notes);
+    assert_eq!(tmps(&chrome), 1, "solo quello vecchio");
+}
+
+#[test]
+fn compact_is_skipped_without_enough_free_space() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let prof = chromium_profile(&chrome_user_data(&env), "Default");
+    let history = prof.join("History");
+    fragmented(&history);
+    let bytes = fs::read(&history).unwrap();
+    let size = bytes.len() as u64;
+    let found = analyze_compact(&profiles(&env), &none, &go());
+    let asked = std::cell::RefCell::new(Vec::new());
+    // Appena meno del doppio sul volume della cartella temporanea.
+    let free = |p: &Path| {
+        asked.borrow_mut().push(p.to_path_buf());
+        Some(if p.starts_with(&prof) { 10 * size } else { 2 * size - 1 })
+    };
+    let done = clean_compact_with(&profiles(&env), &found, &none, &go(), &free, Path::new(r"X:\temp"));
+    assert_eq!((done.removed, done.freed), (0, 0));
+    assert!(done.notes.iter().any(|n| n.contains("spazio insufficiente per compattare")), "{:?}", done.notes);
+    assert_eq!(fs::read(&history).unwrap(), bytes);
+    assert!(asked.borrow().iter().any(|p| p == Path::new(r"X:\temp")), "{:?}", asked.borrow());
+    // Spazio sconosciuto: come insufficiente.
+    let done = clean_compact_with(&profiles(&env), &found, &none, &go(), &|_| None, Path::new(r"X:\temp"));
+    assert_eq!(done.removed, 0);
+    // Abbastanza spazio: si compatta.
+    let done = clean_compact_with(&profiles(&env), &found, &none, &go(), &|_| Some(2 * size), Path::new(r"X:\temp"));
+    assert_eq!(done.removed, 1, "{:?}", done.notes);
+}
+
+#[test]
+fn firefox_lock_is_held_while_a_profile_is_cleaned() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let prof = gecko_profile(&firefox_profiles(&env), "a.default-release");
+    let p = profiles(&env).into_iter().next().unwrap();
+    let lock = prof.join("parent.lock");
+    {
+        let held = hold_profile(&p).expect("parent.lock preso");
+        assert!(lock_held(&lock), "Firefox che parte adesso trova il profilo in uso");
+        drop(held);
+    }
+    assert!(!lock.exists(), "creato da noi, tolto alla fine");
+    // Un parent.lock rimasto da Firefox resta dov'è.
+    fs::write(&lock, b"").unwrap();
+    drop(hold_profile(&p).unwrap());
+    assert!(lock.exists());
+    // Chromium: niente da tenere.
+    let chrome = chromium_profile(&chrome_user_data(&env), "Default");
+    let c = profiles(&env).into_iter().find(|q| q.dir == chrome).unwrap();
+    assert!(hold_profile(&c).is_ok_and(|h| h.is_none()));
 }
 
 // ----- voci -----

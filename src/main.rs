@@ -1265,7 +1265,7 @@ fn native_checkbox(ui: &mut Ui, item: &native::NativeItem, admin: bool, sel: &mu
     }
     if item.id == browserdb::COOKIES_ID {
         ui.add_space(2.0);
-        let hint = "Apre Documenti\\PulisciPC\\cookie_da_conservare.txt nell'editor predefinito (lo crea se manca). \
+        let hint = "Apre Documenti\\PulisciPC\\cookie_da_conservare.txt nel Blocco note (lo crea se manca). \
                     Un dominio per riga: i suoi cookie restano.";
         if secondary(ui, "Modifica lista cookie", true).on_hover_text(hint).clicked() {
             open_keep_list();

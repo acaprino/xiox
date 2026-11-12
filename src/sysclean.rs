@@ -47,8 +47,8 @@ pub trait Dns {
 
 /// I registri del Visualizzatore eventi.
 pub trait EventLog {
-    /// Canali (nome, numero di eventi).
-    fn channels(&self) -> Vec<(String, u64)>;
+    /// Canali (nome, numero di eventi, dimensione del file in byte).
+    fn channels(&self) -> Vec<(String, u64, u64)>;
     fn clear(&self, channel: &str) -> Result<(), String>;
 }
 
@@ -189,6 +189,12 @@ pub fn items() -> Vec<NativeItem> {
 /// `browserdb` per la lista dei cookie da conservare.
 pub fn documents_dir() -> Option<PathBuf> {
     win::documents()
+}
+
+/// La cartella di sistema (`GetSystemDirectoryW`), mai da `%SystemRoot%`. La
+/// usa `browserdb` per il Blocco note che apre la lista dei cookie.
+pub fn system32_dir() -> Option<PathBuf> {
+    win::system_dir()
 }
 
 /// Collegamento fra le voci e le implementazioni vere.
@@ -347,22 +353,30 @@ pub fn is_clearable_channel(name: &str) -> bool {
 /// Canali ammessi ([`is_clearable_channel`]) con almeno un evento. Guarda e
 /// basta: non svuota niente.
 pub fn analyze_event_logs(ev: &dyn EventLog) -> NativeFound {
-    let channels: Vec<(String, u64)> =
-        ev.channels().into_iter().filter(|(c, n)| *n > 0 && is_clearable_channel(c)).collect();
+    let channels: Vec<(String, u64, u64)> =
+        ev.channels().into_iter().filter(|(c, n, _)| *n > 0 && is_clearable_channel(c)).collect();
     if channels.is_empty() {
         return NativeFound::default();
     }
-    let events: u64 = channels.iter().map(|(_, n)| n).sum();
+    let events: u64 = channels.iter().map(|(_, n, _)| n).sum();
+    let bytes: u64 = channels.iter().map(|(_, _, b)| b).sum();
     let mut detail = vec![format!(
-        "{}, {}",
+        "{}, {}, {}",
         plural(channels.len() as u64, "registro", "registri"),
-        plural(events, "evento", "eventi")
+        plural(events, "evento", "eventi"),
+        crate::sys::fmt_size(bytes)
     )];
-    detail.extend(channels.iter().take(MAX_DETAIL).map(|(c, n)| format!("{c}: {}", plural(*n, "evento", "eventi"))));
+    detail.extend(
+        channels
+            .iter()
+            .take(MAX_DETAIL)
+            .map(|(c, n, b)| format!("{c}: {}, {}", plural(*n, "evento", "eventi"), crate::sys::fmt_size(*b))),
+    );
     NativeFound {
         detail,
         count: channels.len() as u64,
-        items: channels.into_iter().map(|(c, _)| c).collect(),
+        bytes,
+        items: channels.into_iter().map(|(c, _, _)| c).collect(),
         ..Default::default()
     }
 }
@@ -445,8 +459,12 @@ fn profiles_root(env: &Env) -> Option<PathBuf> {
 /// Destinazione mancante di un collegamento da proporre, o `None`.
 ///
 /// Non si giudicano mai: collegamenti illeggibili, «pubblicizzati» di
-/// Windows Installer (`SLDF_HAS_DARWINID`), senza `LinkInfo` (solo ID-list:
-/// app pacchettizzate, cartelle virtuali), senza percorsi, con un percorso
+/// Windows Installer (`SLDF_HAS_DARWINID`), senza `LinkInfo` (non solo
+/// ID-list di app pacchettizzate e cartelle virtuali: anche molti collegamenti
+/// di sistema, come Prompt dei comandi o Strumenti di amministrazione, che
+/// hanno la destinazione solo in `EnvironmentVariableDataBlock`, flag
+/// `SLDF_HAS_EXP_SZ` più `SLDF_FORCE_NO_LINKINFO`: limite noto, nel verso
+/// prudente, perché non si propongono mai), senza percorsi, con un percorso
 /// non Unicode valido o lungo [`MAX_TARGET_LEN`] o più (forse troncato).
 /// Nelle cartelle comuni (`common`) neppure quelli con variabili per utente o
 /// con la destinazione dentro un profilo diverso da `Public`.
@@ -811,7 +829,7 @@ mod win {
     };
     use windows_sys::Win32::System::DataExchange::{CloseClipboard, CountClipboardFormats, EmptyClipboard, OpenClipboard};
     use windows_sys::Win32::System::EventLog::{
-        EvtChannelConfigType, EvtClearLog, EvtClose, EvtGetChannelConfigProperty, EvtGetLogInfo, EvtLogNumberOfLogRecords,
+        EvtChannelConfigType, EvtClearLog, EvtClose, EvtGetChannelConfigProperty, EvtGetLogInfo, EvtLogFileSize, EvtLogNumberOfLogRecords,
         EvtOpenChannelConfig, EvtOpenChannelPath, EvtOpenLog, EvtVarTypeUInt32, EvtVarTypeUInt64, EVT_HANDLE,
         EVT_VARIANT,
     };
@@ -991,11 +1009,11 @@ mod win {
     pub struct RealEventLog;
 
     impl EventLog for RealEventLog {
-        fn channels(&self) -> Vec<(String, u64)> {
+        fn channels(&self) -> Vec<(String, u64, u64)> {
             // Solo i canali ammessi: nessuna enumerazione di tutti i registri.
             super::CLEARABLE_CHANNELS
                 .iter()
-                .filter_map(|name| channel_records(name).map(|n| (name.to_string(), n)))
+                .filter_map(|name| channel_records(name).map(|(n, bytes)| (name.to_string(), n, bytes)))
                 .collect()
         }
 
@@ -1007,9 +1025,10 @@ mod win {
         }
     }
 
-    /// Eventi di un canale amministrativo o operativo (gli analitici e di
-    /// debug non si toccano); `None` se non si legge.
-    fn channel_records(name: &str) -> Option<u64> {
+    /// Eventi e dimensione del file (`EvtLogFileSize`, 0 se non si legge) di
+    /// un canale amministrativo o operativo (gli analitici e di debug non si
+    /// toccano); `None` se gli eventi non si leggono.
+    fn channel_records(name: &str) -> Option<(u64, u64)> {
         let w = wide(name);
         // SAFETY: sessione locale, nome terminato da zero, flag 0; chiuso da `Evt`.
         let cfg = Evt(unsafe { EvtOpenChannelConfig(0, w.as_ptr(), 0) });
@@ -1032,15 +1051,24 @@ mod win {
         if log.0 == 0 {
             return None;
         }
-        let mut v = EVT_VARIANT::default();
-        // SAFETY: `v` è un EVT_VARIANT intero e la dimensione passata è la sua;
-        // `EvtLogNumberOfLogRecords` è un UInt64.
-        let ok = unsafe { EvtGetLogInfo(log.0, EvtLogNumberOfLogRecords, size_of::<EVT_VARIANT>() as u32, &mut v, &mut used) };
-        if ok == 0 {
-            return None;
-        }
-        // SAFETY: si legge il campo dell'unione solo se `Type` dice UInt64.
-        Some(if v.Type == EvtVarTypeUInt64 as u32 { unsafe { v.Anonymous.UInt64Val } } else { 0 })
+        // Una proprietà UInt64 del registro aperto; `None` se non si legge.
+        let info = |prop| {
+            let mut v = EVT_VARIANT::default();
+            let mut used = 0u32;
+            // SAFETY: `v` è un EVT_VARIANT intero e la dimensione passata è la sua;
+            // `EvtLogNumberOfLogRecords` e `EvtLogFileSize` sono UInt64.
+            let ok = unsafe { EvtGetLogInfo(log.0, prop, size_of::<EVT_VARIANT>() as u32, &mut v, &mut used) };
+            // SAFETY: si legge il campo dell'unione solo se `Type` dice UInt64.
+            if ok == 0 {
+                None
+            } else if v.Type == EvtVarTypeUInt64 as u32 {
+                Some(unsafe { v.Anonymous.UInt64Val })
+            } else {
+                Some(0)
+            }
+        };
+        let records = info(EvtLogNumberOfLogRecords)?;
+        Some((records, info(EvtLogFileSize).unwrap_or(0)))
     }
 
     // ----- Collegamenti (COM, IShellLinkW) -----
@@ -1243,13 +1271,13 @@ mod tests {
     }
 
     struct FakeEvents {
-        channels: Vec<(String, u64)>,
+        channels: Vec<(String, u64, u64)>,
         fail: Vec<String>,
         cleared: RefCell<Vec<String>>,
     }
 
     impl EventLog for FakeEvents {
-        fn channels(&self) -> Vec<(String, u64)> {
+        fn channels(&self) -> Vec<(String, u64, u64)> {
             self.channels.clone()
         }
         fn clear(&self, channel: &str) -> Result<(), String> {
@@ -1417,12 +1445,12 @@ mod tests {
     fn events(fail: &[&str]) -> FakeEvents {
         FakeEvents {
             channels: vec![
-                ("Application".into(), 10),
-                ("Security".into(), 5),
-                ("Setup".into(), 0),
-                ("Microsoft-Windows-Windows Defender/Operational".into(), 50),
-                ("Setup".into(), 3),
-                ("System".into(), 7),
+                ("Application".into(), 10, 20_975_616),
+                ("Security".into(), 5, 4096),
+                ("Setup".into(), 0, 69_632),
+                ("Microsoft-Windows-Windows Defender/Operational".into(), 50, 1_052_672),
+                ("Setup".into(), 3, 1_052_672),
+                ("System".into(), 7, 2 * 1024 * 1024),
             ],
             fail: fail.iter().map(|s| s.to_string()).collect(),
             cleared: RefCell::new(Vec::new()),
@@ -1451,6 +1479,10 @@ mod tests {
         assert!(ev.cleared.borrow().is_empty());
         assert!(found.detail[0].contains("3 registri"), "{:?}", found.detail);
         assert!(found.detail[0].contains("20 eventi"), "{:?}", found.detail);
+        // Dimensione dei file dei registri (`EvtLogFileSize`), solo dei canali proposti.
+        assert_eq!(found.bytes, 20_975_616 + 1_052_672 + 2 * 1024 * 1024);
+        assert!(found.detail[0].contains("23,0 MB"), "{:?}", found.detail);
+        assert!(found.detail.iter().any(|d| d == "Application: 10 eventi, 20,0 MB"), "{:?}", found.detail);
         // Si svuota solo ciò che l'analisi ha trovato.
         let partial = NativeFound { items: vec!["System".into()], ..found };
         clean_event_logs(&ev, &partial, &AtomicBool::new(false));

@@ -403,6 +403,56 @@ fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     Ok(c)
 }
 
+/// Apertura dell'analisi: sola lettura (mai `immutable`), così un `-wal` o un
+/// `-journal` rimasti non si riportano nel database. Se non si apre così, il
+/// database si salta con una nota: mai riaperto in scrittura.
+fn open_db_read(path: &Path) -> rusqlite::Result<Connection> {
+    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    c.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(c)
+}
+
+/// `parent.lock` di Firefox tenuto aperto senza condivisione durante la
+/// pulizia del profilo: un Firefox che parte adesso dice «già in esecuzione»
+/// invece di aprire i database. Creato se manca (vuoto, mai scritto) e tolto
+/// alla fine; uno lasciato da Firefox resta.
+pub struct ProfileLock {
+    file: Option<fs::File>,
+    created: Option<PathBuf>,
+}
+
+impl Drop for ProfileLock {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        if let Some(p) = self.created.take() {
+            let _ = fs::remove_file(p);
+        }
+    }
+}
+
+/// `Ok(None)` per Chromium (niente da tenere); `Err` se il blocco di Firefox
+/// non si prende (il profilo si salta).
+pub fn hold_profile(p: &Profile) -> Result<Option<ProfileLock>, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    if p.kind != Kind::Gecko {
+        return Ok(None);
+    }
+    let busy = || format!("{}: profilo in uso, chiudi {} per pulire", p.label(), p.processes.join(", "));
+    let existed = match fs::symlink_metadata(&p.lock) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Ok(_) if plain(&p.lock).is_some_and(|m| m.is_file()) => true,
+        _ => return Err(busy()),
+    };
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(!existed)
+        .share_mode(0)
+        .open(&p.lock)
+        .map_err(|_| busy())?;
+    Ok(Some(ProfileLock { file: Some(file), created: (!existed).then(|| p.lock.clone()) }))
+}
+
 fn has_column(c: &Connection, table: &str, col: &str) -> bool {
     c.query_row("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2", [table, col], |_| Ok(())).is_ok()
 }
@@ -414,35 +464,61 @@ fn plural(n: u64, one: &str, many: &str) -> String {
 // ---------------------------------------------------------------------------
 // Lista dei cookie da conservare.
 
+/// La lista letta: i domini (ASCII, in punycode) e le righe non commentate
+/// che non sono un dominio valido, così come scritte.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeepList {
+    pub domains: Vec<String>,
+    pub rejected: Vec<String>,
+}
+
+/// Righe scartate mostrate nella conferma, le altre si contano.
+const MAX_REJECTED_SHOWN: usize = 5;
+
 /// Domini della lista: una riga per dominio, `#` per i commenti (anche in
 /// fondo alla riga), senza maiuscole, senza punto o `*.` iniziale; da un
-/// indirizzo (`https://accounts.example.net:443/login`) si tiene l'host. Le
-/// righe che non sono un nome di dominio ASCII si ignorano; niente doppioni.
-pub fn parse_keep_list(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// indirizzo (`https://accounts.example.net:443/login`) si tiene l'host. I
+/// domini internazionali (`bücher.de`) diventano punycode, come li salvano i
+/// browser. Le righe che non danno un dominio valido vanno in `rejected`;
+/// niente doppioni.
+pub fn parse_keep_list(text: &str) -> KeepList {
+    let mut out = KeepList::default();
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        let mut d = line.to_ascii_lowercase();
-        if let Some(i) = d.find("://") {
-            d = d[i + 3..].to_string();
+        if line.is_empty() {
+            continue;
         }
-        if let Some(i) = d.find(['/', '?']) {
-            d.truncate(i);
-        }
-        if let Some(i) = d.find('@') {
-            d = d[i + 1..].to_string();
-        }
-        if let Some(i) = d.find(':') {
-            d.truncate(i);
-        }
-        let d = d.trim_start_matches("*.").trim_start_matches('.').trim_end_matches('.').to_string();
-        let valid = !d.is_empty()
-            && d.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
-        if valid && !out.contains(&d) {
-            out.push(d);
+        match keep_domain(line) {
+            Some(d) => {
+                if !out.domains.contains(&d) {
+                    out.domains.push(d);
+                }
+            }
+            None => out.rejected.push(line.to_string()),
         }
     }
     out
+}
+
+fn keep_domain(line: &str) -> Option<String> {
+    let mut d = line.to_lowercase();
+    if let Some(i) = d.find("://") {
+        d = d[i + 3..].to_string();
+    }
+    if let Some(i) = d.find(['/', '?']) {
+        d.truncate(i);
+    }
+    if let Some(i) = d.find('@') {
+        d = d[i + 1..].to_string();
+    }
+    if let Some(i) = d.find(':') {
+        d.truncate(i);
+    }
+    let d = d.trim_start_matches("*.").trim_start_matches('.').trim_end_matches('.');
+    let d = if d.is_ascii() { d.to_string() } else { idna::domain_to_ascii(d).ok()? };
+    let valid = !d.is_empty()
+        && d.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    valid.then_some(d)
 }
 
 /// `true` se il cookie di `host` (con o senza punto iniziale) appartiene a un
@@ -458,43 +534,85 @@ pub fn keep_list_in(documents: &Path) -> PathBuf {
     documents.join("PulisciPC").join("cookie_da_conservare.txt")
 }
 
-/// Legge la lista: assente o vuota = nessun dominio (`Ok(vec![])`). UTF-8 con
-/// o senza BOM, UTF-16 con BOM (Blocco note «Unicode»); un testo non UTF-8
-/// non fa errore, valgono le righe che restano domini validi. `Err` solo se
-/// il file c'è ma non si legge: allora nessun cookie si elimina.
-pub fn read_keep_list(path: &Path) -> Result<Vec<String>, String> {
+const NOT_SAFE: &str = "lista dei cookie non sicura (la cartella PulisciPC o il file è un collegamento o una giunzione)";
+
+/// `Ok` se né `PulisciPC` né il file della lista sono reparse point
+/// (giunzioni, collegamenti, segnaposto di OneDrive): ciò che manca va bene,
+/// ciò che c'è deve essere una cartella vera e un file vero.
+fn check_keep_list(path: &Path) -> Result<(), String> {
+    let ok = |p: &Path, dir: bool| match fs::symlink_metadata(p) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => true,
+        Err(_) => false,
+        Ok(_) => plain(p).is_some_and(|m| if dir { m.is_dir() } else { m.is_file() }),
+    };
+    let dir_ok = path.parent().is_none_or(|d| ok(d, true));
+    if dir_ok && ok(path, false) { Ok(()) } else { Err(NOT_SAFE.to_string()) }
+}
+
+/// Legge la lista. Assente, vuota o con soli commenti: nessun dominio
+/// (`Ok`, «lista: 0 domini»). UTF-8 con o senza BOM, UTF-16 con BOM (Blocco
+/// note «Unicode»). `Err` (nessun cookie si elimina) se il file non si legge,
+/// è un collegamento, non è testo UTF-8 né UTF-16 con BOM (anche UTF-16 senza
+/// BOM), o ha righe scritte ma nessun dominio valido.
+pub fn read_keep_list(path: &Path) -> Result<KeepList, String> {
+    check_keep_list(path)?;
     match fs::metadata(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(KeepList::default()),
         Ok(m) if m.len() > KEEP_LIST_MAX => return Err("file troppo grande".to_string()),
         _ => {}
     }
     let bytes = match fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(KeepList::default()),
         Err(e) => return Err(e.to_string()),
     };
-    Ok(parse_keep_list(&decode_text(&bytes)))
-}
-
-fn decode_text(bytes: &[u8]) -> String {
-    let utf16 = |rest: &[u8], le: bool| {
-        let (pairs, _) = rest.as_chunks::<2>();
-        let units: Vec<u16> = pairs.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
-        String::from_utf16_lossy(&units)
-    };
-    match bytes {
-        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
-        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
-        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
-        _ => String::from_utf8_lossy(bytes).into_owned(),
+    let list = parse_keep_list(&decode_text(&bytes)?);
+    if list.domains.is_empty() && !list.rejected.is_empty() {
+        return Err(format!("nessun dominio valido; righe non riconosciute: {}", rejected_text(&list.rejected)));
     }
+    Ok(list)
 }
 
-/// Crea la lista con gli esempi commentati se non c'è; mai sovrascritta.
+/// Le prime [`MAX_REJECTED_SHOWN`] righe scartate, poi «…e altre N».
+fn rejected_text(rejected: &[String]) -> String {
+    let mut s = rejected.iter().take(MAX_REJECTED_SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    if rejected.len() > MAX_REJECTED_SHOWN {
+        s.push_str(&format!(" …e altre {}", rejected.len() - MAX_REJECTED_SHOWN));
+    }
+    s
+}
+
+/// Testo della lista: UTF-8 (con o senza BOM) o UTF-16 con BOM. Un carattere
+/// nullo (UTF-16 senza BOM) o byte non UTF-8 sono un errore.
+fn decode_text(bytes: &[u8]) -> Result<String, String> {
+    let utf16 = |rest: &[u8], le: bool| {
+        let (pairs, odd) = rest.as_chunks::<2>();
+        if !odd.is_empty() {
+            return Err("testo UTF-16 incompleto".to_string());
+        }
+        let units: Vec<u16> = pairs.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
+        String::from_utf16(&units).map_err(|_| "testo UTF-16 non valido".to_string())
+    };
+    let text = match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true)?,
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false)?,
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).map_err(|_| "testo non UTF-8".to_string())?,
+        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "testo non UTF-8: salvalo come UTF-8 nel Blocco note".to_string())?,
+    };
+    if text.contains('\0') {
+        return Err("testo con caratteri nulli (UTF-16 senza BOM?): salvalo come UTF-8 nel Blocco note".to_string());
+    }
+    Ok(text)
+}
+
+/// Crea la lista con gli esempi commentati se non c'è; mai sovrascritta. Mai
+/// attraverso un collegamento o una giunzione.
 pub fn ensure_keep_list(path: &Path) -> io::Result<()> {
+    check_keep_list(path).map_err(io::Error::other)?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
+    check_keep_list(path).map_err(io::Error::other)?;
     match fs::OpenOptions::new().write(true).create_new(true).open(path) {
         Ok(mut f) => f.write_all(KEEP_LIST_TEMPLATE.replace('\n', "\r\n").as_bytes()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -502,13 +620,35 @@ pub fn ensure_keep_list(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Testo per la conferma e per il resoconto: «lista: N domini», oppure, se la
-/// lista non si legge, che nessun cookie verrà eliminato.
-pub fn keep_list_summary(list: &Result<Vec<String>, String>) -> String {
+/// Testo per la conferma e per il resoconto: «lista: N domini» (con le righe
+/// non riconosciute, se ce ne sono), oppure che la lista non vale e nessun
+/// cookie verrà eliminato.
+pub fn keep_list_summary(list: &Result<KeepList, String>) -> String {
     match list {
-        Ok(v) => format!("lista: {}", plural(v.len() as u64, "dominio", "domini")),
-        Err(e) => format!("lista illeggibile ({e}): nessun cookie verrà eliminato"),
+        Ok(v) if v.rejected.is_empty() => format!("lista: {}", plural(v.domains.len() as u64, "dominio", "domini")),
+        Ok(v) => format!(
+            "lista: {}; righe non riconosciute, non protette: {}",
+            plural(v.domains.len() as u64, "dominio", "domini"),
+            rejected_text(&v.rejected)
+        ),
+        Err(e) => format!("Lista dei cookie non valida: nessun cookie verrà eliminato ({e})"),
     }
+}
+
+/// Crea la lista se manca e la apre con `open` (nell'app: il Blocco note di
+/// sistema). Niente se `PulisciPC` o il file sono collegamenti o giunzioni.
+pub fn open_keep_list_in(documents: &Path, open: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
+    let path = keep_list_in(documents);
+    check_keep_list(&path)?;
+    ensure_keep_list(&path).map_err(|e| e.to_string())?;
+    check_keep_list(&path)?;
+    open(&path)
+}
+
+/// `<system32>\notepad.exe` e l'argomento fra virgolette (un percorso di
+/// Windows non può contenere `"`).
+pub fn editor_command(system32: &Path, path: &Path) -> (PathBuf, String) {
+    (system32.join("notepad.exe"), format!("\"{}\"", path.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -540,13 +680,13 @@ fn cookie_hosts(c: &Connection, table: &str, col: &str) -> Result<Vec<(Option<St
 
 /// Analisi dei cookie: in `items` i database con cookie da eliminare, poi i
 /// domini della lista (`keep:<dominio>`). Lista illeggibile = niente.
-pub fn analyze_cookies(profiles: &[Profile], list: Result<Vec<String>, String>, procs: Procs, cancel: &AtomicBool) -> NativeFound {
+pub fn analyze_cookies(profiles: &[Profile], list: Result<KeepList, String>, procs: Procs, cancel: &AtomicBool) -> NativeFound {
     let summary = keep_list_summary(&list);
     let mut f = NativeFound::default();
     let keep = match list {
-        Ok(k) => k,
+        Ok(k) => k.domains,
         Err(_) => {
-            f.detail.push(format!("Nessun cookie proposto: {summary}"));
+            f.detail.push(summary);
             return f;
         }
     };
@@ -564,7 +704,7 @@ pub fn analyze_cookies(profiles: &[Profile], list: Result<Vec<String>, String>, 
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let hosts = open_db(&db).map_err(|e| e.to_string()).and_then(|c| cookie_hosts(&c, table, col));
+            let hosts = open_db_read(&db).map_err(|e| e.to_string()).and_then(|c| cookie_hosts(&c, table, col));
             match hosts {
                 Ok(hosts) => {
                     let (mut del, mut kept) = (0, 0);
@@ -619,6 +759,14 @@ pub fn clean_cookies(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
             done.note(note);
             continue;
         }
+        // Firefox: `parent.lock` preso per tutta la pulizia del profilo.
+        let _lock = match hold_profile(p) {
+            Ok(l) => l,
+            Err(note) => {
+                done.note(note);
+                continue;
+            }
+        };
         for (db, table, col) in cookie_dbs(p).into_iter().filter(|(db, ..)| wanted(db)) {
             if cancel.load(Ordering::Relaxed) {
                 break;
@@ -727,7 +875,7 @@ pub fn analyze_compact(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) 
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            match open_db(&db).and_then(|c| free_bytes(&c)) {
+            match open_db_read(&db).and_then(|c| free_bytes(&c)) {
                 Ok(0) => {}
                 Ok(b) => {
                     f.count += 1;
@@ -754,6 +902,22 @@ pub fn analyze_compact(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) 
 /// `VACUUM` dei database di `found.items`, ciascuno solo se
 /// `PRAGMA integrity_check` dà `ok`; uno rovinato si lascia com'è.
 pub fn clean_compact(profiles: &[Profile], found: &NativeFound, procs: Procs, cancel: &AtomicBool) -> NativeCleaned {
+    clean_compact_with(profiles, found, procs, cancel, &win::free_space, &std::env::temp_dir())
+}
+
+/// [`clean_compact`] con lo spazio libero (`free`, byte disponibili sul
+/// volume di un percorso, `None` se non si sa) e la cartella temporanea di
+/// SQLite (`temp`) passati da fuori. `VACUUM` scrive una copia del database
+/// in `temp` e, in WAL, fa crescere il `-wal`: serve almeno il doppio della
+/// dimensione del file su tutti e due i volumi, altrimenti si salta.
+pub fn clean_compact_with(
+    profiles: &[Profile],
+    found: &NativeFound,
+    procs: Procs,
+    cancel: &AtomicBool,
+    free: &dyn Fn(&Path) -> Option<u64>,
+    temp: &Path,
+) -> NativeCleaned {
     let mut done = NativeCleaned::default();
     for p in profiles {
         let mine: Vec<PathBuf> = compact_names(p).iter().map(|n| p.dir.join(n)).filter(|db| in_found(found, db)).collect();
@@ -767,6 +931,14 @@ pub fn clean_compact(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
             done.note(note);
             continue;
         }
+        // Firefox: `parent.lock` preso per tutta la pulizia del profilo.
+        let _lock = match hold_profile(p) {
+            Ok(l) => l,
+            Err(note) => {
+                done.note(note);
+                continue;
+            }
+        };
         for db in mine {
             if cancel.load(Ordering::Relaxed) {
                 break;
@@ -774,6 +946,16 @@ pub fn clean_compact(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
             let name = short(p, &db);
             if !plain_file(&db) {
                 done.note(format!("{} – {name}: non c'è più", p.label()));
+                continue;
+            }
+            let need = file_size(&db).saturating_mul(2);
+            let room = |dir: &Path| free(dir).is_some_and(|b| b >= need);
+            if !db.parent().is_some_and(room) || !room(temp) {
+                done.note(format!(
+                    "{} – {name}: spazio insufficiente per compattare (servono {} liberi qui e nella cartella temporanea)",
+                    p.label(),
+                    crate::sys::fmt_size(need)
+                ));
                 continue;
             }
             match compact(&db) {
@@ -877,7 +1059,7 @@ pub fn analyze_history(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) 
         let Some(db) = plain_path(&p.dir, "places.sqlite", true) else {
             continue;
         };
-        let counts = open_db(&db).and_then(|c| if places_ok(&c) { history_counts(&c).map(Some) } else { Ok(None) });
+        let counts = open_db_read(&db).and_then(|c| if places_ok(&c) { history_counts(&c).map(Some) } else { Ok(None) });
         match counts {
             Ok(Some((visits, pages))) if visits + pages > 0 => {
                 f.count += visits + pages;
@@ -925,6 +1107,14 @@ pub fn clean_history(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
             done.note(note);
             continue;
         }
+        // Firefox: `parent.lock` preso per tutta la pulizia del profilo.
+        let _lock = match hold_profile(p) {
+            Ok(l) => l,
+            Err(note) => {
+                done.note(note);
+                continue;
+            }
+        };
         if plain_path(&p.dir, "places.sqlite", true).is_none() {
             done.note(format!("{}: places.sqlite non c'è più", p.label()));
             continue;
@@ -1169,6 +1359,14 @@ pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Proc
             done.note(note);
             continue;
         }
+        // Firefox: `parent.lock` preso per tutta la pulizia del profilo.
+        let _lock = match hold_profile(p) {
+            Ok(l) => l,
+            Err(note) => {
+                done.note(note);
+                continue;
+            }
+        };
         let name = short(p, &file);
         if !plain_file(&file) {
             done.note(format!("{}: {name} non c'è più", p.label()));
@@ -1206,14 +1404,16 @@ pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Proc
     done
 }
 
-/// Scrive `bytes` in un file temporaneo nella stessa cartella, lo rilegge,
-/// e solo se `check` lo approva lo rinomina sopra `path` (sostituzione
-/// atomica). In errore il file temporaneo (creato qui) si toglie e `path`
-/// resta com'era.
+/// Scrive `bytes` in un file temporaneo con un nome nuovo (pid e
+/// nanosecondi) nella stessa cartella, lo rilegge, e solo se `check` lo
+/// approva lo mette al posto di `path` con `ReplaceFileW`, che tiene ACL e
+/// attributi dell'originale. In errore il temporaneo (creato qui) si toglie e
+/// `path` resta com'era. Un temporaneo vecchio non dà fastidio.
 fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> io::Result<()> {
     let name = path.file_name().ok_or_else(|| io::Error::other("nome mancante"))?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut tmp_name = name.to_os_string();
-    tmp_name.push(".pulisci-pc.tmp");
+    tmp_name.push(format!(".pulisci-pc.{}-{nanos}.tmp", std::process::id()));
     let tmp = path.with_file_name(tmp_name);
     let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let res = (|| {
@@ -1223,7 +1423,7 @@ fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> 
         if !check(&fs::read(&tmp)?) {
             return Err(io::Error::other("il file riscritto non si rilegge uguale"));
         }
-        fs::rename(&tmp, path)
+        win::replace(path, &tmp)
     })();
     if res.is_err() {
         let _ = fs::remove_file(&tmp);
@@ -1314,18 +1514,24 @@ fn keep_list_path() -> Option<PathBuf> {
     crate::sysclean::documents_dir().map(|d| keep_list_in(&d))
 }
 
-/// Crea la lista se manca e la apre nell'editor predefinito
-/// (`ShellExecuteW "open"`). Da chiamare fuori dal thread della UI.
+/// Crea la lista se manca e la apre con il Blocco note di sistema
+/// (`<GetSystemDirectoryW>\notepad.exe "<lista>"`): nessuna associazione di
+/// file di HKCU, nessun `ShellExecuteW` da amministratore. Da chiamare fuori
+/// dal thread della UI.
 pub fn open_keep_list() -> Result<(), String> {
-    let path = keep_list_path().ok_or_else(|| "cartella Documenti non trovata".to_string())?;
-    ensure_keep_list(&path).map_err(|e| e.to_string())?;
-    win::open(&path)
+    let docs = crate::sysclean::documents_dir().ok_or_else(|| "cartella Documenti non trovata".to_string())?;
+    let system32 = crate::sysclean::system32_dir().ok_or_else(|| "cartella di sistema non trovata".to_string())?;
+    open_keep_list_in(&docs, &|path: &Path| {
+        use std::os::windows::process::CommandExt;
+        let (exe, arg) = editor_command(&system32, path);
+        std::process::Command::new(exe).raw_arg(arg).spawn().map(drop).map_err(|e| format!("Blocco note non avviato ({e})"))
+    })
 }
 
 mod real {
     use super::*;
 
-    fn keep_list() -> Result<Vec<String>, String> {
+    fn keep_list() -> Result<KeepList, String> {
         keep_list_path().ok_or_else(|| "cartella Documenti non trovata".to_string()).and_then(|p| read_keep_list(&p))
     }
 
@@ -1359,32 +1565,37 @@ mod real {
 }
 
 mod win {
+    use std::io;
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
-    use std::ptr::null;
+    use std::ptr::{null, null_mut};
 
-    use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
 
-    /// Apre `path` con il programma predefinito. Inizializza COM nel thread
-    /// chiamante, come chiede `ShellExecuteW`.
-    pub fn open(path: &Path) -> Result<(), String> {
-        let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        let verb: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: nessun puntatore; si annulla con CoUninitialize solo se riuscita.
-        let com = unsafe { CoInitializeEx(null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) } >= 0;
-        // SAFETY: stringhe UTF-16 terminate da zero che vivono fino al ritorno;
-        // finestra, parametri e cartella nulli sono ammessi.
-        let h = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), null(), null(), SW_SHOWNORMAL) };
-        if com {
-            // SAFETY: bilancia la CoInitializeEx riuscita qui sopra.
-            unsafe { CoUninitialize() };
-        }
-        // Valori fino a 32 sono errori (documentazione di ShellExecuteW).
-        if h as isize > 32 { Ok(()) } else { Err(format!("apertura non riuscita (codice {})", h as isize)) }
+    fn wide(p: &Path) -> Vec<u16> {
+        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// Byte disponibili per questo utente sul volume di `dir`.
+    pub fn free_space(dir: &Path) -> Option<u64> {
+        let w = wide(dir);
+        let mut avail = 0u64;
+        // SAFETY: percorso terminato da zero; solo il primo puntatore di uscita, gli altri nulli.
+        let ok = unsafe { GetDiskFreeSpaceExW(w.as_ptr(), &mut avail, null_mut(), null_mut()) };
+        (ok != 0).then_some(avail)
+    }
+
+    /// Mette `replacement` al posto di `target` (`ReplaceFileW`, che tiene
+    /// ACL, attributi e flussi dell'originale), senza file di backup.
+    pub fn replace(target: &Path, replacement: &Path) -> io::Result<()> {
+        let (t, r) = (wide(target), wide(replacement));
+        // SAFETY: due percorsi terminati da zero che vivono fino al ritorno;
+        // nessun file di backup, `lpexclude` e `lpreserved` nulli come richiesto.
+        let ok = unsafe { ReplaceFileW(t.as_ptr(), r.as_ptr(), null(), REPLACEFILE_WRITE_THROUGH, null(), null()) };
+        if ok != 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
     }
 }
 
 #[cfg(test)]
 mod tests;
+
