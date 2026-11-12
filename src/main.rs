@@ -13,6 +13,7 @@ mod services;
 mod sys;
 mod sysclean;
 mod theme;
+mod winold;
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
