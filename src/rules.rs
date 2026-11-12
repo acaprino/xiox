@@ -84,6 +84,8 @@ pub struct RuleCleaned {
     pub freed: u64,
     /// File e voci di registro tolti.
     pub removed: u64,
+    /// Di `removed`, quanti erano file (il resoconto conta solo questi tra i file eliminati).
+    pub files: u64,
     /// File e voci di registro rimasti (in uso, rifiutati, backup non riuscito).
     pub failed: u64,
     pub backup: Option<PathBuf>,
@@ -582,6 +584,7 @@ pub fn clean_option(
         match delete_path(path, guard) {
             Ok(()) => {
                 out.removed += 1;
+                out.files += 1;
                 out.freed += size;
             }
             Err(e) => {

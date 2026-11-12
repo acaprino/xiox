@@ -121,8 +121,13 @@ pub fn run_natives(
                 skipped.note(format!("Saltata: {why}"));
                 return skipped;
             }
-            if found.items.is_empty() || ctx.cancel.load(Ordering::Relaxed) {
+            if found.items.is_empty() {
                 return NativeCleaned::default();
+            }
+            if ctx.cancel.load(Ordering::Relaxed) {
+                let mut stopped = NativeCleaned::default();
+                stopped.note("Pulizia interrotta".to_string());
+                return stopped;
             }
             (item.clean)(ctx, &found)
         });

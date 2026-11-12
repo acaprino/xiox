@@ -591,9 +591,10 @@ fn remove_one_file(p: &Path, patient: bool) -> Result<bool, String> {
     })
 }
 
-/// Deletes loose files with `workers` threads: `(bytes, files removed, failed)`, the bytes
-/// being the sizes given with the files. A file already gone counts nowhere; «Annulla» stops
-/// before the next file (the files left are neither removed nor failed). Folders are refused
+/// Deletes loose files with `workers` threads: `(bytes, files removed, failed, not attempted)`,
+/// the bytes being the sizes given with the files. A file already gone counts nowhere; «Annulla»
+/// stops before the next file (the files left are neither removed nor failed: they are the
+/// last number, so `0` means every file was tried even if «Annulla» came at the end). Folders are refused
 /// and links are removed as links, never followed.
 ///
 /// **No `guard` here**: the paths are not checked against the protected locations; the
@@ -603,19 +604,21 @@ pub fn remove_files_parallel(
     workers: usize,
     tick: &(dyn Fn(Tick) + Sync),
     cancel: &Cancel,
-) -> (u64, u64, Vec<(PathBuf, String)>) {
+) -> (u64, u64, Vec<(PathBuf, String)>, u64) {
     let pool = match pool(workers) {
         Ok(p) => p,
-        Err(e) => return (0, 0, files.iter().map(|(p, _)| (p.clone(), e.clone())).collect()),
+        Err(e) => return (0, 0, files.iter().map(|(p, _)| (p.clone(), e.clone())).collect(), 0),
     };
     let progress =
         Progress { total_bytes: files.iter().map(|(_, n)| n).sum(), total_items: files.len(), ..Default::default() };
     let (bytes, count, failures) = (AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0));
+    let untried = AtomicU64::new(0);
     let failed: Mutex<Vec<(usize, PathBuf, String)>> = Mutex::new(Vec::new());
     with_ticker(&progress, tick, || {
         pool.install(|| {
             files.par_iter().enumerate().for_each(|(i, (p, len))| {
                 if cancel.is_cancelled() {
+                    untried.fetch_add(1, SeqCst);
                     return;
                 }
                 let patient = failures.load(SeqCst) == 0;
@@ -639,5 +642,6 @@ pub fn remove_files_parallel(
     });
     let mut failed = failed.into_inner().unwrap_or_else(|e| e.into_inner());
     failed.sort_by_key(|(i, _, _)| *i);
-    (bytes.into_inner(), count.into_inner(), failed.into_iter().map(|(_, p, e)| (p, e)).collect())
+    let failed = failed.into_iter().map(|(_, p, e)| (p, e)).collect();
+    (bytes.into_inner(), count.into_inner(), failed, untried.into_inner())
 }

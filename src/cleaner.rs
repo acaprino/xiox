@@ -257,10 +257,15 @@ pub fn clean(index: usize, found: &Found, tick: &(dyn Fn(Tick) + Sync), cancel: 
 
 /// The files of `found` (and nothing else: they are what the analysis listed
 /// under the category's folders), then the empty folders below each of `roots`.
+/// `cancelled` only when «Annulla» really left some file untried; then the
+/// folders are not touched.
 fn clean_files(found: &Found, roots: &[PathBuf], tick: &(dyn Fn(Tick) + Sync), cancel: &Cancel) -> Cleaned {
-    let (freed, removed, failures) = remove_files_parallel(&found.files, worker_count(), tick, cancel);
+    let (freed, removed, failures, untried) = remove_files_parallel(&found.files, worker_count(), tick, cancel);
     let mut r = Cleaned { freed, removed, failed: failures.len() as u64, failures, ..Default::default() };
-    r.cancelled = cancel.is_cancelled();
+    r.cancelled = untried > 0;
+    if r.cancelled {
+        return r;
+    }
     for dir in roots {
         if !dir.as_os_str().is_empty() && dir.is_dir() {
             r.dirs += remove_empty_dirs(dir, true);
@@ -365,10 +370,28 @@ mod tests {
         let found = super::Found { files: vec![(p.clone(), 1)], bytes: 1, count: 1, skipped_dirs: 0 };
         let cancel = dc_cleaner::Cancel::default();
         cancel.cancel();
-        let c = super::clean_files(&found, &[], &|_| {}, &cancel);
-        assert_eq!((c.removed, c.failed, c.freed), (0, 0, 0));
+        let empty = t.path().join("vuota");
+        std::fs::create_dir(&empty).unwrap();
+        let c = super::clean_files(&found, &[t.path().to_path_buf()], &|_| {}, &cancel);
+        assert_eq!((c.removed, c.failed, c.freed, c.dirs), (0, 0, 0, 0));
         assert!(c.cancelled);
         assert!(p.exists());
+        assert!(empty.is_dir(), "annullata: le cartelle vuote non si toccano");
+    }
+
+    /// «Annulla» arrivato quando non restava nessun file da provare: la categoria non è
+    /// annullata e le cartelle vuote si tolgono come sempre.
+    #[test]
+    fn cancel_with_nothing_left_is_not_a_cancelled_category() {
+        let t = tempfile::tempdir().unwrap();
+        let empty = t.path().join("vuota");
+        std::fs::create_dir(&empty).unwrap();
+        let cancel = dc_cleaner::Cancel::default();
+        cancel.cancel();
+        let c = super::clean_files(&super::Found::default(), &[t.path().to_path_buf()], &|_| {}, &cancel);
+        assert!(!c.cancelled);
+        assert_eq!(c.dirs, 1);
+        assert!(!empty.exists());
     }
 
     #[test]

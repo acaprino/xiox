@@ -512,12 +512,30 @@ fn loose_files_go_folders_and_missing_files_do_not() {
     fs::create_dir_all(&dir).unwrap();
     files.push((dir.clone(), 5));
     files.push((tmp.path().join("missing.tmp"), 7));
-    let (bytes, n, failed) = remove_files_parallel(&files, 4, &|_| {}, &Cancel::default());
-    assert_eq!((bytes, n), (1000, 100));
+    let (bytes, n, failed, untried) = remove_files_parallel(&files, 4, &|_| {}, &Cancel::default());
+    assert_eq!((bytes, n, untried), (1000, 100, 0));
     assert_eq!(failed.len(), 1, "{failed:?}");
     assert_eq!(failed[0].0, dir);
     assert!(dir.exists());
     assert!(files[..100].iter().all(|(p, _)| !p.exists()));
+}
+
+/// «Annulla» before the start: no file is tried and all of them are reported as not attempted.
+#[test]
+fn remove_files_parallel_cancelled_tries_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let files: Vec<(PathBuf, u64)> = (0..20)
+        .map(|i| {
+            let p = tmp.path().join(format!("f{i}.tmp"));
+            write(&p, 10);
+            (p, 10)
+        })
+        .collect();
+    let cancel = Cancel::default();
+    cancel.cancel();
+    let (bytes, n, failed, untried) = remove_files_parallel(&files, 4, &|_| {}, &cancel);
+    assert_eq!((bytes, n, failed.len(), untried), (0, 0, 0, 20));
+    assert!(files.iter().all(|(p, _)| p.exists()));
 }
 
 #[test]
@@ -537,7 +555,8 @@ fn remove_files_parallel_leaves_the_three_locked_files() {
         .iter()
         .map(|&i| fs::OpenOptions::new().read(true).share_mode(0).open(&files[i].0).unwrap())
         .collect();
-    let (bytes, n, failed) = remove_files_parallel(&files, 8, &|_| {}, &Cancel::default());
+    let (bytes, n, failed, untried) = remove_files_parallel(&files, 8, &|_| {}, &Cancel::default());
+    assert_eq!(untried, 0);
     assert_eq!(n, 997);
     assert_eq!(bytes, 997 * 50);
     let failed_paths: Vec<_> = failed.iter().map(|(p, _)| p.clone()).collect();
