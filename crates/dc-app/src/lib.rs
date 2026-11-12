@@ -86,6 +86,7 @@ fn default_settings_for(home: Option<&Path>) -> Settings {
         scan_roots: false,
         inactive_days: DEFAULT_INACTIVE_DAYS,
         remove_mode: RemoveMode::Recycle,
+        all_drives: true,
     }
 }
 
@@ -228,7 +229,8 @@ pub struct ScanRoots {
     /// What the session working directories gave (roots and skipped folders with the reason).
     pub from_sessions: dc_scanner::SessionRoots,
     /// Folders holding many projects, for the engine's session matching
-    /// (`EngineConfig::container_roots`): the home and every folder in `settings.roots`.
+    /// (`EngineConfig::container_roots`): the home, every folder in `settings.roots` and the
+    /// drive roots searched whole.
     pub container_roots: Vec<PathBuf>,
 }
 
@@ -243,8 +245,11 @@ fn key_within(child: &str, parent: &str) -> bool {
 
 /// Projects come from the agents' sessions (`settings.session_projects`, see
 /// `dc_scanner::project_roots_from_sessions`), plus the agents' managed worktrees that exist,
-/// plus the folders in `settings.roots` when `settings.scan_roots` is on.
-pub fn plan_roots(settings: &Settings, sessions: &[Preloaded], home: Option<&Path>) -> ScanRoots {
+/// plus the folders in `settings.roots` when `settings.scan_roots` is on, plus `drives`: drive
+/// roots (`X:\`) searched whole. A root inside another one is dropped, so every folder on a
+/// drive in `drives` is searched as part of that drive.
+pub fn plan_roots(settings: &Settings, sessions: &[Preloaded], home: Option<&Path>, drives: &[PathBuf]) -> ScanRoots {
+    let drives: Vec<PathBuf> = drives.iter().map(|d| normalize_path(d)).filter(|d| d.is_dir()).collect();
     let user: Vec<PathBuf> = if settings.scan_roots {
         settings.roots.iter().map(|r| normalize_path(r)).filter(|r| r.is_dir()).collect()
     } else {
@@ -259,8 +264,12 @@ pub fn plan_roots(settings: &Settings, sessions: &[Preloaded], home: Option<&Pat
     let worktrees = sessions.iter().flat_map(|s| s.worktrees.iter()).filter(|p| p.is_dir());
 
     // Outer roots first (shorter key), then drop every root inside one already kept.
-    let mut all: Vec<PathBuf> =
-        user.into_iter().chain(from_sessions.roots.iter().chain(worktrees).map(|p| normalize_path(p))).collect();
+    let mut all: Vec<PathBuf> = drives
+        .iter()
+        .cloned()
+        .chain(user)
+        .chain(from_sessions.roots.iter().chain(worktrees).map(|p| normalize_path(p)))
+        .collect();
     all.sort_by_key(|p| path_key(p).len());
     let mut kept: Vec<(String, PathBuf)> = Vec::new();
     for p in all {
@@ -273,6 +282,7 @@ pub fn plan_roots(settings: &Settings, sessions: &[Preloaded], home: Option<&Pat
 
     let mut container_roots: Vec<PathBuf> = home.map(normalize_path).into_iter().collect();
     container_roots.extend(settings.roots.iter().map(|r| normalize_path(r)));
+    container_roots.extend(drives);
     ScanRoots { roots: kept.into_iter().map(|(_, p)| p).collect(), from_sessions, container_roots }
 }
 
@@ -342,6 +352,10 @@ pub fn split_reports(reports: Vec<ProjectReport>) -> (Vec<ProjectReport>, Vec<Pr
 
 /// The developer scan. `step(text, fraction)` reports progress in Italian.
 ///
+/// `settings.all_drives`: every fixed drive is searched whole ([`dc_disktree::fixed_drives`]):
+/// the NTFS ones through their MFT, the others with the walker. An NTFS drive whose MFT cannot
+/// be read (or any NTFS drive without `admin`) falls back to the roots of [`plan_roots`] on it.
+///
 /// `admin`: the MFT index (`dc-disktree`) is built for ALL the roots and handed to the scanner,
 /// which takes the artifact sizes from it (roots it does not cover are walked). Without `admin`
 /// there is no index and the `dc-scanner` walker does everything. The four steps are always
@@ -356,7 +370,34 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     step("Lettura delle sessioni…", 0.05);
     let (sessions, mut warnings) = load_sessions(cache.clone());
     let home = home_dir();
-    let plan = plan_roots(settings, &sessions, home.as_deref());
+    let fixed = if settings.all_drives { dc_disktree::fixed_drives() } else { Vec::new() };
+    // The roots without the drives: on an NTFS drive whose MFT cannot be read, they are what
+    // gets searched.
+    let base = plan_roots(settings, &sessions, home.as_deref(), &[]);
+
+    // Always reported, so the UI shows the same four steps; without admin nothing is read here.
+    step("Lettura veloce del disco…", 0.25);
+    let drive_keys: Vec<String> = fixed.iter().map(|d| path_key(&d.root())).collect();
+    let mut index_roots: Vec<PathBuf> = fixed.iter().filter(|d| d.ntfs).map(|d| d.root()).collect();
+    // A root on a fixed drive is read with its drive (NTFS) or walked with it (not NTFS).
+    index_roots.extend(
+        base.roots.iter().filter(|r| !drive_keys.iter().any(|k| key_within(&path_key(r), k))).cloned(),
+    );
+    let index = if admin && !index_roots.is_empty() {
+        guarded_index(
+            || dc_disktree::build_for_roots(&index_roots, true, &dc_disktree::Progress::default()),
+            &mut warnings,
+        )
+    } else {
+        None
+    };
+    // Searched whole: the NTFS drives the index covers, and every drive that is not NTFS.
+    let drives: Vec<PathBuf> = fixed
+        .iter()
+        .filter(|d| !d.ntfs || index.as_ref().is_some_and(|ix| ix.size_of(&d.root()).is_some()))
+        .map(|d| d.root())
+        .collect();
+    let plan = if drives.is_empty() { base } else { plan_roots(settings, &sessions, home.as_deref(), &drives) };
     if plan.roots.is_empty() {
         warnings.push(if settings.session_projects {
             "Nessun progetto trovato nelle sessioni degli agenti: aggiungi delle cartelle da analizzare nelle impostazioni.".into()
@@ -364,17 +405,6 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
             "Nessuna cartella da analizzare.".into()
         });
     }
-
-    // Always reported, so the UI shows the same four steps; without admin nothing is read here.
-    step("Lettura veloce del disco…", 0.25);
-    let index = if admin && !plan.roots.is_empty() {
-        guarded_index(
-            || dc_disktree::build_for_roots(&plan.roots, true, &dc_disktree::Progress::default()),
-            &mut warnings,
-        )
-    } else {
-        None
-    };
     let backend = index.as_ref().map_or("walker", |i| i.backend_name()).to_string();
 
     step("Analisi dei progetti…", 0.45);

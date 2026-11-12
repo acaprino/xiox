@@ -309,7 +309,7 @@ fn recycle_mode_moves_tree_to_bin() {
 fn catalog_items_are_checked_against_the_catalog() {
     let tmp = TempDir::new().unwrap();
     let p = tmp.path().join("proj");
-    for d in [".nx/cache", "cypress/videos", "src", "videos", "cache", "target"] {
+    for d in [".nx/cache", "cypress/videos", "src", "videos", "cache", "node_modules"] {
         fs::create_dir_all(p.join(d)).unwrap();
     }
     for ok in [p.join(".nx").join("cache"), p.join("cypress").join("videos")] {
@@ -319,7 +319,7 @@ fn catalog_items_are_checked_against_the_catalog() {
         (p.join("src"), "never a removable"),
         (p.join("videos"), "never a removable"), // denied alone: only `cypress/videos` is an entry
         (p.join("cache"), "does not look like"),
-        (p.join("target"), "does not look like"), // not a catalog entry
+        (p.join("node_modules"), "does not look like"), // not a catalog entry
     ];
     for (path, needle) in refused {
         let r = guard::validate(&item(&path, ArtifactKind::Catalog)).err().unwrap_or_default();
@@ -328,4 +328,30 @@ fn catalog_items_are_checked_against_the_catalog() {
     // the DENY_NAMES exception is for catalog items only
     let r = guard::validate(&item(&p.join("cypress").join("videos"), ArtifactKind::Other)).err().unwrap_or_default();
     assert!(r.contains("never a removable"), "{r}");
+}
+
+/// Every folder of the production catalog passes the guard as a `Catalog` item (prefix and
+/// suffix entries with a sample name, Meson with its `meson-private`). Needs a drive letter:
+/// Windows only.
+#[test]
+#[cfg_attr(not(windows), ignore = "the guard needs a drive-letter path")]
+fn guard_accepts_every_catalog_dir() {
+    let tmp = TempDir::new().unwrap();
+    let p = tmp.path().join("proj");
+    let dirs = dc_scanner::catalog_dirs();
+    assert!(dirs.len() > 100, "{}", dirs.len());
+    for d in dirs {
+        let rel = if d == "*" { "builddir".to_string() } else { d.replace("*.", "x.").replace('*', "1") };
+        let path = rel.split('/').fold(p.clone(), |acc, seg| acc.join(seg));
+        fs::create_dir_all(&path).unwrap();
+        if d == "*" {
+            fs::create_dir_all(path.join("meson-private")).unwrap();
+            fs::write(path.join("build.ninja"), b"x").unwrap();
+        }
+        let r = guard::validate(&item(&path, ArtifactKind::Catalog));
+        assert!(r.is_ok(), "{d}: {:?}", r.err());
+    }
+    // a Meson-looking name without meson-private is refused
+    fs::create_dir_all(p.join("other")).unwrap();
+    assert!(guard::validate(&item(&p.join("other"), ArtifactKind::Catalog)).is_err());
 }

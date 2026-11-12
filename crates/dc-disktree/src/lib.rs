@@ -7,7 +7,7 @@
 
 mod mft;
 
-use dc_model::{DirIndex, IndexedDir, SizeInfo, normalize_path, path_key};
+use dc_model::{DirIndex, IndexedDir, SizeInfo, name_matches, normalize_path, path_key};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -271,15 +271,24 @@ impl DirIndex for DiskIndex {
         (!self.entries[i as usize].reparse).then(|| self.size_info(i))
     }
 
-    /// Folders whose name equals one of `names` (case-insensitive), at or below one of
-    /// `roots`. Reparse-point folders (links, junctions) are skipped. Results in index order.
+    /// Folders whose name matches one of `names` (case-insensitive; a `prefix*` or `*suffix`
+    /// pattern goes through every distinct folder name once), at or below one of `roots`.
+    /// Reparse-point folders (links, junctions) are skipped. Results in index order.
     fn find_dirs_named(&self, names: &[&str], roots: &[PathBuf]) -> Vec<IndexedDir> {
         let root_keys: Vec<String> = roots.iter().map(|r| path_key(r)).collect();
         let mut seen: HashSet<u32> = HashSet::new();
         let mut hits: Vec<u32> = Vec::new();
-        for n in names {
+        let (patterns, plain): (Vec<&str>, Vec<&str>) = names.iter().partition(|n| n.contains('*'));
+        for n in plain {
             if let Some(v) = self.by_name.get(n.to_lowercase().as_str()) {
                 hits.extend(v.iter().copied().filter(|i| seen.insert(*i)));
+            }
+        }
+        if !patterns.is_empty() {
+            for (name, v) in &self.by_name {
+                if patterns.iter().any(|p| name_matches(p, name)) {
+                    hits.extend(v.iter().copied().filter(|i| seen.insert(*i)));
+                }
             }
         }
         hits.sort_unstable();
@@ -306,6 +315,89 @@ fn is_at_or_under(key: &str, root: &str) -> bool {
         Some(rest) => root.ends_with('\\') || rest.starts_with('\\'),
         None => false,
     }
+}
+
+/// `GetDriveTypeW` values (Win32 `DRIVE_REMOVABLE` = 2, `DRIVE_FIXED` = 3, in windows-sys
+/// under `Win32_System_WindowsProgramming`), here so that [`classify`] is the same on every
+/// platform.
+pub const DRIVE_REMOVABLE: u32 = 2;
+pub const DRIVE_FIXED: u32 = 3;
+
+/// A fixed (internal) drive, searched whole for projects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FixedDrive {
+    /// Upper case.
+    pub letter: char,
+    /// NTFS: read through its MFT; anything else (ReFS, exFAT, FAT32) is walked.
+    pub ntfs: bool,
+}
+
+impl FixedDrive {
+    /// `X:\`.
+    pub fn root(&self) -> PathBuf {
+        PathBuf::from(format!("{}:\\", self.letter))
+    }
+}
+
+/// A drive of type `drive_type` (`GetDriveTypeW`) with file system `fs_name`
+/// (`GetVolumeInformationW`): `Some` only for a fixed drive. Removable, network, optical and
+/// RAM drives are never searched whole.
+#[cfg_attr(not(windows), allow(dead_code))] // only `fixed_drives` on Windows calls it
+fn classify(letter: char, drive_type: u32, fs_name: &str) -> Option<FixedDrive> {
+    let letter = letter.to_ascii_uppercase();
+    (letter.is_ascii_alphabetic() && drive_type == DRIVE_FIXED)
+        .then(|| FixedDrive { letter, ntfs: fs_name.trim().eq_ignore_ascii_case("NTFS") })
+}
+
+/// The fixed drives of this PC, in letter order. A drive whose file system cannot be read
+/// counts as not NTFS (it is walked). Empty outside Windows.
+#[cfg(windows)]
+pub fn fixed_drives() -> Vec<FixedDrive> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
+    // SAFETY: no arguments.
+    let mask = unsafe { GetLogicalDrives() };
+    let mut out = Vec::new();
+    for i in 0..26u32 {
+        if mask & (1 << i) == 0 {
+            continue;
+        }
+        let letter = (b'A' + i as u8) as char;
+        let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain([0]).collect();
+        // SAFETY: `root` is a NUL-terminated wide string that outlives the call.
+        let ty = unsafe { GetDriveTypeW(root.as_ptr()) };
+        if ty != DRIVE_FIXED {
+            continue;
+        }
+        let mut fs = [0u16; 64];
+        // SAFETY: `root` is NUL-terminated; `fs` is a writable buffer of the length passed;
+        // the other out-pointers are null, which the API allows.
+        let ok = unsafe {
+            GetVolumeInformationW(
+                root.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                fs.as_mut_ptr(),
+                fs.len() as u32,
+            )
+        };
+        let name = if ok != 0 {
+            let n = fs.iter().position(|&c| c == 0).unwrap_or(fs.len());
+            String::from_utf16_lossy(&fs[..n])
+        } else {
+            String::new()
+        };
+        out.extend(classify(letter, ty, &name));
+    }
+    out
+}
+
+/// The fixed drives of this PC: none outside Windows.
+#[cfg(not(windows))]
+pub fn fixed_drives() -> Vec<FixedDrive> {
+    Vec::new()
 }
 
 /// Index of the whole volume `letter` (e.g. `'C'`), read from its MFT. Needs administrator
@@ -450,6 +542,41 @@ mod tests {
         assert_eq!((t.logical_bytes, t.allocated_bytes, t.file_count), (u64::MAX, Some(u64::MAX), 3));
         let root = ix.size_of(Path::new(r"C:\")).unwrap();
         assert_eq!((root.logical_bytes, root.allocated_bytes, root.file_count), (u64::MAX, Some(u64::MAX), 5));
+    }
+
+    #[test]
+    fn classify_keeps_fixed_drives_only() {
+        assert_eq!(classify('C', DRIVE_FIXED, "NTFS"), Some(FixedDrive { letter: 'C', ntfs: true }));
+        assert_eq!(classify('E', DRIVE_REMOVABLE, "FAT32"), None);
+        assert_eq!(classify('E', DRIVE_REMOVABLE, "NTFS"), None);
+        assert_eq!(classify('D', DRIVE_FIXED, "ReFS"), Some(FixedDrive { letter: 'D', ntfs: false }));
+        assert_eq!(classify('f', DRIVE_FIXED, "ntfs"), Some(FixedDrive { letter: 'F', ntfs: true }));
+        assert_eq!(classify('G', DRIVE_FIXED, ""), Some(FixedDrive { letter: 'G', ntfs: false }));
+        assert_eq!(classify('Z', 4, "NTFS"), None, "network drive");
+        assert_eq!(FixedDrive { letter: 'C', ntfs: true }.root(), PathBuf::from(r"C:\"));
+    }
+
+    #[test]
+    fn finds_dirs_by_prefix_and_suffix_pattern() {
+        let mut n = nodes();
+        n.push(dir(2, "checkpoint-500")); // 8
+        n.push(dir(2, "Checkpoint-")); // 9: nothing after the prefix
+        n.push(dir(2, "pkg.egg-info")); // 10
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let mut hits: Vec<PathBuf> = ix
+            .find_dirs_named(&["CHECKPOINT-*", "*.egg-info", "target"], &[PathBuf::from(r"C:\Projects")])
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hits.sort();
+        assert_eq!(
+            hits,
+            vec![
+                PathBuf::from(r"C:\Projects\app\checkpoint-500"),
+                PathBuf::from(r"C:\Projects\app\pkg.egg-info"),
+                PathBuf::from(r"C:\Projects\app\target"),
+            ]
+        );
     }
 
     #[test]

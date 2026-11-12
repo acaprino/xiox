@@ -4,8 +4,9 @@
 //!   [`markers`]), records the artifact dirs it implies, and accumulates the newest source
 //!   mtime of the nearest enclosing project. Unlike kondo it never stops at the first project:
 //!   nested and mixed projects each get their own `ProjectCandidate`.
-//! * Index mode: artifact dirs come from `DirIndex::find_dirs_named`, the marker/identity is
-//!   validated on disk and sizes are taken from the index (no size walk).
+//! * Index mode: artifact dirs come from `DirIndex::find_dirs_named` (names, prefix / suffix
+//!   patterns and `meson-private`), the marker/identity is validated on disk and sizes are
+//!   taken from the index (no size walk).
 //!
 //! Links, junctions and other reparse points are never followed. Hardlinks are not
 //! deduplicated in `allocated_bytes` (needs a file handle per file); allocated size is the
@@ -142,7 +143,7 @@ impl<'a> Ctx<'a> {
         if !self.opts.include_dot_dirs && name.starts_with('.') {
             return false;
         }
-        if is_system_dir(name, parent_is_root, || path_key(path)) || self.is_ignored(path) {
+        if is_system_dir(name, parent_is_root) || self.is_ignored(path) {
             return false;
         }
         // Generated output we can positively identify (a venv, a cargo target, ...) holds
@@ -154,12 +155,16 @@ impl<'a> Ctx<'a> {
     }
 
     /// Record the artifacts of the project at `root` (ignored ones are dropped, but still never
-    /// entered) and return its owner.
+    /// entered) and return its owner. An artifact inside another one of the same project
+    /// (`vendor/bundle` inside `vendor`) is dropped: its bytes are already counted, and it would
+    /// be gone once the outer one is removed.
     fn add_project(&self, root: PathBuf, det: &Detected, arts: Vec<Art>) -> Arc<Owner> {
-        let o = Owner::new(root, det, arts.iter().map(|a| path_key(&a.path)).collect());
+        let keys: Vec<String> = arts.iter().map(|a| path_key(&a.path)).collect();
+        let o = Owner::new(root, det, keys.clone());
         let mut found = self.found.lock().unwrap();
-        for a in arts {
-            if self.is_ignored(&a.path) {
+        for (i, a) in arts.into_iter().enumerate() {
+            let nested = keys.iter().enumerate().any(|(j, k)| j != i && *k != keys[i] && inside(k, &keys[i]));
+            if nested || self.is_ignored(&a.path) {
                 continue;
             }
             found.push(Found {
@@ -365,20 +370,6 @@ fn discover_indexed(ctx: &Ctx, ix: &dyn DirIndex, roots: &[PathBuf]) {
                 arts.push(Art::new(path, r, e.size.clone()));
             }
         }
-        // Prefix and Meson entries have no searchable name: try the direct children listed above.
-        if det.has_patterns() {
-            for sd in &listing.dirs {
-                let k = path_key(&sd.path);
-                if arts.iter().any(|a| path_key(&a.path) == k) {
-                    continue;
-                }
-                let Some(r) = det.resolve(&sd.name, |id| identity_ok(id, &sd.path)) else { continue };
-                if r.0.is_plain() {
-                    continue; // plain names come from the index
-                }
-                arts.push(Art::new(sd.path.clone(), r, ix.size_of(&sd.path)));
-            }
-        }
         if arts.is_empty() {
             return;
         }
@@ -502,8 +493,11 @@ impl DefaultScanner {
     }
 }
 
+pub use markers::catalog_dirs;
+
 /// Do the last segments of `path` name a catalog entry (`ArtifactKind::Catalog`)? A prefix
-/// entry (`checkpoint-*`) matches by prefix; `*` (Meson) needs `path/meson-private` on disk.
+/// entry (`checkpoint-*`) matches by prefix, a suffix entry (`*.egg-info`) by suffix; `*` (Meson)
+/// needs `path/meson-private` on disk.
 pub fn catalog_dir_plausible(path: &Path) -> bool {
     catalog_dir_match(path).is_some()
 }

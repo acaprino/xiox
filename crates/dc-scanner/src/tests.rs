@@ -144,30 +144,116 @@ fn several_markers_one_root_merge() {
         assert_eq!(a.class, want, "{:?}", a.path);
         assert_eq!(a.id, path_key(&a.path));
         assert_eq!(a.level, a.class.base_level());
-        assert!(!a.ambiguous && !a.preselected && a.note.is_empty());
+        assert!(!a.ambiguous && !a.preselected);
+        // the catalog hint of a Dependency goes into `note`
+        assert_eq!(a.note.is_empty(), a.class != Class::Dependency, "{:?}: {}", a.path, a.note);
     }
 }
 
 #[test]
-fn marker_table_classes() {
+fn marker_table_shape() {
+    let legacy = |k: ArtifactKind| {
+        matches!(
+            k,
+            ArtifactKind::RustTarget
+                | ArtifactKind::NodeModules
+                | ArtifactKind::PythonVenv
+                | ArtifactKind::PythonCache
+                | ArtifactKind::Gradle
+                | ArtifactKind::Maven
+                | ArtifactKind::DotNet
+                | ArtifactKind::CMake
+        )
+    };
     let mut seen = 0;
     for m in markers::MARKERS {
-        for s in m.artifacts {
-            let want = match s.dir {
-                "target" | "build" | "bin" | "obj" => Class::Build,
-                "node_modules" | ".venv" | "venv" => Class::Dependency,
-                "__pycache__" | ".pytest_cache" | ".mypy_cache" | ".ruff_cache" | ".gradle" => Class::Cache,
-                ".nx/cache" | ".nx/workspace-data" => Class::Cache,
-                "cypress/videos" | "cypress/screenshots" => Class::Log,
-                d => panic!("no class expected for {d}"),
-            };
-            assert_eq!(s.class, want, "{} ({})", s.dir, m.ecosystem);
-            assert_eq!(s.kind == ArtifactKind::Catalog, s.dir.contains('/'), "{}", s.dir);
-            assert!(!s.ambiguous && s.hint.is_empty(), "{}", s.dir);
+        for (i, s) in m.artifacts.iter().chain(markers::COMMON).enumerate() {
+            assert!(s.kind == ArtifactKind::Catalog || legacy(s.kind), "{}", s.dir);
+            assert!(s.dir.split('/').count() <= 3, "{}", s.dir);
+            assert!(!s.label.is_empty() && !s.label.starts_with("AGG"), "{}", s.dir);
+            assert_eq!(s.hint.is_empty(), s.class != Class::Dependency, "hint of {} ({})", s.dir, m.ecosystem);
+            assert_eq!(s.identity == Identity::MesonBuild, s.dir == "*", "{}", s.dir);
+            let dup = m.artifacts.iter().chain(markers::COMMON).skip(i + 1).any(|o| o.dir.eq_ignore_ascii_case(s.dir));
+            assert!(!dup, "{} twice for {}", s.dir, m.ecosystem);
             seen += 1;
         }
     }
-    assert!(seen >= 15, "{seen}");
+    assert!(seen >= 150, "{seen}");
+}
+
+/// The † names of the spec table, and nothing else.
+#[test]
+fn ambiguous_names_are_the_dagger_ones() {
+    let mut amb: Vec<&str> = markers::MARKERS
+        .iter()
+        .flat_map(|m| m.artifacts.iter())
+        .chain(markers::COMMON)
+        .filter(|s| s.ambiguous)
+        .map(|s| s.dir)
+        .collect();
+    amb.sort();
+    amb.dedup();
+    assert_eq!(amb, vec!["artifacts", "build", "dist", "out", "public", "site", "vendor", "vendor/bundle"]);
+}
+
+/// The Dependency hints of the plan, word for word.
+#[test]
+fn dependency_hints() {
+    let want: &[(&str, &str, &str)] = &[
+        ("node", "node_modules", "Si riscarica con npm install (o pnpm, yarn, bun install)"),
+        ("python", ".venv", "Si ricrea con python -m venv e l'installazione dei requisiti"),
+        ("python", "venv", "Si ricrea con python -m venv e l'installazione dei requisiti"),
+        ("python", ".tox", "Si ricrea al prossimo tox/nox"),
+        ("python", ".nox", "Si ricrea al prossimo tox/nox"),
+        ("python", "__pypackages__", "Si riscarica con pdm install"),
+        ("terraform", ".terraform", "Si riscarica con terraform init"),
+        ("go", "vendor", "Si ricrea con go mod vendor"),
+        ("php", "vendor", "Si riscarica con composer install"),
+        ("ruby", "vendor/bundle", "Si riscarica con bundle install"),
+        ("elixir", "deps", "Si riscarica con mix deps.get"),
+        ("ocaml", "_opam", "Si ricrea con opam install . --deps-only"),
+        ("vcpkg", "vcpkg_installed", "Si ricrea con vcpkg install"),
+        ("platformio", ".pio", "Si riscarica alla prossima build PlatformIO"),
+        ("swift", ".build", "Si ricrea con swift build"),
+        ("dbt", "dbt_packages", "Si riscarica con dbt deps"),
+    ];
+    let mut deps = 0;
+    for m in markers::MARKERS {
+        for s in m.artifacts.iter().filter(|s| s.class == Class::Dependency) {
+            let w = want.iter().find(|(e, d, _)| *e == m.ecosystem && *d == s.dir);
+            assert_eq!(w.map(|w| w.2), Some(s.hint), "{} ({})", s.dir, m.ecosystem);
+            deps += 1;
+        }
+    }
+    assert!(deps >= want.len());
+    for (e, d, _) in want {
+        assert!(markers::MARKERS.iter().any(|m| m.ecosystem == *e && m.artifacts.iter().any(|s| s.dir == *d)), "{d} ({e})");
+    }
+}
+
+/// The Attenzione entries of the spec are Personal, with the markers of the plan.
+#[test]
+fn personal_entries() {
+    let common: Vec<&str> = markers::COMMON.iter().map(|s| s.dir).collect();
+    assert_eq!(common, vec![".idea", ".vs", ".ipynb_checkpoints"]);
+    assert!(markers::COMMON.iter().all(|s| s.class == Class::Personal));
+    let want: &[(&str, &[&str])] = &[
+        ("python", &[".hypothesis", "wandb", "mlruns", "runs", "checkpoint-*"]),
+        ("r", &[".Rproj.user"]),
+        ("yarn", &[".yarn/cache"]),
+        ("unreal", &["Saved", "Binaries"]),
+        ("unity", &["UserSettings"]),
+        ("dvc", &[".dvc/cache"]),
+        ("laravel", &["bootstrap/cache", "storage/framework/cache", "storage/framework/views"]),
+        ("symfony", &["var/cache"]),
+    ];
+    for m in markers::MARKERS {
+        let mut got: Vec<&str> = m.artifacts.iter().filter(|s| s.class == Class::Personal).map(|s| s.dir).collect();
+        let mut exp: Vec<&str> = want.iter().find(|(e, _)| *e == m.ecosystem).map(|w| w.1.to_vec()).unwrap_or_default();
+        got.sort();
+        exp.sort();
+        assert_eq!(got, exp, "{}", m.ecosystem);
+    }
 }
 
 #[test]
@@ -417,7 +503,7 @@ impl DirIndex for FakeIndex {
             .iter()
             .filter(|d| {
                 let n = d.path.file_name().unwrap().to_string_lossy();
-                names.iter().any(|x| x.eq_ignore_ascii_case(&n))
+                names.iter().any(|x| dc_model::name_matches(x, &n))
                     && roots.iter().any(|r| path_key(&d.path).starts_with(&path_key(r)))
             })
             .cloned()
@@ -695,10 +781,11 @@ fn catalog_index() {
 #[test]
 fn catalog_index_search_names() {
     let names = T_TABLE.index_names();
-    for n in ["cache", "Library", "storybook-static", "meson-private", "__pycache__", "build", "_build", "bundle"] {
+    for n in ["cache", "Library", "storybook-static", "meson-private", "checkpoint-*", "__pycache__", "build", "_build", "bundle"] {
         assert!(names.iter().any(|x| x.eq_ignore_ascii_case(n)), "{n} missing from {names:?}");
     }
-    assert!(!names.iter().any(|x| x.contains('*') || x.contains('/')), "{names:?}");
+    // sub-paths become their last segment; Meson's lone `*` is searched as `meson-private`
+    assert!(!names.iter().any(|x| x.contains('/') || *x == "*"), "{names:?}");
 }
 
 #[test]
@@ -784,5 +871,164 @@ fn real_table_catalog_dirs() {
     assert!(catalog_dir_plausible(&p.join("cypress").join("videos")));
     assert!(!catalog_dir_plausible(&p.join("videos")));
     assert!(!catalog_dir_plausible(&p.join("src")));
-    assert!(!catalog_dir_plausible(&p.join("target")), "Rust/Maven target are not catalog entries");
+    assert!(!catalog_dir_plausible(&p.join("node_modules")), "node_modules is not a catalog entry");
+    assert!(catalog_dir_plausible(&p.join("pkg.egg-info")));
+    assert!(catalog_dir_plausible(&p.join("checkpoint-12")));
+    assert!(!catalog_dir_plausible(&p.join("checkpoint-")));
+    // every catalog dir of the table is accepted, as the cleaner's guard asks
+    for d in catalog_dirs() {
+        let rel = d.replace("*.", "x.").replace('*', "1");
+        let path = markers::join_rel(p, &rel);
+        if d == "*" {
+            continue; // Meson: needs meson-private on disk, see catalog_dir_match_in_test_table
+        }
+        let got = catalog_dir_match(&path).unwrap_or_else(|| panic!("{rel} refused"));
+        assert!(got.eq_ignore_ascii_case(d), "{rel}: {got}");
+    }
+}
+
+// ───────────────────────────── the production catalog ─────────────────────────────
+
+fn make_marker(dir: &Path, p: &Pattern) {
+    match p {
+        Pattern::Exact(n) => write(dir.join(n), 10),
+        Pattern::Suffix(s) => write(dir.join(format!("proj{s}")), 10),
+        Pattern::Dir(n) => write(dir.join(n).join("main.js"), 10),
+        Pattern::Sub(rel) => write(markers::join_rel(dir, rel), 10),
+        Pattern::All(ps) => ps.iter().for_each(|p| make_marker(dir, p)),
+    }
+}
+
+/// A folder name the entry `dir` claims (`checkpoint-*` -> `checkpoint-1`, `*.egg-info` ->
+/// `x.egg-info`, `*` -> a Meson build dir).
+fn sample_rel(dir: &str) -> String {
+    if dir == "*" { "builddir".into() } else { dir.replace("*.", "x.").replace('*', "1") }
+}
+
+fn make_artifact(project: &Path, s: &ArtifactSpec) -> PathBuf {
+    let a = markers::join_rel(project, &sample_rel(s.dir));
+    match s.identity {
+        Identity::RustTarget => write(a.join("CACHEDIR.TAG"), 10),
+        Identity::NodeModules => write(a.join(".package-lock.json"), 10),
+        Identity::PythonVenv => write(a.join("pyvenv.cfg"), 10),
+        Identity::MesonBuild => {
+            write(a.join("meson-private/coredata.dat"), 10);
+            write(a.join("build.ninja"), 10);
+        }
+        Identity::ParentMarker => {}
+    }
+    write(a.join("payload.bin"), 100);
+    a
+}
+
+/// Every folder below `root`, as an MFT index would list it.
+fn index_everything(root: &Path) -> FakeIndex {
+    let mut dirs = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).unwrap().flatten() {
+            if e.file_type().unwrap().is_dir() {
+                dirs.push(IndexedDir { path: e.path(), size: gib(1) });
+                stack.push(e.path());
+            }
+        }
+    }
+    FakeIndex { dirs }
+}
+
+/// One project per (marker, entry) of `MARKERS`, plus the entries of `COMMON`: the scan finds
+/// the folder with the entry's label, class and † flag, verified, in both modes.
+#[test]
+fn every_catalog_entry_is_found() {
+    let t = tempfile::tempdir().unwrap();
+    let mut cases: Vec<(PathBuf, &'static ArtifactSpec, &'static str)> = Vec::new();
+    let mut add = |i: usize, j: usize, p: &Pattern, s: &'static ArtifactSpec, eco: &'static str| {
+        let project = t.path().join(format!("m{i}_a{j}"));
+        make_marker(&project, p);
+        cases.push((make_artifact(&project, s), s, eco));
+    };
+    for (i, m) in markers::MARKERS.iter().enumerate() {
+        for (j, s) in m.artifacts.iter().enumerate() {
+            add(i, j, &m.pattern, s, m.ecosystem);
+        }
+    }
+    for (j, s) in markers::COMMON.iter().enumerate() {
+        add(999, j, &markers::MARKERS[0].pattern, s, "common");
+    }
+    let ix = index_everything(t.path());
+    for (mode, r) in [("walker", scan(t.path(), &opts())), ("index", DefaultScanner.scan(&[t.path().to_path_buf()], &opts(), Some(&ix)))] {
+        for (path, s, eco) in &cases {
+            let project = path.ancestors().find(|a| a.parent() == Some(t.path())).unwrap();
+            let c = find(&r, project);
+            let a = c
+                .artifacts
+                .iter()
+                .find(|a| path_key(&a.path) == path_key(path))
+                .unwrap_or_else(|| panic!("{mode}: {} ({eco}) not found in {:?}", s.dir, c.artifacts));
+            assert_eq!(
+                (a.label.as_str(), a.class, a.ambiguous, a.verified, a.kind),
+                (s.label, s.class, s.ambiguous, true, s.kind),
+                "{mode}: {} ({eco})",
+                s.dir
+            );
+            assert_eq!(a.note, s.hint, "{mode}: {}", s.dir);
+        }
+    }
+}
+
+/// Review Focus 2: a `package.json` with `node_modules` under `AppData` or inside another
+/// `node_modules` is not a project.
+#[test]
+fn no_projects_under_appdata_or_inside_node_modules() {
+    let t = tempfile::tempdir().unwrap();
+    let hidden = t.path().join("Users/u/AppData/Roaming/tool");
+    node_project(&hidden);
+    let local = t.path().join("Users/u/appdata/Local/Temp/x");
+    rust_project(&local);
+    let p = t.path().join("Users/u/source/web");
+    node_project(&p);
+    let inner = p.join("node_modules/pkg");
+    write(inner.join("package.json"), 10);
+    write(inner.join("node_modules/.package-lock.json"), 10);
+    write(inner.join("node_modules/z/index.js"), 10);
+    let ix = index_everything(t.path());
+    for r in [scan(t.path(), &opts()), DefaultScanner.scan(&[t.path().to_path_buf()], &opts(), Some(&ix))] {
+        let roots: Vec<String> = r.items.iter().map(|c| path_key(&c.root)).collect();
+        assert_eq!(roots, vec![path_key(&p)]);
+        assert_eq!(r.items[0].artifacts.len(), 1);
+    }
+}
+
+/// M5.2: `vendor` (Composer) and `vendor/bundle` (Bundler) of one project: only the outer one.
+#[test]
+fn nested_artifacts_of_one_project_count_once() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("app");
+    write(p.join("composer.json"), 10);
+    write(p.join("Gemfile"), 10);
+    write(p.join("vendor/autoload.php"), 10);
+    write(p.join("vendor/bundle/ruby/gem.rb"), 100);
+    let ix = index_everything(t.path());
+    for r in [scan(t.path(), &opts()), DefaultScanner.scan(&[t.path().to_path_buf()], &opts(), Some(&ix))] {
+        let c = find(&r, &p);
+        let paths: Vec<String> = c.artifacts.iter().map(|a| path_key(&a.path)).collect();
+        assert_eq!(paths, vec![path_key(&p.join("vendor"))]);
+        assert_eq!(c.artifacts[0].label, "Dipendenze Composer (vendor)");
+    }
+}
+
+/// M5.1: in index mode a project whose only artifact is a prefix entry is found too.
+#[test]
+fn index_finds_a_project_with_only_a_prefix_entry() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("train");
+    write(p.join("pyproject.toml"), 10);
+    write(p.join("checkpoint-7/model.bin"), 100);
+    write(p.join("checkpointless/x"), 10);
+    let ix = index_everything(t.path());
+    let r = tscan(t.path(), Some(&ix));
+    let c = find(&r, &p);
+    assert_eq!(c.artifacts.len(), 1);
+    assert!(c.artifacts[0].path.ends_with("checkpoint-7"));
+    assert_eq!(c.artifacts[0].size, gib(1));
 }

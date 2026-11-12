@@ -257,9 +257,29 @@ pub struct IndexedDir {
 pub trait DirIndex: Send + Sync {
     fn backend_name(&self) -> &'static str;
     fn size_of(&self, dir: &Path) -> Option<SizeInfo>;
-    /// Indexed directories under any of `roots` whose last path component equals one of
-    /// `names` (ASCII case-insensitive).
+    /// Indexed directories under any of `roots` whose last path component matches one of
+    /// `names` ([`name_matches`]: a name, or a pattern with one leading or trailing `*`).
     fn find_dirs_named(&self, names: &[&str], roots: &[PathBuf]) -> Vec<IndexedDir>;
+}
+
+/// Does folder `name` match `pattern`, ASCII case-insensitively? `pattern` is a plain name, a
+/// prefix (`checkpoint-*`) or a suffix (`*.egg-info`); the `*` stands for at least one
+/// character. A lone `*` matches nothing.
+pub fn name_matches(pattern: &str, name: &str) -> bool {
+    let fixed_ok = |fixed: &str, at_start: bool| {
+        name.len() > fixed.len() && {
+            let cut = if at_start { fixed.len() } else { name.len() - fixed.len() };
+            name.is_char_boundary(cut)
+                && (if at_start { &name[..cut] } else { &name[cut..] }).eq_ignore_ascii_case(fixed)
+        }
+    };
+    if let Some(p) = pattern.strip_suffix('*') {
+        return !p.is_empty() && !p.contains('*') && fixed_ok(p, true);
+    }
+    if let Some(s) = pattern.strip_prefix('*') {
+        return !s.is_empty() && !s.contains('*') && fixed_ok(s, false);
+    }
+    name.eq_ignore_ascii_case(pattern)
 }
 
 pub trait ProjectScanner: Send + Sync {
@@ -475,6 +495,10 @@ pub struct Settings {
     pub scan_roots: bool,
     pub inactive_days: u32,
     pub remove_mode: RemoveMode,
+    /// Look for projects on every fixed drive (MFT for NTFS, walker for the others), not only
+    /// in the folders above. Default on; `--only-root` turns it off.
+    #[serde(default = "yes")]
+    pub all_drives: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -503,7 +527,22 @@ mod tests {
         .unwrap();
         assert!(s.session_projects);
         assert!(!s.scan_roots);
+        assert!(s.all_drives, "an old settings file searches every fixed drive");
         assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
+    }
+
+    #[test]
+    fn name_patterns() {
+        assert!(name_matches("target", "TARGET"));
+        assert!(!name_matches("target", "targets"));
+        assert!(name_matches("checkpoint-*", "Checkpoint-500"));
+        assert!(!name_matches("checkpoint-*", "checkpoint-"));
+        assert!(!name_matches("checkpoint-*", "checkpointless"));
+        assert!(name_matches("*.egg-info", "pkg.EGG-INFO"));
+        assert!(!name_matches("*.egg-info", ".egg-info"));
+        assert!(!name_matches("*", "anything"));
+        assert!(!name_matches("*a*", "bab"));
+        assert!(!name_matches("*.egg-info", "è.egg-inf"));
     }
 
     #[test]

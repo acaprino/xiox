@@ -609,6 +609,7 @@ fn settings_walking(roots: Vec<PathBuf>) -> Settings {
         scan_roots: true,
         inactive_days: 14,
         remove_mode: RemoveMode::Recycle,
+        all_drives: false,
     }
 }
 
@@ -618,7 +619,7 @@ fn plan_roots_keeps_only_the_outer_root() {
     let outer = tmp.path().join("outer");
     let inner = outer.join("inner");
     std::fs::create_dir_all(&inner).unwrap();
-    let plan = plan_roots(&settings_walking(vec![inner.clone(), outer.clone()]), &[], None);
+    let plan = plan_roots(&settings_walking(vec![inner.clone(), outer.clone()]), &[], None, &[]);
     assert_eq!(plan.roots, vec![normalize_path(&outer)]);
 }
 
@@ -649,11 +650,52 @@ fn plan_roots_drops_a_session_root_inside_a_walked_folder_and_missing_worktrees(
     }];
     let mut settings = settings_walking(vec![outer.clone()]);
     settings.session_projects = true;
-    let plan = plan_roots(&settings, &sessions, None);
+    let plan = plan_roots(&settings, &sessions, None, &[]);
     assert_eq!(plan.from_sessions.roots, vec![normalize_path(&proj)]);
     let mut want = vec![normalize_path(&outer), normalize_path(&wt)];
     want.sort_by_key(|p| path_key(p));
     assert_eq!(plan.roots, want);
+}
+
+/// A drive searched whole (here a temp folder standing in for `X:\`) swallows the roots on it;
+/// without drives the roots are those of today.
+#[test]
+fn plan_roots_with_a_drive_keeps_only_the_drive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let drive = tmp.path().join("X");
+    let proj = drive.join("p");
+    std::fs::create_dir_all(proj.join(".git")).unwrap();
+    std::fs::write(proj.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+    let sessions = [Preloaded {
+        agent: Agent::Claude,
+        loaded: Loaded {
+            items: vec![SessionRecord {
+                agent: Agent::Claude,
+                session_id: None,
+                project_path: proj.clone(),
+                last_activity_ms: 0,
+                archived: false,
+                live: false,
+            }],
+            warnings: vec![],
+        },
+        worktrees: vec![],
+    }];
+    let mut settings = settings_walking(vec![]);
+    settings.session_projects = true;
+    let plan = plan_roots(&settings, &sessions, None, std::slice::from_ref(&drive));
+    assert_eq!(plan.roots, vec![normalize_path(&drive)]);
+    assert!(plan.container_roots.contains(&normalize_path(&drive)));
+    let plan = plan_roots(&settings, &sessions, None, &[]);
+    assert_eq!(plan.roots, vec![normalize_path(&proj)]);
+    // a drive that does not exist is no root
+    let plan = plan_roots(&settings, &sessions, None, &[tmp.path().join("gone")]);
+    assert_eq!(plan.roots, vec![normalize_path(&proj)]);
+}
+
+#[test]
+fn default_settings_search_every_fixed_drive() {
+    assert!(default_settings_for(None).all_drives);
 }
 
 #[test]

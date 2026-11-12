@@ -35,11 +35,12 @@ fn main() {
         roots: extra,
         inactive_days: DEFAULT_INACTIVE_DAYS,
         remove_mode: RemoveMode::Recycle,
+        all_drives: false,
     };
 
     let (sessions, _) = dc_app::load_sessions(Some(dc_app::cache_dir()));
     let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    let plan = dc_app::plan_roots(&settings, &sessions, home.as_deref());
+    let plan = dc_app::plan_roots(&settings, &sessions, home.as_deref(), &[]);
     let mut by_reason: std::collections::BTreeMap<String, usize> = Default::default();
     for (_, why) in &plan.from_sessions.skipped {
         *by_reason.entry(format!("{why:?}")).or_default() += 1;
