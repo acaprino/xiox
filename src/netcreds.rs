@@ -101,6 +101,7 @@ pub fn items() -> Vec<NativeItem> {
         default_on: false,
         needs_admin: false,
         running: &[],
+        needs_preview: false,
         analyze: real_analyze,
         clean: real_clean,
     }]

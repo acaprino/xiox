@@ -15,6 +15,9 @@ use pc_rules::{Env, Guard};
 /// Note tenute per una voce nel resoconto.
 const MAX_NOTES: usize = 20;
 
+/// Nota di una voce `needs_preview` pulita senza un'analisi prima.
+pub const NO_PREVIEW: &str = "Esegui prima Analisi per vedere le voci da togliere";
+
 /// Ciò che serve a una voce nativa: l'ambiente delle regole (cartelle fidate),
 /// l'annullamento e il `Guard` unico della pulizia (lo usa chi cancella file).
 pub struct NativeCtx<'a> {
@@ -75,6 +78,10 @@ pub struct NativeItem {
     pub needs_admin: bool,
     /// Processi (con o senza `.exe`) che bloccano la voce finché sono attivi.
     pub running: &'static [&'static str],
+    /// Con «Pulizia», `clean` riceve il `NativeFound` dell'ultima «Analisi»
+    /// mostrata all'utente (non un'analisi nuova, mai vista): senza
+    /// anteprima la voce non fa nulla. Per le voci più rischiose (PATH).
+    pub needs_preview: bool,
     pub analyze: fn(&NativeCtx) -> NativeFound,
     pub clean: fn(&NativeCtx, &NativeFound) -> NativeCleaned,
 }
@@ -94,10 +101,14 @@ pub fn all() -> Vec<NativeItem> {
 /// `rules::run_options`: i processi si rileggono prima dell'analisi e prima
 /// della pulizia di ogni voce; una voce bloccata si salta e lo si scrive nel
 /// resoconto; `clean` si chiama solo se l'analisi ha trovato qualcosa.
+/// Per le voci con `needs_preview`, con «Pulizia» non si rifà l'analisi:
+/// `clean` riceve ciò che `previews` dà (l'ultima «Analisi» vista) e, se non
+/// c'è, la voce si salta con una nota.
 pub fn run_natives(
     chosen: &[NativeItem],
     also_clean: bool,
     ctx: &NativeCtx,
+    previews: &dyn Fn(&NativeItem) -> Option<NativeFound>,
     processes: &dyn Fn() -> Vec<String>,
     progress: &dyn Fn(usize, String),
     emit: &mut dyn FnMut(&NativeItem, NativeFound, Option<NativeCleaned>),
@@ -112,6 +123,25 @@ pub fn run_natives(
             let mut skipped = NativeCleaned::default();
             skipped.note(format!("Saltata: {why}"));
             emit(item, NativeFound::default(), also_clean.then_some(skipped));
+            continue;
+        }
+        if also_clean && item.needs_preview {
+            let Some(found) = previews(item) else {
+                let mut skipped = NativeCleaned::default();
+                skipped.note(NO_PREVIEW.to_string());
+                emit(item, NativeFound::default(), Some(skipped));
+                continue;
+            };
+            let done = if found.items.is_empty() {
+                NativeCleaned::default()
+            } else if ctx.cancel.load(Ordering::Relaxed) {
+                let mut stopped = NativeCleaned::default();
+                stopped.note("Pulizia interrotta".to_string());
+                stopped
+            } else {
+                (item.clean)(ctx, &found)
+            };
+            emit(item, found, Some(done));
             continue;
         }
         let found = (item.analyze)(ctx);
@@ -168,19 +198,29 @@ mod tests {
             default_on: false,
             needs_admin: false,
             running,
+            needs_preview: false,
             analyze,
             clean: record,
         }
     }
 
     fn run(chosen: &[NativeItem], also_clean: bool, procs: &[&str]) -> Vec<(String, NativeFound, Option<NativeCleaned>)> {
+        run_with(chosen, also_clean, procs, None)
+    }
+
+    fn run_with(
+        chosen: &[NativeItem],
+        also_clean: bool,
+        procs: &[&str],
+        preview: Option<NativeFound>,
+    ) -> Vec<(String, NativeFound, Option<NativeCleaned>)> {
         let env = Env::default();
         let guard = Guard::new(&env);
         let cancel = AtomicBool::new(false);
         let ctx = NativeCtx { env: &env, cancel: &cancel, guard: &guard };
         let procs: Vec<String> = procs.iter().map(|s| s.to_string()).collect();
         let mut out = Vec::new();
-        run_natives(chosen, also_clean, &ctx, &|| procs.clone(), &|_, _| {}, &mut |i, f, c| out.push((i.id.to_string(), f, c)));
+        run_natives(chosen, also_clean, &ctx, &|_| preview.clone(), &|| procs.clone(), &|_, _| {}, &mut |i, f, c| out.push((i.id.to_string(), f, c)));
         out
     }
 
@@ -212,5 +252,31 @@ mod tests {
         assert_eq!(c.removed, 0);
         assert!(c.notes[0].contains("Chiudi Safari.exe per pulire"), "{:?}", c.notes);
         SEEN.with(|s| assert!(s.borrow().is_empty()));
+    }
+
+    fn never_analyzed(_: &NativeCtx) -> NativeFound {
+        panic!("una voce needs_preview non si analizza di nuovo con Pulizia")
+    }
+
+    #[test]
+    fn preview_item_without_an_analysis_does_nothing() {
+        SEEN.with(|s| s.borrow_mut().clear());
+        let it = NativeItem { needs_preview: true, ..item("p", &[], never_analyzed) };
+        let out = run_with(&[it], true, &[], None);
+        let c = out[0].2.as_ref().unwrap();
+        assert_eq!(c.removed, 0);
+        assert_eq!(c.notes, vec![NO_PREVIEW.to_string()]);
+        SEEN.with(|s| assert!(s.borrow().is_empty()));
+    }
+
+    #[test]
+    fn preview_item_cleans_exactly_the_previewed_findings() {
+        SEEN.with(|s| s.borrow_mut().clear());
+        let it = NativeItem { needs_preview: true, ..item("p", &[], never_analyzed) };
+        let seen = NativeFound { count: 1, items: vec!["visto".into()], ..Default::default() };
+        let out = run_with(&[it], true, &[], Some(seen));
+        assert_eq!(out[0].1.items, vec!["visto".to_string()]);
+        assert_eq!(out[0].2.as_ref().unwrap().removed, 1);
+        SEEN.with(|s| assert_eq!(*s.borrow(), vec![vec!["visto".to_string()]]));
     }
 }

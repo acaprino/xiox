@@ -110,6 +110,8 @@ fn write_new(dir: &Path, stem: &str, data: &[u8]) -> Result<PathBuf, String> {
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut f) => {
                 f.write_all(data).map_err(|e| format!("{}: {e}", path.display()))?;
+                // Su disco prima che chi chiama scriva nel registro.
+                f.sync_all().map_err(|e| format!("{}: {e}", path.display()))?;
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,

@@ -286,6 +286,14 @@ impl App {
         self.cleaned = vec![None; self.clean_sel.len()];
         self.rule_found.clear();
         self.rule_cleaned.clear();
+        // Voci con anteprima obbligatoria (PATH): con «Pulizia» agiscono solo su
+        // ciò che l'ultima «Analisi» ha mostrato, se la vista è ancora quella.
+        let previews: std::collections::HashMap<String, native::NativeFound> =
+            if also_clean && self.clean_view == CleanView::Analyzed {
+                self.native_found.iter().map(|(k, _, f)| (k.clone(), f.clone())).collect()
+            } else {
+                std::collections::HashMap::new()
+            };
         self.native_found.clear();
         self.native_cleaned.clear();
         self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
@@ -339,7 +347,8 @@ impl App {
                 let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
                 ctx.request_repaint();
             };
-            native::run_natives(&natives, also_clean, &nctx, &processes, &nprogress, &mut |item, f, done| {
+            let previews = |item: &native::NativeItem| previews.get(&rules::native_key(item)).cloned();
+            native::run_natives(&natives, also_clean, &nctx, &previews, &processes, &nprogress, &mut |item, f, done| {
                 let _ = tx.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
             });
             let run = rules::RunCtx {

@@ -151,6 +151,7 @@ pub fn items() -> Vec<NativeItem> {
         default_on: false,
         needs_admin: true,
         running: &["cleanmgr.exe"],
+        needs_preview: false,
         analyze: real::analyze,
         clean: real::clean,
     }]

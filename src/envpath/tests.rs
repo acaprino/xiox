@@ -6,13 +6,24 @@ use super::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-fn env() -> Env {
+/// Ambiente finto: blocco nuovo dell'utente e processo uguali.
+fn env() -> BlockExpander {
     let mut m = HashMap::new();
     m.insert("systemroot".to_string(), r"C:\Windows".to_string());
     m.insert("windir".to_string(), r"C:\Windows".to_string());
+    m.insert("programfiles".to_string(), r"C:\Program Files".to_string());
     m.insert("userprofile".to_string(), r"C:\Users\me".to_string());
     m.insert("localappdata".to_string(), r"C:\Users\me\AppData\Local".to_string());
-    Env(m)
+    m.insert("appdata".to_string(), r"C:\Users\me\AppData\Roaming".to_string());
+    BlockExpander { block: m.clone(), process: m }
+}
+
+/// `env()` con `name` = `value` in entrambi gli ambienti.
+fn env_with(name: &str, value: &str) -> BlockExpander {
+    let mut e = env();
+    e.block.insert(name.to_string(), value.to_string());
+    e.process.insert(name.to_string(), value.to_string());
+    e
 }
 
 fn sz(s: &str) -> PathValue {
@@ -35,6 +46,9 @@ struct Fake {
     broadcast_err: Option<String>,
     /// Un'altra app cambia il PATH mentre si fa il backup.
     change_on_backup: Option<(RegRoot, PathValue)>,
+    account: Account,
+    /// Chiavi chieste all'ultimo backup.
+    backed_up: RefCell<Vec<RegRoot>>,
     log: RefCell<Vec<String>>,
 }
 
@@ -49,6 +63,8 @@ impl Fake {
             write_err: None,
             broadcast_err: None,
             change_on_backup: None,
+            account: Account::Same(r"PC\me".to_string()),
+            backed_up: RefCell::new(Vec::new()),
             log: RefCell::new(Vec::new()),
         }
     }
@@ -94,8 +110,9 @@ impl PathSys for Fake {
         self.set(root, value.clone());
         Ok(())
     }
-    fn backup(&self) -> Result<PathBuf, String> {
+    fn backup(&self, roots: &[RegRoot]) -> Result<PathBuf, String> {
         self.log.borrow_mut().push("backup".to_string());
+        *self.backed_up.borrow_mut() = roots.to_vec();
         if let Some((root, v)) = &self.change_on_backup {
             self.set(*root, v.clone());
         }
@@ -114,6 +131,9 @@ impl PathSys for Fake {
     }
     fn truly_missing(&self, p: &Path) -> bool {
         self.missing.borrow().contains(&p.to_string_lossy().to_lowercase())
+    }
+    fn account(&self) -> Account {
+        self.account.clone()
     }
     fn broadcast(&self) -> Result<(), String> {
         self.log.borrow_mut().push("broadcast".to_string());
@@ -166,7 +186,7 @@ fn registry_text_is_decoded_strictly_and_encoded_with_one_terminator() {
 #[test]
 fn missing_folder_on_a_fixed_volume_is_proposed() {
     let fake = Fake::new(None, None).with_missing(&[r"D:\gone"]);
-    let p = proposals(RegRoot::Hkcu, r"C:\Tools\bin;D:\gone", &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(r"C:\Tools\bin;D:\gone"), &fake, &env()).unwrap();
     assert_eq!(indexes(&p), vec![(1, Reason::Missing)]);
     assert_eq!(p[0].entry, r"D:\gone");
 }
@@ -175,7 +195,7 @@ fn missing_folder_on_a_fixed_volume_is_proposed() {
 fn duplicates_after_expansion_and_normalization_keep_the_first() {
     let fake = Fake::new(None, None);
     let text = r"%USERPROFILE%\bin;C:\Users\me\BIN\;C:\Tools;c:\users\ME\bin\\;C:\Tools";
-    let p = proposals(RegRoot::Hkcu, text, &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
     assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (3, Reason::Duplicate), (4, Reason::Duplicate)]);
 }
 
@@ -186,17 +206,17 @@ fn per_user_variables_in_the_system_path_are_never_judged() {
     // `%USERPROFILE%\gone` può esistere.
     let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\gone", r"C:\Users\me\AppData\Local\old"]);
     let text = r"%USERPROFILE%\.local\bin;C:\Users\me\.local\bin;%UserProfile%\gone;%LOCALAPPDATA%\old;C:\x";
-    let p = proposals(RegRoot::Hklm, text, &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hklm, &ex(text), &fake, &env()).unwrap();
     assert!(p.is_empty(), "{p:?}");
     // Nel PATH dell'utente invece valgono solo per lui.
-    let p = proposals(RegRoot::Hkcu, text, &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
     assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (2, Reason::Missing), (3, Reason::Missing)]);
 }
 
 #[test]
 fn a_drive_root_is_not_the_same_as_a_bare_drive() {
     let fake = Fake::new(None, None);
-    let p = proposals(RegRoot::Hkcu, r"D:\;D:;D:\", &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(r"D:\;D:;D:\"), &fake, &env()).unwrap();
     assert_eq!(indexes(&p), vec![(2, Reason::Duplicate)]);
 }
 
@@ -225,7 +245,7 @@ fn risky_entries_are_never_proposed_even_if_missing_or_repeated() {
     missing.extend([r"C:\Windows\System32\gone", r"\\?\C:\gone", r"C:\gone"]);
     let fake = Fake::new(None, None).with_missing(&missing);
     let text = entries.join(";");
-    let p = proposals(RegRoot::Hkcu, &text, &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(&text), &fake, &env()).unwrap();
     assert!(p.is_empty(), "{p:?}");
 }
 
@@ -234,38 +254,125 @@ fn a_folder_that_is_there_or_not_judgeable_is_kept() {
     // C:\Tools non è fra le cartelle mancanti del finto: c'è, o l'errore non
     // è 2/3, o c'è un punto di reparse (lo decide `truly_missing`).
     let fake = Fake::new(None, None);
-    let p = proposals(RegRoot::Hkcu, r"C:\Tools;D:\data\bin", &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(r"C:\Tools;D:\data\bin"), &fake, &env()).unwrap();
     assert!(p.is_empty());
 }
 
 #[test]
 fn quoted_entries_are_judged_without_quotes_and_never_split() {
     let fake = Fake::new(None, None).with_missing(&[r"D:\gone", r"D:\x", r"y"]);
-    let p = proposals(RegRoot::Hkcu, r#""D:\gone";"D:\x;y";D:\gone"#, &fake, &env()).unwrap();
-    assert_eq!(indexes(&p), vec![(0, Reason::Missing), (2, Reason::Duplicate)]);
+    let p = proposals(RegRoot::Hkcu, &ex(r#""D:\gone";"D:\x;y";D:\gone"#), &fake, &env()).unwrap();
+    // Mancano entrambe; la seconda non è un «doppione» della prima.
+    assert_eq!(indexes(&p), vec![(0, Reason::Missing), (2, Reason::Missing)]);
+}
+
+#[test]
+fn a_quoted_copy_and_a_plain_copy_are_both_kept() {
+    // `"C:\x"` funziona solo in cmd.exe, `C:\x` ovunque: nessuna delle due è
+    // un doppione, in qualunque ordine. Anche con spazi intorno.
+    let fake = Fake::new(None, None);
+    for text in [r#""C:\x";C:\x"#, r#"C:\x;"C:\x""#, r"C:\x; C:\x", r" C:\x;C:\x"] {
+        let p = proposals(RegRoot::Hkcu, &ex(text), &fake, &env()).unwrap();
+        assert!(p.is_empty(), "{text}: {p:?}");
+    }
+}
+
+#[test]
+fn redirected_appdata_is_expanded_to_its_real_place_and_kept() {
+    // AppData reindirizzata su un server: `%APPDATA%\npm` è UNC, non si
+    // giudica, anche se la cartella locale nel profilo manca.
+    let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\AppData\Roaming\npm"]);
+    let e = env_with("appdata", r"\\server\profili\me\AppData\Roaming");
+    let p = proposals(RegRoot::Hkcu, &ex(r"%APPDATA%\npm;C:\Users\me\AppData\Roaming\npm"), &fake, &e).unwrap();
+    // La seconda manca davvero (ed è un'altra cartella): solo lei.
+    assert_eq!(indexes(&p), vec![(1, Reason::Missing)]);
+    // AppData su D:, dove la cartella c'è: niente da togliere.
+    let e = env_with("appdata", r"D:\Profili\me\AppData\Roaming");
+    let p = proposals(RegRoot::Hkcu, &ex(r"%APPDATA%\npm"), &fake, &e).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+}
+
+#[test]
+fn reg_sz_values_are_literal_and_never_expanded() {
+    // In un REG_SZ Windows non espande `%USERPROFILE%`: le due voci sono
+    // diverse e si tengono entrambe (la prima non funziona, la seconda sì).
+    let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\gone"]);
+    let p = proposals(RegRoot::Hkcu, &sz(r"%USERPROFILE%\bin;C:\Users\me\bin;%USERPROFILE%\gone"), &fake, &env()).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    // Lo stesso testo in un REG_EXPAND_SZ: doppione e cartella mancante.
+    let p = proposals(RegRoot::Hkcu, &ex(r"%USERPROFILE%\bin;C:\Users\me\bin;%USERPROFILE%\gone"), &fake, &env()).unwrap();
+    assert_eq!(indexes(&p), vec![(1, Reason::Duplicate), (2, Reason::Missing)]);
+    // Nella pulizia vera, dall'analisi.
+    let fake = Fake::new(None, Some(sz(r"%USERPROFILE%\bin;C:\Users\me\bin"))).with_missing(&[]);
+    let found = analyze_path(&fake, &env());
+    assert_eq!(found.count, 0, "{:?}", found.detail);
+}
+
+#[test]
+fn unknown_pseudo_or_uncertain_variables_keep_the_entry() {
+    let fake = Fake::new(None, None).with_missing(&[r"C:\Users\me\Documents\x", r"D:\old\bin", r"D:\cargo\bin"]);
+    // `%DOCUMENTS%` non esiste in Windows: testo letterale. La seconda voce
+    // (quella che funziona) non è un doppione della prima.
+    let p = proposals(RegRoot::Hkcu, &ex(r"%DOCUMENTS%\x;C:\Users\me\Documents\x"), &fake, &env()).unwrap();
+    assert_eq!(indexes(&p), vec![(1, Reason::Missing)]);
+    // Variabile cambiata dopo l'avvio: il processo dice D:\old, il blocco
+    // nuovo D:\cargo. Non si sa quale vale: si tiene.
+    let mut e = env();
+    e.block.insert("cargo_home".into(), r"D:\cargo".into());
+    e.process.insert("cargo_home".into(), r"D:\old".into());
+    assert_eq!(e.var("CARGO_HOME"), None);
+    let p = proposals(RegRoot::Hkcu, &ex(r"%CARGO_HOME%\bin"), &fake, &e).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    // Solo nel processo o solo nel blocco: si tiene.
+    let mut e = env();
+    e.process.insert("only_proc".into(), r"D:\old".into());
+    e.block.insert("only_block".into(), r"D:\old".into());
+    let p = proposals(RegRoot::Hkcu, &ex(r"%ONLY_PROC%\bin;%ONLY_BLOCK%\bin"), &fake, &e).unwrap();
+    assert!(p.is_empty(), "{p:?}");
+}
+
+#[test]
+fn the_system_path_expands_only_windows_own_variables() {
+    let fake = Fake::new(None, None).with_missing(&[r"C:\Program Files\gone", r"D:\jdk\bin"]);
+    let e = env_with("java_home", r"D:\jdk");
+    let p = proposals(RegRoot::Hklm, &ex(r"C:\a;%ProgramFiles%\gone;%JAVA_HOME%\bin"), &fake, &e).unwrap();
+    assert_eq!(indexes(&p), vec![(1, Reason::Missing)]);
+    // Nel PATH dell'utente sì.
+    let p = proposals(RegRoot::Hkcu, &ex(r"%JAVA_HOME%\bin"), &fake, &e).unwrap();
+    assert_eq!(indexes(&p), vec![(0, Reason::Missing)]);
+}
+
+#[test]
+fn environment_block_is_parsed_with_lowercase_names() {
+    let text = "=C:=C:\\\0Path=C:\\a;C:\\b\0APPDATA=\\\\srv\\x\0weird\0\0";
+    let words: Vec<u16> = text.encode_utf16().collect();
+    let m = parse_env_block(&words);
+    assert_eq!(m.get("path").map(String::as_str), Some(r"C:\a;C:\b"));
+    assert_eq!(m.get("appdata").map(String::as_str), Some(r"\\srv\x"));
+    assert_eq!(m.len(), 2, "{m:?}");
 }
 
 #[test]
 fn unbalanced_quotes_leave_the_whole_value_alone() {
     let fake = Fake::new(None, None).with_missing(&[r"D:\gone"]);
-    assert!(proposals(RegRoot::Hkcu, r#"D:\gone;"C:\a"#, &fake, &env()).is_err());
+    assert!(proposals(RegRoot::Hkcu, &ex(r#"D:\gone;"C:\a"#), &fake, &env()).is_err());
 }
 
 #[test]
 fn without_a_known_windows_folder_nothing_is_proposed() {
     let fake = Fake::new(None, None).with_missing(&[r"D:\gone"]);
     let mut e = env();
-    e.0.remove("systemroot");
-    e.0.remove("windir");
-    assert!(proposals(RegRoot::Hkcu, r"D:\gone", &fake, &e).is_err());
+    e.block.remove("systemroot");
+    e.block.remove("windir");
+    assert!(proposals(RegRoot::Hkcu, &ex(r"D:\gone"), &fake, &e).is_err());
 }
 
 #[test]
 fn the_system_path_is_never_emptied() {
     let fake = Fake::new(None, None).with_missing(&[r"D:\gone", r"D:\old"]);
-    assert!(proposals(RegRoot::Hklm, r"D:\gone;;D:\old;", &fake, &env()).is_err());
+    assert!(proposals(RegRoot::Hklm, &ex(r"D:\gone;;D:\old;"), &fake, &env()).is_err());
     // Il PATH dell'utente invece sì: resta vuoto, Windows lo accetta.
-    let p = proposals(RegRoot::Hkcu, r"D:\gone;;D:\old;", &fake, &env()).unwrap();
+    let p = proposals(RegRoot::Hkcu, &ex(r"D:\gone;;D:\old;"), &fake, &env()).unwrap();
     assert_eq!(p.len(), 2);
 }
 
@@ -357,17 +464,101 @@ fn backup_failure_means_no_write_at_all() {
 }
 
 #[test]
-fn a_path_changed_since_the_analysis_is_not_written() {
+fn a_path_changed_since_the_analysis_stops_the_whole_item() {
     let fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), Some(ex(r"D:\old;C:\a"))).with_missing(&[r"D:\gone", r"D:\old"]);
     let found = analyze_path(&fake, &env());
     assert_eq!(found.count, 2);
     fake.set(RegRoot::Hkcu, ex(r"D:\old;C:\a;C:\new"));
     let out = clean_path(&fake, &env(), &found, &no_cancel());
-    assert_eq!(out.removed, 1);
-    assert_eq!(out.failed, 1);
-    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato, rifai l'analisi")), "{:?}", out.notes);
+    assert_eq!(out.removed, 0);
+    assert_eq!(out.failed, 2);
+    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato dopo l'analisi")), "{:?}", out.notes);
+    assert!(fake.log().is_empty(), "niente backup né scrittura: {:?}", fake.log());
     assert_eq!(fake.value(RegRoot::Hkcu), Some(ex(r"D:\old;C:\a;C:\new")));
-    assert_eq!(fake.value(RegRoot::Hklm), Some(sz(r"C:\Windows")));
+    assert_eq!(fake.value(RegRoot::Hklm), Some(sz(r"C:\Windows;D:\gone")));
+}
+
+#[test]
+fn clean_removes_only_the_previewed_entries() {
+    // L'analisi ha mostrato solo D:\gone; nel frattempo manca anche C:\b.
+    let fake = Fake::new(None, Some(ex(r"D:\gone;C:\a;C:\b"))).with_missing(&[r"D:\gone"]);
+    let found = analyze_path(&fake, &env());
+    assert_eq!(found.count, 1);
+    fake.missing.borrow_mut().push(r"c:\b".into());
+    let out = clean_path(&fake, &env(), &found, &no_cancel());
+    assert_eq!(out.removed, 1, "{:?}", out.notes);
+    assert_eq!(fake.value(RegRoot::Hkcu), Some(ex(r"C:\a;C:\b")));
+}
+
+#[test]
+fn clean_without_a_preview_writes_nothing() {
+    let fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), Some(ex(r"D:\old"))).with_missing(&[r"D:\gone", r"D:\old"]);
+    let out = clean_path(&fake, &env(), &NativeFound::default(), &no_cancel());
+    assert_eq!((out.removed, out.failed), (0, 0));
+    assert!(fake.log().is_empty(), "{:?}", fake.log());
+    // E la voce dice di fare prima l'analisi (`run_natives`).
+    let item = items()[0];
+    assert!(item.needs_preview);
+    let env = pc_rules::Env::default();
+    let guard = pc_rules::Guard::new(&env);
+    let cancel = no_cancel();
+    let ctx = NativeCtx { env: &env, cancel: &cancel, guard: &guard };
+    let mut got = Vec::new();
+    crate::native::run_natives(&[item], true, &ctx, &|_| None, &Vec::new, &|_, _| {}, &mut |_, f, c| got.push((f, c)));
+    assert_eq!(got.len(), 1);
+    let c = got[0].1.as_ref().unwrap();
+    assert_eq!(c.notes, vec!["Esegui prima Analisi per vedere le voci da togliere".to_string()]);
+    assert_eq!(c.removed, 0);
+}
+
+#[test]
+fn another_account_skips_the_user_path_but_not_the_system_one() {
+    let mut fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), Some(ex(r"D:\old"))).with_missing(&[r"D:\gone", r"D:\old"]);
+    fake.account = Account::Other(r"PC\admin".into());
+    let found = analyze_path(&fake, &env());
+    assert_eq!(found.count, 1);
+    assert!(found.detail.iter().any(|d| d.contains("PATH utente di un altro account: non toccato")), "{:?}", found.detail);
+    let out = clean_path(&fake, &env(), &found, &no_cancel());
+    assert_eq!(out.removed, 1);
+    assert_eq!(*fake.backed_up.borrow(), vec![RegRoot::Hklm]);
+    assert_eq!(fake.value(RegRoot::Hkcu), Some(ex(r"D:\old")));
+    // Items di HKCU di un'analisi fatta con l'account giusto, pulizia con
+    // l'account sbagliato (o non verificato): HKCU non si tocca.
+    for acct in [Account::Other(r"PC\admin".into()), Account::Unknown("errore 5".into())] {
+        let mut fake = Fake::new(None, Some(ex(r"D:\old;C:\a"))).with_missing(&[r"D:\old"]);
+        let found = analyze_path(&fake, &env());
+        assert_eq!(found.count, 1);
+        fake.account = acct;
+        let out = clean_path(&fake, &env(), &found, &no_cancel());
+        assert_eq!((out.removed, out.failed), (0, 1));
+        assert!(fake.writes().is_empty());
+        assert!(out.notes.iter().any(|n| n.contains("PATH utente")), "{:?}", out.notes);
+    }
+}
+
+#[test]
+fn backup_covers_only_the_keys_to_write_and_names_the_account() {
+    // HKCU\Environment senza Path (o assente): il backup è solo di HKLM.
+    let fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), None).with_missing(&[r"D:\gone"]);
+    let found = analyze_path(&fake, &env());
+    let out = clean_path(&fake, &env(), &found, &no_cancel());
+    assert_eq!(out.removed, 1);
+    assert_eq!(*fake.backed_up.borrow(), vec![RegRoot::Hklm]);
+    assert!(out.notes.iter().any(|n| n.contains(r"account PC\me") && n.contains("backup_path.reg")), "{:?}", out.notes);
+}
+
+#[test]
+fn backup_text_must_hold_path_for_each_key() {
+    let both = "Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Environment]\r\n\"TEMP\"=\"x\"\r\n\"Path\"=hex(2):43,00\r\n\r\n\
+                [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment]\r\n\"PATH\"=\"C:\\\\a\"\r\n";
+    assert!(backup_covers(both, &[RegRoot::Hkcu, RegRoot::Hklm]).is_ok());
+    let user_only = "[HKEY_CURRENT_USER\\Environment]\r\n\"Path\"=\"C:\\\\a\"\r\n[HKEY_LOCAL_MACHINE\\SYSTEM\\x]\r\n\"Path\"=\"y\"\r\n";
+    assert!(backup_covers(user_only, &[RegRoot::Hkcu]).is_ok());
+    assert!(backup_covers(user_only, &[RegRoot::Hklm]).is_err());
+    // `Path` sotto un'altra sezione o assente: no.
+    let wrong = "[HKEY_CURRENT_USER\\Environment]\r\n\"TEMP\"=\"x\"\r\n[HKEY_CURRENT_USER\\Other]\r\n\"Path\"=\"y\"\r\n";
+    assert!(backup_covers(wrong, &[RegRoot::Hkcu]).is_err());
+    assert!(backup_covers("", &[RegRoot::Hkcu]).is_err());
 }
 
 #[test]
@@ -379,7 +570,7 @@ fn a_change_during_the_backup_is_caught_by_the_reread_before_writing() {
     assert_eq!(out.removed, 0);
     assert!(fake.writes().is_empty());
     assert!(!fake.log().contains(&"broadcast".to_string()));
-    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato, rifai l'analisi")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato dopo l'analisi")), "{:?}", out.notes);
 }
 
 #[test]
@@ -453,13 +644,11 @@ fn item_is_off_by_default_with_the_agreed_warning() {
     assert_eq!(i.label, "Percorso ambiente");
     assert_eq!(i.group, "Windows");
     assert!(!i.default_on && i.needs_admin);
-    assert_eq!(
-        i.warning,
-        Some(
-            "Toglie dal PATH le cartelle che non esistono più e i doppioni. Un programma che si aspetta una \
-             cartella su un disco non ancora collegato potrebbe non trovarla. Backup .reg in Documenti\\PulisciPC."
-        )
-    );
+    assert!(i.needs_preview);
+    let w = i.warning.unwrap();
+    for part in ["installato dopo", "lettera", "strumenti e build", "solo le voci mostrate dall'ultima Analisi", r"Documenti\PulisciPC"] {
+        assert!(w.contains(part), "{part}: {w}");
+    }
     let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap());
     assert!(!text.to_lowercase().contains("bleachbit") && !text.contains("AGG -"));
 }
@@ -469,7 +658,8 @@ fn item_is_off_by_default_with_the_agreed_warning() {
 #[test]
 #[ignore]
 fn live_envpath_analysis_read_only() {
-    let env = Env::for_rules();
+    let env = win::real_expander().expect("blocco d'ambiente");
+    println!("account: {:?}", win::RealPath.account());
     for root in ROOTS {
         match win::RealPath.read(root) {
             Ok(Some(v)) => println!("{}: {:?}, {} caratteri", root_label(root), v.kind, v.text.chars().count()),

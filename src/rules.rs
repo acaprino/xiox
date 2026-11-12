@@ -2519,6 +2519,7 @@ mod tests {
             default_on: id == "acceso",
             needs_admin: false,
             running,
+            needs_preview: false,
             analyze: native_none,
             clean: native_nothing,
         }
