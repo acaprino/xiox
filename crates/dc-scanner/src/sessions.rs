@@ -108,7 +108,11 @@ fn resolve(d: &Path, home: Option<&str>) -> std::result::Result<PathBuf, Skip> {
 }
 
 fn has_marker(dir: &Path) -> bool {
-    list_dir(dir).is_ok_and(|l| detect(l.files.iter().map(|f| f.name.as_str())).is_some())
+    list_dir(dir).is_ok_and(|l| {
+        let files: Vec<&str> = l.files.iter().map(|f| f.name.as_str()).collect();
+        let dirs: Vec<&str> = l.dirs.iter().map(|d| d.name.as_str()).collect();
+        detect(dir, &files, &dirs).is_some()
+    })
 }
 
 /// Direct children that are a repository or hold a marker; stops counting past the limit.

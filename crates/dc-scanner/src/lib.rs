@@ -20,7 +20,7 @@ pub use sessions::{MAX_WORKSPACE_CHILDREN, SessionRoots, Skip, project_roots_fro
 
 use dc_model::*;
 use fsutil::*;
-use markers::{Detected, NEVER_ENTER, artifact_names, detect};
+use markers::{ArtifactSpec, Detected, NEVER_ENTER, TABLE, Table, join_rel, real_subdir};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -39,15 +39,19 @@ struct Owner {
     ecosystems: Vec<&'static str>,
     /// Lowercase artifact dir names of this project; never entered while walking its sources.
     skip_names: Vec<String>,
+    /// `path_key`s of the artifacts found for this project (sub-paths, prefixes and Meson build
+    /// dirs have no fixed name): never entered either.
+    skip_paths: Vec<String>,
     mtime: AtomicI64,
 }
 
 impl Owner {
-    fn new(root: PathBuf, det: &Detected) -> Arc<Owner> {
+    fn new(root: PathBuf, det: &Detected, skip_paths: Vec<String>) -> Arc<Owner> {
         Arc::new(Owner {
             root,
             ecosystems: det.ecosystems.clone(),
             skip_names: det.skip_names(),
+            skip_paths,
             mtime: AtomicI64::new(NO_MTIME),
         })
     }
@@ -55,6 +59,11 @@ impl Owner {
         if let Some(m) = ms {
             self.mtime.fetch_max(m, Ordering::Relaxed);
         }
+    }
+    /// Is `path` (named `lname`, lowercase) one of this project's artifacts?
+    fn skips(&self, lname: &str, path: &Path) -> bool {
+        self.skip_names.iter().any(|n| n == lname)
+            || (!self.skip_paths.is_empty() && self.skip_paths.contains(&path_key(path)))
     }
 }
 
@@ -65,10 +74,37 @@ struct Found {
     label: &'static str,
     class: Class,
     verified: bool,
+    ambiguous: bool,
+    hint: &'static str,
     size: Option<SizeInfo>,
 }
 
+/// An artifact folder of one project, before its `Owner` exists.
+struct Art {
+    path: PathBuf,
+    spec: &'static ArtifactSpec,
+    verified: bool,
+    ambiguous: bool,
+    size: Option<SizeInfo>,
+}
+
+impl Art {
+    fn new(path: PathBuf, r: (&'static ArtifactSpec, bool, bool), size: Option<SizeInfo>) -> Art {
+        Art { path, spec: r.0, verified: r.1, ambiguous: r.2, size }
+    }
+}
+
+/// File and directory names of a listing.
+fn names(l: &Listing) -> (Vec<&str>, Vec<&str>) {
+    (l.files.iter().map(|f| f.name.as_str()).collect(), l.dirs.iter().map(|d| d.name.as_str()).collect())
+}
+
+fn has_name(names: &[&str], n: &str) -> bool {
+    names.iter().any(|x| x.eq_ignore_ascii_case(n))
+}
+
 struct Ctx<'a> {
+    table: &'static Table,
     opts: &'a ScanOptions,
     ignore: HashSet<String>,
     known_names: Vec<String>,
@@ -78,11 +114,12 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn new(opts: &'a ScanOptions) -> Self {
+    fn new(table: &'static Table, opts: &'a ScanOptions) -> Self {
         Ctx {
+            table,
             opts,
             ignore: ignore_set(&opts.ignore),
-            known_names: artifact_names().iter().map(|n| n.to_ascii_lowercase()).collect(),
+            known_names: table.plain_names().iter().map(|n| n.to_ascii_lowercase()).collect(),
             found: Mutex::new(Vec::new()),
             owners: Mutex::new(Vec::new()),
             warnings: Mutex::new(Vec::new()),
@@ -95,10 +132,11 @@ impl<'a> Ctx<'a> {
         !self.ignore.is_empty() && self.ignore.contains(&path_key(p))
     }
 
-    /// May the walker enter directory `name` at `path`?
-    fn enter_ok(&self, name: &str, path: &Path, parent_is_root: bool, skip_names: &[String]) -> bool {
+    /// May the walker enter directory `name` at `path`? `owner`: the enclosing project, whose
+    /// artifacts are never entered.
+    fn enter_ok(&self, name: &str, path: &Path, parent_is_root: bool, owner: Option<&Owner>) -> bool {
         let lname = name.to_ascii_lowercase();
-        if NEVER_ENTER.contains(&lname.as_str()) || skip_names.contains(&lname) {
+        if NEVER_ENTER.contains(&lname.as_str()) || owner.is_some_and(|o| o.skips(&lname, path)) {
             return false;
         }
         if !self.opts.include_dot_dirs && name.starts_with('.') {
@@ -113,6 +151,30 @@ impl<'a> Ctx<'a> {
             return false;
         }
         true
+    }
+
+    /// Record the artifacts of the project at `root` (ignored ones are dropped, but still never
+    /// entered) and return its owner.
+    fn add_project(&self, root: PathBuf, det: &Detected, arts: Vec<Art>) -> Arc<Owner> {
+        let o = Owner::new(root, det, arts.iter().map(|a| path_key(&a.path)).collect());
+        let mut found = self.found.lock().unwrap();
+        for a in arts {
+            if self.is_ignored(&a.path) {
+                continue;
+            }
+            found.push(Found {
+                owner: o.clone(),
+                path: a.path,
+                kind: a.spec.kind,
+                label: a.spec.label,
+                class: a.spec.class,
+                verified: a.verified,
+                ambiguous: a.ambiguous,
+                hint: a.spec.hint,
+                size: a.size,
+            });
+        }
+        o
     }
 }
 
@@ -133,24 +195,29 @@ fn walk(ctx: &Ctx, dir: &Path, depth: usize, inherited: Option<Arc<Owner>>) {
     let mut owner = inherited;
     let mut consumed = vec![false; listing.dirs.len()];
 
-    if let Some(det) = detect(listing.files.iter().map(|f| f.name.as_str())) {
-        let o = Owner::new(dir.to_path_buf(), &det);
+    let (files, dirs) = names(&listing);
+    if let Some(det) = ctx.table.detect(dir, &files, &dirs) {
+        let mut arts = Vec::new();
+        // Direct children: names, prefixes and Meson build dirs.
         for (i, sd) in listing.dirs.iter().enumerate() {
-            let Some((spec, verified)) = det.resolve(&sd.name, |id| identity_ok(id, &sd.path)) else { continue };
+            let Some(r) = det.resolve(&sd.name, |id| identity_ok(id, &sd.path)) else { continue };
             consumed[i] = true; // artifact dirs are never descended into
-            if ctx.is_ignored(&sd.path) {
+            arts.push(Art::new(sd.path.clone(), r, None));
+        }
+        // Sub-paths (`.nx/cache`): probed only when their first segment is listed here.
+        for s in det.multi_specs() {
+            if !has_name(&dirs, s.dir.split('/').next().unwrap_or_default()) {
                 continue;
             }
-            ctx.found.lock().unwrap().push(Found {
-                owner: o.clone(),
-                path: sd.path.clone(),
-                kind: spec.kind,
-                label: spec.label,
-                class: spec.class,
-                verified,
-                size: None,
-            });
+            let Some(p) = real_subdir(dir, s.dir) else { continue };
+            let k = path_key(&p);
+            if arts.iter().any(|a| path_key(&a.path) == k) {
+                continue;
+            }
+            let Some(r) = det.resolve(s.dir, |id| identity_ok(id, &p)) else { continue };
+            arts.push(Art::new(p, r, None));
         }
+        let o = ctx.add_project(dir.to_path_buf(), &det, arts);
         ctx.owners.lock().unwrap().push(o.clone());
         owner = Some(o);
     }
@@ -161,13 +228,12 @@ fn walk(ctx: &Ctx, dir: &Path, depth: usize, inherited: Option<Arc<Owner>>) {
         }
     }
 
-    let skip: &[String] = owner.as_ref().map(|o| o.skip_names.as_slice()).unwrap_or(&[]);
     let parent_is_root = dir.parent().is_none();
     let children: Vec<&SubDir> = listing
         .dirs
         .iter()
         .zip(&consumed)
-        .filter(|(sd, c)| !**c && ctx.enter_ok(&sd.name, &sd.path, parent_is_root, skip))
+        .filter(|(sd, c)| !**c && ctx.enter_ok(&sd.name, &sd.path, parent_is_root, owner.as_deref()))
         .map(|(sd, _)| sd)
         .collect();
 
@@ -187,7 +253,8 @@ fn mtime_only(ctx: &Ctx, owner: &Owner, starts: Vec<PathBuf>, starts_are_root: b
     let mut stack: Vec<(PathBuf, bool)> = starts.into_iter().map(|p| (p, starts_are_root)).collect();
     while let Some((dir, is_root)) = stack.pop() {
         let Ok(listing) = list_dir(&dir) else { continue };
-        if !is_root && detect(listing.files.iter().map(|f| f.name.as_str())).is_some() {
+        let (files, dirs) = names(&listing);
+        if !is_root && ctx.table.detect(&dir, &files, &dirs).is_some() {
             continue; // nested project root: it has its own candidate
         }
         for f in &listing.files {
@@ -195,7 +262,7 @@ fn mtime_only(ctx: &Ctx, owner: &Owner, starts: Vec<PathBuf>, starts_are_root: b
         }
         let parent_is_root = dir.parent().is_none();
         for sd in &listing.dirs {
-            if ctx.enter_ok(&sd.name, &sd.path, parent_is_root, &owner.skip_names) {
+            if ctx.enter_ok(&sd.name, &sd.path, parent_is_root, Some(owner)) {
                 stack.push((sd.path.clone(), false));
             }
         }
@@ -214,80 +281,110 @@ fn inside(root_key: &str, p_key: &str) -> bool {
 }
 
 struct IdxEntry {
-    path: PathBuf,
-    size: SizeInfo,
+    /// Relative to the project, `/`-separated (`target`, `.nx/cache`, a Meson build dir).
+    rel: String,
+    size: Option<SizeInfo>,
 }
 
 fn discover_indexed(ctx: &Ctx, ix: &dyn DirIndex, roots: &[PathBuf]) {
-    let names = artifact_names();
+    let search = ctx.table.index_names();
     let root_keys: Vec<String> = roots.iter().map(|r| path_key(r)).collect();
+    // Hits grouped by project root. A hit's project is found lexically (for a k-segment entry
+    // the folder k levels up, intermediate segments matching; for `meson-private` the
+    // grandparent) before anything is read from disk.
     let mut groups: HashMap<String, (PathBuf, Vec<IdxEntry>)> = HashMap::new();
 
-    'dirs: for d in ix.find_dirs_named(&names, roots) {
-        let path = normalize_path(&d.path);
-        let key = path_key(&path);
-        let Some(ri) = root_keys.iter().position(|rk| key != *rk && inside(rk, &key)) else { continue };
-        let Some(parent) = path.parent() else { continue };
-        if ctx.is_ignored(&path) {
-            continue;
-        }
-        // Every directory between the scan root (exclusive) and the artifact (exclusive,
-        // parent included) must be one the walker would have entered.
-        let mut depth = 0usize;
-        for a in path.ancestors().skip(1) {
-            if path_key(a).len() <= root_keys[ri].len() {
-                break;
+    for d in ix.find_dirs_named(&search, roots) {
+        let hit = normalize_path(&d.path);
+        let hit_key = path_key(&hit);
+        let Some(ri) = root_keys.iter().position(|rk| hit_key != *rk && inside(rk, &hit_key)) else { continue };
+        'cands: for (project, rel) in ctx.table.index_candidates(&hit) {
+            let pkey = path_key(project);
+            if !inside(&root_keys[ri], &pkey) {
+                continue;
             }
-            let Some(an) = a.file_name().map(|n| n.to_string_lossy().into_owned()) else { break };
-            let a_parent_is_root = a.parent().is_some_and(|p| p.parent().is_none());
-            if !ctx.enter_ok(&an, a, a_parent_is_root, &[]) {
-                continue 'dirs;
+            let art = join_rel(project, &rel);
+            if ctx.is_ignored(&art) {
+                continue;
             }
-            depth += 1;
+            // Every directory between the scan root (exclusive) and the project (inclusive)
+            // must be one the walker would have entered.
+            let mut depth = 0usize;
+            for a in project.ancestors() {
+                if path_key(a).len() <= root_keys[ri].len() {
+                    break;
+                }
+                let Some(an) = a.file_name().map(|n| n.to_string_lossy().into_owned()) else { break };
+                let a_parent_is_root = a.parent().is_some_and(|p| p.parent().is_none());
+                if !ctx.enter_ok(&an, a, a_parent_is_root, None) {
+                    continue 'cands;
+                }
+                depth += 1;
+            }
+            if ctx.opts.max_depth.is_some_and(|m| depth > m) {
+                continue;
+            }
+            let size = if path_key(&art) != hit_key {
+                ix.size_of(&art) // Meson: the hit is `meson-private`, the artifact its parent
+            } else if d.size == SizeInfo::default() {
+                Some(ix.size_of(&hit).unwrap_or(d.size.clone()))
+            } else {
+                Some(d.size.clone())
+            };
+            groups.entry(pkey).or_insert_with(|| (project.to_path_buf(), Vec::new())).1.push(IdxEntry { rel, size });
         }
-        if ctx.opts.max_depth.is_some_and(|m| depth > m) {
-            continue;
-        }
-        let size = if d.size == SizeInfo::default() { ix.size_of(&path).unwrap_or(d.size) } else { d.size };
-        groups
-            .entry(path_key(parent))
-            .or_insert_with(|| (parent.to_path_buf(), Vec::new()))
-            .1
-            .push(IdxEntry { path, size });
     }
 
     let groups: Vec<(PathBuf, Vec<IdxEntry>)> = groups.into_values().collect();
-    groups.par_iter().for_each(|(parent, entries)| {
-        let Ok(listing) = list_dir(parent) else {
-            ctx.warn(format!("index entry parent not readable: {}", parent.display()));
+    groups.par_iter().for_each(|(project, entries)| {
+        let Ok(listing) = list_dir(project) else {
+            ctx.warn(format!("index entry parent not readable: {}", project.display()));
             return;
         };
-        let Some(det) = detect(listing.files.iter().map(|f| f.name.as_str())) else { return };
-        let owner = Owner::new(parent.clone(), &det);
-        let mut any = false;
+        let (files, dirs) = names(&listing);
+        let Some(det) = ctx.table.detect(project, &files, &dirs) else { return };
+        let mut arts: Vec<Art> = Vec::new();
         for e in entries {
-            let name = e.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // Must exist on disk as a real (non-link) directory.
-            let Some(sd) = listing.dirs.iter().find(|sd| sd.name.eq_ignore_ascii_case(&name)) else {
-                ctx.warn(format!("index entry not found on disk (stale index?): {}", e.path.display()));
+            // Must exist on disk as a real (non-link) directory, every segment of it.
+            let (first, rest) = e.rel.split_once('/').map_or((e.rel.as_str(), None), |(f, r)| (f, Some(r)));
+            let path = listing
+                .dirs
+                .iter()
+                .find(|sd| sd.name.eq_ignore_ascii_case(first))
+                .and_then(|sd| match rest {
+                    None => Some(sd.path.clone()),
+                    Some(r) => real_subdir(&sd.path, r),
+                });
+            let Some(path) = path else {
+                ctx.warn(format!("index entry not found on disk (stale index?): {}", join_rel(project, &e.rel).display()));
                 continue;
             };
-            let Some((spec, verified)) = det.resolve(&sd.name, |id| identity_ok(id, &sd.path)) else { continue };
-            any = true;
-            ctx.found.lock().unwrap().push(Found {
-                owner: owner.clone(),
-                path: sd.path.clone(),
-                kind: spec.kind,
-                label: spec.label,
-                class: spec.class,
-                verified,
-                size: Some(e.size.clone()),
-            });
+            let Some(r) = det.resolve(&e.rel, |id| identity_ok(id, &path)) else { continue };
+            let k = path_key(&path);
+            if !arts.iter().any(|a| path_key(&a.path) == k) {
+                arts.push(Art::new(path, r, e.size.clone()));
+            }
         }
-        if any {
-            mtime_only(ctx, &owner, vec![parent.clone()], true);
-            ctx.owners.lock().unwrap().push(owner);
+        // Prefix and Meson entries have no searchable name: try the direct children listed above.
+        if det.has_patterns() {
+            for sd in &listing.dirs {
+                let k = path_key(&sd.path);
+                if arts.iter().any(|a| path_key(&a.path) == k) {
+                    continue;
+                }
+                let Some(r) = det.resolve(&sd.name, |id| identity_ok(id, &sd.path)) else { continue };
+                if r.0.is_plain() {
+                    continue; // plain names come from the index
+                }
+                arts.push(Art::new(sd.path.clone(), r, ix.size_of(&sd.path)));
+            }
         }
+        if arts.is_empty() {
+            return;
+        }
+        let owner = ctx.add_project(project.clone(), &det, arts);
+        mtime_only(ctx, &owner, vec![project.clone()], true);
+        ctx.owners.lock().unwrap().push(owner);
     });
 }
 
@@ -308,7 +405,19 @@ fn dedup_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
 
 impl ProjectScanner for DefaultScanner {
     fn scan(&self, roots: &[PathBuf], opts: &ScanOptions, index: Option<&dyn DirIndex>) -> Loaded<ProjectCandidate> {
-        let ctx = Ctx::new(opts);
+        Self::scan_table(&TABLE, roots, opts, index)
+    }
+}
+
+impl DefaultScanner {
+    /// `scan` over a given marker table (tests pass their own).
+    fn scan_table(
+        table: &'static Table,
+        roots: &[PathBuf],
+        opts: &ScanOptions,
+        index: Option<&dyn DirIndex>,
+    ) -> Loaded<ProjectCandidate> {
+        let ctx = Ctx::new(table, opts);
         let roots = dedup_roots(roots);
 
         let mut live_roots = Vec::new();
@@ -346,8 +455,8 @@ impl ProjectScanner for DefaultScanner {
             if size.effective_bytes() < opts.min_artifact_bytes {
                 continue;
             }
-            // `level`, `note` and `preselected` are placeholders: the engine assesses each folder.
-            // The 7 ecosystems of the marker table verify their identity: none is ambiguous.
+            // `level` and `preselected` are placeholders and `note` holds the catalog hint: the
+            // engine assesses each folder.
             by_owner.entry(Arc::as_ptr(&f.owner)).or_default().push(Artifact {
                 id: path_key(&f.path),
                 path: f.path,
@@ -357,8 +466,8 @@ impl ProjectScanner for DefaultScanner {
                 verified: f.verified,
                 class: f.class,
                 level: f.class.base_level(),
-                note: String::new(),
-                ambiguous: false,
+                note: f.hint.to_string(),
+                ambiguous: f.ambiguous,
                 preselected: false,
             });
         }
@@ -391,6 +500,17 @@ impl ProjectScanner for DefaultScanner {
         warnings.dedup();
         Loaded { items, warnings }
     }
+}
+
+/// Do the last segments of `path` name a catalog entry (`ArtifactKind::Catalog`)? A prefix
+/// entry (`checkpoint-*`) matches by prefix; `*` (Meson) needs `path/meson-private` on disk.
+pub fn catalog_dir_plausible(path: &Path) -> bool {
+    catalog_dir_match(path).is_some()
+}
+
+/// The catalog entry's `dir` that `path` ends with (`".nx/cache"`, `"checkpoint-*"`, `"*"`).
+pub fn catalog_dir_match(path: &Path) -> Option<&'static str> {
+    TABLE.dir_match(path)
 }
 
 #[cfg(test)]

@@ -157,9 +157,13 @@ fn marker_table_classes() {
                 "target" | "build" | "bin" | "obj" => Class::Build,
                 "node_modules" | ".venv" | "venv" => Class::Dependency,
                 "__pycache__" | ".pytest_cache" | ".mypy_cache" | ".ruff_cache" | ".gradle" => Class::Cache,
+                ".nx/cache" | ".nx/workspace-data" => Class::Cache,
+                "cypress/videos" | "cypress/screenshots" => Class::Log,
                 d => panic!("no class expected for {d}"),
             };
             assert_eq!(s.class, want, "{} ({})", s.dir, m.ecosystem);
+            assert_eq!(s.kind == ArtifactKind::Catalog, s.dir.contains('/'), "{}", s.dir);
+            assert!(!s.ambiguous && s.hint.is_empty(), "{}", s.dir);
             seen += 1;
         }
     }
@@ -489,4 +493,296 @@ fn index_mode_honours_ignore_and_depth() {
     assert_eq!(go(ScanOptions { max_depth: Some(2), ..opts() }), 0);
     assert_eq!(go(ScanOptions { max_depth: Some(3), ..opts() }), 1);
     assert_eq!(go(ScanOptions { ignore: vec![t.path().join("x/y")], ..opts() }), 0);
+}
+
+// ───────────────────────────── catalog as data (test table) ─────────────────────────────
+
+use markers::{ArtifactSpec, Identity, Marker, Pattern, Table};
+
+const fn cat(dir: &'static str, label: &'static str, class: Class) -> ArtifactSpec {
+    ArtifactSpec { dir, kind: ArtifactKind::Catalog, label, identity: Identity::ParentMarker, class, ambiguous: false, hint: "" }
+}
+
+static T_NX: &[ArtifactSpec] = &[cat(".nx/cache", "Cache Nx (.nx/cache)", Class::Cache)];
+static T_UNITY: &[ArtifactSpec] = &[cat("Library", "Unity Library", Class::Cache)];
+static T_STORYBOOK: &[ArtifactSpec] = &[cat("storybook-static", "Storybook", Class::Build)];
+static T_MESON: &[ArtifactSpec] =
+    &[ArtifactSpec { identity: Identity::MesonBuild, ..cat("*", "Build Meson", Class::Build) }];
+static T_PYTHON: &[ArtifactSpec] = &[
+    cat("checkpoint-*", "Checkpoint", Class::Personal),
+    ArtifactSpec { kind: ArtifactKind::PythonCache, ..cat("__pycache__", "Python __pycache__", Class::Cache) },
+];
+static T_NODE: &[ArtifactSpec] = &[ArtifactSpec { ambiguous: true, ..cat("build", "Build Node", Class::Build) }];
+static T_CMAKE: &[ArtifactSpec] =
+    &[ArtifactSpec { kind: ArtifactKind::CMake, ..cat("build", "CMake build/", Class::Build) }];
+static T_SPHINX: &[ArtifactSpec] = &[cat("_build", "Sphinx _build", Class::Build)];
+static T_RUBY: &[ArtifactSpec] =
+    &[ArtifactSpec { hint: "bundle install", ..cat("vendor/bundle", "Gem (vendor/bundle)", Class::Dependency) }];
+
+static T_MARKERS: &[Marker] = &[
+    Marker { pattern: Pattern::Exact("nx.json"), ecosystem: "nx", artifacts: T_NX },
+    Marker { pattern: Pattern::Sub("ProjectSettings/ProjectVersion.txt"), ecosystem: "unity", artifacts: T_UNITY },
+    Marker { pattern: Pattern::Dir(".storybook"), ecosystem: "storybook", artifacts: T_STORYBOOK },
+    Marker { pattern: Pattern::Exact("meson.build"), ecosystem: "meson", artifacts: T_MESON },
+    Marker { pattern: Pattern::Exact("pyproject.toml"), ecosystem: "python", artifacts: T_PYTHON },
+    Marker { pattern: Pattern::Exact("package.json"), ecosystem: "node", artifacts: T_NODE },
+    Marker { pattern: Pattern::Exact("CMakeLists.txt"), ecosystem: "cmake", artifacts: T_CMAKE },
+    Marker {
+        pattern: Pattern::All(&[Pattern::Exact("conf.py"), Pattern::Exact("index.rst")]),
+        ecosystem: "sphinx",
+        artifacts: T_SPHINX,
+    },
+    Marker { pattern: Pattern::Exact("Gemfile"), ecosystem: "ruby", artifacts: T_RUBY },
+];
+
+static T_TABLE: Table = Table { markers: T_MARKERS, common: &[] };
+
+fn tscan(root: &Path, index: Option<&dyn DirIndex>) -> Loaded<ProjectCandidate> {
+    DefaultScanner::scan_table(&T_TABLE, &[root.to_path_buf()], &opts(), index)
+}
+
+/// Builds every catalog case of the brief under `ws`; returns what an MFT index would hold
+/// (the searched names are filtered by `FakeIndex`; the other entries only give sizes).
+fn catalog_tree(ws: &Path) -> Vec<IndexedDir> {
+    let mut ix = Vec::new();
+    let mut add = |p: PathBuf| ix.push(IndexedDir { path: p, size: gib(1) });
+    // Nx: `.nx/cache` is the artifact; `src/cache` and a `.nx/cache` without nx.json are not.
+    let nx = ws.join("nx");
+    write(nx.join("nx.json"), 10);
+    write(nx.join(".nx/cache/a.bin"), 100);
+    write(nx.join("src/cache/keep.ts"), 10);
+    write(nx.join("src/.nx/cache/keep.ts"), 10);
+    add(nx.join(".nx/cache"));
+    add(nx.join("src/cache"));
+    add(nx.join("src/.nx/cache"));
+    // Unity: the marker is a file in a subfolder.
+    let u = ws.join("unity");
+    write(u.join("ProjectSettings/ProjectVersion.txt"), 10);
+    write(u.join("Library/x.asset"), 100);
+    add(u.join("Library"));
+    let nu = ws.join("not-unity"); // `Library` without the marker file
+    write(nu.join("ProjectSettings/other.txt"), 10);
+    write(nu.join("Library/x.asset"), 100);
+    add(nu.join("Library"));
+    // Storybook: the marker is a folder.
+    let sb = ws.join("sb");
+    write(sb.join(".storybook/main.js"), 10);
+    write(sb.join("storybook-static/index.html"), 100);
+    add(sb.join("storybook-static"));
+    // Meson: any direct child holding meson-private/ and build.ninja.
+    let me = ws.join("meson");
+    write(me.join("meson.build"), 10);
+    write(me.join("builddir/meson-private/coredata.dat"), 10);
+    write(me.join("builddir/build.ninja"), 100);
+    write(me.join("other/file.c"), 10);
+    add(me.join("builddir/meson-private"));
+    add(me.join("builddir"));
+    // Python: prefix entry `checkpoint-*`, found next to an indexed `__pycache__`.
+    let py = ws.join("py");
+    write(py.join("pyproject.toml"), 10);
+    write(py.join("checkpoint-500/model.bin"), 100);
+    write(py.join("checkpointless/notes.txt"), 10);
+    write(py.join("__pycache__/m.pyc"), 10);
+    add(py.join("checkpoint-500"));
+    add(py.join("__pycache__"));
+    // `build`: † for Node, plain for CMake.
+    let mix = ws.join("mix");
+    write(mix.join("package.json"), 10);
+    write(mix.join("CMakeLists.txt"), 10);
+    write(mix.join("build/out.o"), 100);
+    add(mix.join("build"));
+    let cm = ws.join("cmake");
+    write(cm.join("CMakeLists.txt"), 10);
+    write(cm.join("build/out.o"), 100);
+    add(cm.join("build"));
+    // Sphinx: `All` needs both conf.py and index.rst.
+    let sp = ws.join("sphinx");
+    write(sp.join("conf.py"), 10);
+    write(sp.join("index.rst"), 10);
+    write(sp.join("_build/html/index.html"), 100);
+    add(sp.join("_build"));
+    let half = ws.join("half-sphinx");
+    write(half.join("conf.py"), 10);
+    write(half.join("_build/x.html"), 100);
+    add(half.join("_build"));
+    // Multi-segment Dependency entry with a hint.
+    let rb = ws.join("rb");
+    write(rb.join("Gemfile"), 10);
+    write(rb.join("vendor/bundle/gem.rb"), 100);
+    add(rb.join("vendor/bundle"));
+    ix
+}
+
+fn check_catalog(r: &Loaded<ProjectCandidate>, ws: &Path) {
+    let roots: Vec<String> = r.items.iter().map(|c| path_key(&c.root)).collect();
+    let arts = |root: &str| -> Vec<&Artifact> {
+        let mut v: Vec<&Artifact> = find(r, &ws.join(root)).artifacts.iter().collect();
+        v.sort_by(|a, b| a.path.cmp(&b.path));
+        v
+    };
+    let rel = |a: &Artifact, root: &str| -> String {
+        a.path.strip_prefix(ws.join(root)).unwrap().to_string_lossy().replace('\\', "/").to_lowercase()
+    };
+
+    let nx = arts("nx");
+    assert_eq!(nx.len(), 1, "{nx:?}");
+    assert_eq!(rel(nx[0], "nx"), ".nx/cache");
+    assert_eq!((nx[0].kind, nx[0].class, nx[0].label.as_str()), (ArtifactKind::Catalog, Class::Cache, "Cache Nx (.nx/cache)"));
+    assert!(nx[0].verified && !nx[0].ambiguous);
+    assert!(!roots.contains(&path_key(&ws.join("nx/src"))), "{roots:?}");
+
+    let u = arts("unity");
+    assert_eq!((u.len(), rel(u[0], "unity").as_str()), (1, "library"));
+    assert!(!roots.contains(&path_key(&ws.join("not-unity"))), "{roots:?}");
+
+    let sb = arts("sb");
+    assert_eq!((sb.len(), rel(sb[0], "sb").as_str()), (1, "storybook-static"));
+
+    let me = arts("meson");
+    assert_eq!(me.len(), 1, "{me:?}");
+    assert_eq!(rel(me[0], "meson"), "builddir");
+    assert_eq!(me[0].label, "Build Meson");
+    assert!(me[0].verified);
+
+    let py = arts("py");
+    let py_rels: Vec<String> = py.iter().map(|a| rel(a, "py")).collect();
+    assert_eq!(py_rels, vec!["__pycache__", "checkpoint-500"]);
+    assert_eq!(py[1].class, Class::Personal);
+
+    let mix = arts("mix");
+    assert_eq!(mix.len(), 1);
+    assert!(mix[0].ambiguous, "a † entry of the project claims `build`");
+    let cm = arts("cmake");
+    assert_eq!(cm.len(), 1);
+    assert!(!cm[0].ambiguous, "no † entry: `build` stays as today");
+    assert_eq!(cm[0].kind, ArtifactKind::CMake);
+
+    let sp = arts("sphinx");
+    assert_eq!((sp.len(), rel(sp[0], "sphinx").as_str()), (1, "_build"));
+    assert!(!roots.contains(&path_key(&ws.join("half-sphinx"))), "{roots:?}");
+
+    let rb = arts("rb");
+    assert_eq!((rb.len(), rel(rb[0], "rb").as_str()), (1, "vendor/bundle"));
+    assert_eq!(rb[0].note, "bundle install", "the hint goes into note");
+    assert_eq!(rb[0].class, Class::Dependency);
+}
+
+#[test]
+fn catalog_walker() {
+    let t = tempfile::tempdir().unwrap();
+    catalog_tree(t.path());
+    let r = tscan(t.path(), None);
+    check_catalog(&r, t.path());
+    assert_eq!(r.items.len(), 9, "{:?}", r.items.iter().map(|c| &c.root).collect::<Vec<_>>());
+}
+
+#[test]
+fn catalog_index() {
+    let t = tempfile::tempdir().unwrap();
+    let ix = FakeIndex { dirs: catalog_tree(t.path()) };
+    let r = tscan(t.path(), Some(&ix));
+    check_catalog(&r, t.path());
+    assert_eq!(r.items.len(), 9, "{:?}", r.items.iter().map(|c| &c.root).collect::<Vec<_>>());
+    // Sizes come from the index, also for the prefix and Meson entries.
+    for c in &r.items {
+        for a in &c.artifacts {
+            assert_eq!(a.size, gib(1), "{:?}", a.path);
+        }
+    }
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+}
+
+#[test]
+fn catalog_index_search_names() {
+    let names = T_TABLE.index_names();
+    for n in ["cache", "Library", "storybook-static", "meson-private", "__pycache__", "build", "_build", "bundle"] {
+        assert!(names.iter().any(|x| x.eq_ignore_ascii_case(n)), "{n} missing from {names:?}");
+    }
+    assert!(!names.iter().any(|x| x.contains('*') || x.contains('/')), "{names:?}");
+}
+
+#[test]
+fn catalog_multi_segment_contents_do_not_count_as_sources() {
+    let t = tempfile::tempdir().unwrap();
+    let nx = t.path().join("nx");
+    write(nx.join("nx.json"), 10);
+    write(nx.join(".nx/cache/a.bin"), 100);
+    set_mtime(&nx.join("nx.json"), 1_600_000_000);
+    set_mtime(&nx.join(".nx/cache/a.bin"), 2_000_000_000);
+    let ix = FakeIndex { dirs: vec![IndexedDir { path: nx.join(".nx/cache"), size: gib(1) }] };
+    for r in [tscan(t.path(), None), tscan(t.path(), Some(&ix))] {
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].artifacts.len(), 1);
+        assert_eq!(r.items[0].source_mtime_ms, Some(1_600_000_000_000));
+    }
+}
+
+#[test]
+fn resolve_ambiguity_and_meson_identity() {
+    let t = tempfile::tempdir().unwrap();
+    let both = T_TABLE.detect(t.path(), &["package.json", "CMakeLists.txt"], &["build"]).unwrap();
+    let (s, verified, amb) = both.resolve("build", |_| true).unwrap();
+    assert!(verified && amb);
+    assert_eq!(s.kind, ArtifactKind::Catalog);
+    let cmake = T_TABLE.detect(t.path(), &["CMakeLists.txt"], &["build"]).unwrap();
+    let (s, verified, amb) = cmake.resolve("BUILD", |_| true).unwrap();
+    assert_eq!((s.kind, verified, amb), (ArtifactKind::CMake, true, false));
+    // `*` (Meson) only matches when its identity holds, and only a direct child.
+    let meson = T_TABLE.detect(t.path(), &["meson.build"], &[]).unwrap();
+    assert!(meson.resolve("src", |id| id != Identity::MesonBuild).is_none());
+    assert!(meson.resolve("builddir", |id| id == Identity::MesonBuild).is_some());
+    assert!(meson.resolve("a/b", |_| true).is_none());
+    // prefix entries need something after the prefix
+    let py = T_TABLE.detect(t.path(), &["pyproject.toml"], &[]).unwrap();
+    assert!(py.resolve("checkpoint-", |_| true).is_none());
+    assert!(py.resolve("Checkpoint-12", |_| true).is_some());
+    // multi-segment entries match the whole relative path only
+    let nx = T_TABLE.detect(t.path(), &["nx.json"], &[]).unwrap();
+    assert!(nx.resolve(".NX/Cache", |_| true).is_some());
+    assert!(nx.resolve("cache", |_| true).is_none());
+    // `All` needs every pattern; `Sub` needs the file, not only its folder.
+    assert!(T_TABLE.detect(t.path(), &["conf.py"], &[]).is_none());
+    assert!(T_TABLE.detect(t.path(), &[], &["ProjectSettings"]).is_none());
+}
+
+#[test]
+fn catalog_dir_match_in_test_table() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("p");
+    assert_eq!(T_TABLE.dir_match(&p.join(".nx").join("cache")), Some(".nx/cache"));
+    assert_eq!(T_TABLE.dir_match(&p.join(".NX").join("Cache")), Some(".nx/cache"));
+    assert_eq!(T_TABLE.dir_match(&p.join("src").join("cache")), None);
+    assert_eq!(T_TABLE.dir_match(&p.join("cache")), None);
+    assert_eq!(T_TABLE.dir_match(&p.join("checkpoint-9")), Some("checkpoint-*"));
+    assert_eq!(T_TABLE.dir_match(&p.join("vendor").join("bundle")), Some("vendor/bundle"));
+    // only entries of kind Catalog count (`__pycache__` here is PythonCache)
+    assert_eq!(T_TABLE.dir_match(&p.join("__pycache__")), None);
+    // Meson needs meson-private on disk
+    assert_eq!(T_TABLE.dir_match(&p.join("bd")), None);
+    write(p.join("bd/meson-private/x"), 1);
+    write(p.join("bd/build.ninja"), 1);
+    assert_eq!(T_TABLE.dir_match(&p.join("bd")), Some("*"));
+    // the project above a multi-segment entry must be a named folder, not a drive root
+    let root = p.ancestors().last().unwrap().to_path_buf();
+    assert_eq!(T_TABLE.dir_match(&root.join(".nx").join("cache")), None);
+}
+
+#[test]
+fn never_enter_heavy_unambiguous_dirs() {
+    for n in [
+        ".next", ".nuxt", ".svelte-kit", ".angular", ".turbo", ".dart_tool", ".terraform", ".terragrunt-cache",
+        ".stack-work", "dist-newstyle", ".zig-cache", ".pio",
+    ] {
+        assert!(markers::NEVER_ENTER.contains(&n), "{n}");
+    }
+}
+
+#[test]
+fn real_table_catalog_dirs() {
+    let p = Path::new(r"D:\ws\proj");
+    assert!(catalog_dir_plausible(&p.join(".nx").join("cache")));
+    assert!(catalog_dir_plausible(&p.join("cypress").join("videos")));
+    assert!(!catalog_dir_plausible(&p.join("videos")));
+    assert!(!catalog_dir_plausible(&p.join("src")));
+    assert!(!catalog_dir_plausible(&p.join("target")), "Rust/Maven target are not catalog entries");
 }

@@ -102,7 +102,13 @@ pub fn identity_ok(identity: Identity, dir: &Path) -> bool {
                 || exists(dir, ".pnpm")
         }
         Identity::PythonVenv => exists(dir, "pyvenv.cfg"),
+        Identity::MesonBuild => is_real_dir(&dir.join("meson-private")) && exists(dir, "build.ninja"),
     }
+}
+
+/// A real directory: not a file, not a link, junction or other reparse point.
+pub fn is_real_dir(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok_and(|m| classify(&m) == Kind::Dir)
 }
 
 /// Does `dir` carry any strong identity file (it is certainly generated output)?

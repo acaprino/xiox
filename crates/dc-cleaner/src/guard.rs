@@ -42,7 +42,7 @@ fn name_plausible(kind: ArtifactKind, name: &str) -> bool {
         }
         // Whole worktree directories can have any name (the deny list above still applies).
         ArtifactKind::WorktreeDir => true,
-        // Catalog entries are not planned yet: refused until the catalog gives their names.
+        // Catalog entries are matched on the whole path by `lexical_refusal`.
         ArtifactKind::Catalog => false,
         // `Other` has no fixed name: only the deny list protects it.
         ArtifactKind::Other => true,
@@ -84,7 +84,8 @@ fn protected_reason(path: &Path) -> Option<String> {
     None
 }
 
-/// `Some(reason)` if the path breaks a purely lexical rule (no filesystem access).
+/// `Some(reason)` if the path breaks a purely lexical rule (no filesystem access, except a
+/// Meson build dir of the catalog, recognised by its `meson-private` folder).
 fn lexical_refusal(path: &Path, kind: ArtifactKind) -> Option<String> {
     let mut comps = path.components();
     match comps.next() {
@@ -114,10 +115,13 @@ fn lexical_refusal(path: &Path, kind: ArtifactKind) -> Option<String> {
         return Some("path is a user profile root or the Users folder".into());
     }
     let name = normals.last().expect("len >= 2");
-    if DENY_NAMES.contains(&name.as_str()) {
+    // A catalog item must end with the `dir` of a catalog entry. A sub-path entry
+    // (`cypress/videos`) may end with a name denied on its own: only then is it let through.
+    let catalog_dir = if kind == ArtifactKind::Catalog { dc_scanner::catalog_dir_match(path) } else { None };
+    if DENY_NAMES.contains(&name.as_str()) && !catalog_dir.is_some_and(|d| d.contains('/')) {
         return Some(format!("'{name}' is never a removable artifact"));
     }
-    if !name_plausible(kind, name) {
+    if catalog_dir.is_none() && !name_plausible(kind, name) {
         return Some(format!("folder name '{name}' does not look like a {kind:?} artifact"));
     }
     protected_reason(path)

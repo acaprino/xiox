@@ -304,3 +304,28 @@ fn recycle_mode_moves_tree_to_bin() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn catalog_items_are_checked_against_the_catalog() {
+    let tmp = TempDir::new().unwrap();
+    let p = tmp.path().join("proj");
+    for d in [".nx/cache", "cypress/videos", "src", "videos", "cache", "target"] {
+        fs::create_dir_all(p.join(d)).unwrap();
+    }
+    for ok in [p.join(".nx").join("cache"), p.join("cypress").join("videos")] {
+        assert!(guard::validate(&item(&ok, ArtifactKind::Catalog)).is_ok(), "{}", ok.display());
+    }
+    let refused = [
+        (p.join("src"), "never a removable"),
+        (p.join("videos"), "never a removable"), // denied alone: only `cypress/videos` is an entry
+        (p.join("cache"), "does not look like"),
+        (p.join("target"), "does not look like"), // not a catalog entry
+    ];
+    for (path, needle) in refused {
+        let r = guard::validate(&item(&path, ArtifactKind::Catalog)).err().unwrap_or_default();
+        assert!(r.contains(needle), "{}: reason '{r}' lacks '{needle}'", path.display());
+    }
+    // the DENY_NAMES exception is for catalog items only
+    let r = guard::validate(&item(&p.join("cypress").join("videos"), ArtifactKind::Other)).err().unwrap_or_default();
+    assert!(r.contains("never a removable"), "{r}");
+}
