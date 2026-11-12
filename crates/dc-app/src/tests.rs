@@ -929,3 +929,46 @@ fn settings_round_trip_and_fall_back_to_defaults() {
     std::fs::write(&path, "{ not json").unwrap();
     assert_eq!(read_settings(&path).remove_mode, RemoveMode::Recycle);
 }
+
+// ───────────────────────────── recycle_shortfall ─────────────────────────────
+
+fn sized(path: &str, bytes: u64) -> PlanItem {
+    PlanItem { expected_bytes: bytes, ..item(Path::new(path), ArtifactKind::RustTarget) }
+}
+
+fn recycle_plan(items: Vec<PlanItem>) -> CleanPlan {
+    CleanPlan { mode: RemoveMode::Recycle, ..plan_of(items) }
+}
+
+const GB: u64 = 1 << 30;
+
+#[test]
+fn recycle_shortfall_sums_per_drive_letter() {
+    let plan = recycle_plan(vec![
+        sized(r"C:\p\a\target", 4 * GB),
+        sized(r"\\?\c:\p\b\target", 6 * GB),
+        sized(r"D:\q\target", GB),
+        sized(r"\\server\share\target", 50 * GB),
+        sized(r"relative\target", 50 * GB),
+    ]);
+    let seen = Mutex::new(Vec::new());
+    let out = recycle_shortfall_with(&plan, |v| {
+        seen.lock().unwrap().push(v);
+        Some(2 * GB)
+    });
+    assert_eq!(out, vec![('C', 10 * GB, 2 * GB)]);
+    assert_eq!(*seen.lock().unwrap(), vec!['C', 'D']);
+}
+
+#[test]
+fn recycle_shortfall_empty_when_the_bin_is_big_enough_or_unknown() {
+    let plan = recycle_plan(vec![sized(r"C:\p\target", 10 * GB)]);
+    assert!(recycle_shortfall_with(&plan, |_| Some(20 * GB)).is_empty());
+    assert!(recycle_shortfall_with(&plan, |_| None).is_empty());
+}
+
+#[test]
+fn recycle_shortfall_empty_for_a_permanent_plan() {
+    let plan = plan_of(vec![sized(r"C:\p\target", 10 * GB)]);
+    assert!(recycle_shortfall_with(&plan, |_| panic!("not asked for a permanent plan")).is_empty());
+}

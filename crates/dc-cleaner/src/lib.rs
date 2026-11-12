@@ -12,11 +12,13 @@ mod fsops;
 mod guard;
 mod locks;
 mod parallel;
+mod recycle;
 
 #[cfg(test)]
 mod tests;
 
 pub use fsops::measure as measure_dir;
+pub use recycle::{recycle_room, shortfall};
 pub use parallel::{Cancel, ParallelRemover, Tick, remove_files_parallel, worker_count};
 
 use dc_model::{CleanPlan, CleanResult, ItemOutcome, Remover, normalize_path, path_key};

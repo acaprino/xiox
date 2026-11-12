@@ -532,6 +532,41 @@ fn execute_plan_with(
     Ok(remover.execute(&runnable_plan(scan, plan, now_ms)?, false))
 }
 
+/// The volumes whose Recycle Bin cannot take what `plan` would move there:
+/// `(drive letter, bytes the plan moves, free room in the bin)`, from
+/// [`dc_cleaner::recycle_room`]. Empty for a `Permanent` plan, and for volumes whose room is
+/// unknown. The UI asks to delete permanently instead of letting Windows decide per file.
+pub fn recycle_shortfall(plan: &CleanPlan) -> Vec<(char, u64, u64)> {
+    recycle_shortfall_with(plan, dc_cleaner::recycle_room)
+}
+
+/// [`recycle_shortfall`] with the room of each bin given (tests).
+fn recycle_shortfall_with(plan: &CleanPlan, room: impl Fn(char) -> Option<u64>) -> Vec<(char, u64, u64)> {
+    if plan.mode == RemoveMode::Permanent {
+        return Vec::new();
+    }
+    let mut per_volume: std::collections::BTreeMap<char, u64> = std::collections::BTreeMap::new();
+    for item in &plan.items {
+        if let Some(letter) = drive_letter(&item.path) {
+            let sum = per_volume.entry(letter).or_default();
+            *sum = sum.saturating_add(item.expected_bytes);
+        }
+    }
+    let needed: Vec<(char, u64)> = per_volume.into_iter().collect();
+    dc_cleaner::shortfall(&needed, room)
+}
+
+/// Uppercase drive letter of `C:\…` or `\\?\C:\…`; `None` for UNC and relative paths.
+fn drive_letter(path: &Path) -> Option<char> {
+    let s = path.to_string_lossy();
+    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    let mut chars = s.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic() => Some(letter.to_ascii_uppercase()),
+        _ => None,
+    }
+}
+
 /// Category of the agent worktrees removed whole, in [`report`].
 pub const WORKTREE_CATEGORY: &str = "Worktree degli agenti";
 
