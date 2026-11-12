@@ -118,6 +118,10 @@ struct Confirm {
     summary: Vec<String>,
     error: Option<String>,
     mode: RemoveMode,
+    /// Quante righe della sezione visibile erano scelte all'apertura (per il pulsante di conferma).
+    selected: usize,
+    /// «Non tocca le altre sezioni: …», se nelle altre due c'è qualcosa di scelto.
+    others: Option<String>,
 }
 
 pub struct DevState {
@@ -457,6 +461,8 @@ impl DevState {
             }
         }
         let sessions = sessions.iter().map(|s| (s.agent, s.id.clone())).collect();
+        let selected = section_stats(&scan, section, &self.sel_artifacts, &self.sel_worktrees, &self.sel_sessions).0;
+        let others = others_note(&scan, section, &self.sel_artifacts, &self.sel_worktrees, &self.sel_sessions);
         self.confirm = Some(Confirm {
             scan,
             section,
@@ -470,6 +476,8 @@ impl DevState {
             summary,
             error,
             mode,
+            selected,
+            others,
         });
     }
 
@@ -631,7 +639,13 @@ impl DevState {
     fn options(&mut self, ui: &mut Ui, busy: bool) {
         group(ui, "Sezione", 6.0);
         let counts = self.scan.as_ref().map(|s| [s.projects.len(), s.worktrees.len(), s.archived.len()]);
-        for (k, s) in [Section::Projects, Section::Worktrees, Section::Sessions].into_iter().enumerate() {
+        let all = [Section::Projects, Section::Worktrees, Section::Sessions];
+        // Le spunte di ogni sezione, anche di quelle non visibili.
+        let picked = all.map(|s| match &self.scan {
+            Some(scan) => section_stats(scan, s, &self.sel_artifacts, &self.sel_worktrees, &self.sel_sessions).0,
+            None => 0,
+        });
+        for (k, s) in all.into_iter().enumerate() {
             let text = section_label(s, counts.map(|c| c[k]));
             let on = self.section == s;
             let btn = egui::Button::new(RichText::new(text).color(if on { ACCENT } else { TEXT }).strong())
@@ -640,6 +654,9 @@ impl DevState {
                 .min_size(Vec2::new(ui.available_width(), 28.0));
             if ui.add(btn).clicked() {
                 self.set_section(s);
+            }
+            if picked[k] > 0 {
+                ui.label(RichText::new(selected_text(s, picked[k])).size(12.0).color(MUTED));
             }
         }
 
@@ -943,12 +960,12 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
                 let (selected, _, bytes) = state.selection();
                 if state.scan.is_some() {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(format!("Selezionati: {}", sys::fmt_size(bytes))).color(TEXT));
+                        ui.label(RichText::new(format!("Selezionati in {}: {}", state.section.name(), sys::fmt_size(bytes))).color(TEXT));
                         ui.label(RichText::new(selection_text(state.section, selected)).size(12.0).color(MUTED));
                     });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if primary(ui, "Avvia pulizia", state.can_clean()).clicked() {
+                    if primary(ui, &clean_button(state.section, selected), state.can_clean()).clicked() {
                         state.open_confirm();
                     }
                     if secondary(ui, "Analizza", !busy).clicked() {
@@ -986,6 +1003,10 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         ui.label(RichText::new(confirm_title(c.section)).size(18.0).strong());
         ui.add_space(6.0);
         ui.add(egui::Label::new(confirm_text(c.section, shown_mode(c))).wrap());
+        if let Some(o) = &c.others {
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(o.as_str()).wrap());
+        }
         ui.add_space(8.0);
         if let Some(e) = &c.error {
             ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
@@ -1123,10 +1144,7 @@ fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
 }
 
 fn confirm_button(c: &Confirm) -> String {
-    match c.section {
-        Section::Sessions => format!("Cancella {}", plural(c.sessions.len(), "sessione", "sessioni")),
-        Section::Projects | Section::Worktrees => "Pulisci".into(),
-    }
+    clean_button(c.section, c.selected)
 }
 
 // ---------- tables ----------
@@ -1555,6 +1573,47 @@ fn selection_text(section: Section, n: usize) -> String {
         Section::Projects => plural(n, "cartella", "cartelle"),
         Section::Worktrees => plural(n, "worktree", "worktree"),
         Section::Sessions => plural(n, "sessione", "sessioni"),
+    }
+}
+
+/// Cosa c'è di scelto in una sezione, con il nome della cosa: «3 cartelle selezionate».
+fn selected_text(section: Section, n: usize) -> String {
+    match section {
+        Section::Projects => plural(n, "cartella selezionata", "cartelle selezionate"),
+        Section::Worktrees => plural(n, "worktree selezionato", "worktree selezionati"),
+        Section::Sessions => plural(n, "sessione selezionata", "sessioni selezionate"),
+    }
+}
+
+/// Il pulsante che pulisce la sezione visibile: il verbo della sezione e, se c'è una scelta, quanto.
+fn clean_button(section: Section, n: usize) -> String {
+    let verb = match section {
+        Section::Projects => "Pulisci",
+        Section::Worktrees => "Rimuovi",
+        Section::Sessions => "Cancella",
+    };
+    if n == 0 {
+        verb.into()
+    } else {
+        format!("{verb} {}", selection_text(section, n))
+    }
+}
+
+/// La riga del dialogo che dice cosa resta fuori: le righe scelte nelle altre sezioni.
+fn others_note(scan: &DevScan, section: Section, sa: &HashSet<String>, sw: &[bool], ss: &[bool]) -> Option<String> {
+    let parts: Vec<String> = [Section::Projects, Section::Worktrees, Section::Sessions]
+        .into_iter()
+        .filter(|s| *s != section)
+        .filter_map(|s| {
+            let n = section_stats(scan, s, sa, sw, ss).0;
+            (n > 0).then(|| selected_text(s, n))
+        })
+        .collect();
+    match parts.as_slice() {
+        [] => None,
+        [a] => Some(format!("Non tocca le altre sezioni: {a}.")),
+        [a, b] => Some(format!("Non tocca le altre sezioni: {a} e {b}.")),
+        _ => None,
     }
 }
 
@@ -2200,7 +2259,7 @@ mod tests {
         assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
         assert_eq!(c.rows.len(), plan.items.len());
         assert_eq!(confirm_title(c.section), "Pulire le cartelle selezionate?");
-        assert_eq!(confirm_button(&c), "Pulisci");
+        assert_eq!(confirm_button(&c), "Pulisci 1 cartella");
 
         st.section = Section::Worktrees;
         st.open_confirm();
@@ -2241,8 +2300,72 @@ mod tests {
             summary: vec![],
             error: None,
             mode: RemoveMode::Recycle,
+            selected: 1,
+            others: None,
         };
         assert_eq!(confirm_button(&one), "Cancella 1 sessione");
+        let three = Confirm { section: Section::Projects, sessions: vec![], selected: 3, ..one };
+        assert_eq!(confirm_button(&three), "Pulisci 3 cartelle");
+    }
+
+    #[test]
+    fn selected_text_and_clean_button_name_the_section() {
+        assert_eq!(selected_text(Section::Projects, 1), "1 cartella selezionata");
+        assert_eq!(selected_text(Section::Projects, 3), "3 cartelle selezionate");
+        assert_eq!(selected_text(Section::Worktrees, 1), "1 worktree selezionato");
+        assert_eq!(selected_text(Section::Worktrees, 2), "2 worktree selezionati");
+        assert_eq!(selected_text(Section::Sessions, 1), "1 sessione selezionata");
+        assert_eq!(selected_text(Section::Sessions, 5), "5 sessioni selezionate");
+
+        assert_eq!(clean_button(Section::Projects, 0), "Pulisci");
+        assert_eq!(clean_button(Section::Worktrees, 0), "Rimuovi");
+        assert_eq!(clean_button(Section::Sessions, 0), "Cancella");
+        assert_eq!(clean_button(Section::Projects, 1), "Pulisci 1 cartella");
+        assert_eq!(clean_button(Section::Projects, 3), "Pulisci 3 cartelle");
+        assert_eq!(clean_button(Section::Worktrees, 1), "Rimuovi 1 worktree");
+        assert_eq!(clean_button(Section::Worktrees, 2), "Rimuovi 2 worktree");
+        assert_eq!(clean_button(Section::Sessions, 1), "Cancella 1 sessione");
+        assert_eq!(clean_button(Section::Sessions, 5), "Cancella 5 sessioni");
+    }
+
+    #[test]
+    fn the_confirmation_says_what_it_leaves_out() {
+        let mut st = state();
+        st.set_scan(three_sections());
+        st.sel_worktrees = vec![true];
+        assert_eq!((st.sel_artifacts.len(), st.sel_sessions.clone()), (1, vec![true, true]));
+
+        // Progetti: le righe scelte in Worktree e Sessioni restano fuori dal piano e sono nominate.
+        st.set_section(Section::Projects);
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 worktree selezionato e 2 sessioni selezionate."));
+        assert_eq!(c.selected, 1);
+        assert_eq!(confirm_button(&c), "Pulisci 1 cartella");
+        let plan = c.plan.as_ref().unwrap();
+        assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
+        assert!(c.sessions.is_empty());
+
+        // Sessioni: Progetti e Worktree, nell'ordine.
+        st.set_section(Section::Sessions);
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 cartella selezionata e 1 worktree selezionato."));
+        assert_eq!(confirm_button(&c), "Cancella 2 sessioni");
+
+        // Una sola altra sezione con qualcosa di scelto: una sola voce.
+        st.set_section(Section::Worktrees);
+        st.sel_sessions = vec![false, false];
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 cartella selezionata."));
+        assert_eq!(confirm_button(&c), "Rimuovi 1 worktree");
+
+        // Le altre sezioni vuote: nessuna nota.
+        st.sel_artifacts.clear();
+        st.open_confirm();
+        let c = st.confirm.take().unwrap();
+        assert_eq!(c.others, None);
     }
 
     #[test]
