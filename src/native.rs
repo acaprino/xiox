@@ -84,6 +84,7 @@ pub fn all() -> Vec<NativeItem> {
     let mut v = crate::sysclean::items();
     v.extend(crate::browserdb::items());
     v.extend(crate::netcreds::items());
+    v.extend(crate::wipe::items());
     v
 }
 
