@@ -171,6 +171,11 @@ fn marker_table_shape() {
             assert!(s.kind == ArtifactKind::Catalog || legacy(s.kind), "{}", s.dir);
             assert!(s.dir.split('/').count() <= 3, "{}", s.dir);
             assert!(!s.label.is_empty() && !s.label.starts_with("AGG"), "{}", s.dir);
+            // «<Cosa> <Ecosistema> (<cartella>)»; Meson ha una cartella di build dal nome libero.
+            if s.dir != "*" {
+                assert!(s.label.ends_with(&format!("({})", s.dir)), "label of {}: {}", s.dir, s.label);
+                assert!(s.label.chars().next().is_some_and(char::is_uppercase), "label of {}: {}", s.dir, s.label);
+            }
             assert_eq!(s.hint.is_empty(), s.class != Class::Dependency, "hint of {} ({})", s.dir, m.ecosystem);
             assert_eq!(s.identity == Identity::MesonBuild, s.dir == "*", "{}", s.dir);
             let dup = m.artifacts.iter().chain(markers::COMMON).skip(i + 1).any(|o| o.dir.eq_ignore_ascii_case(s.dir));
@@ -596,11 +601,11 @@ static T_MESON: &[ArtifactSpec] =
     &[ArtifactSpec { identity: Identity::MesonBuild, ..cat("*", "Build Meson", Class::Build) }];
 static T_PYTHON: &[ArtifactSpec] = &[
     cat("checkpoint-*", "Checkpoint", Class::Personal),
-    ArtifactSpec { kind: ArtifactKind::PythonCache, ..cat("__pycache__", "Python __pycache__", Class::Cache) },
+    ArtifactSpec { kind: ArtifactKind::PythonCache, ..cat("__pycache__", "Cache Python (__pycache__)", Class::Cache) },
 ];
 static T_NODE: &[ArtifactSpec] = &[ArtifactSpec { ambiguous: true, ..cat("build", "Build Node", Class::Build) }];
 static T_CMAKE: &[ArtifactSpec] =
-    &[ArtifactSpec { kind: ArtifactKind::CMake, ..cat("build", "CMake build/", Class::Build) }];
+    &[ArtifactSpec { kind: ArtifactKind::CMake, ..cat("build", "Build CMake (build)", Class::Build) }];
 static T_SPHINX: &[ArtifactSpec] = &[cat("_build", "Sphinx _build", Class::Build)];
 static T_RUBY: &[ArtifactSpec] =
     &[ArtifactSpec { hint: "bundle install", ..cat("vendor/bundle", "Gem (vendor/bundle)", Class::Dependency) }];

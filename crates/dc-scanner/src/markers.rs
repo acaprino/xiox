@@ -157,11 +157,11 @@ use Class::{Build, Cache, Log, Personal};
 const HINT_VENV: &str = "Si ricrea con python -m venv e l'installazione dei requisiti";
 const HINT_TOX: &str = "Si ricrea al prossimo tox/nox";
 
-static RUST: &[ArtifactSpec] = &[spec("target", ArtifactKind::RustTarget, "Rust target/", Identity::RustTarget, Build)];
+static RUST: &[ArtifactSpec] = &[spec("target", ArtifactKind::RustTarget, "Build Rust (target)", Identity::RustTarget, Build)];
 static NODE: &[ArtifactSpec] = &[
     ArtifactSpec {
         hint: "Si riscarica con npm install (o pnpm, yarn, bun install)",
-        ..spec("node_modules", ArtifactKind::NodeModules, "node_modules", Identity::NodeModules, Class::Dependency)
+        ..spec("node_modules", ArtifactKind::NodeModules, "Dipendenze Node (node_modules)", Identity::NodeModules, Class::Dependency)
     },
     cat(".parcel-cache", "Cache Parcel (.parcel-cache)", Cache),
     cat(".turbo", "Cache Turborepo (.turbo)", Cache),
@@ -196,16 +196,16 @@ static CYPRESS: &[ArtifactSpec] = &[
 static PYTHON: &[ArtifactSpec] = &[
     ArtifactSpec {
         hint: HINT_VENV,
-        ..spec(".venv", ArtifactKind::PythonVenv, "Python venv (.venv)", Identity::PythonVenv, Class::Dependency)
+        ..spec(".venv", ArtifactKind::PythonVenv, "Ambiente virtuale Python (.venv)", Identity::PythonVenv, Class::Dependency)
     },
     ArtifactSpec {
         hint: HINT_VENV,
-        ..spec("venv", ArtifactKind::PythonVenv, "Python venv (venv)", Identity::PythonVenv, Class::Dependency)
+        ..spec("venv", ArtifactKind::PythonVenv, "Ambiente virtuale Python (venv)", Identity::PythonVenv, Class::Dependency)
     },
-    spec("__pycache__", ArtifactKind::PythonCache, "Python __pycache__", Identity::ParentMarker, Cache),
-    spec(".pytest_cache", ArtifactKind::PythonCache, "pytest cache", Identity::ParentMarker, Cache),
-    spec(".mypy_cache", ArtifactKind::PythonCache, "mypy cache", Identity::ParentMarker, Cache),
-    spec(".ruff_cache", ArtifactKind::PythonCache, "ruff cache", Identity::ParentMarker, Cache),
+    spec("__pycache__", ArtifactKind::PythonCache, "Cache Python (__pycache__)", Identity::ParentMarker, Cache),
+    spec(".pytest_cache", ArtifactKind::PythonCache, "Cache pytest (.pytest_cache)", Identity::ParentMarker, Cache),
+    spec(".mypy_cache", ArtifactKind::PythonCache, "Cache mypy (.mypy_cache)", Identity::ParentMarker, Cache),
+    spec(".ruff_cache", ArtifactKind::PythonCache, "Cache Ruff (.ruff_cache)", Identity::ParentMarker, Cache),
     dep(".tox", "Ambienti tox (.tox)", HINT_TOX),
     dep(".nox", "Ambienti nox (.nox)", HINT_TOX),
     cat("*.egg-info", "Metadati del pacchetto Python (*.egg-info)", Build),
@@ -223,25 +223,25 @@ static PYTHON: &[ArtifactSpec] = &[
     cat("checkpoint-*", "Checkpoint di addestramento (checkpoint-*)", Personal),
 ];
 static GRADLE: &[ArtifactSpec] = &[
-    spec("build", ArtifactKind::Gradle, "Gradle build/", Identity::ParentMarker, Build),
-    spec(".gradle", ArtifactKind::Gradle, "Gradle .gradle/", Identity::ParentMarker, Cache),
+    spec("build", ArtifactKind::Gradle, "Build Gradle (build)", Identity::ParentMarker, Build),
+    spec(".gradle", ArtifactKind::Gradle, "Cache Gradle (.gradle)", Identity::ParentMarker, Cache),
     cat(".kotlin", "Cache Kotlin (.kotlin)", Cache),
     cat(".cxx", "Build nativa Android (.cxx)", Build),
     cat(".externalNativeBuild", "Build nativa Android (.externalNativeBuild)", Build),
 ];
-static MAVEN: &[ArtifactSpec] = &[spec("target", ArtifactKind::Maven, "Maven target/", Identity::ParentMarker, Build)];
+static MAVEN: &[ArtifactSpec] = &[spec("target", ArtifactKind::Maven, "Build Maven (target)", Identity::ParentMarker, Build)];
 static SBT: &[ArtifactSpec] =
     &[cat("target", "Build sbt (target)", Build), cat("project/target", "Build sbt del progetto (project/target)", Build)];
 static LEININGEN: &[ArtifactSpec] = &[cat("target", "Build Leiningen (target)", Build)];
 static CLOJURE: &[ArtifactSpec] = &[cat(".cpcache", "Cache Clojure CLI (.cpcache)", Cache)];
 static DOTNET: &[ArtifactSpec] = &[
-    spec("bin", ArtifactKind::DotNet, ".NET bin/", Identity::ParentMarker, Build),
-    spec("obj", ArtifactKind::DotNet, ".NET obj/", Identity::ParentMarker, Build),
+    spec("bin", ArtifactKind::DotNet, "Build .NET (bin)", Identity::ParentMarker, Build),
+    spec("obj", ArtifactKind::DotNet, "Build intermedia .NET (obj)", Identity::ParentMarker, Build),
     cat("TestResults", "Risultati dei test .NET (TestResults)", Log),
     cat("BenchmarkDotNet.Artifacts", "Risultati di BenchmarkDotNet (BenchmarkDotNet.Artifacts)", Log),
 ];
 static DOTNET_PROPS: &[ArtifactSpec] = &[amb("artifacts", "Build .NET (artifacts)", Build)];
-static CMAKE: &[ArtifactSpec] = &[spec("build", ArtifactKind::CMake, "CMake build/", Identity::ParentMarker, Build)];
+static CMAKE: &[ArtifactSpec] = &[spec("build", ArtifactKind::CMake, "Build CMake (build)", Identity::ParentMarker, Build)];
 static CLANGD: &[ArtifactSpec] =
     &[cat(".cache/clangd", "Indice di clangd (.cache/clangd)", Cache), cat(".ccls-cache", "Cache ccls (.ccls-cache)", Cache)];
 static AUTOTOOLS: &[ArtifactSpec] = &[cat("autom4te.cache", "Cache Autotools (autom4te.cache)", Cache)];

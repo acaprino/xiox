@@ -23,7 +23,7 @@ fn report(root: &str, agent_worktree: bool, linked: bool) -> ProjectReport {
             id: path_key(&root.join("target")),
             path: root.join("target"),
             kind: ArtifactKind::RustTarget,
-            label: "Rust target/".into(),
+            label: "Build Rust (target)".into(),
             size: SizeInfo { logical_bytes: 10 << 20, allocated_bytes: None, file_count: 3 },
             verified: true,
             class: Class::Build,
@@ -660,7 +660,7 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
         r.by_category,
         vec![
             (WORKTREE_CATEGORY.to_string(), 1000),
-            ("Rust target/".to_string(), 500),
+            ("Build Rust (target)".to_string(), 500),
             ("Dipendenze npm".to_string(), 400),
         ]
     );
@@ -965,6 +965,18 @@ fn recycle_shortfall_empty_when_the_bin_is_big_enough_or_unknown() {
     let plan = recycle_plan(vec![sized(r"C:\p\target", 10 * GB)]);
     assert!(recycle_shortfall_with(&plan, |_| Some(20 * GB)).is_empty());
     assert!(recycle_shortfall_with(&plan, |_| None).is_empty());
+}
+
+#[test]
+fn recycle_shortfall_ignores_worktree_removals() {
+    let wt = PlanItem {
+        action: PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"C:\p\repo") },
+        ..sized(r"C:\p\wt", 10 * GB)
+    };
+    let plan = recycle_plan(vec![wt.clone()]);
+    assert!(recycle_shortfall_with(&plan, |_| Some(GB)).is_empty(), "git removes worktrees for good");
+    let plan = recycle_plan(vec![wt, sized(r"C:\p\wt\target", 3 * GB)]);
+    assert_eq!(recycle_shortfall_with(&plan, |_| Some(GB)), vec![('C', 3 * GB, GB)]);
 }
 
 #[test]

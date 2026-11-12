@@ -1424,6 +1424,7 @@ fn main() -> eframe::Result<()> {
     let mut about = false;
     let mut section = dev::Section::Projects;
     let mut only_root: Option<PathBuf> = None;
+    #[cfg(debug_assertions)]
     let mut demo = None;
     let mut i = 1;
     while i < args.len() {
@@ -1453,7 +1454,9 @@ fn main() -> eframe::Result<()> {
                 only_root = Some(PathBuf::from(&args[i + 1]));
                 i += 1;
             }
-            // Solo build di debug e solo con --only-root: conferma, pulizia o annulla da soli.
+            // Solo build di debug e solo con --only-root su un albero finto: conferma, pulizia o
+            // annulla da soli. Nelle build di rilascio non esiste.
+            #[cfg(debug_assertions)]
             "--dev-demo" if i + 1 < args.len() => {
                 demo = dev::Demo::parse(&args[i + 1]);
                 i += 1;
@@ -1482,8 +1485,12 @@ fn main() -> eframe::Result<()> {
             if screenshot.is_some() {
                 dev.set_screenshot();
             }
+            #[cfg(debug_assertions)]
             if let Some(d) = demo {
-                dev.set_demo(d);
+                if let Err(e) = dev.set_demo(d) {
+                    eprintln!("{e}");
+                    return Err(e.into());
+                }
             }
             let mut app = App::new(screenshot, tab, dev, about);
             app.start_rules(&cc.egui_ctx);

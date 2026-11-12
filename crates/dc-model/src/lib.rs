@@ -184,7 +184,7 @@ pub struct Artifact {
     pub id: String,
     pub path: PathBuf,
     pub kind: ArtifactKind,
-    /// Human label, e.g. "Rust target/".
+    /// Human label, e.g. "Build Rust (target)".
     pub label: String,
     pub size: SizeInfo,
     /// Identity check passed (CACHEDIR.TAG / .rustc_info.json, .modules.yaml, pyvenv.cfg ...).

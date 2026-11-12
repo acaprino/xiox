@@ -150,14 +150,17 @@ pub struct DevState {
     /// Esito di «Salva come testo…»: (testo, riuscito).
     saved: Option<(String, bool)>,
     /// Solo build di debug: `--dev-demo`, per gli screenshot della conferma e del resoconto.
+    #[cfg(debug_assertions)]
     demo: Option<Demo>,
     /// Fotogrammi dall'ultimo passo della dimostrazione (lo screenshot aspetta che il dialogo compaia).
+    #[cfg(debug_assertions)]
     demo_frames: u32,
 }
 
-/// `--dev-demo` (solo build di debug, solo con `--only-root`): dopo l'analisi sceglie tutte le
-/// cartelle e apre la conferma (`Confirm`), oppure pulisce in modo definitivo (`Clean`), oppure
-/// pulisce e annulla subito (`Cancel`).
+/// `--dev-demo` (solo build di debug, solo con `--only-root` su un albero finto): dopo l'analisi
+/// sceglie tutte le cartelle e apre la conferma (`Confirm`), oppure pulisce in modo definitivo
+/// (`Clean`), oppure pulisce e annulla subito (`Cancel`).
+#[cfg(debug_assertions)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Demo {
     Confirm,
@@ -165,6 +168,7 @@ pub enum Demo {
     Cancel,
 }
 
+#[cfg(debug_assertions)]
 impl Demo {
     pub fn parse(s: &str) -> Option<Demo> {
         match s {
@@ -211,7 +215,9 @@ impl DevState {
             tick: None,
             cancel: None,
             saved: None,
+            #[cfg(debug_assertions)]
             demo: None,
+            #[cfg(debug_assertions)]
             demo_frames: 0,
         }
     }
@@ -229,16 +235,23 @@ impl DevState {
         self.screenshot = true;
     }
 
-    /// Solo build di debug e solo con `--only-root` (mai sui progetti veri).
-    pub fn set_demo(&mut self, demo: Demo) {
-        if cfg!(debug_assertions) && !self.persist {
-            self.demo = Some(demo);
-        }
+    /// Solo build di debug e solo con `--only-root` su un albero finto (mai sui progetti veri):
+    /// la dimostrazione cancella in modo definitivo. `Err`: il motivo del rifiuto.
+    #[cfg(debug_assertions)]
+    pub fn set_demo(&mut self, demo: Demo) -> Result<(), String> {
+        demo_allowed(self.persist, &self.settings.roots)?;
+        self.demo = Some(demo);
+        Ok(())
     }
 
     /// Lo screenshot aspetta: la dimostrazione non ha ancora finito o il dialogo sta comparendo.
     pub fn demo_pending(&self) -> bool {
-        self.demo.is_some() || (self.demo_frames > 0 && self.demo_frames < 30)
+        #[cfg(debug_assertions)]
+        {
+            self.demo.is_some() || (self.demo_frames > 0 && self.demo_frames < 30)
+        }
+        #[cfg(not(debug_assertions))]
+        false
     }
 
     pub fn busy(&self) -> bool {
@@ -586,7 +599,8 @@ impl DevState {
         });
     }
 
-    /// Un passo di `--dev-demo` (solo build di debug, solo `--only-root`).
+    /// Un passo di `--dev-demo` (solo build di debug, solo `--only-root` su un albero finto).
+    #[cfg(debug_assertions)]
     fn run_demo(&mut self, ctx: &egui::Context) {
         if self.demo_frames > 0 {
             self.demo_frames += 1;
@@ -597,6 +611,11 @@ impl DevState {
         }
         let Some(scan) = self.scan.clone() else { return };
         self.demo = None;
+        // Le radici possono essere cambiate dal pannello dopo l'avvio: si ricontrolla.
+        if let Err(e) = demo_allowed(self.persist, &self.settings.roots) {
+            self.notice = Some(e);
+            return;
+        }
         self.demo_frames = 1;
         self.section = Section::Projects;
         select_all_artifacts(&scan.projects, &mut self.sel_artifacts, true);
@@ -891,8 +910,11 @@ pub fn dev_tab(state: &mut DevState, ui: &mut Ui, admin: bool) {
         let ctx = ui.ctx().clone();
         state.start_scan(&ctx, admin);
     }
-    let ctx = ui.ctx().clone();
-    state.run_demo(&ctx);
+    #[cfg(debug_assertions)]
+    {
+        let ctx = ui.ctx().clone();
+        state.run_demo(&ctx);
+    }
     let busy = state.busy();
     egui::SidePanel::left("dev_opts")
         .exact_width(270.0)
@@ -950,7 +972,7 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         ui.set_width(520.0);
         ui.label(RichText::new(confirm_title(c.section)).size(18.0).strong());
         ui.add_space(6.0);
-        ui.add(egui::Label::new(confirm_text(c.section, c.mode)).wrap());
+        ui.add(egui::Label::new(confirm_text(c.section, shown_mode(c))).wrap());
         ui.add_space(8.0);
         if let Some(e) = &c.error {
             ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
@@ -1020,6 +1042,15 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         }
     } else if close {
         state.confirm = None;
+    }
+}
+
+/// Il modo che il pulsante applica: con il Cestino troppo piccolo c'è solo «Definitiva».
+fn shown_mode(c: &Confirm) -> RemoveMode {
+    if c.shortfall.is_empty() {
+        c.mode
+    } else {
+        RemoveMode::Permanent
     }
 }
 
@@ -1105,6 +1136,8 @@ fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut HashSet<Stri
         let mut row = 0;
         for r in reports {
             let free = status_allows(r);
+            let locked = (!free).then(|| locked_why(r));
+            let locked = locked.as_deref();
             let color = if free { TEXT } else { MUTED };
             let mut open = CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id(("dev_project", &r.id)), open_all);
             if open_all {
@@ -1133,13 +1166,16 @@ fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut HashSet<Stri
                 if check.clicked() {
                     toggle_project(r, sel);
                 }
+                if let Some(why) = locked {
+                    check.on_disabled_hover_text(why);
+                }
                 ui.allocate_ui_with_layout(Vec2::new(w[2], ROW_H), Layout::left_to_right(Align::Center), |ui| {
                     ui.set_min_width(w[2]);
                     ui.set_max_width(w[2]);
                     ui.add(egui::Label::new(RichText::new(&r.name).strong().color(color)))
                         .on_hover_text(r.root.display().to_string());
-                    ui.add(egui::Label::new(RichText::new(&r.reason).size(12.0).color(MUTED)).truncate())
-                        .on_hover_text(&r.reason);
+                    // Il motivo intero, a capo se serve: la riga si alza.
+                    ui.add(egui::Label::new(RichText::new(&r.reason).size(12.0).color(MUTED)).wrap());
                 });
                 crate::cell(ui, w[3], RichText::new(r.last_activity_ms.map_or_else(|| "—".to_string(), fmt_date)).color(color));
                 crate::cell(ui, w[4], RichText::new(sys::fmt_size(r.reclaimable_bytes)).color(color));
@@ -1147,7 +1183,7 @@ fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut HashSet<Stri
             row += 1;
             open.show_body_unindented(ui, |ui| {
                 for a in &r.artifacts {
-                    striped_row(ui, row, |ui| artifact_cells(ui, &w, a, sel, free));
+                    striped_row(ui, row, |ui| artifact_cells(ui, &w, a, sel, locked));
                     row += 1;
                 }
             });
@@ -1156,11 +1192,17 @@ fn projects_table(ui: &mut Ui, reports: &[ProjectReport], sel: &mut HashSet<Stri
 }
 
 /// Una cartella di un progetto: casella, etichetta con l'avviso sotto, livello, dimensione.
-fn artifact_cells(ui: &mut Ui, w: &[f32], a: &Artifact, sel: &mut HashSet<String>, free: bool) {
+/// `locked`: perché il progetto non si pulisce (casella spenta, spiegata al passaggio).
+fn artifact_cells(ui: &mut Ui, w: &[f32], a: &Artifact, sel: &mut HashSet<String>, locked: Option<&str>) {
+    let free = locked.is_none();
     crate::cell(ui, w[0], "");
     let mut on = sel.contains(&a.id);
-    if check_cell(ui, w[1], &mut on, free).changed() {
+    let check = check_cell(ui, w[1], &mut on, free);
+    if check.changed() {
         set_artifact(sel, a, on);
+    }
+    if let Some(why) = locked {
+        check.on_disabled_hover_text(why);
     }
     let color = if free { TEXT } else { MUTED };
     ui.allocate_ui_with_layout(Vec2::new(w[2], ROW_H), Layout::top_down(Align::Min), |ui| {
@@ -1169,7 +1211,8 @@ fn artifact_cells(ui: &mut Ui, w: &[f32], a: &Artifact, sel: &mut HashSet<String
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.add(egui::Label::new(RichText::new(&a.label).color(color)).truncate()).on_hover_text(a.path.display().to_string());
         if !a.note.is_empty() {
-            ui.add(egui::Label::new(RichText::new(&a.note).size(12.0).color(MUTED)).truncate()).on_hover_text(&a.note);
+            // L'avviso intero («Si riscarica con…», «Potrebbe contenere sorgenti…»), a capo se serve.
+            ui.add(egui::Label::new(RichText::new(&a.note).size(12.0).color(MUTED)).wrap());
         }
     });
     let (level, level_color) = level_text(a.level);
@@ -1360,6 +1403,17 @@ fn error_strip(ui: &mut Ui, errors: &[String]) {
 // ---------- pure helpers ----------
 
 /// Lo stato e i blocchi che `dc_engine::build_plan` lascia passare: non in uso, non bloccato.
+/// Perché le caselle di un progetto che [`status_allows`] ferma sono spente.
+fn locked_why(r: &ProjectReport) -> String {
+    match r.status {
+        ProjectStatus::InUse => {
+            "Il progetto è in uso da un agente: le sue cartelle si puliscono quando la sessione è chiusa.".into()
+        }
+        ProjectStatus::Unreachable => format!("Il progetto non è raggiungibile e non si pulisce: {}", r.reason),
+        _ => format!("Il progetto è bloccato e non si pulisce: {}", r.reason),
+    }
+}
+
 fn status_allows(r: &ProjectReport) -> bool {
     matches!(r.status, ProjectStatus::Inactive | ProjectStatus::Recent | ProjectStatus::NoSessions)
         && r.blocked_by.is_empty()
@@ -1700,6 +1754,35 @@ fn only_root_settings(mut s: Settings, dir: PathBuf) -> Settings {
     s
 }
 
+/// File che segna la radice di un albero finto per `--dev-demo`.
+#[cfg(debug_assertions)]
+pub const DEMO_MARKER: &str = ".pulisci-demo";
+
+/// `--dev-demo` cancella in modo definitivo: vale solo con `--only-root` (`!persist`) e una sola
+/// radice dentro la cartella temporanea di sistema o con [`DEMO_MARKER`] alla radice.
+#[cfg(debug_assertions)]
+fn demo_allowed(persist: bool, roots: &[PathBuf]) -> Result<(), String> {
+    let refuse = |why: &str| Err(format!("Dimostrazione rifiutata: {why}"));
+    let [root] = roots else {
+        return refuse("serve --only-root con una sola cartella.");
+    };
+    if persist {
+        return refuse("serve --only-root.");
+    }
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return refuse("la cartella di --only-root non esiste.");
+    };
+    let in_temp = std::fs::canonicalize(std::env::temp_dir()).is_ok_and(|t| root.starts_with(&t) && root != t);
+    if in_temp || root.join(DEMO_MARKER).is_file() {
+        Ok(())
+    } else {
+        refuse(&format!(
+            "{} non è un albero finto (né nella cartella temporanea né con il file {DEMO_MARKER}).",
+            root.display()
+        ))
+    }
+}
+
 fn analysis_failed(scan: &DevScan) -> bool {
     scan.warnings.iter().any(|w| w == ANALYSIS_FAILED)
 }
@@ -1770,7 +1853,7 @@ fn session_size(s: &ArchivedSession) -> String {
     }
 }
 
-/// «progetto · Rust target/» per una cartella, «progetto · worktree intero» per un worktree.
+/// «progetto · Build Rust (target)» per una cartella, «progetto · worktree intero» per un worktree.
 fn plan_label(scan: &DevScan, item: &PlanItem) -> String {
     let report = scan.projects.iter().chain(&scan.worktrees).find(|r| r.id == item.project_id);
     let name = report.map_or_else(|| folder_name(&item.path), |r| r.name.clone());
@@ -1829,7 +1912,7 @@ mod tests {
                 id: dc_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target"))),
                 path: PathBuf::from(format!(r"D:\p\{id}\target")),
                 kind: ArtifactKind::RustTarget,
-                label: "Rust target/".into(),
+                label: "Build Rust (target)".into(),
                 size: SizeInfo { logical_bytes: bytes, allocated_bytes: None, file_count: 1 },
                 verified: true,
                 class: dc_model::Class::Build,
@@ -1878,6 +1961,13 @@ mod tests {
         let mut blocked = report("d", ProjectStatus::Recent, false, 1);
         blocked.blocked_by.push(BlockReason::DirtyGit);
         assert!(!selectable(&blocked));
+        for st in [ProjectStatus::InUse, ProjectStatus::Blocked, ProjectStatus::Unreachable] {
+            let mut r = report("x", st, false, 1);
+            r.reason = "modifiche non salvate".into();
+            let why = locked_why(&r);
+            assert!(why.starts_with("Il progetto "), "{why}");
+            assert_eq!(why.contains("modifiche non salvate"), st != ProjectStatus::InUse, "{why}");
+        }
         let mut empty = report("e", ProjectStatus::Inactive, false, 0);
         empty.artifacts.clear();
         assert!(!selectable(&empty), "un progetto senza artefatti non ha nulla da togliere");
@@ -2175,7 +2265,7 @@ mod tests {
             project_id: id.into(),
             reason: String::new(),
         };
-        assert_eq!(plan_label(&scan, &item(r"D:\p\app\target", "app", PlanAction::RemoveDir)), "app · Rust target/");
+        assert_eq!(plan_label(&scan, &item(r"D:\p\app\target", "app", PlanAction::RemoveDir)), "app · Build Rust (target)");
         let remove_wt = PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"D:\repo") };
         assert_eq!(plan_label(&scan, &item(r"D:\p\wt", "wt", remove_wt)), "wt · worktree intero");
         assert_eq!(plan_label(&scan, &item(r"D:\x\node_modules", "?", PlanAction::RemoveDir)), "node_modules · node_modules");
@@ -2335,7 +2425,7 @@ mod tests {
         assert_eq!(st.tick.map(|t| t.done_bytes), Some(5));
         let mut c = DevCleaned::new();
         c.report.freed_bytes = 10;
-        c.report.by_category = vec![("Rust target/".into(), 10)];
+        c.report.by_category = vec![("Build Rust (target)".into(), 10)];
         tx.send(DevMsg::Cleaned(c)).unwrap();
         st.poll();
         assert!(!st.busy());
@@ -2477,6 +2567,10 @@ mod tests {
             shortfall_text(&c.shortfall),
             "Il Cestino di D: ha 0 byte liberi, la pulizia ne sposta 100 byte. Eliminare definitivamente questa volta?"
         );
+        // Il pulsante è «Definitiva»: il testo non parla del Cestino.
+        assert_eq!(c.mode, RemoveMode::Recycle);
+        assert_eq!(shown_mode(&c), RemoveMode::Permanent);
+        assert_eq!(confirm_text(c.section, shown_mode(&c)), "Gli elementi selezionati verranno eliminati definitivamente.");
         make_permanent(&mut c).unwrap();
         assert_eq!(c.mode, RemoveMode::Permanent);
         assert_eq!(c.plan.as_ref().unwrap().mode, RemoveMode::Permanent);
@@ -2501,7 +2595,7 @@ mod tests {
                 files: 4,
                 dirs: 2,
                 elapsed_ms: 1500,
-                by_category: vec![("Rust target/".into(), 100)],
+                by_category: vec![("Build Rust (target)".into(), 100)],
                 skipped: vec![(PathBuf::from(r"D:\p\web\dist"), "Annullato".into())],
                 cancelled: true,
                 ..Default::default()
@@ -2513,7 +2607,7 @@ mod tests {
         add_session_outcome(&mut out.report, "Codex · y", &f, RemoveMode::Recycle);
         let r = &out.report;
         assert_eq!((r.freed_bytes, r.recycled_bytes, r.files, r.dirs), (100, 300, 5, 2));
-        assert_eq!(r.by_category, vec![(SESSIONS_CATEGORY.to_string(), 300), ("Rust target/".to_string(), 100)]);
+        assert_eq!(r.by_category, vec![(SESSIONS_CATEGORY.to_string(), 300), ("Build Rust (target)".to_string(), 100)]);
         assert_eq!(r.failed, vec![(PathBuf::from("Codex · y"), "bloccato (in uso da: code.exe)".to_string())]);
         assert_eq!(out.label(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)");
         assert_eq!(cleaned_title(Some(&out), false), "Pulizia annullata");
@@ -2561,11 +2655,38 @@ mod tests {
         st.settings.inactive_days = 3;
         st.save();
         assert!(st.settings_err.is_none());
-        // Le dimostrazioni valgono solo con --only-root.
-        st.set_demo(Demo::Clean);
-        assert_eq!(st.demo.is_some(), cfg!(debug_assertions));
+    }
+
+    /// `--dev-demo` cancella per davvero: solo con `--only-root` su un albero finto.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn demo_runs_only_on_a_fake_tree() {
+        // Fuori dalla cartella temporanea: serve il file segnale.
+        let base = std::env::current_dir().unwrap().join("target");
+        let real = tempfile::Builder::new().prefix("demo-vero-").tempdir_in(&base).unwrap();
+        let mut st = DevState::only_root(real.path().to_path_buf(), Section::Projects, false);
+        let e = st.set_demo(Demo::Clean).unwrap_err();
+        assert!(e.contains(DEMO_MARKER), "{e}");
+        assert!(st.demo.is_none());
+        std::fs::write(real.path().join(DEMO_MARKER), "").unwrap();
+        st.set_demo(Demo::Clean).unwrap();
+        assert_eq!(st.demo, Some(Demo::Clean));
+
+        // Dentro la cartella temporanea basta --only-root, ma non la cartella temporanea stessa.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects, false);
+        st.set_demo(Demo::Confirm).unwrap();
+        let mut st = DevState::only_root(std::env::temp_dir(), Section::Projects, false);
+        assert!(st.set_demo(Demo::Confirm).is_err());
+        let mut st = DevState::only_root(real.path().join("manca"), Section::Projects, false);
+        assert!(st.set_demo(Demo::Confirm).is_err(), "cartella inesistente");
+
+        // Senza --only-root (le radici vere dell'utente) mai, nemmeno con il segnale.
         let mut normal = state();
-        normal.set_demo(Demo::Clean);
+        normal.settings.roots = vec![real.path().to_path_buf()];
+        assert!(normal.set_demo(Demo::Clean).is_err());
         assert!(normal.demo.is_none());
+        // Le radici cambiate dopo l'avvio: il passo della dimostrazione si ferma.
+        assert!(demo_allowed(false, &[real.path().to_path_buf(), tmp.path().to_path_buf()]).is_err());
     }
 }

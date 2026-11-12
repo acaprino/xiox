@@ -546,7 +546,8 @@ fn recycle_shortfall_with(plan: &CleanPlan, room: impl Fn(char) -> Option<u64>) 
         return Vec::new();
     }
     let mut per_volume: std::collections::BTreeMap<char, u64> = std::collections::BTreeMap::new();
-    for item in &plan.items {
+    // A worktree removal is always permanent (git deletes it): only `RemoveDir` uses the Bin.
+    for item in plan.items.iter().filter(|i| matches!(i.action, PlanAction::RemoveDir)) {
         if let Some(letter) = drive_letter(&item.path) {
             let sum = per_volume.entry(letter).or_default();
             *sum = sum.saturating_add(item.expected_bytes);
