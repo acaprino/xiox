@@ -9,6 +9,10 @@
 //! `cleanmgr.exe /sagerun:99` per percorso assoluto, si aspetta la fine e poi
 //! si toglie **sempre** il valore. Se `StateFlags0099` c'è già sotto una
 //! qualsiasi sottochiave (lo ha messo qualcun altro) non si procede.
+//! Eccezione: un valore rimasto da PulisciPC stesso (processo terminato
+//! durante l'attesa) si riconosce dal valore compagno [`MARKER_NAME`],
+//! scritto prima del flag e tolto dopo; se l'unico flag è sotto
+//! [`HANDLER`] e il compagno c'è, si toglie e si procede.
 //!
 //! Ogni accesso al sistema passa da un trait ([`Files`], [`VolumeCaches`],
 //! [`Cleanmgr`]): `analyze`/`clean` contengono tutta la logica e i test le
@@ -25,8 +29,9 @@ use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 /// Id della voce (selezione `native:windows_old`).
 pub const ID: &str = "windows_old";
 pub const LABEL: &str = "Vecchia installazione di Windows";
-pub const WARNING: &str =
-    "Elimina i file della versione precedente di Windows: dopo non potrai più tornare indietro alla versione di prima.";
+pub const WARNING: &str = "Elimina i file della versione precedente di Windows: dopo non potrai più tornare indietro \
+     alla versione di prima. Elimina anche i file personali rimasti in Windows.old\\Users (documenti non trasferiti \
+     dall'aggiornamento): controlla l'Analisi e copiali prima, se ti servono.";
 /// Nome della cartella nella radice del disco di sistema.
 pub const FOLDER: &str = "Windows.old";
 /// Chiave dei gestori di Pulizia disco (HKLM, vista a 64 bit).
@@ -37,6 +42,13 @@ pub const HANDLER: &str = "Previous Installations";
 pub const FLAG_NAME: &str = "StateFlags0099";
 /// `2` = gestore scelto per questa esecuzione di `/sagerun`.
 pub const FLAG_VALUE: u32 = 2;
+/// Valore compagno (`REG_SZ` con l'ora) scritto sotto [`HANDLER`] prima di
+/// [`FLAG_NAME`] e tolto dopo: dice che il flag l'ha messo PulisciPC.
+pub const MARKER_NAME: &str = "PulisciPC_StateFlags0099";
+/// Cartelle dei profili in `Windows.old\Users` guardate per i file personali.
+pub const PERSONAL_DIRS: &[&str] = &["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos", "Favorites"];
+/// Tempo massimo per contare i file personali.
+pub const PERSONAL_BUDGET: Duration = Duration::from_secs(5);
 pub const SAGERUN_ARG: &str = "/sagerun:99";
 /// Tempo massimo per stimare la dimensione; oltre, «oltre N GB».
 pub const SIZE_BUDGET: Duration = Duration::from_secs(10);
@@ -89,6 +101,12 @@ pub trait VolumeCaches {
     fn set_flag(&self) -> Result<(), String>;
     /// Toglie [`FLAG_NAME`] da [`HANDLER`]; `Ok` anche se non c'è.
     fn remove_flag(&self) -> Result<(), String>;
+    /// `Ok(true)` se sotto [`HANDLER`] c'è [`MARKER_NAME`].
+    fn has_marker(&self) -> Result<bool, String>;
+    /// Scrive [`MARKER_NAME`] sotto [`HANDLER`] (senza creare la chiave).
+    fn set_marker(&self) -> Result<(), String>;
+    /// Toglie [`MARKER_NAME`]; `Ok` anche se non c'è.
+    fn remove_marker(&self) -> Result<(), String>;
 }
 
 /// `cleanmgr.exe` di sistema.
@@ -198,7 +216,20 @@ pub fn windows_old_path(fs: &dyn Files) -> Option<PathBuf> {
 /// fisici si contano una volta per nome: la stima può superare lo spazio
 /// che si libera davvero.
 pub fn measure(fs: &dyn Files, root: &Path, budget: Duration, clock: &dyn Fn() -> Duration, cancel: &AtomicBool) -> Size {
-    let start = clock();
+    measure_from(fs, root, clock(), budget, clock, cancel, &|_| false)
+}
+
+/// Come [`measure`], con il tempo contato da `start` e i file per cui `skip`
+/// dà `true` lasciati fuori dal conto.
+fn measure_from(
+    fs: &dyn Files,
+    root: &Path,
+    start: Duration,
+    budget: Duration,
+    clock: &dyn Fn() -> Duration,
+    cancel: &AtomicBool,
+    skip: &dyn Fn(&std::ffi::OsStr) -> bool,
+) -> Size {
     let mut size = Size::default();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -222,7 +253,7 @@ pub fn measure(fs: &dyn Files, root: &Path, budget: Duration, clock: &dyn Fn() -
                 if !e.reparse {
                     stack.push(dir.join(&e.name));
                 }
-            } else {
+            } else if !skip(&e.name) {
                 size.files += 1;
                 size.bytes = size.bytes.saturating_add(e.size);
             }
@@ -254,17 +285,100 @@ pub fn analyze(fs: &dyn Files, clock: &dyn Fn() -> Duration, cancel: &AtomicBool
     if size.cancelled {
         return NativeFound::default();
     }
+    let mut detail = vec![
+        format!("{shown}: {}", size_text(&size)),
+        "Si elimina con Pulizia disco di Windows (cleanmgr), mai a mano; la dimensione è una stima.".to_string(),
+    ];
+    detail.extend(personal_files_text(fs, &path, clock, cancel));
+    let others = numbered_copies(fs, &path);
+    if !others.is_empty() {
+        detail.push(format!(
+            "Ci sono anche {}: copie di installazioni ancora più vecchie, che Pulizia disco può eliminare insieme.",
+            others.join(", ")
+        ));
+    }
     NativeFound {
-        detail: vec![
-            format!("{shown}: {}", size_text(&size)),
-            "Si elimina con Pulizia disco di Windows (cleanmgr), mai a mano; la dimensione è una stima.".to_string(),
-        ],
+        detail,
         count: 1,
         files: 0,
         bytes: size.bytes,
         skipped: 0,
         items: vec![path.to_string_lossy().into_owned()],
     }
+}
+
+/// Profili di `Windows.old\Users` con file nelle cartelle personali
+/// ([`PERSONAL_DIRS`]), in sola lettura e in al più [`PERSONAL_BUDGET`]:
+/// righe per il dettaglio dell'analisi (vuoto se non ce ne sono).
+pub fn personal_files_text(fs: &dyn Files, win_old: &Path, clock: &dyn Fn() -> Duration, cancel: &AtomicBool) -> Vec<String> {
+    let users = win_old.join("Users");
+    let Ok(profiles) = fs.list(&users) else { return Vec::new() };
+    let start = clock();
+    let skip = |n: &std::ffi::OsStr| n.eq_ignore_ascii_case("desktop.ini");
+    let mut found = Vec::new();
+    let mut partial = false;
+    let mut names: Vec<_> = profiles.into_iter().filter(|e| e.dir && !e.reparse).map(|e| e.name).collect();
+    names.sort();
+    for name in names {
+        if name.eq_ignore_ascii_case("Default") {
+            continue;
+        }
+        let mut total = Size::default();
+        for sub in PERSONAL_DIRS {
+            let dir = users.join(&name).join(sub);
+            if fs.kind(&dir) != Kind::Dir {
+                continue;
+            }
+            let s = measure_from(fs, &dir, start, PERSONAL_BUDGET, clock, cancel, &skip);
+            total.files += s.files;
+            total.bytes = total.bytes.saturating_add(s.bytes);
+            partial |= !s.complete();
+        }
+        if total.files > 0 {
+            found.push(format!(
+                "{} ({} file, {})",
+                name.to_string_lossy(),
+                total.files,
+                crate::sys::fmt_size(total.bytes)
+            ));
+        }
+        if clock().saturating_sub(start) >= PERSONAL_BUDGET || cancel.load(Ordering::Relaxed) {
+            partial = true;
+            break;
+        }
+    }
+    if found.is_empty() {
+        return if partial {
+            vec![format!("File personali in {}: conteggio non completato, controlla a mano.", users.display())]
+        } else {
+            Vec::new()
+        };
+    }
+    let more = if partial { " (conteggio parziale)" } else { "" };
+    vec![format!(
+        "Attenzione: in {} ci sono file personali (Desktop, Documenti, Download, Immagini…){more}: {}. Con la \
+         pulizia si perdono: copiali prima, se ti servono.",
+        users.display(),
+        found.join(", ")
+    )]
+}
+
+/// `Windows.old.000`, `Windows.old.001`… accanto a `win_old` (cartelle vere).
+pub fn numbered_copies(fs: &dyn Files, win_old: &Path) -> Vec<String> {
+    let Some(root) = win_old.parent() else { return Vec::new() };
+    let Ok(entries) = fs.list(root) else { return Vec::new() };
+    let mut out: Vec<String> = entries
+        .into_iter()
+        .filter(|e| e.dir && !e.reparse)
+        .filter_map(|e| {
+            let n = e.name.to_str()?.to_string();
+            let lower = n.to_ascii_lowercase();
+            let digits = lower.strip_prefix("windows.old.")?;
+            (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())).then(|| root.join(&n).display().to_string())
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 fn kind_text(k: Kind) -> &'static str {
@@ -298,7 +412,9 @@ fn size_text(s: &Size) -> String {
 
 /// Aspetta la fine di `cleanmgr` controllando ogni [`POLL_STEP`]. Annullare
 /// o superare `max` vuol dire solo smettere di aspettare: `cleanmgr` non si
-/// termina mai (ha già letto i gestori scelti e può finire da solo).
+/// termina mai. Se ha già letto i gestori scelti finisce da solo; se si
+/// annulla subito dopo l'avvio, il flag può sparire prima che lo legga, e
+/// allora non pulisce nulla (innocuo).
 pub fn wait_cleanmgr(child: &mut dyn Child, cancel: &AtomicBool, max: Duration, sleep: &dyn Fn(Duration)) -> Result<Waited, String> {
     let mut waited = Duration::ZERO;
     loop {
@@ -325,7 +441,8 @@ pub struct Deps<'a> {
     pub sleep: &'a dyn Fn(Duration),
 }
 
-/// Toglie `StateFlags0099` all'uscita di scena se nessuno l'ha già fatto con
+/// Toglie `StateFlags0099` (e poi il compagno [`MARKER_NAME`], solo se il
+/// flag è andato via) all'uscita di scena se nessuno l'ha già fatto con
 /// [`FlagGuard::finish`]: anche su errore, ritorno anticipato o panico.
 struct FlagGuard<'a> {
     reg: &'a dyn VolumeCaches,
@@ -335,16 +452,23 @@ struct FlagGuard<'a> {
 impl FlagGuard<'_> {
     fn finish(mut self) -> Result<(), String> {
         self.armed = false;
-        self.reg.remove_flag()
+        remove_flag_and_marker(self.reg)
     }
 }
 
 impl Drop for FlagGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            let _ = self.reg.remove_flag();
+            let _ = remove_flag_and_marker(self.reg);
         }
     }
+}
+
+/// Prima il flag, poi il compagno: se il flag non si toglie, il compagno
+/// resta e la volta dopo lo si riconosce come nostro.
+fn remove_flag_and_marker(reg: &dyn VolumeCaches) -> Result<(), String> {
+    reg.remove_flag()?;
+    reg.remove_marker().map_err(|e| format!("{MARKER_NAME}: {e}"))
 }
 
 /// Pulisce solo se l'analisi dello stesso job ha trovato **proprio**
@@ -386,11 +510,24 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
             out.note(format!("Impostazioni di Pulizia disco non leggibili ({e}): non si procede"));
             return out;
         }
+        Ok(keys) if keys.len() == 1 && keys[0].eq_ignore_ascii_case(HANDLER) && d.reg.has_marker() == Ok(true) => {
+            // Rimasto da PulisciPC stesso (processo terminato durante l'attesa).
+            if let Err(e) = remove_flag_and_marker(d.reg) {
+                out.failed = 1;
+                out.note(format!(
+                    "{FLAG_NAME} rimasto da una pulizia interrotta di PulisciPC, ma non si toglie ({e}). Toglilo a \
+                     mano da HKLM\\{VOLUME_CACHES}\\{HANDLER} con l'Editor del Registro."
+                ));
+                return out;
+            }
+            out.note(format!("Tolto {FLAG_NAME} rimasto da una pulizia interrotta di PulisciPC."));
+        }
         Ok(keys) if !keys.is_empty() => {
             out.failed = 1;
             out.note(format!(
                 "{FLAG_NAME} è già impostato da un altro programma in: {}. Non si procede, per non avviare pulizie \
-                 che non hai scelto.",
+                 che non hai scelto. Se non serve più, toglilo con l'Editor del Registro da \
+                 HKLM\\{VOLUME_CACHES}\\<chiave>.",
                 keys.join(", ")
             ));
             return out;
@@ -403,8 +540,9 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
     let flag = FlagGuard { reg: d.reg, armed: true };
     let ran = d
         .reg
-        .set_flag()
-        .map_err(|e| format!("{FLAG_NAME} non scritto: {e}"))
+        .set_marker()
+        .map_err(|e| format!("{MARKER_NAME} non scritto: {e}"))
+        .and_then(|()| d.reg.set_flag().map_err(|e| format!("{FLAG_NAME} non scritto: {e}")))
         .and_then(|()| d.cleanmgr.start().map_err(|e| format!("cleanmgr.exe non avviato: {e}")))
         .and_then(|mut child| {
             wait_cleanmgr(child.as_mut(), cancel, MAX_WAIT, d.sleep).map_err(|e| format!("attesa di cleanmgr.exe interrotta: {e}"))
@@ -434,9 +572,12 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
     out
 }
 
-/// Esito dopo la fine di `cleanmgr`: cartella sparita = eliminata (si libera
-/// la stima dell'analisi); ancora presente = errore, con lo spazio liberato
-/// solo se la nuova stima è completa (mai più di quanto si sa).
+/// Esito dopo la fine di `cleanmgr` (si rimisura): cartella sparita =
+/// eliminata (si libera la stima dell'analisi); ancora presente ma più
+/// piccola, con la nuova stima completa = Pulizia disco ha lavorato e forse
+/// continua in un altro processo (non è un errore: «controlla lo spazio»);
+/// uguale o non misurabile = errore. Lo spazio liberato si conta solo con la
+/// nuova stima completa (mai più di quanto si sa).
 fn after_exit(d: &Deps, path: &Path, found: &NativeFound, code: i32, cancel: &AtomicBool, out: &mut NativeCleaned) {
     let shown = path.display().to_string();
     let kind = d.fs.kind(path);
@@ -447,17 +588,27 @@ fn after_exit(d: &Deps, path: &Path, found: &NativeFound, code: i32, cancel: &At
         return;
     }
     let mut left = String::new();
+    let mut shrank = false;
     if kind == Kind::Dir {
         let after = measure(d.fs, path, SIZE_BUDGET, d.clock, cancel);
         if after.complete() {
             out.freed = found.bytes.saturating_sub(after.bytes);
+            shrank = after.bytes < found.bytes;
         }
         left = format!(" ({})", size_text(&after));
     }
     let code = if code != 0 { format!(" con codice {code}") } else { String::new() };
+    if shrank {
+        out.note(format!(
+            "Pulizia disco ha terminato{code}: controlla lo spazio. {shown} c'è ancora ma è più piccola{left}; \
+             Pulizia disco può continuare da sola per qualche minuto."
+        ));
+        return;
+    }
     out.failed = 1;
     out.note(format!(
-        "Pulizia disco è terminata{code} ma {shown} è ancora presente{left}: riprova dopo un riavvio oppure da \
+        "Pulizia disco è terminata{code} ma {shown} è ancora presente{left}: se Pulizia disco continua in un'altra \
+         finestra controlla lo spazio fra qualche minuto, altrimenti riprova dopo un riavvio oppure da \
          Impostazioni > Sistema > Archiviazione > File temporanei."
     ));
 }
@@ -491,11 +642,14 @@ mod win {
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY,
         HKEY_LOCAL_MACHINE, KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE, KEY_WOW64_64KEY, REG_DWORD, REG_LINK,
-        REG_OPTION_OPEN_LINK,
+        REG_OPTION_OPEN_LINK, REG_SZ,
     };
     use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetSystemWindowsDirectoryW};
 
-    use super::{Child, Cleanmgr, Entry, Files, Kind, VolumeCaches, FLAG_NAME, FLAG_VALUE, HANDLER, SAGERUN_ARG, VOLUME_CACHES};
+    use super::{
+        Child, Cleanmgr, Entry, Files, Kind, VolumeCaches, FLAG_NAME, FLAG_VALUE, HANDLER, MARKER_NAME, SAGERUN_ARG,
+        VOLUME_CACHES,
+    };
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -709,43 +863,85 @@ mod win {
         }
 
         fn set_flag(&self) -> Result<(), String> {
-            let path = handler_path();
-            let key = open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_SET_VALUE | KEY_QUERY_VALUE).map_err(|rc| {
-                if rc == ERROR_FILE_NOT_FOUND {
-                    format!("gestore «{HANDLER}» di Pulizia disco assente")
-                } else {
-                    format!("HKLM\\{path}: {}", os_error(rc))
-                }
-            })?;
-            if is_link(&key) {
-                return Err(format!("HKLM\\{path} è un collegamento del registro: non si scrive"));
-            }
-            let name = wide(FLAG_NAME);
             let data = FLAG_VALUE.to_le_bytes();
-            // SAFETY: chiave aperta in scrittura, nome terminato da zero, 4 byte di DWORD.
-            let rc = unsafe { RegSetValueExW(key.0, name.as_ptr(), 0, REG_DWORD, data.as_ptr(), data.len() as u32) };
-            if rc == ERROR_SUCCESS {
-                Ok(())
-            } else {
-                Err(os_error(rc))
-            }
+            set_value(FLAG_NAME, REG_DWORD, &data)
         }
 
         fn remove_flag(&self) -> Result<(), String> {
+            delete_value(FLAG_NAME)
+        }
+
+        fn has_marker(&self) -> Result<bool, String> {
             let path = handler_path();
-            let key = match open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_SET_VALUE) {
+            let key = match open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_QUERY_VALUE) {
                 Ok(k) => k,
-                Err(ERROR_FILE_NOT_FOUND) => return Ok(()),
+                Err(ERROR_FILE_NOT_FOUND) => return Ok(false),
                 Err(rc) => return Err(format!("HKLM\\{path}: {}", os_error(rc))),
             };
-            let name = wide(FLAG_NAME);
-            // SAFETY: chiave aperta in scrittura, nome terminato da zero.
-            let rc = unsafe { RegDeleteValueW(key.0, name.as_ptr()) };
-            if rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND {
-                Ok(())
-            } else {
-                Err(os_error(rc))
+            if is_link(&key) {
+                return Ok(false);
             }
+            value_exists(&key, &wide(MARKER_NAME)).map_err(os_error)
+        }
+
+        fn set_marker(&self) -> Result<(), String> {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let text: Vec<u16> = format!("PulisciPC {secs}").encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes: Vec<u8> = text.iter().flat_map(|c| c.to_le_bytes()).collect();
+            set_value(MARKER_NAME, REG_SZ, &bytes)
+        }
+
+        fn remove_marker(&self) -> Result<(), String> {
+            delete_value(MARKER_NAME)
+        }
+    }
+
+    /// Scrive il valore `name` sotto [`HANDLER`] (chiave esistente, non un
+    /// collegamento del registro).
+    fn set_value(name: &str, ty: u32, data: &[u8]) -> Result<(), String> {
+        let path = handler_path();
+        let key = open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_SET_VALUE | KEY_QUERY_VALUE).map_err(|rc| {
+            if rc == ERROR_FILE_NOT_FOUND {
+                format!("gestore «{HANDLER}» di Pulizia disco assente")
+            } else {
+                format!("HKLM\\{path}: {}", os_error(rc))
+            }
+        })?;
+        if is_link(&key) {
+            return Err(format!("HKLM\\{path} è un collegamento del registro: non si scrive"));
+        }
+        let w = wide(name);
+        // SAFETY: chiave aperta in scrittura, nome terminato da zero, `data`
+        // lungo quanto passato (4 byte di DWORD o UTF-16 terminato da zero).
+        let rc = unsafe { RegSetValueExW(key.0, w.as_ptr(), 0, ty, data.as_ptr(), data.len() as u32) };
+        if rc == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(os_error(rc))
+        }
+    }
+
+    /// Toglie il valore `name` da [`HANDLER`]; `Ok` se non c'è.
+    fn delete_value(name: &str) -> Result<(), String> {
+        let path = handler_path();
+        let key = match open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_SET_VALUE | KEY_QUERY_VALUE) {
+            Ok(k) => k,
+            Err(ERROR_FILE_NOT_FOUND) => return Ok(()),
+            Err(rc) => return Err(format!("HKLM\\{path}: {}", os_error(rc))),
+        };
+        if is_link(&key) {
+            return Err(format!("HKLM\\{path} è un collegamento del registro: non si tocca"));
+        }
+        let w = wide(name);
+        // SAFETY: chiave aperta in scrittura, nome terminato da zero.
+        let rc = unsafe { RegDeleteValueW(key.0, w.as_ptr()) };
+        if rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            Err(os_error(rc))
         }
     }
 

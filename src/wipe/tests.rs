@@ -37,6 +37,8 @@ struct FakeVol {
     /// Lo spazio libero non cala scrivendo (come un file compresso).
     free_never_shrinks: bool,
     create_dir_fails: bool,
+    /// Byte consumati da un'«altra app» durante ogni scrittura.
+    steal: u64,
 }
 
 impl FakeVol {
@@ -58,6 +60,7 @@ impl FakeVol {
             cancel: AtomicBool::new(false),
             free_never_shrinks: false,
             create_dir_fails: false,
+            steal: 0,
         }
     }
 
@@ -94,6 +97,7 @@ impl Fill for FakeFill<'_> {
         if !v.free_never_shrinks {
             v.free.set(v.free.get() - len);
         }
+        v.free.set(v.free.get().saturating_sub(v.steal));
         v.lowest_free.set(v.lowest_free.get().min(v.free.get()));
         v.biggest_write.set(v.biggest_write.get().max(len));
         v.dirs.borrow_mut().get_mut(&self.dir).expect("cartella creata")[self.idx] += len;
@@ -194,13 +198,15 @@ fn item_is_off_by_default_with_warning() {
     assert_eq!(it.label, "Pulisci spazio libero");
     assert!(!it.default_on);
     assert!(it.needs_admin);
-    assert_eq!(
-        it.warning,
-        Some(
-            "Sovrascrive lo spazio libero perché i file cancellati non si possano recuperare. Può richiedere molto \
-             tempo; durante la scrittura il disco resta quasi pieno (si lascia 1 GB libero)."
-        )
-    );
+    assert_eq!(it.warning, Some(WARNING));
+    // L'avviso dice cosa si rompe e cosa non si copre.
+    for needle in ["solo disco di sistema", "MFT", "altri programmi", "copie shadow", "punti di ripristino", "SSD"] {
+        assert!(WARNING.contains(needle), "{needle}");
+    }
+    // La descrizione dichiara la copertura parziale.
+    for needle in ["solo disco di sistema", "parziale", "MFT", "altri dischi", "copie shadow", "1 GB"] {
+        assert!(it.description.contains(needle), "{needle}");
+    }
 }
 
 // ----- analisi -----
@@ -267,24 +273,78 @@ fn hdd_analysis_shows_kind_and_free_space() {
     assert_eq!(vol.writes.get(), 0, "l'analisi non scrive");
 }
 
-#[test]
-fn leftover_from_a_previous_run_is_removed_by_analysis() {
-    let vol = FakeVol::hdd(10 * GIB);
+fn with_leftovers(free: u64) -> FakeVol {
+    let vol = FakeVol::hdd(free);
     vol.dirs.borrow_mut().insert("PulisciPC_wipe_123_456".into(), vec![3 * GIB, GIB]);
     vol.dirs.borrow_mut().insert("Documenti".into(), vec![5]);
     vol.dirs.borrow_mut().insert("PulisciPC_wipe_altro".into(), vec![5]);
+    vol
+}
+
+#[test]
+fn analysis_only_reports_a_leftover_and_never_removes_it() {
+    let vol = with_leftovers(10 * GIB);
     let found = analyze_wipe(&vol);
-    assert_eq!(*vol.removed.borrow(), vec!["PulisciPC_wipe_123_456".to_string()]);
-    assert_eq!(vol.free.get(), 14 * GIB);
-    assert!(vol.dirs.borrow().contains_key("Documenti"));
-    assert!(vol.dirs.borrow().contains_key("PulisciPC_wipe_altro"));
+    assert!(vol.removed.borrow().is_empty(), "l'analisi è di sola lettura");
+    assert_eq!(vol.free.get(), 10 * GIB);
+    assert_eq!(vol.dirs.borrow().len(), 3);
+    assert_eq!(found.items, vec![r"C:\".to_string(), "leftover:PulisciPC_wipe_123_456".to_string()]);
+    assert_eq!(found.count, 2);
     assert!(
-        found.detail.iter().any(|d| d.contains("PulisciPC_wipe_123_456") && d.contains("4,00 GB")),
+        found.detail.iter().any(|d| d.contains("Trovata una cartella rimasta") && d.contains("PulisciPC_wipe_123_456")
+            && d.contains("Verrà tolta")),
         "{:?}",
         found.detail
     );
-    // Lo spazio ritrovato conta già nell'analisi.
-    assert!(found.detail[0].contains("14,00 GB"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("10,00 GB"), "{:?}", found.detail);
+}
+
+#[test]
+fn clean_removes_the_leftover_first_then_writes() {
+    let vol = with_leftovers(10 * GIB);
+    let found = analyze_wipe(&vol);
+    let out = clean_wipe(&vol, &found, &vol.cancel);
+    let removed = vol.removed.borrow().clone();
+    assert_eq!(removed[0], "PulisciPC_wipe_123_456", "prima l'avanzo");
+    assert_eq!(removed.len(), 2, "poi la cartella di lavoro");
+    assert!(vol.dirs.borrow().contains_key("Documenti"));
+    assert!(vol.dirs.borrow().contains_key("PulisciPC_wipe_altro"));
+    assert_eq!(vol.free.get(), 14 * GIB);
+    // Spazio ritrovato: conta per la scrittura (14 GB meno riserva e margine).
+    assert_eq!(vol.created.borrow().len(), 1);
+    assert!(vol.lowest_free.get() >= RESERVE + MARGIN);
+    assert!(vol.writes.get() > (12 * GIB / BLOCK) as u32, "scritture: {}", vol.writes.get());
+    assert_eq!(out.freed, 4 * GIB);
+    assert_eq!(out.removed, 1);
+    assert_eq!(out.failed, 0, "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("Cancellata la cartella rimasta") && n.contains("4,00 GB")), "{:?}", out.notes);
+}
+
+#[test]
+fn leftover_on_an_unsuitable_disk_is_removed_but_nothing_is_written() {
+    // Avanzo che riempie il disco: sotto 2 GB liberi non si scrive, ma l'avanzo si toglie.
+    let vol = with_leftovers(GIB);
+    let found = analyze_wipe(&vol);
+    assert_eq!(found.items, vec!["leftover:PulisciPC_wipe_123_456".to_string()]);
+    let out = clean_wipe(&vol, &found, &vol.cancel);
+    assert_eq!(*vol.removed.borrow(), vec!["PulisciPC_wipe_123_456".to_string()]);
+    assert!(vol.created.borrow().is_empty());
+    assert_eq!(vol.writes.get(), 0);
+    assert_eq!(out.freed, 4 * GIB);
+    assert_eq!(out.removed, 0);
+}
+
+#[test]
+fn startup_cleanup_skips_the_folders_of_this_process() {
+    let vol = with_leftovers(10 * GIB);
+    vol.dirs.borrow_mut().insert("PulisciPC_wipe_77_1".into(), vec![GIB]);
+    let left = cleanup_leftovers(&vol, Some(77));
+    assert_eq!(*vol.removed.borrow(), vec!["PulisciPC_wipe_123_456".to_string()]);
+    assert!(vol.dirs.borrow().contains_key("PulisciPC_wipe_77_1"));
+    assert_eq!(left.freed, 4 * GIB);
+    assert_eq!(left.failed, 0);
+    assert_eq!(wipe_dir_pid("PulisciPC_wipe_77_1"), Some(77));
+    assert_eq!(wipe_dir_pid("PulisciPC_wipe_x"), None);
 }
 
 // ----- pulizia -----
@@ -294,8 +354,8 @@ fn fill_stops_leaving_one_gb_free_and_the_folder_goes_away() {
     let start = 5 * GIB + 37 * MIB + 123;
     let vol = FakeVol::hdd(start);
     let out = clean(&vol);
-    assert!(vol.lowest_free.get() >= RESERVE, "sotto la riserva: {}", vol.lowest_free.get());
-    assert!(vol.lowest_free.get() < RESERVE + ALIGN, "fermo troppo presto: {}", vol.lowest_free.get());
+    assert!(vol.lowest_free.get() >= RESERVE + MARGIN, "sotto la riserva: {}", vol.lowest_free.get());
+    assert!(vol.lowest_free.get() < RESERVE + MARGIN + ALIGN, "fermo troppo presto: {}", vol.lowest_free.get());
     assert!(vol.biggest_write.get() <= BLOCK);
     let created = vol.created.borrow().clone();
     assert_eq!(created.len(), 1);
@@ -306,8 +366,17 @@ fn fill_stops_leaving_one_gb_free_and_the_folder_goes_away() {
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0);
     assert_eq!(out.freed, 0);
-    assert!(out.notes.iter().any(|n| n.contains("4,04 GB")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("3,97 GB")), "{:?}", out.notes);
     assert_eq!(out.done.len(), 1);
+}
+
+#[test]
+fn another_app_writing_meanwhile_never_pushes_free_space_below_the_reserve() {
+    let mut vol = FakeVol::hdd(6 * GIB + 5 * MIB);
+    vol.steal = BLOCK;
+    clean(&vol);
+    assert!(vol.writes.get() > 0);
+    assert!(vol.lowest_free.get() >= RESERVE, "sotto la riserva: {}", vol.lowest_free.get());
 }
 
 #[test]
@@ -345,7 +414,7 @@ fn fill_files_are_at_most_one_gb_each() {
     }
     let spy = Spy(&vol, &sizes);
     clean_wipe(&spy, &found_for(&vol), &AtomicBool::new(false));
-    assert_eq!(*sizes.borrow(), vec![GIB, GIB, GIB, 512 * MIB]);
+    assert_eq!(*sizes.borrow(), vec![GIB, GIB, GIB, 448 * MIB]);
 }
 
 #[test]
@@ -354,8 +423,8 @@ fn free_space_that_does_not_shrink_never_writes_more_than_measured() {
     vol.free_never_shrinks = true;
     let out = clean(&vol);
     assert_eq!(vol.written(), 0, "cartella già cancellata");
-    assert!(u64::from(vol.writes.get()) * BLOCK <= 2 * GIB, "scritture: {}", vol.writes.get());
-    assert_eq!(vol.writes.get(), 32);
+    assert!(u64::from(vol.writes.get()) * BLOCK <= 2 * GIB - MARGIN, "scritture: {}", vol.writes.get());
+    assert_eq!(vol.writes.get(), 31);
     assert_eq!(out.removed, 1);
 }
 

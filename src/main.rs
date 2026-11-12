@@ -281,6 +281,9 @@ impl App {
                 .collect(),
         };
         self.clean_end = None;
+        // «Pulisci spazio libero» gira dopo tutto il resto (anche le opzioni
+        // dinamiche), perché sovrascriva anche ciò che le altre voci cancellano.
+        let (natives, natives_last) = native::split_last(natives);
         let (tx, rx) = channel();
         self.clean_job = Some(rx);
         self.found = vec![None; self.clean_sel.len()];
@@ -308,7 +311,7 @@ impl App {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let verb = if also_clean { "Pulizia" } else { "Analisi" };
-            let total = (cats.len() + natives.len() + dynamic.len()).max(1) as f32;
+            let total = (cats.len() + natives.len() + dynamic.len() + natives_last.len()).max(1) as f32;
             for (k, &i) in cats.iter().enumerate() {
                 let name = cleaner::CATEGORIES[i].name;
                 if files_cancel.is_cancelled() || cancel.load(Ordering::SeqCst) {
@@ -366,6 +369,13 @@ impl App {
             };
             rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
                 let _ = tx.send(CleanMsg::Rule(key, label, f, done));
+            });
+            let lprogress = |k: usize, text: String| {
+                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + natives.len() + dynamic.len() + k) as f32 / total));
+                ctx.request_repaint();
+            };
+            native::run_natives(&natives_last, also_clean, &nctx, &previews, &processes, &lprogress, &mut |item, f, done| {
+                let _ = tx.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
             });
             let _ = tx.send(CleanMsg::Done);
             ctx.request_repaint();
@@ -1840,6 +1850,11 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_active(false).with_window_level(egui::WindowLevel::AlwaysOnBottom);
     }
     let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, ..Default::default() };
+    // Cartelle di «Pulisci spazio libero» rimaste da uno spegnimento brusco:
+    // via subito, in un thread a parte (mai negli screenshot né su un albero finto).
+    if screenshot.is_none() && only_root.is_none() {
+        wipe::remove_leftovers_in_background();
+    }
     eframe::run_native(
         "PulisciPC",
         options,

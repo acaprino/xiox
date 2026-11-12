@@ -53,6 +53,8 @@ struct Fake {
     polls_before_exit: u32,
     exit_code: i32,
     poll_panics: bool,
+    /// Il compagno `PulisciPC_StateFlags0099` sotto `Previous Installations`.
+    marker: Cell<bool>,
 }
 
 fn base() -> Fake {
@@ -74,6 +76,7 @@ fn base() -> Fake {
         polls_before_exit: 2,
         exit_code: 0,
         poll_panics: false,
+        marker: Cell::new(false),
     }
 }
 
@@ -96,7 +99,8 @@ impl Files for Fake {
         if p.as_os_str().to_string_lossy().eq_ignore_ascii_case(&win_old().to_string_lossy()) {
             if self.s.exited.get() { self.after } else { self.before }
         } else {
-            Kind::Missing
+            let tree = if self.s.exited.get() { &self.tree_after } else { &self.tree };
+            if matches!(tree.get(p), Some(Ok(_))) { Kind::Dir } else { Kind::Missing }
         }
     }
     fn list(&self, d: &Path) -> Result<Vec<Entry>, String> {
@@ -118,6 +122,20 @@ impl VolumeCaches for Fake {
     fn remove_flag(&self) -> Result<(), String> {
         self.s.push("remove");
         self.remove_err.clone().map_or(Ok(()), Err)
+    }
+    fn has_marker(&self) -> Result<bool, String> {
+        self.s.push("has_marker");
+        Ok(self.marker.get())
+    }
+    fn set_marker(&self) -> Result<(), String> {
+        self.s.push("set_marker");
+        self.marker.set(true);
+        Ok(())
+    }
+    fn remove_marker(&self) -> Result<(), String> {
+        self.s.push("remove_marker");
+        self.marker.set(false);
+        Ok(())
     }
 }
 
@@ -207,10 +225,9 @@ fn item_is_off_with_warning_needs_admin_and_waits_for_cleanmgr() {
     assert!(i.needs_admin);
     // Si elimina solo dopo aver visto Windows.old e la sua dimensione nell'Analisi.
     assert!(i.needs_preview);
-    assert_eq!(
-        i.warning,
-        Some("Elimina i file della versione precedente di Windows: dopo non potrai più tornare indietro alla versione di prima.")
-    );
+    assert_eq!(i.warning, Some(WARNING));
+    assert!(WARNING.contains("tornare indietro"));
+    assert!(WARNING.contains(r"Windows.old\Users") && WARNING.contains("file personali"), "{WARNING}");
     assert!(i.running.iter().any(|p| p.eq_ignore_ascii_case("cleanmgr.exe")), "{:?}", i.running);
     assert!(!i.description.contains("BleachBit") && !i.description.is_empty());
 }
@@ -294,7 +311,9 @@ fn analysis_stops_after_the_time_budget_and_says_oltre() {
     assert_eq!(found.count, 1, "la cartella c'è: si propone anche con la stima parziale");
     assert!(found.detail[0].contains("oltre"), "{:?}", found.detail);
     assert!(found.detail[0].contains("10 s"), "{:?}", found.detail);
-    assert_eq!(f.listed().len(), 1);
+    // Si legge solo la radice (più Users e la radice del disco, fuori dal conto della dimensione).
+    let measured: Vec<_> = f.listed().into_iter().filter(|p| !p.ends_with("Users") && p != r"C:\").collect();
+    assert_eq!(measured.len(), 1, "{:?}", f.listed());
 }
 
 #[test]
@@ -324,7 +343,11 @@ fn clean_sets_only_the_flag_runs_cleanmgr_waits_and_removes_the_flag() {
     let f = base();
     let found = analyze_fake(&f);
     let out = clean_fake(&f, &found);
-    assert_eq!(f.calls(), ["available", "flagged", "set", "start", "poll", "poll", "poll", "remove"]);
+    assert_eq!(
+        f.calls(),
+        ["available", "flagged", "set_marker", "set", "start", "poll", "poll", "poll", "remove", "remove_marker"]
+    );
+    assert!(!f.marker.get(), "compagno tolto");
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0, "{:?}", out.notes);
     assert_eq!(out.freed, 150);
@@ -372,7 +395,7 @@ fn flag_is_removed_even_when_writing_it_fails() {
     f.set_err = Some("gestore «Previous Installations» assente".into());
     let found = analyze_fake(&f);
     let out = clean_fake(&f, &found);
-    assert_eq!(f.calls(), ["available", "flagged", "set", "remove"]);
+    assert_eq!(f.calls(), ["available", "flagged", "set_marker", "set", "remove", "remove_marker"]);
     assert_eq!(out.failed, 1);
     assert_eq!(out.removed, 0);
     assert!(out.notes.join("\n").contains("Previous Installations"), "{:?}", out.notes);
@@ -384,7 +407,7 @@ fn flag_is_removed_even_when_cleanmgr_does_not_start() {
     f.start_err = Some("avvio negato".into());
     let found = analyze_fake(&f);
     let out = clean_fake(&f, &found);
-    assert_eq!(f.calls(), ["available", "flagged", "set", "start", "remove"]);
+    assert_eq!(f.calls(), ["available", "flagged", "set_marker", "set", "start", "remove", "remove_marker"]);
     assert_eq!(out.failed, 1);
     assert!(out.notes.join("\n").contains("avvio negato"), "{:?}", out.notes);
 }
@@ -396,7 +419,7 @@ fn flag_is_removed_even_if_waiting_panics() {
     let found = analyze_fake(&f);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| clean_fake(&f, &found)));
     assert!(r.is_err());
-    assert_eq!(f.calls(), ["available", "flagged", "set", "start", "poll", "remove"]);
+    assert_eq!(f.calls(), ["available", "flagged", "set_marker", "set", "start", "poll", "remove", "remove_marker"]);
 }
 
 #[test]
@@ -414,7 +437,7 @@ fn cancel_stops_waiting_without_killing_cleanmgr_and_removes_the_flag() {
     };
     let out = clean_fake_with(&f, &found, &cancel, &sleep);
     let calls = f.calls();
-    assert_eq!(calls.last().map(String::as_str), Some("remove"));
+    assert_eq!(calls.last().map(String::as_str), Some("remove_marker"));
     assert_eq!(calls.iter().filter(|c| *c == "poll").count(), 4);
     assert_eq!(out.removed, 0);
     assert_eq!(out.failed, 0);
@@ -468,17 +491,128 @@ fn folder_turned_into_a_link_is_never_handed_to_cleanmgr() {
 }
 
 #[test]
-fn folder_still_present_after_cleanmgr_is_reported_with_what_was_freed() {
+fn folder_shrunk_after_cleanmgr_says_check_the_space_not_a_failure() {
+    // cleanmgr esce presto e passa il lavoro a un altro processo: la cartella è più piccola.
     let mut f = base();
     f.after = Kind::Dir;
     f.tree_after.insert(win_old(), Ok(vec![file("resto", 30)]));
     let found = analyze_fake(&f);
     let out = clean_fake(&f, &found);
-    assert_eq!(f.calls().last().map(String::as_str), Some("remove"));
+    assert_eq!(f.calls().last().map(String::as_str), Some("remove_marker"));
     assert_eq!(out.removed, 0);
-    assert_eq!(out.failed, 1);
+    assert_eq!(out.failed, 0, "{:?}", out.notes);
     assert_eq!(out.freed, 120);
+    let n = out.notes.join("\n");
+    assert!(n.contains("Pulizia disco ha terminato") && n.contains("controlla lo spazio"), "{n}");
+}
+
+#[test]
+fn folder_unchanged_after_cleanmgr_is_a_failure() {
+    let mut f = base();
+    f.after = Kind::Dir;
+    f.tree_after = f.tree.clone();
+    let found = analyze_fake(&f);
+    let out = clean_fake(&f, &found);
+    assert_eq!(out.failed, 1);
+    assert_eq!(out.freed, 0);
     assert!(out.notes.join("\n").contains("ancora presente"), "{:?}", out.notes);
+}
+
+#[test]
+fn leftover_flag_of_pulisci_pc_is_recognised_removed_and_the_clean_proceeds() {
+    let mut f = base();
+    f.flagged = Ok(vec!["Previous Installations".into()]);
+    f.marker.set(true);
+    let found = analyze_fake(&f);
+    let out = clean_fake(&f, &found);
+    assert_eq!(
+        f.calls(),
+        [
+            "available", "flagged", "has_marker", "remove", "remove_marker", "set_marker", "set", "start", "poll", "poll",
+            "poll", "remove", "remove_marker"
+        ]
+    );
+    assert_eq!(out.removed, 1);
+    assert_eq!(out.failed, 0, "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("rimasto da una pulizia interrotta di PulisciPC"), "{:?}", out.notes);
+}
+
+#[test]
+fn flag_under_previous_installations_without_our_marker_is_not_ours() {
+    let mut f = base();
+    f.flagged = Ok(vec!["Previous Installations".into()]);
+    let found = analyze_fake(&f);
+    let out = clean_fake(&f, &found);
+    assert_eq!(f.calls(), ["available", "flagged", "has_marker"]);
+    assert_eq!(out.failed, 1);
+    assert!(out.notes.join("\n").contains("altro programma"), "{:?}", out.notes);
+    // Con il compagno ma anche un'altra chiave con il flag: non è solo nostro.
+    let mut f = base();
+    f.flagged = Ok(vec!["Previous Installations".into(), "Temporary Files".into()]);
+    f.marker.set(true);
+    let out = clean_fake(&f, &found);
+    assert_eq!(f.calls(), ["available", "flagged"]);
+    assert_eq!(out.failed, 1);
+}
+
+#[test]
+fn leftover_flag_that_cannot_be_removed_stops_everything() {
+    let mut f = base();
+    f.flagged = Ok(vec!["Previous Installations".into()]);
+    f.marker.set(true);
+    f.remove_err = Some("accesso negato".into());
+    let found = analyze_fake(&f);
+    let out = clean_fake(&f, &found);
+    assert_eq!(f.calls(), ["available", "flagged", "has_marker", "remove"]);
+    assert!(f.marker.get(), "il compagno resta finché resta il flag");
+    assert_eq!(out.failed, 1);
+    assert!(out.notes.join("\n").contains("accesso negato"), "{:?}", out.notes);
+}
+
+#[test]
+fn analysis_shows_personal_files_left_in_users_and_numbered_copies() {
+    let mut f = base();
+    let users = win_old().join("Users");
+    f.tree.insert(win_old(), Ok(vec![file("a.dat", 100), dir("Users")]));
+    f.tree.insert(
+        users.clone(),
+        Ok(vec![
+            dir("Mario"),
+            dir("Default"),
+            dir("Public"),
+            Entry { name: "All Users".into(), dir: true, reparse: true, size: 0 },
+        ]),
+    );
+    f.tree.insert(users.join("Mario"), Ok(vec![dir("Documents"), dir("AppData")]));
+    f.tree.insert(users.join("Mario").join("Documents"), Ok(vec![file("tesi.docx", 2048), file("desktop.ini", 1)]));
+    f.tree.insert(users.join("Mario").join("Documents").join("x"), Ok(vec![]));
+    f.tree.insert(users.join("Mario").join("AppData"), Ok(vec![file("cache", 999)]));
+    f.tree.insert(users.join("Default").join("Documents"), Ok(vec![file("modello", 5)]));
+    f.tree.insert(users.join("Public").join("Desktop"), Ok(vec![file("desktop.ini", 1)]));
+    f.tree.insert(
+        PathBuf::from(r"C:\"),
+        Ok(vec![
+            dir("Windows.old"),
+            dir("Windows.old.000"),
+            dir("windows.old.12"),
+            dir("Windows.old.bak"),
+            Entry { name: "Windows.old.001".into(), dir: true, reparse: true, size: 0 },
+        ]),
+    );
+    let found = analyze_fake(&f);
+    let d = found.detail.join("\n");
+    assert!(d.contains("file personali") && d.contains("Mario (1 file, "), "{d}");
+    assert!(!d.contains("Default (") && !d.contains("Public ("), "{d}");
+    assert!(d.contains(r"C:\Windows.old.000") && d.contains(r"C:\windows.old.12"), "{d}");
+    assert!(!d.contains("Windows.old.bak") && !d.contains("Windows.old.001"), "{d}");
+    assert_eq!(found.items, vec![r"C:\Windows.old".to_string()]);
+}
+
+#[test]
+fn no_personal_files_no_warning_line() {
+    let f = base();
+    let found = analyze_fake(&f);
+    assert!(!found.detail.join("\n").contains("file personali"), "{:?}", found.detail);
 }
 
 #[test]
@@ -528,7 +662,7 @@ fn timeout_in_clean_is_a_note_and_the_flag_is_removed() {
     f.polls_before_exit = u32::MAX;
     let found = analyze_fake(&f);
     let out = clean_fake(&f, &found);
-    assert_eq!(f.calls().last().map(String::as_str), Some("remove"));
+    assert_eq!(f.calls().last().map(String::as_str), Some("remove_marker"));
     assert_eq!(out.removed, 0);
     assert!(out.notes.join("\n").contains("non ha finito"), "{:?}", out.notes);
 }

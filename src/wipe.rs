@@ -12,10 +12,15 @@
 //! sempre: alla fine, su errore, su annullamento e anche su panico (guard con
 //! `Drop`). In più ogni file di riempimento è aperto con
 //! `FILE_FLAG_DELETE_ON_CLOSE`: se il processo muore, Windows lo cancella da
-//! sé alla chiusura dell'handle. Una cartella rimasta (spegnimento brusco) la
-//! toglie l'analisi successiva ([`cleanup_leftovers`]).
+//! sé alla chiusura dell'handle. Una cartella rimasta (mancanza di corrente,
+//! schermata blu) la toglie [`cleanup_leftovers`]: all'avvio dell'app in un
+//! thread a parte ([`remove_leftovers_in_background`]) e all'inizio di ogni
+//! pulizia di questa voce. L'analisi la segnala soltanto (sola lettura).
 //!
-//! Nessuna seconda fase sulla MFT in questa versione.
+//! Portata dichiarata nella voce: solo lo spazio libero del volume di sistema.
+//! Nessuna fase sulla MFT (i file piccolissimi che stavano dentro la MFT
+//! restano) e nessun altro volume. Nemmeno le copie shadow (punti di
+//! ripristino) si toccano.
 //!
 //! Ogni accesso al disco passa dal trait [`Volume`]: la logica sta in
 //! [`analyze_wipe`]/[`clean_wipe`] e i test la provano con un volume finto.
@@ -41,6 +46,10 @@ pub const RESERVE: u64 = 1 << 30;
 /// Un blocco di scrittura; fra un blocco e l'altro si rileggono annullamento
 /// e spazio libero.
 pub const BLOCK: u64 = 64 << 20;
+/// Margine sopra la riserva: ci si ferma un blocco prima, così anche se
+/// un'altra app consuma spazio durante l'ultima scrittura (fino a un blocco)
+/// i liberi non scendono sotto [`RESERVE`].
+pub const MARGIN: u64 = BLOCK;
 /// Ogni scrittura è un multiplo di questo (multiplo di ogni dimensione di
 /// settore: lo chiede `FILE_FLAG_NO_BUFFERING`).
 pub const ALIGN: u64 = 1 << 20;
@@ -93,19 +102,26 @@ pub trait Fill {
 // ---------------------------------------------------------------------------
 // Voce.
 
+pub const DESCRIPTION: &str = "Sovrascrive con zeri lo spazio libero del solo disco di sistema (C:) perché i file già \
+     cancellati non si possano recuperare. Copertura parziale: non si toccano gli altri dischi, né la MFT (i file \
+     piccolissimi cancellati possono restare), né le copie shadow dei punti di ripristino, e circa 1 GB resta non \
+     sovrascritto (la riserva). Solo su dischi rigidi (HDD) NTFS con almeno 2 GB liberi; sugli SSD si rifiuta, perché \
+     Windows usa TRIM. Alcuni controller RAID o dischi virtuali si dichiarano HDD anche su SSD. Alla fine i file di \
+     riempimento si cancellano.";
+
+pub const WARNING: &str = "Sovrascrive lo spazio libero del solo disco di sistema (niente MFT, niente altri dischi) \
+     perché i file cancellati non si possano recuperare. Può richiedere ore; durante la scrittura il disco resta quasi \
+     pieno (si lascia almeno 1 GB libero) e gli altri programmi possono non riuscire a scrivere: chiudili prima. I file \
+     cancellati dopo l'ultimo punto di ripristino possono restare nelle copie shadow, e con poco spazio libero Windows \
+     può eliminare i punti di ripristino. Su SSD la voce si rifiuta.";
+
 pub fn items() -> Vec<NativeItem> {
     vec![NativeItem {
         id: "wipe_free_space",
         group: GROUP,
         label: "Pulisci spazio libero",
-        description: "Sovrascrive con zeri lo spazio libero del disco di sistema perché i file già cancellati non si \
-             possano recuperare. Solo su dischi rigidi (HDD) NTFS con almeno 2 GB liberi; sugli SSD non serve, perché \
-             Windows usa TRIM. Durante la scrittura resta sempre 1 GB libero e alla fine i file di riempimento si \
-             cancellano.",
-        warning: Some(
-            "Sovrascrive lo spazio libero perché i file cancellati non si possano recuperare. Può richiedere molto \
-             tempo; durante la scrittura il disco resta quasi pieno (si lascia 1 GB libero).",
-        ),
+        description: DESCRIPTION,
+        warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
         needs_admin: true,
@@ -209,39 +225,109 @@ fn suitability(vol: &dyn Volume) -> Result<Suitable, String> {
     }
 }
 
-/// Toglie le cartelle di lavoro rimaste da un'esecuzione interrotta (solo
-/// quelle con il nome esatto, attraverso [`Volume::remove_dir`]). Restituisce
-/// le note per il resoconto.
-pub fn cleanup_leftovers(vol: &dyn Volume) -> Vec<String> {
-    let root = root_text(vol);
-    let names = match vol.leftover_dirs() {
-        Ok(n) => n,
-        Err(e) => return vec![format!("Cartelle rimaste in {root} non leggibili: {e}")],
-    };
-    let mut notes = Vec::new();
-    for name in names.iter().filter(|n| is_wipe_dir_name(n)) {
-        match vol.remove_dir(name) {
-            Ok(bytes) => notes.push(format!(
-                "Cancellata la cartella rimasta da una pulizia interrotta: {root}{name} ({} liberati)",
-                fmt_size(bytes)
-            )),
-            Err(e) => notes.push(format!("Cartella rimasta {root}{name} non cancellata: {e}")),
-        }
+/// Il pid nel nome di una cartella di lavoro.
+fn wipe_dir_pid(name: &str) -> Option<u32> {
+    if !is_wipe_dir_name(name) {
+        return None;
     }
-    notes
+    name[DIR_PREFIX.len()..].split('_').next()?.parse().ok()
 }
 
-/// Toglie gli avanzi, poi guarda tipo di disco e spazio libero. `count = 1`
-/// (elemento: la radice del volume) solo se il volume è adatto. Non scrive.
+/// Esito di [`cleanup_leftovers`].
+#[derive(Debug, Default)]
+pub struct Leftovers {
+    pub freed: u64,
+    pub notes: Vec<String>,
+    pub failed: u64,
+}
+
+/// Toglie le cartelle di lavoro rimaste da un'esecuzione interrotta (solo
+/// quelle con il nome esatto, attraverso [`Volume::remove_dir`], che cancella
+/// solo file `fill_*.bin` veri e non segue collegamenti). `skip_pid`: le
+/// cartelle con questo pid restano (all'avvio: quelle del processo stesso,
+/// che potrebbe averne appena creata una). Una cartella di un'altra istanza
+/// in corso non si cancella: i suoi file sono aperti senza condivisione.
+pub fn cleanup_leftovers(vol: &dyn Volume, skip_pid: Option<u32>) -> Leftovers {
+    let root = root_text(vol);
+    let mut out = Leftovers::default();
+    let names = match vol.leftover_dirs() {
+        Ok(n) => n,
+        Err(e) => {
+            out.failed = 1;
+            out.notes.push(format!("Cartelle rimaste in {root} non leggibili: {e}"));
+            return out;
+        }
+    };
+    for name in names.iter().filter(|n| is_wipe_dir_name(n)) {
+        if skip_pid.is_some() && wipe_dir_pid(name) == skip_pid {
+            continue;
+        }
+        match vol.remove_dir(name) {
+            Ok(bytes) => {
+                out.freed += bytes;
+                out.notes.push(format!(
+                    "Cancellata la cartella rimasta da una pulizia interrotta: {root}{name} ({} liberati)",
+                    fmt_size(bytes)
+                ));
+            }
+            Err(e) => {
+                out.failed += 1;
+                out.notes.push(format!("Cartella rimasta {root}{name} non cancellata: {e}"));
+            }
+        }
+    }
+    out
+}
+
+/// All'avvio dell'app, in un thread a parte: toglie dal volume di sistema le
+/// cartelle rimaste da una pulizia interrotta (spegnimento brusco), così il
+/// disco non resta quasi pieno finché l'utente non rianalizza questa voce.
+/// Mai quelle del processo stesso. L'esito va solo sullo standard error.
+pub fn remove_leftovers_in_background() {
+    std::thread::spawn(|| {
+        let guard = Guard::new(&pc_rules::Env::for_rules());
+        let Some(vol) = win::RealVolume::system(&guard) else { return };
+        // Nessuna cartella: niente da fare (il caso normale).
+        if !vol.leftover_dirs().is_ok_and(|d| d.iter().any(|n| is_wipe_dir_name(n))) {
+            return;
+        }
+        for n in cleanup_leftovers(&vol, Some(std::process::id())).notes {
+            eprintln!("{n}");
+        }
+    });
+}
+
+/// Prefisso degli elementi «cartella rimasta» in `NativeFound::items`.
+pub const LEFTOVER_ITEM: &str = "leftover:";
+
+/// Guarda tipo di disco e spazio libero ed elenca le cartelle rimaste, **in
+/// sola lettura**. Elemento `<radice>` solo se il volume è adatto; un
+/// elemento `leftover:<nome>` per ogni cartella rimasta (la toglie la
+/// pulizia, oppure il prossimo avvio). Non scrive e non cancella nulla.
 pub fn analyze_wipe(vol: &dyn Volume) -> NativeFound {
-    let leftovers = cleanup_leftovers(vol);
+    let root = root_text(vol);
+    let mut leftovers = Vec::new();
+    let mut notes = Vec::new();
+    match vol.leftover_dirs() {
+        Ok(names) => {
+            for name in names.into_iter().filter(|n| is_wipe_dir_name(n)) {
+                notes.push(format!(
+                    "Trovata una cartella rimasta da una pulizia interrotta: {root}{name}. Verrà tolta (con Pulizia \
+                     o al prossimo avvio di PulisciPC)"
+                ));
+                leftovers.push(format!("{LEFTOVER_ITEM}{name}"));
+            }
+        }
+        Err(e) => notes.push(format!("Cartelle rimaste in {root} non leggibili: {e}")),
+    }
     let mut found = match suitability(vol) {
         Ok(s) => NativeFound {
             detail: vec![format!(
-                "{}: disco rigido (HDD) NTFS con {} liberi; se ne sovrascrivono circa {} (resta 1 GB libero)",
+                "{}: disco rigido (HDD) NTFS con {} liberi; se ne sovrascrivono circa {} (resta almeno 1 GB libero; \
+                 niente MFT né altri dischi)",
                 root_text(vol),
                 fmt_size(s.free),
-                fmt_size(s.free.saturating_sub(RESERVE))
+                fmt_size(s.free.saturating_sub(RESERVE + MARGIN))
             )],
             count: 1,
             items: vec![root_text(vol)],
@@ -249,7 +335,9 @@ pub fn analyze_wipe(vol: &dyn Volume) -> NativeFound {
         },
         Err(why) => NativeFound { detail: vec![why], ..Default::default() },
     };
-    found.detail.extend(leftovers);
+    found.detail.extend(notes);
+    found.count += leftovers.len() as u64;
+    found.items.extend(leftovers);
     found
 }
 
@@ -288,12 +376,22 @@ enum Stop {
     Failed(String),
 }
 
-/// Scrive gli zeri e cancella sempre la cartella. Agisce solo se l'analisi
-/// dello stesso job ha trovato questo volume, e ricontrolla tipo e spazio
-/// prima di cominciare.
+/// Prima toglie le cartelle rimaste da una pulizia interrotta (rilette
+/// adesso), poi scrive gli zeri e cancella sempre la cartella. Scrive solo se
+/// l'analisi dello stesso job ha trovato questo volume adatto, e ricontrolla
+/// tipo e spazio prima di cominciare.
 pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
     let mut out = NativeCleaned::default();
     let root = root_text(vol);
+    if found.items.is_empty() || cancel.load(Ordering::Relaxed) {
+        return out;
+    }
+    let left = cleanup_leftovers(vol, None);
+    out.freed += left.freed;
+    out.failed += left.failed;
+    for n in left.notes {
+        out.note(n);
+    }
     if !found.items.contains(&root) || cancel.load(Ordering::Relaxed) {
         return out;
     }
@@ -306,10 +404,10 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
     };
     // Mai più dello spazio misurato adesso, meno la riserva: se lo spazio
     // libero non calasse scrivendo, non si scriverebbe all'infinito.
-    let budget = start.free.saturating_sub(RESERVE);
+    let budget = start.free.saturating_sub(RESERVE + MARGIN);
     let name = new_dir_name();
     if let Err(e) = vol.create_dir(&name) {
-        out.failed = 1;
+        out.failed += 1;
         out.note(format!("Cartella di lavoro {root}{name} non creata: {e}"));
         return out;
     }
@@ -327,7 +425,9 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
             Ok(f) => f,
             Err(e) => break Stop::Failed(format!("spazio libero non leggibile: {e}")),
         };
-        let room = free.saturating_sub(RESERVE).min(budget - written);
+        // Ci si ferma con [`MARGIN`] sopra la riserva: un'altra app che scrive
+        // durante questo blocco non fa scendere i liberi sotto [`RESERVE`].
+        let room = free.saturating_sub(RESERVE + MARGIN).min(budget - written);
         let mut n = room.min(BLOCK) / ALIGN * ALIGN;
         if n == 0 {
             break Stop::Full;
@@ -353,19 +453,23 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
     match stop {
         Stop::Full => {
             out.removed = 1;
-            out.note(format!("Sovrascritti {amount} di spazio libero su {root} (lasciato 1 GB libero)"));
+            out.note(format!(
+                "Sovrascritti {amount} di spazio libero su {root} (lasciato almeno 1 GB libero; MFT, altri dischi e \
+                 copie shadow non toccati)"
+            ));
             out.done.push(format!("{root}: {amount} di spazio libero sovrascritti"));
         }
         Stop::Cancelled => out.note(format!("Annullata dopo {amount} su {root}: file di riempimento cancellati")),
         Stop::Failed(e) => {
-            out.failed = 1;
+            out.failed += 1;
             out.note(format!("Scrittura interrotta dopo {amount} su {root}: {e}"));
         }
     }
     if let Err(e) = removal {
-        out.failed = 1;
+        out.failed += 1;
         out.note(format!(
-            "La cartella {root}{name} non si è cancellata ({e}): si riprova alla prossima analisi di questa voce"
+            "La cartella {root}{name} non si è cancellata ({e}): si riprova al prossimo avvio di PulisciPC o alla \
+             prossima pulizia di questa voce"
         ));
     }
     out

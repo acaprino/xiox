@@ -97,6 +97,17 @@ pub fn all() -> Vec<NativeItem> {
     v
 }
 
+/// Voci che girano per ultime nel job, dopo anche le opzioni dinamiche
+/// (Winapp2/XML): «Pulisci spazio libero» deve sovrascrivere anche lo spazio
+/// dei file che le altre voci dello stesso job hanno appena cancellato.
+pub const RUN_LAST: &[&str] = &["wipe_free_space"];
+
+/// Divide le voci scelte in (da far girare prima delle opzioni dinamiche,
+/// da far girare per ultime), mantenendo l'ordine.
+pub fn split_last(items: Vec<NativeItem>) -> (Vec<NativeItem>, Vec<NativeItem>) {
+    items.into_iter().partition(|i| !RUN_LAST.contains(&i.id))
+}
+
 /// Analizza (e con `also_clean` pulisce) le voci scelte, in sequenza, come
 /// `rules::run_options`: i processi si rileggono prima dell'analisi e prima
 /// della pulizia di ogni voce; una voce bloccata si salta e lo si scrive nel
@@ -222,6 +233,17 @@ mod tests {
         let mut out = Vec::new();
         run_natives(chosen, also_clean, &ctx, &|_| preview.clone(), &|| procs.clone(), &|_, _| {}, &mut |i, f, c| out.push((i.id.to_string(), f, c)));
         out
+    }
+
+    #[test]
+    fn free_space_wipe_runs_last() {
+        let (first, last) = split_last(all());
+        assert_eq!(last.iter().map(|i| i.id).collect::<Vec<_>>(), vec!["wipe_free_space"]);
+        assert!(first.iter().all(|i| i.id != "wipe_free_space"));
+        assert_eq!(first.len() + 1, all().len());
+        let (first, last) = split_last(vec![item("a", &[], found_none), item("b", &[], found_none)]);
+        assert_eq!(first.iter().map(|i| i.id).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert!(last.is_empty());
     }
 
     #[test]
