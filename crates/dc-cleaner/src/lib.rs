@@ -1,6 +1,6 @@
 //! Plan execution: Recycle Bin / permanent / git worktree remove (`Remover`).
 //!
-//! Safety model (see docs/DESIGN.md): every item is validated first (`guard`), measured
+//! Safety model (see docs/reference/devclean-DESIGN.md): every item is validated first (`guard`), measured
 //! right before removal (`fsops::measure`), removed by the worker pool (`parallel`), then
 //! verified gone. Validation and measurement run in sequence before anything is queued: the
 //! workers only delete. `bytes_freed` is

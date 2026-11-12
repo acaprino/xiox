@@ -48,7 +48,7 @@ Perché egui e non Tauri: PulisciPC nasce per consumare poca RAM; un exe egui è
 ## Vincoli
 
 - Windows 11, Rust stabile, egui/eframe 0.33 (già in uso).
-- mukade si usa **vendored** (compilato dentro l'exe, nessun binario esterno, nessuna rete), come in devclean (`devclean/vendor/mukade/VENDORED.md`). Vendor dal commit `dfde57e` di `D:\Projects\mukade` (master del 2026-11-10, include `0dd0498` "--archived" e la lettura di `archived_sessions/` di Codex). Solo codice committato: il working tree upstream può avere modifiche in corso di un'altra sessione.
+- mukade si usa **vendored** (compilato dentro l'exe, nessun binario esterno, nessuna rete), come in devclean (`docs/reference/devclean-mukade-VENDORED.md`). Vendor dal commit `dfde57e` di `D:\Projects\mukade` (master del 2026-11-10, include `0dd0498` "--archived" e la lettura di `archived_sessions/` di Codex). Solo codice committato: il working tree upstream può avere modifiche in corso di un'altra sessione.
 - `rusqlite = "=0.40.2"` bundled, stessa versione in mukade e nei crate (due versioni di `libsqlite3-sys` non convivono).
 - Nessun eseguibile esterno per la scansione disco: niente WizTree64.exe, niente export CSV, niente nota di licenza.
 - Funzioni distruttive su servizi/registro richiedono già admin; la modalità dev no (lavora nel profilo utente). Da admin la scansione usa la MFT (più veloce), senza admin cammina le cartelle.
@@ -79,7 +79,7 @@ ccleaner64/app/
 
 `dc-disktree` implementa il trait già esistente `DirIndex` di `dc-model` (`backend_name`, `size_of`, `find_dirs_named`), quindi `dc-scanner` e `dc-engine` non cambiano. Niente treemap né UI di wiztree64 dentro PulisciPC.
 
-*Proposta mia:* oggi WizTree serviva solo per le cartelle aggiuntive, e i ~60 s dell'analisi dev sono quasi tutti misura delle dimensioni degli artefatti (`devclean/docs/DESIGN.md`). Da admin, una sola lettura MFT del volume dà le dimensioni di tutti gli artefatti via `size_of`, anche per i progetti trovati dalle sessioni. Senza admin si misura come oggi.
+*Proposta mia:* oggi WizTree serviva solo per le cartelle aggiuntive, e i ~60 s dell'analisi dev sono quasi tutti misura delle dimensioni degli artefatti (`docs/reference/devclean-DESIGN.md`). Da admin, una sola lettura MFT del volume dà le dimensioni di tutti gli artefatti via `size_of`, anche per i progetti trovati dalle sessioni. Senza admin si misura come oggi.
 
 Cosa non si porta in PulisciPC (devclean resta com'è, non si cancella nulla lì): `dc-wiztree`, `Settings.use_wiztree`, `Settings.wiztree_path` (un file impostazioni vecchio che li contiene deve ancora caricarsi), `scripts/fetch-wiztree.ps1`, `src-tauri/resources/wiztree/`, la nota di licenza WizTree.
 
