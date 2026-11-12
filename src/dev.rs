@@ -334,11 +334,21 @@ impl DevState {
         }
     }
 
-    fn set_scan(&mut self, scan: DevScan) {
+    fn set_scan(&mut self, mut scan: DevScan) {
         self.notice = None;
+        // Con `--only-root` mai nulla di vero: via sessioni e worktree fuori dall'albero finto.
+        if !self.persist {
+            if let [root] = self.settings.roots.as_slice() {
+                keep_only_under(&mut scan, root);
+            } else {
+                // Non c'è un'unica radice (impossibile con `only_root`): nel dubbio non si tiene nulla.
+                scan = DevScan { warnings: scan.warnings, backend: scan.backend, elapsed_ms: scan.elapsed_ms, scanned_at_ms: scan.scanned_at_ms, ..Default::default() };
+            }
+        }
         self.sel_artifacts = preselect_artifacts(&scan.projects);
         self.sel_worktrees = preselect_reports(&scan.worktrees);
-        self.sel_sessions = preselect_sessions(&scan.archived);
+        // Le sessioni le sceglie l'utente: dopo l'analisi nessuna è spuntata.
+        self.sel_sessions = vec![false; scan.archived.len()];
         self.scan = Some(Arc::new(scan));
         self.view = View::Scanned;
     }
@@ -1474,11 +1484,6 @@ fn preselect_reports(reports: &[ProjectReport]) -> Vec<bool> {
     reports.iter().map(|r| r.preselected && selectable(r)).collect()
 }
 
-/// Scelta di piano: tutte le sessioni archiviate non bloccate.
-fn preselect_sessions(sessions: &[ArchivedSession]) -> Vec<bool> {
-    sessions.iter().map(|s| s.blocked.is_none()).collect()
-}
-
 fn select_reports(reports: &[ProjectReport], sel: &mut [bool], all: bool) {
     for (s, r) in sel.iter_mut().zip(reports) {
         *s = all && selectable(r);
@@ -1826,6 +1831,19 @@ fn only_root_settings(mut s: Settings, dir: PathBuf) -> Settings {
     s
 }
 
+/// `--only-root`: l'analisi legge comunque gli archivi veri delle sessioni e può trovare worktree
+/// veri. Si tiene solo ciò che sta dentro l'albero finto: niente sessioni (non hanno una cartella
+/// lì dentro) e solo i report la cui cartella sta sotto `root`, confrontata per componenti
+/// (`albero-x` non sta sotto `albero`) e con la chiave di percorso del progetto.
+fn keep_only_under(scan: &mut DevScan, root: &Path) {
+    let root = PathBuf::from(dc_model::path_key(root));
+    let inside = |r: &ProjectReport| PathBuf::from(dc_model::path_key(&r.root)).starts_with(&root);
+    scan.archived.clear();
+    scan.projects.retain(inside);
+    scan.worktrees.retain(inside);
+    scan.other_worktrees.retain(inside);
+}
+
 /// File che segna la radice di un albero finto per `--dev-demo`.
 #[cfg(debug_assertions)]
 pub const DEMO_MARKER: &str = ".pulisci-demo";
@@ -2100,9 +2118,18 @@ mod tests {
     }
 
     #[test]
-    fn sessions_preselected_unless_blocked() {
+    fn sessions_start_unticked_and_blocked_never_chosen() {
         let ss = vec![session("1", None, false, 0), session("2", Some("sessione in uso"), true, 10), session("3", None, true, 7)];
-        assert_eq!(preselect_sessions(&ss), vec![true, false, true]);
+        let mut st = state();
+        st.set_scan(DevScan { archived: ss.clone(), ..Default::default() });
+        assert_eq!(st.sel_sessions, vec![false, false, false], "dopo l'analisi nessuna sessione è spuntata");
+        st.set_section(Section::Sessions);
+        assert!(!st.can_clean(), "nulla scelto: «Avvia pulizia» resta spento");
+        assert_eq!(st.selection(), (0, 3, 0));
+        // «Tutti» spunta le non bloccate.
+        select_sessions(&ss, &mut st.sel_sessions, true);
+        assert_eq!(st.sel_sessions, vec![true, false, true]);
+        assert!(st.can_clean());
         // Anche se la casella risultasse spuntata, una sessione bloccata non viene mai scelta.
         let sel = vec![true, true, false];
         let ids: Vec<&str> = chosen_sessions(&ss, &sel).map(|s| s.id.as_str()).collect();
@@ -2239,8 +2266,9 @@ mod tests {
     fn the_confirmation_names_the_section_and_lists_only_its_items() {
         let mut st = state();
         st.set_scan(three_sections());
-        assert_eq!((&st.sel_artifacts, &st.sel_worktrees, &st.sel_sessions), (&ids(&["a"]), &vec![false], &vec![true, true]));
+        assert_eq!((&st.sel_artifacts, &st.sel_worktrees, &st.sel_sessions), (&ids(&["a"]), &vec![false], &vec![false, false]));
         st.sel_worktrees = vec![true];
+        st.sel_sessions = vec![true, true];
 
         st.section = Section::Sessions;
         st.open_confirm();
@@ -2333,7 +2361,8 @@ mod tests {
         let mut st = state();
         st.set_scan(three_sections());
         st.sel_worktrees = vec![true];
-        assert_eq!((st.sel_artifacts.len(), st.sel_sessions.clone()), (1, vec![true, true]));
+        assert_eq!((st.sel_artifacts.len(), st.sel_sessions.clone()), (1, vec![false, false]));
+        st.sel_sessions = vec![true, true];
 
         // Progetti: le righe scelte in Worktree e Sessioni restano fuori dal piano e sono nominate.
         st.set_section(Section::Projects);
@@ -2470,7 +2499,7 @@ mod tests {
         assert!(!st.busy());
         assert_eq!(st.view, View::Scanned);
         assert_eq!(st.sel_artifacts, ids(&["a"]));
-        assert_eq!(st.sel_sessions, vec![true, false]);
+        assert_eq!(st.sel_sessions, vec![false, false], "le sessioni partono non spuntate");
         assert_eq!(st.selection(), (1, 2, 10));
 
         st.release();
@@ -2778,6 +2807,69 @@ mod tests {
         let shared = st.cancel.clone().unwrap();
         st.cancel_clean();
         assert!(st.cancelling() && shared.is_cancelled(), "lo stesso Cancel dei worker");
+    }
+
+    /// Un report con la radice indicata.
+    fn report_at(id: &str, root: &str) -> ProjectReport {
+        let mut r = report(id, ProjectStatus::Inactive, true, 1);
+        r.root = PathBuf::from(root);
+        r
+    }
+
+    /// Un'analisi con roba dentro `D:\t\albero` e fuori (anche un fratello `albero-x`) e due sessioni.
+    fn mixed_scan() -> DevScan {
+        let mut wt_in = report_at("wi", r"D:\t\albero\wt");
+        wt_in.is_agent_worktree = true;
+        let mut wt_out = report_at("wo", r"D:\Projects\vero-wt");
+        wt_out.is_agent_worktree = true;
+        DevScan {
+            projects: vec![report_at("pi", r"D:\t\albero\p1"), report_at("po", r"D:\Projects\vero"), report_at("px", r"D:\t\albero-x\p2")],
+            worktrees: vec![wt_in, wt_out],
+            other_worktrees: vec![report_at("oi", r"D:\t\albero\o1"), report_at("oo", r"D:\altrove\o2")],
+            archived: vec![session("1", None, true, 4), session("2", None, true, 5)],
+            scanned_at_ms: dc_app::now_ms(),
+            ..Default::default()
+        }
+    }
+
+    fn report_ids(rs: &[ProjectReport]) -> Vec<&str> {
+        rs.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn keep_only_under_drops_everything_outside_the_root() {
+        let mut scan = mixed_scan();
+        keep_only_under(&mut scan, Path::new(r"D:\t\albero"));
+        assert_eq!(report_ids(&scan.projects), vec!["pi"], "il fratello albero-x non sta sotto albero");
+        assert_eq!(report_ids(&scan.worktrees), vec!["wi"]);
+        assert_eq!(report_ids(&scan.other_worktrees), vec!["oi"]);
+        assert!(scan.archived.is_empty(), "le sessioni non hanno una cartella nell'albero finto");
+
+        // La radice stessa resta; maiuscole e barre non cambiano il giudizio.
+        let mut scan = DevScan { projects: vec![report_at("r", r"D:\t\albero"), report_at("c", "d:/T/ALBERO/sub")], ..Default::default() };
+        keep_only_under(&mut scan, Path::new(r"D:\t\albero"));
+        assert_eq!(report_ids(&scan.projects), vec!["r", "c"]);
+    }
+
+    #[test]
+    fn only_root_never_keeps_real_sessions_or_worktrees() {
+        let mut fake = DevState::only_root(PathBuf::from(r"D:\t\albero"), Section::Sessions, false);
+        fake.set_scan(mixed_scan());
+        let scan = fake.scan.clone().unwrap();
+        assert!(scan.archived.is_empty() && fake.sel_sessions.is_empty());
+        assert_eq!(report_ids(&scan.worktrees), vec!["wi"], "solo il worktree dentro l'albero finto");
+        assert_eq!(fake.sel_worktrees.len(), 1);
+        assert_eq!(report_ids(&scan.projects), vec!["pi"]);
+        assert_eq!(report_ids(&scan.other_worktrees), vec!["oi"]);
+
+        // Uno stato normale tiene tutto.
+        let mut normal = state();
+        normal.set_scan(mixed_scan());
+        let scan = normal.scan.clone().unwrap();
+        assert_eq!(scan.archived.len(), 2);
+        assert_eq!(scan.worktrees.len(), 2);
+        assert_eq!(scan.projects.len(), 3);
+        assert_eq!(scan.other_worktrees.len(), 2);
     }
 
     #[test]
