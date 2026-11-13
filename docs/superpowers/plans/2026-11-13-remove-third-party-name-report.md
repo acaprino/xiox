@@ -1,5 +1,6 @@
 # Rimozione dei riferimenti al prodotto di terzi: relazione
-nNota: questa relazione ha il nome `remove-third-party-name` e non quello richiesto, perché il nome richiesto conteneva il nome del prodotto e avrebbe fatto fallire `git ls-files | grep -i`.
+
+Nota: questa relazione ha il nome `remove-third-party-name` e non quello richiesto, perché il nome richiesto conteneva il nome del prodotto e avrebbe fatto fallire `git ls-files | grep -i`.
 
 Richiesta dell'utente: eliminare ogni riferimento al prodotto di pulizia di terzi (qualunque grafia, compresi nomi di file e di cartella) dai file tracciati da git. Winapp2 resta, citato come fonte delle regole. Questa relazione non scrive il nome del prodotto, per non reintrodurlo nel grep di verifica.
 
