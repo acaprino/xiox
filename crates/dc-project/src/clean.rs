@@ -13,7 +13,9 @@
 
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
-use crate::{Block, Category, Env, Item, Options, Project, ProjectScan, SCHEMA, SearchMode, Target, analyze_with};
+use crate::{
+    Block, Category, Env, Item, Options, Project, ProjectScan, SCHEMA, SearchMode, Target, Why, analyze_with,
+};
 use dc_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use dc_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
 use dc_mukade::ArchivedSession;
@@ -26,31 +28,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-impl fmt::Display for Category {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Category::Builds => "builds",
-            Category::Worktrees => "worktrees",
-            Category::Copies => "copies",
-            Category::Named => "named",
-            Category::Logs => "logs",
-            Category::Sessions => "sessions",
-        })
-    }
-}
-
-impl fmt::Display for Block {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Block::LiveSession => "live agent session",
-            Block::DirtyGit => "uncommitted changes",
-            Block::UnpushedCommits => "commits that no other branch has",
-            Block::Unreachable => "unreachable",
-            Block::SessionLocked => "session locked",
-            Block::Unknown => "unknown reason",
-        })
-    }
-}
+/// Start of the reason of an item that went with a chosen item that holds it.
+pub(crate) const ALREADY_REMOVED: &str = "already removed with ";
 
 fn join_blocks(why: &[Block]) -> String {
     why.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", ")
@@ -193,9 +172,15 @@ pub struct CleanOutcome {
 }
 
 impl CleanOutcome {
-    /// At least one item was skipped or failed.
+    /// At least one item was skipped or failed. An item `Skipped` only because the chosen item
+    /// that holds it was removed (`already removed with …`) is the ordinary overlap, not a
+    /// partial result: what was asked is gone.
     pub fn partial(&self) -> bool {
-        self.items.iter().any(|(.., o)| !matches!(o, Outcome::Removed { .. }))
+        self.items.iter().any(|(.., o)| match o {
+            Outcome::Removed { .. } => false,
+            Outcome::Skipped { reason } => !reason.starts_with(ALREADY_REMOVED),
+            Outcome::Failed { .. } => true,
+        })
     }
 }
 
@@ -341,6 +326,18 @@ pub(crate) struct Io<'a> {
 /// `dry_run` every check runs and nothing is touched; the outcomes say what would be freed.
 /// Reads the real sessions of this PC, like the analysis does.
 pub fn clean(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run: bool) -> CleanOutcome {
+    if chosen.keys.is_empty() {
+        // Nothing chosen: no session listing, no analysis.
+        return CleanOutcome {
+            schema: SCHEMA,
+            mode,
+            dry_run,
+            items: Vec::new(),
+            bytes_freed: 0,
+            recycled_bytes: 0,
+            elapsed_ms: 0,
+        };
+    }
     let cache = Some(dc_app::cache_dir());
     let (sessions, _) = dc_app::load_sessions(cache.clone());
     let (archived, _) = dc_app::load_archived_sessions(cache);
@@ -434,7 +431,7 @@ struct Run<'a> {
 }
 
 /// Why a chosen item is not removed after the fresh analysis; `Ok` is the fresh item.
-fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Item, String> {
+pub(crate) fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Item, String> {
     let Some(f) = fresh else {
         return Err(if old.path.is_none() { "no longer archived" } else { "no longer there" }.to_string());
     };
@@ -443,6 +440,9 @@ fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Item, String> 
     }
     if !f.blocked.is_empty() {
         return Err(format!("now blocked: {}", join_blocks(&f.blocked)));
+    }
+    if let Why::SameRepository { has_own_work: Some(true), .. } = f.why {
+        return Err("now has commits or changes the project does not have".to_string());
     }
     if f.level == Level::Caution && old.level != Level::Caution {
         return Err("now needs a manual review (it is no longer a recommended item)".to_string());
@@ -483,7 +483,7 @@ impl Run<'_> {
                 });
                 match outer {
                     Some(o) => {
-                        done.insert(key.clone(), skipped(format!("already removed with {}", o.path().display())));
+                        done.insert(key.clone(), skipped(format!("{ALREADY_REMOVED}{}", o.path().display())));
                     }
                     None => still.push(i),
                 }

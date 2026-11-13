@@ -24,6 +24,7 @@ pub use resolve::resolve_project;
 
 use dc_model::{Agent, ArtifactKind, Level};
 use serde::Serialize;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Version of the JSON shape of [`ProjectScan`].
@@ -50,7 +51,36 @@ pub enum Block {
     UnpushedCommits,
     Unreachable,
     SessionLocked,
+    /// A copy of the repository with commits or changes the project does not have.
+    UnsavedWork,
     Unknown,
+}
+
+impl fmt::Display for Category {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Category::Builds => "builds",
+            Category::Worktrees => "worktrees",
+            Category::Copies => "copies",
+            Category::Named => "named",
+            Category::Logs => "logs",
+            Category::Sessions => "sessions",
+        })
+    }
+}
+
+impl fmt::Display for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Block::UnsavedWork => "has commits or changes the project does not have",
+            Block::LiveSession => "live agent session",
+            Block::DirtyGit => "uncommitted changes",
+            Block::UnpushedCommits => "commits that no other branch has",
+            Block::Unreachable => "unreachable",
+            Block::SessionLocked => "session locked",
+            Block::Unknown => "unknown reason",
+        })
+    }
 }
 
 /// Why the item belongs to the project.

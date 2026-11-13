@@ -9,7 +9,7 @@
 //! tested as a candidate but never descended into.
 
 use crate::owned::key_within;
-use crate::{Category, Env, Item, Note, Options, Project, SearchMode, Target, Why};
+use crate::{Block, Category, Env, Item, Note, Options, Project, SearchMode, Target, Why};
 use dc_git::GitCli;
 use dc_model::{ArtifactKind, DirIndex, GitProbe, Level, is_system_dir, normalize_path, path_key};
 use std::collections::HashSet;
@@ -362,12 +362,17 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
         .into_iter()
         .filter_map(|c| {
             let (category, why) = classify(project, &roots, project.origin.as_deref(), &c)?;
+            // A copy with commits or changes the project lacks cannot be removed at all.
+            let blocked = match &why {
+                Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
+                _ => Vec::new(),
+            };
             Some(Item {
                 key: path_key(&c),
                 category,
                 bytes: opts.measure.then(|| dc_cleaner::measure_dir(&c).effective_bytes()),
                 level: Level::Caution,
-                blocked: Vec::new(),
+                blocked,
                 why,
                 target: Target::Dir { kind: ArtifactKind::ProjectFolder },
                 path: Some(c),

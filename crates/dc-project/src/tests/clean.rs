@@ -340,7 +340,7 @@ fn worktree_that_gained_a_private_commit_after_the_analysis_is_skipped() {
 }
 
 #[test]
-fn folder_replaced_by_a_junction_after_the_analysis_is_skipped_and_the_target_survives() {
+fn folder_replaced_by_a_junction_after_the_analysis_is_left_alone_and_the_target_survives() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));
     let target = rust_build(&root, 2 * MB);
@@ -363,7 +363,8 @@ fn folder_replaced_by_a_junction_after_the_analysis_is_skipped_and_the_target_su
     }
 
     let out = run(&scan, &chosen, RemoveMode::Permanent, false);
-    // The engine does not list a junction as a build folder any more: left alone either way.
+    // End to end the fresh analysis no longer lists the junction as a build folder, so it is
+    // skipped before `check_dir`; the link refusal itself is tested on `check_dir` below.
     assert!(matches!(outcome_of(&out, &target), Outcome::Skipped { .. }), "{:#?}", out.items);
     assert!(out.partial());
     assert_eq!(out.bytes_freed, 0);
@@ -744,4 +745,156 @@ fn operating_system_and_git_text_never_reach_the_outcome() {
         english_error("could not remove x: Accesso negato. (os error 5)", &["a.exe".into(), "b.exe".into()]),
         "could not remove x: os error 5 (in use by: a.exe, b.exe)"
     );
+}
+
+// ───────────────────────────── fix round 1 ─────────────────────────────
+
+fn copy_of(base: &Path, root: &Path) -> PathBuf {
+    let dest = base.join("other").join("copy");
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    git(base, &["clone", "-q", &root.to_string_lossy(), &dest.to_string_lossy()]);
+    canon(&dest)
+}
+
+/// `scan_in` for a project whose copies are searched in `base/other`.
+fn scan_with_copies(root: &Path, base: &Path) -> ProjectScan {
+    let e = Env { sessions: &[], archived: &[], search_roots: Some(vec![base.join("other")]), now_ms: dc_app::now_ms() };
+    scan_in(root, &e)
+}
+
+fn rerun(scan: &ProjectScan, chosen: &Chosen, base: &Path) -> CleanOutcome {
+    let e = Env { sessions: &[], archived: &[], search_roots: Some(vec![base.join("other")]), now_ms: dc_app::now_ms() };
+    let bin = FakeBin::new(PathBuf::from("unused"));
+    run_with(scan, chosen, RemoveMode::Permanent, false, &e, &bin, &|_| Vec::new())
+}
+
+#[test]
+fn a_copy_that_gained_work_after_the_analysis_is_skipped_and_stays() {
+    for how in ["dirty", "commit"] {
+        let (_t, base) = tmp();
+        let root = repo(&base.join("proj"));
+        let copy = copy_of(&base, &root);
+        let scan = scan_with_copies(&root, &base);
+        let item = scan.items.iter().find(|i| i.key == path_key(&copy)).expect("copy listed");
+        assert_eq!(item.category, Category::Copies);
+        assert!(item.blocked.is_empty(), "{:?}", item.blocked);
+        let chosen = select(&scan, &req(&[], &[&copy])).unwrap();
+
+        if how == "dirty" {
+            fs::write(copy.join("wip.txt"), "unsaved").unwrap();
+        } else {
+            commit(&copy, "private.txt");
+        }
+        let out = rerun(&scan, &chosen, &base);
+        // The fresh analysis blocks it (UnsavedWork) before the own-work check is even needed.
+        assert!(matches!(outcome_of(&out, &copy), Outcome::Skipped { .. }), "{how}: {:#?}", out.items);
+        assert!(out.partial());
+        assert!(copy.join("README.md").exists(), "{how}: the copy was touched");
+        assert_english(&out);
+    }
+}
+
+#[test]
+fn recheck_skips_a_copy_whose_fresh_listing_says_it_has_own_work_even_if_unblocked() {
+    let mk = |own: Option<bool>, blocked: Vec<Block>| Item {
+        key: "k".into(),
+        category: Category::Copies,
+        path: Some(PathBuf::from("X-a-b")),
+        bytes: None,
+        level: Level::Caution,
+        blocked,
+        why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+    };
+    let old = mk(Some(false), Vec::new());
+    assert!(crate::clean::recheck(&old, Some(&mk(Some(false), Vec::new()))).is_ok());
+    assert!(crate::clean::recheck(&old, Some(&mk(None, Vec::new()))).is_ok());
+    assert_eq!(
+        crate::clean::recheck(&old, Some(&mk(Some(true), Vec::new()))).unwrap_err(),
+        "now has commits or changes the project does not have"
+    );
+}
+
+#[test]
+fn include_of_a_copy_with_its_own_work_is_refused_as_blocked_and_it_survives() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let copy = copy_of(&base, &root);
+    commit(&copy, "private.txt");
+    let scan = scan_with_copies(&root, &base);
+
+    match select(&scan, &req(&[], &[&copy])).unwrap_err() {
+        SelectError::Blocked { path, why } => {
+            assert_eq!(path, copy);
+            assert_eq!(why, vec![Block::UnsavedWork]);
+        }
+        e => panic!("{e:?}"),
+    }
+    assert_eq!(
+        SelectError::Blocked { path: copy.clone(), why: vec![Block::UnsavedWork] }.to_string(),
+        format!("cannot be removed (has commits or changes the project does not have): {}", copy.display())
+    );
+    assert!(copy.join("private.txt").exists());
+}
+
+#[test]
+fn an_item_skipped_because_its_outer_item_went_is_not_a_partial_result() {
+    let (_t, base) = tmp();
+    let root = project_ignoring_logs(&base);
+    let wt = worktree(&root, &base.join("proj-wt"), "feature");
+    write_sized(&wt.join("logs").join("a.log"), 2 * MB);
+    let scan = scan_of(&root);
+    let chosen = select(&scan, &req(&[Category::Worktrees, Category::Logs], &[])).unwrap();
+
+    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    assert!(out.items.iter().any(|(.., o)| matches!(o, Outcome::Skipped { reason } if reason.starts_with("already removed with "))));
+    assert!(!out.partial(), "{:#?}", out.items);
+
+    // A real skip or failure still is.
+    let mut other = out.clone();
+    other.items.push(("k".into(), None, Category::Logs, Outcome::Skipped { reason: "no longer there".into() }));
+    assert!(other.partial());
+    let mut failed = out;
+    failed.items.push(("k".into(), None, Category::Logs, Outcome::Failed { error: "x".into() }));
+    assert!(failed.partial());
+}
+
+#[test]
+fn clean_with_nothing_chosen_returns_an_empty_outcome_at_once() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let scan = scan_of(&root);
+    let out = clean(&scan, &Chosen::default(), RemoveMode::Recycle, false);
+    assert!(out.items.is_empty() && !out.partial());
+    assert_eq!((out.schema, out.mode, out.bytes_freed, out.recycled_bytes), (1, RemoveMode::Recycle, 0, 0));
+}
+
+#[test]
+fn a_top_level_project_folder_is_refused_with_an_english_reason() {
+    // `guard::validate` refuses drive-root children and that is not relaxed for project
+    // folders. `clean` cannot reach it end to end (a name-matched folder at a drive root would
+    // have to be created there), so the check is made on `check_dir` with a real top-level
+    // folder, read only: nothing is deleted.
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let project = resolve_project(&root).unwrap();
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let top = PathBuf::from(format!("{drive}/Windows"));
+    if !top.is_dir() {
+        eprintln!("skipped: no top-level folder to test with");
+        return;
+    }
+    let item = Item {
+        key: path_key(&top),
+        category: Category::Named,
+        path: Some(top.clone()),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+    };
+    let reason = check_dir(&item, 0, &project).unwrap_err();
+    assert!(reason.starts_with("path too shallow"), "{reason}");
+    assert!(top.is_dir());
 }

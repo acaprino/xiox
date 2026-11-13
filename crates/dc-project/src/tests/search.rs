@@ -2,7 +2,7 @@
 
 use super::fixtures::*;
 use crate::search::{mft_hits, name_matches_project, walk_candidates};
-use crate::{Category, Env, Note, Options, ProjectScan, SearchMode, Target, Why, analyze_with, resolve_project};
+use crate::{Block, Category, Env, Note, Options, ProjectScan, SearchMode, Target, Why, analyze_with, resolve_project};
 use dc_disktree::{DiskIndex, Node};
 use dc_model::{ArtifactKind, Level};
 use std::fs;
@@ -114,6 +114,11 @@ fn clone_with_an_extra_commit_has_own_work_true_and_plain_clone_false() {
     assert_eq!(own_work(&plain), Some(false));
     assert_eq!(own_work(&ahead), Some(true));
     assert_eq!(own_work(&dirty), Some(true));
+    // A copy with work of its own cannot be removed at all; a plain one can.
+    let blocked = |p: &Path| s.items.iter().find(|i| i.path.as_deref() == Some(p)).unwrap().blocked.clone();
+    assert_eq!(blocked(&plain), Vec::<Block>::new());
+    assert_eq!(blocked(&ahead), vec![Block::UnsavedWork]);
+    assert_eq!(blocked(&dirty), vec![Block::UnsavedWork]);
 }
 
 #[test]
@@ -342,6 +347,7 @@ fn clone_with_another_local_branch_carrying_its_own_commit_has_own_work_true() {
     let s = scan(&project, vec![base.join("other")], &Options::default());
     let item = s.items.iter().find(|i| i.path.as_deref() == Some(c.as_path())).expect("copy listed");
     assert!(matches!(item.why, Why::SameRepository { has_own_work: Some(true), .. }), "{:?}", item.why);
+    assert_eq!(item.blocked, vec![Block::UnsavedWork]);
 }
 
 #[test]
