@@ -173,7 +173,9 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 - Macchina: `cargo` sempre con `-j 1`, mai due build insieme, dischi quasi pieni.
 - Il motore resta nei crate `dc-*`; l'analisi mirata è una funzione di libreria (in `dc-app` o in
   un crate nuovo) che la finestra Tauri potrà chiamare tale e quale. Il binario `xiox` contiene
-  solo argomenti, stampa e conferma.
+  solo argomenti, stampa e conferma. La funzione ha un modo leggero che non misura i pesi
+  (serve all'osservatore, `2026-11-13-project-observer-mcp-design.md`) e ogni voce ha una chiave
+  stabile (`dc_model::path_key` del percorso).
 - Nessuna dipendenza nuova pesante: per gli argomenti va bene un parser piccolo o scritto a mano.
 
 ## Non si fa
