@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A project name shorter than this (in characters) is never searched.
+/// A project name shorter than this (in characters) is never searched by name (copies still are, by identity).
 const MIN_NAME_CHARS: usize = 4;
 /// How deep the walk goes below a drive root or the user's home.
 const WALK_DEPTH: usize = 3;
@@ -31,8 +31,9 @@ pub(crate) struct Found {
 }
 
 /// True when `folder` is `project` + one of `-` `_` `.` ` ` + at least one more character, case-insensitive.
+/// A project name shorter than [`MIN_NAME_CHARS`] matches nothing (too common to attribute folders).
 pub(crate) fn name_matches_project(project: &str, folder: &str) -> bool {
-    if project.is_empty() {
+    if project.chars().count() < MIN_NAME_CHARS {
         return false;
     }
     let (p, f) = (project.to_lowercase(), folder.to_lowercase());
@@ -84,7 +85,11 @@ fn walk(dir: &Path, levels: usize, own: &Own, name: &str, seen: &mut HashSet<Str
             continue;
         }
         let repo = is_git_repo(&path);
-        if !own.inside(&key) && (repo || name_matches_project(name, &child)) && seen.insert(key) {
+        if !own.inside(&key)
+            && (repo || name_matches_project(name, &child))
+            && !inside_other_repo(&path)
+            && seen.insert(key)
+        {
             out.push(path.clone());
         }
         if !repo {
@@ -104,7 +109,7 @@ pub(crate) fn classify(
 ) -> Option<(Category, Why)> {
     let own = Own::new(project);
     let key = path_key(candidate);
-    if own.holds(&key) || own.inside(&key) {
+    if own.holds(&key) || own.inside(&key) || inside_other_repo(candidate) {
         return None;
     }
     if !fs::symlink_metadata(candidate).is_ok_and(|m| m.is_dir() && !is_link(&m)) {
@@ -128,14 +133,31 @@ pub(crate) fn classify(
     name_matches_project(&project.name, &name).then_some((Category::Named, Why::NameOnly))
 }
 
-/// `Some(true)`: the copy is dirty or has a HEAD the project's repository does not contain.
-/// `Some(false)`: clean and contained. `None`: git cannot tell.
+/// `Some(true)`: the copy is dirty, or HEAD or any local branch tip of it is a commit the
+/// project's repository does not have. `Some(false)`: clean and every tip is contained.
+/// `None`: git cannot tell.
 fn has_own_work(project: &Project, copy: &Path) -> Option<bool> {
     let dirty = GitCli.state(copy).dirty;
-    let contained = git_head(copy).and_then(|head| git_exit(&project.root, &["cat-file", "-e", &head]));
-    match (dirty, contained) {
-        (Some(true), _) | (_, Some(false)) => Some(true),
-        (Some(false), Some(true)) => Some(false),
+    let mut tips: Vec<String> = git_head(copy).into_iter().collect();
+    let refs = git_command(copy).args(["for-each-ref", "--format=%(objectname)", "refs/heads"]).output().ok();
+    let listed = refs.as_ref().is_some_and(|o| o.status.success());
+    if let Some(o) = refs {
+        tips.extend(String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
+    }
+    tips.sort();
+    tips.dedup();
+    let mut unknown = !listed || tips.is_empty();
+    let mut missing = false;
+    for tip in &tips {
+        match git_exit(&project.root, &["cat-file", "-e", tip]) {
+            Some(false) => missing = true,
+            Some(true) => {}
+            None => unknown = true,
+        }
+    }
+    match (dirty, missing) {
+        (Some(true), _) | (_, true) => Some(true),
+        (Some(false), false) if !unknown => Some(false),
         _ => None,
     }
 }
@@ -213,9 +235,21 @@ fn is_git_repo(dir: &Path) -> bool {
     dir.join(".git").symlink_metadata().is_ok()
 }
 
-/// Some ancestor of `path` (not `path` itself) is a git repository.
+/// Some ancestor of `path` (not `path` itself) is a git repository. Like git, the folders in
+/// `GIT_CEILING_DIRECTORIES` and above them are not looked at.
 fn inside_other_repo(path: &Path) -> bool {
-    path.ancestors().skip(1).any(is_git_repo)
+    let ceilings: Vec<String> = std::env::var_os("GIT_CEILING_DIRECTORIES")
+        .map(|v| std::env::split_paths(&v).map(|p| path_key(&p)).collect())
+        .unwrap_or_default();
+    for a in path.ancestors().skip(1) {
+        if ceilings.contains(&path_key(a)) {
+            return false;
+        }
+        if is_git_repo(a) {
+            return true;
+        }
+    }
+    false
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -263,21 +297,14 @@ fn read_index(drives: &[dc_disktree::FixedDrive]) -> Option<dc_disktree::DiskInd
 
 // ───────────────────────────────── the search ───────────────────────────────
 
-/// The mode the options ask for (what is reported when nothing gets searched).
-fn requested_mode(opts: &Options, env: &Env) -> SearchMode {
-    if !opts.drives {
-        SearchMode::ParentOnly
-    } else if opts.admin && env.search_roots.is_none() {
-        SearchMode::MftIndex
-    } else {
-        SearchMode::BoundedWalk
-    }
-}
-
 /// Find the copies and the name-matched folders of `project`.
 pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
-    if project.name.chars().count() < MIN_NAME_CHARS {
-        return Found { items: Vec::new(), mode: requested_mode(opts, env), notes: vec![Note::NameTooShort] };
+    // A short name is not searched by name: no `named` items and no index (the index only
+    // offers names). Copies are still found by identity, by the walk.
+    let by_name = project.name.chars().count() >= MIN_NAME_CHARS;
+    let mut notes = Vec::new();
+    if !by_name {
+        notes.push(Note::NameTooShort);
     }
 
     let mut walk: Vec<(PathBuf, usize)> = Vec::new();
@@ -295,6 +322,7 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
                 let drives = dc_disktree::fixed_drives();
                 let mut covered: Vec<PathBuf> = Vec::new();
                 if opts.admin
+                    && by_name
                     && let Some(index) = read_index(&drives)
                 {
                     covered = drives.iter().map(|d| d.root()).filter(|r| index.size_of(r).is_some()).collect();
@@ -320,7 +348,6 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
         walk.extend(deep.into_iter().map(|r| (r, WALK_DEPTH)));
     }
 
-    let mut notes = Vec::new();
     if mode == SearchMode::BoundedWalk || deep_walk {
         notes.push(Note::WalkMayMissDeepFolders);
     }

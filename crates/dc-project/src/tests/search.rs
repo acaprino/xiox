@@ -243,16 +243,24 @@ fn deeper_than_the_depth_limit_is_not_found() {
 }
 
 #[test]
-fn three_letter_project_name_searches_nothing_and_says_so() {
+fn three_letter_project_name_finds_copies_but_no_named_folders_and_says_so() {
     let (_t, base) = tmp();
     let project = repo(&base.join("work").join("abc"));
     fill(&base.join("work").join("abc-old"), 1, 10);
-    clone(&project, &base.join("work").join("zzz"));
+    let zzz = clone(&project, &base.join("other").join("zzz"));
 
-    let s = scan(&project, Vec::new(), &Options::default());
-    assert!(found(&s).is_empty(), "{:?}", s.items);
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    assert_eq!(paths(&s, Category::Copies), vec![zzz], "{:?}", s.items);
+    assert!(paths(&s, Category::Named).is_empty(), "{:?}", s.items);
     assert!(s.notes.contains(&Note::NameTooShort));
-    assert!(!s.notes.contains(&Note::WalkMayMissDeepFolders));
+    // Nothing by name was searched (no index), only the walk: the mode says so.
+    assert_eq!(s.search, SearchMode::BoundedWalk);
+    assert!(s.notes.contains(&Note::WalkMayMissDeepFolders));
+
+    let near = scan(&project, vec![base.join("other")], &Options { drives: false, ..Options::default() });
+    assert!(paths(&near, Category::Copies).is_empty());
+    assert_eq!(near.search, SearchMode::ParentOnly);
+    assert!(near.notes.contains(&Note::NameTooShort));
 }
 
 #[test]
@@ -318,4 +326,33 @@ fn the_mft_index_lists_folders_by_name_prefix_without_system_folders_or_the_proj
         .collect();
     got.sort();
     assert_eq!(got, [r"C:\Projects\mukade-bench", r"C:\Users\x\Documents\Mukade_old"]);
+}
+
+#[test]
+fn clone_with_another_local_branch_carrying_its_own_commit_has_own_work_true() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let c = clone(&project, &base.join("other").join("branchy"));
+    git(&c, &["checkout", "-q", "-b", "side"]);
+    commit(&c, "only-on-side.txt");
+    git(&c, &["checkout", "-q", "main"]);
+    assert_eq!(git(&c, &["status", "--porcelain"]), "");
+    assert_eq!(git(&c, &["rev-parse", "HEAD"]), git(&project, &["rev-parse", "HEAD"]));
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let item = s.items.iter().find(|i| i.path.as_deref() == Some(c.as_path())).expect("copy listed");
+    assert!(matches!(item.why, Why::SameRepository { has_own_work: Some(true), .. }), "{:?}", item.why);
+}
+
+#[test]
+fn project_nested_in_an_outer_repository_lists_no_sibling() {
+    let (_t, base) = tmp();
+    let outer = repo(&base.join("outer"));
+    let project = repo(&outer.join("vendor").join("mukade"));
+    fs::create_dir_all(outer.join("vendor").join("mukade-sibling")).unwrap();
+    clone(&project, &outer.join("vendor").join("zzz"));
+    fs::create_dir_all(outer.join("mukade-top")).unwrap();
+
+    let s = scan(&project, vec![outer.clone()], &Options::default());
+    assert!(found(&s).is_empty(), "{:?}", s.items);
 }
