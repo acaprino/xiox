@@ -122,6 +122,23 @@ test('openConfirm and openFix are refused when the action is disabled', () => {
   assert.deepEqual([off.stateOf('cleanup'), off.stateOf('registry'), off.stateOf('developers')], ['analyzed', 'analyzed', 'projects']);
 });
 
+test('openConfirm and openFix are refused from a state that is not analyzed-like, even with the action enabled', () => {
+  const model = loose(enableAll);
+  const NOT_ANALYZED: [SectionId, string][] = [
+    ['cleanup', 'idle'], ['cleanup', 'analyzing'], ['cleanup', 'cleaning'], ['cleanup', 'report'],
+    ['registry', 'idle'], ['registry', 'scanning'], ['registry', 'fixed'],
+    ['services', 'loading'],
+    ['developers', 'idle'], ['developers', 'analyzing'], ['developers', 'cleaning'], ['developers', 'report'],
+  ];
+  for (const [section, name] of NOT_ANALYZED) {
+    model.go(section, name);
+    const open: AnyIntent = section === 'registry' ? { kind: 'openFix' } : section === 'services' ? { kind: 'openConfirm', action: 'disable' } : { kind: 'openConfirm' };
+    model.intent(section, open);
+    assert.equal(model.stateOf(section), name, `${section}:${name} opened a dialog`);
+    assert.equal(model.view(section).dialog, null);
+  }
+});
+
 test('a dialog that is reopened starts with its ack box off', () => {
   const model = fresh();
   model.go('developers', 'projects');

@@ -1368,6 +1368,98 @@
     "state": "projects",
     "rev": 41
    }
+  },
+  {
+   "note": "closeDialog with no dialog and no report does nothing",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "analyzed",
+    "dialog": false,
+    "report": false,
+    "rev": 34
+   }
+  },
+  {
+   "note": "cancel when nothing is busy does nothing",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 35
+   }
+  },
+  {
+   "note": "select of a category that is not in the nav changes nothing (the remembered one stays)",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "cat:cleanup"
+   },
+   "expect": {
+    "state": "analyzed",
+    "active": "cat:browser",
+    "rev": 36
+   }
+  },
+  {
+   "note": "home of the next step: the idle state",
+   "op": "go",
+   "section": "cleanup",
+   "state": "idle",
+   "expect": {
+    "state": "idle",
+    "rev": 37
+   }
+  },
+  {
+   "note": "openConfirm from a state that is not analyzed-like (here idle) opens nothing",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "idle",
+    "dialog": false,
+    "rev": 38
+   }
+  },
+  {
+   "note": "select moves Developers to its worktrees",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "worktrees"
+   },
+   "expect": {
+    "state": "worktrees",
+    "rev": 42
+   }
+  },
+  {
+   "note": "toggle on an enabled row whose check is none (the OTHER WORKTREES header) changes nothing",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "h:others"
+   },
+   "expect": {
+    "state": "worktrees",
+    "checks": {
+     "h:others": "none"
+    },
+    "rev": 43
+   }
   }
  ]
 }

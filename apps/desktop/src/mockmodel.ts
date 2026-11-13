@@ -71,6 +71,19 @@
 //   anything else (search, setOnlyOld, selectAll, setAll, setInactiveDays, ...)   the same state.
 // An intent that is refused or does not apply is IGNORED: same state, new rev, nothing else changes.
 //
+// WHAT NO INTENT DOES (the FakeBackend must not invent it either).
+//   developers:shortfall is reachable only through `go`: no intent leads to it (confirm from the confirm
+//       dialog goes to `cleaning`; in Rust the shortfall comes from a real disk check the fixture lacks).
+//   `cancel` is never sent for Registry and Services: their intent types (RegistryIntent, ServicesIntent)
+//       have no `cancel`, and `actionIntent` returns null for it there; the only "Cancel" in Registry is
+//       the backup dialog's button, which is `closeDialog`. This mock does not look at the section when
+//       it gets a `cancel` (a busy Registry would go back), because the page can never send one; the
+//       Rust FakeBackend rejects it at the type level (no such variant).
+//   closeDialog with no dialog and no report, cancel when nothing is busy, select of a category that is
+//       not in the nav, toggle of a row whose check is `none` (a header: the OTHER WORKTREES row of
+//       developers:worktrees), openConfirm from a state that is not analyzed-like: all refused, as above
+//       (steps at the end of fixtures/intent-script.json).
+//
 // SERVICES NOTICE. The notice of `services:loaded` is cleared when a refresh starts, when a dialog opens
 // and when `show('services')` is called (the section is shown again); it is set only by a confirm.
 //
