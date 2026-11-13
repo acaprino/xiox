@@ -1460,10 +1460,10 @@
           "id": "confirm",
           "title": "Clean 4 items?",
           "text": [
-            "The selected items will be removed."
+            "The selected items will be removed. Files are deleted for good, they do not go to the Recycle Bin."
           ],
           "summary": [
-            "4 items · 13.31 GB"
+            "4 items · 12.40 GB"
           ],
           "rows": [
             [
@@ -1483,8 +1483,12 @@
               "1.20 GB"
             ]
           ],
-          "warningsTitle": null,
-          "warnings": [],
+          "warningsTitle": "Before you continue",
+          "warnings": [
+            "Emptying the Recycle Bin cannot be undone.",
+            "Close the programs that may be using their temporary files; files in use are skipped.",
+            "Deleted files cannot be restored by Xiox."
+          ],
           "cautionTitle": null,
           "cautions": [],
           "ack": null,
@@ -1513,7 +1517,7 @@
         "job": {
           "label": "Cleaning…",
           "fraction": 0,
-          "detail": "Windows temporary files"
+          "detail": "Windows temporary files · C:\\Windows\\Temp"
         },
         "status": {
           "badge": "Cleaning",
@@ -1911,7 +1915,7 @@
         "job": null,
         "status": {
           "badge": "Clean finished",
-          "text": "13.31 GB freed"
+          "text": "12.40 GB freed"
         },
         "nav": [
           {
@@ -2297,7 +2301,13 @@
           "dirs": 412,
           "elapsedMs": 16000,
           "cancelled": false,
-          "notes": [],
+          "notes": [
+            {
+              "tone": "warn",
+              "text": "Some files could not be removed. They are listed below.",
+              "more": []
+            }
+          ],
           "byCategory": [
             [
               "System",
@@ -2309,17 +2319,36 @@
               "item": "Windows temporary files",
               "why": "In use by another program",
               "path": "C:\\Windows\\Temp\\wmi.log"
+            },
+            {
+              "item": "Windows temporary files",
+              "why": "In use by another program",
+              "path": "C:\\Windows\\Temp\\MpCmdRun.log"
+            },
+            {
+              "item": "User temporary files",
+              "why": "Younger than 24 hours",
+              "path": "C:\\Users\\demo\\AppData\\Local\\Temp\\setup-2f9a.tmp"
             }
           ],
-          "failed": [],
+          "failed": [
+            {
+              "item": "Windows log files",
+              "why": "Access is denied",
+              "path": "C:\\Windows\\Logs\\CBS\\CBS.log"
+            }
+          ],
           "items": [
             {
               "name": "Windows temporary files",
               "freedBytes": 4402341478,
-              "removed": 18204,
-              "left": 0,
-              "note": null,
-              "lines": []
+              "removed": 18202,
+              "left": 2,
+              "note": "2 files were in use",
+              "lines": [
+                "C:\\Windows\\Temp\\wmi.log: in use by another program",
+                "C:\\Windows\\Temp\\MpCmdRun.log: in use by another program"
+              ]
             },
             {
               "name": "Recycle Bin",
@@ -2340,10 +2369,12 @@
             {
               "name": "Windows log files",
               "freedBytes": 1288490189,
-              "removed": 5118,
-              "left": 0,
-              "note": null,
-              "lines": []
+              "removed": 5117,
+              "left": 1,
+              "note": "1 file could not be removed",
+              "lines": [
+                "C:\\Windows\\Logs\\CBS\\CBS.log: access is denied"
+              ]
             }
           ],
           "canSave": true,
@@ -5706,8 +5737,13 @@
           "warnings": [
             "A project with uncommitted changes is never cleaned."
           ],
-          "cautionTitle": null,
-          "cautions": [],
+          "cautionTitle": "Caution (1)",
+          "cautions": [
+            [
+              "acme-api / .venv",
+              "Rebuilding it needs network access."
+            ]
+          ],
           "ack": false,
           "error": null,
           "buttons": [

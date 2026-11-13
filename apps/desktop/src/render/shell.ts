@@ -6,12 +6,15 @@
 import { button, fill, h, kbd } from '../dom.ts';
 import { ramText } from '../format.ts';
 import { actionIntent, bulkIntent } from '../intents.ts';
+import { footerHint } from '../keys.ts';
 import { sortRows, visibleRows } from '../rows.ts';
 import { currentFocus, SECTION_ORDER, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
 import { renderBar2 } from './bar2.ts';
 import { renderDetail } from './detail.ts';
+import { renderDialog } from './dialog.ts';
 import { renderList } from './list.ts';
+import { renderReport } from './report.ts';
 
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
@@ -22,6 +25,8 @@ export interface Handlers {
   toggleExpanded(id: string): void;
   /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
   addRoot(): void;
+  /** `Save as text…` of a report: the save dialog opens in Rust and the answer is the section's view with `report.saved`. */
+  saveReport(section: SectionId): void;
 }
 
 /** What one render needs. */
@@ -29,6 +34,8 @@ export interface Screen {
   app: AppInfo;
   view: SectionView;
   ui: UiState;
+  /** The `data-key` of the control that had the keyboard focus before this render (the redraw replaces it): where a dialog returns the focus to. */
+  focused: string | null;
   /** The message of the last failed command, shown above the list until the next one succeeds. */
   error: string | null;
 }
@@ -38,8 +45,6 @@ const SECTION_NAMES: Record<SectionId, string> = {
 };
 
 const KEY_LABELS: Record<string, string> = { Enter: '↵', Escape: 'Esc' };
-
-const FOOTER_HINT = '↑↓ move · space toggle · a analyze · ↵ clean';
 
 function byId<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -62,11 +67,27 @@ function actionButton(section: SectionId, action: ActionView, on: Handlers): HTM
   );
 }
 
-/** A notice line: its text, and the extra lines under it. Errors are announced. */
+/** A notice strip: one line in its tone colour; the extra lines (`more`) are in the tooltip. Errors are announced. */
 export function noticeNode(notice: NoticeView): HTMLElement {
-  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null },
-    h('span', {}, notice.text),
-    ...notice.more.map((line) => h('small', {}, line)));
+  const full = [notice.text, ...notice.more].join('\n');
+  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null, title: notice.more.length > 0 ? full : null },
+    h('span', { class: 'ellipsis', title: full }, notice.text),
+    notice.more.length > 0 ? h('small', { 'data-fit': '' }, `+${notice.more.length} more`) : null);
+}
+
+/** The progress bar under the status row: the job's label, the bar, its percentage and the detail. No animation. */
+function renderJob(root: HTMLElement, view: SectionView): void {
+  const job = view.job;
+  root.hidden = job === null;
+  if (job === null) { fill(root); return; }
+  const percent = Math.round(Math.min(1, Math.max(0, job.fraction)) * 100);
+  const fillBar = h('i', {});
+  fillBar.style.width = `${percent}%`;
+  fill(root,
+    h('span', { class: 'job-label', 'data-fit': '' }, job.label),
+    h('div', { class: 'track', role: 'progressbar', 'aria-label': job.label, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent }, fillBar),
+    h('span', { class: 'job-pct num', 'data-fit': '' }, `${percent}%`),
+    job.detail === null ? null : h('span', { class: 'job-detail num' }, ellipsis(job.detail)));
 }
 
 /** The window when nothing can be drawn (the first command failed): the message, in the notice area. */
@@ -91,6 +112,9 @@ export function renderShell(screen: Screen, on: Handlers): void {
   profile.hidden = app.profileMismatch === null;
   if (app.profileMismatch !== null) fill(profile, ellipsis(app.profileMismatch));
 
+  // The job's progress bar.
+  renderJob(byId('job'), view);
+
   // Sections bar.
   fill(byId('sections'),
     h('div', { class: 'hd' }, h('span', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
@@ -103,7 +127,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
   renderBar2(byId('bar2'), view, on);
 
   // List header: title, subtitle and, where the section has bulk selection, All / None.
-  const bulk = view.bulk && bulkIntent(view.section, true) !== null;
+  const bulk = view.bulk && view.report === null && bulkIntent(view.section, true) !== null;
   fill(byId('list-head'),
     h('span', { class: 'hd-title', 'data-fit': '' }, view.title),
     h('span', { class: 'hd-right' },
@@ -115,13 +139,25 @@ export function renderShell(screen: Screen, on: Handlers): void {
   fill(byId('notices'),
     ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
     ...view.notices.map(noticeNode));
-  renderList(byId('rows'), view, ui, on);
-  const focus = currentFocus(ui, view);
-  renderDetail(byId('detail'), visibleRows(sortRows(view.rows), ui.expanded).find((r) => r.id === focus) ?? null);
+  const rowsArea = byId('rows');
+  if (view.report !== null) {
+    // The report replaces the list (and its search box and detail) until it is closed.
+    rowsArea.classList.add('is-report');
+    renderReport(rowsArea, view.section, view.report, ui.expanded, on);
+    renderDetail(byId('detail'), null);
+  } else {
+    if (rowsArea.classList.contains('is-report')) { rowsArea.classList.remove('is-report'); fill(rowsArea); }
+    renderList(rowsArea, view, ui, on);
+    const focus = currentFocus(ui, view);
+    renderDetail(byId('detail'), visibleRows(sortRows(view.rows), ui.expanded).find((r) => r.id === focus) ?? null);
+  }
 
   // Footer.
   fill(byId('foot'),
     h('span', { class: 'dot' }),
     h('span', { class: 'foot-left' }, ellipsis(view.footer ?? '')),
-    h('span', { class: 'foot-right', 'data-fit': '' }, FOOTER_HINT));
+    h('span', { class: 'foot-right', 'data-fit': '' }, footerHint(view)));
+
+  // The confirmation, last: it takes the focus when it opens and gives it back when it closes.
+  renderDialog(view, on, screen.focused);
 }

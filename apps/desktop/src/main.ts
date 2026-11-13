@@ -2,9 +2,13 @@ import './styles/tokens.css';
 import './styles/frame.css';
 import './styles/shell.css';
 import './styles/list.css';
+import './styles/dialog.css';
 import { api, errorText, onView } from './api.ts';
+import { actionIntent, toggleIntent } from './intents.ts';
+import { actionForKey, keyAction } from './keys.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
-import { acceptView, createGate, createUi } from './state.ts';
+import { rowParents, sortRows, visibleRows } from './rows.ts';
+import { acceptView, createGate, createUi, currentFocus, moveFocus } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -14,7 +18,7 @@ let error: { section: SectionId; text: string } | null = null;
 /** Rapid clicks on the section bar: only the answer to the last one is drawn. */
 const opening = createGate();
 
-const SCROLLERS = ['#bar2 .items', '#rows .grid'];
+const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
 
 /** Draws the open section's view and keeps what the user was doing: the focused control and the scroll positions. */
 function render(): void {
@@ -26,12 +30,13 @@ function render(): void {
   }
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
+  renderShell({ app, view, ui, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
   SCROLLERS.forEach((selector, i) => {
     const node = document.querySelector(selector);
     if (node) node.scrollTop = scrolls[i] ?? 0;
   });
-  if (active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
+  // An open dialog manages its own focus (render/dialog.ts); the rest of the page is inert behind it.
+  if (view.dialog === null && active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
     document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
   }
 }
@@ -73,10 +78,78 @@ const handlers: Handlers = {
     if (!ui.expanded.delete(id)) ui.expanded.add(id);
     render();
   },
+  saveReport: (section) => {
+    void api.saveReport(section).then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section, text: errorText(failure) }; render(); });
+  },
   addRoot: () => {
     void api.addRoot().then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
   },
 };
+
+/** The row the selection is on, after a move: the page scrolls to keep it in view. */
+function showSelected(): void {
+  document.querySelector<HTMLElement>('#rows .r.sel')?.scrollIntoView({ block: 'nearest' });
+}
+
+const FIELD = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
+/** Enter and Space on these belong to the control (the browser presses it), never to the global keys. */
+const PRESSABLE = 'button, a[href], summary, [role="checkbox"], [role="button"]';
+
+/**
+ * The global keys (keys.ts decides what a key means). Arrows move the selection, Space ticks the focused
+ * row, Enter / a / s / r press the view's action that carries that key, Esc closes the dialog or the
+ * report, else cancels the job. The page presses only what the view offers enabled; Rust still decides.
+ */
+function onKey(event: KeyboardEvent): void {
+  const view = ui.views[ui.section];
+  if (!view || event.defaultPrevented) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const inField = target?.closest(FIELD) != null;
+  const act = keyAction(event, { inField, dialog: view.dialog !== null });
+  if (act === null) return;
+  if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
+  const section = view.section;
+  const rows = visibleRows(sortRows(view.rows), ui.expanded);
+  const listed = view.report === null;
+  switch (act.kind) {
+    case 'section':
+      if (act.section !== section) void open(act.section);
+      break;
+    case 'closeDialog':
+      handlers.send(section, { kind: 'closeDialog' });
+      break;
+    case 'move': {
+      if (!listed) return;
+      const next = moveFocus(rows, currentFocus(ui, view), act.delta);
+      if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
+      break;
+    }
+    case 'toggle': {
+      const row = rows.find((r) => r.id === currentFocus(ui, view));
+      if (!listed || !row || row.kind === 'header' || row.check === 'none' || !row.enabled) return;
+      handlers.send(section, toggleIntent(section, row.id));
+      break;
+    }
+    case 'expand': {
+      const id = currentFocus(ui, view);
+      if (!listed || id === null || !rowParents(view.rows).has(id)) return;
+      if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
+      render();
+      break;
+    }
+    case 'action': {
+      if (act.key === 'Esc' && inField) { (target as HTMLElement).blur(); break; }
+      if (act.key === 'Esc' && view.report !== null) { handlers.send(section, { kind: 'closeDialog' }); break; }
+      const action = actionForKey(view, act.key);
+      if (action === null) return;
+      handlers.send(section, actionIntent(section, action.id));
+      break;
+    }
+  }
+  event.preventDefault();
+}
+
+document.addEventListener('keydown', onKey);
 
 async function start(): Promise<void> {
   try {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gridTemplate, sortRows, visibleRows } from '../src/rows.ts';
+import { gridTemplate, rowParents, sortRows, visibleRows } from '../src/rows.ts';
 import type { ColumnView, RowView } from '../src/types.ts';
 
 function row(id: string, bytes: number | null, extra: Partial<RowView> = {}): RowView {
@@ -60,4 +60,10 @@ test('children of a collapsed parent are not visible', () => {
   assert.deepEqual(ids(visibleRows(rows, new Set())), ['p1', 'p2']);
   assert.deepEqual(ids(visibleRows(rows, new Set(['p2']))), ['p1', 'p2', 'c2']);
   assert.deepEqual(ids(visibleRows(rows, new Set(['p1', 'p2']))), ['p1', 'c1', 'p2', 'c2']);
+});
+
+test('rowParents lists the rows that have children', () => {
+  const rows = [row('p1', 100), child('c1', 'p1', 10), child('c2', 'p1', 90), row('p2', 300)];
+  assert.deepEqual([...rowParents(rows)], ['p1']);
+  assert.equal(rowParents([row('a', 1)]).size, 0);
 });

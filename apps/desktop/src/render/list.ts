@@ -5,7 +5,7 @@
 import { fill, h } from '../dom.ts';
 import { formatBytes } from '../format.ts';
 import { searchIntent, toggleIntent } from '../intents.ts';
-import { gridTemplate, sortRows, visibleRows } from '../rows.ts';
+import { gridTemplate, rowParents, sortRows, visibleRows } from '../rows.ts';
 import { currentFocus, type UiState } from '../state.ts';
 import type { RowView, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
@@ -106,7 +106,9 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   syncSearch(tools, view, on);
 
   const rows = visibleRows(sortRows(view.rows), ui.expanded);
-  if (view.rows.length === 0) {
+  // The grid is where the focus goes back to when a dialog closes (and the arrow keys act from).
+  grid.tabIndex = -1;
+  if (view.rows.length === 0 || view.empty !== null) {
     grid.style.gridTemplateColumns = '';
     fill(grid, h('div', { class: 'empty' },
       view.empty ? h('b', { class: 'empty-title' }, view.empty.title) : null,
@@ -114,7 +116,7 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
     return;
   }
   const checks = view.rows.some((r) => r.check !== 'none');
-  const parents = new Set(view.rows.flatMap((r) => (r.parent === null ? [] : [r.parent])));
+  const parents = rowParents(view.rows);
   const focus = currentFocus(ui, view);
   grid.style.gridTemplateColumns = gridTemplate(view.columns, checks);
   const head = h('div', { class: 'r h' },

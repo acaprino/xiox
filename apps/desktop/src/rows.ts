@@ -80,3 +80,8 @@ const COLUMN_WIDTH: Record<ColumnView['kind'], string> = {
 export function gridTemplate(columns: ColumnView[], checks: boolean): string {
   return [...(checks ? ['16px'] : []), ...columns.map((c) => COLUMN_WIDTH[c.kind])].join(' ');
 }
+
+/** The ids of the rows that have children (they get a caret). */
+export function rowParents(rows: RowView[]): Set<string> {
+  return new Set(rows.flatMap((r) => (r.parent === null ? [] : [r.parent])));
+}

@@ -3,11 +3,11 @@ html, body { height: 100%; overflow: hidden; }
 
 #app {
   position: relative; height: 100vh; min-width: 0; overflow: hidden;
-  display: grid; grid-template-rows: 38px 34px auto 1fr 26px; grid-template-columns: minmax(0, 1fr);
+  display: grid; grid-template-rows: 38px 34px auto auto 1fr 26px; grid-template-columns: minmax(0, 1fr);
 }
 #app > * { position: relative; min-width: 0; }
 /* Explicit rows: a hidden #profile takes no row, and the rest must not slide up. */
-#top { grid-row: 1; } #status { grid-row: 2; } #profile { grid-row: 3; } #body { grid-row: 4; } #foot { grid-row: 5; }
+#top { grid-row: 1; } #status { grid-row: 2; } #job { grid-row: 3; } #profile { grid-row: 4; } #body { grid-row: 5; } #foot { grid-row: 6; }
 
 /* Titles: display font, uppercase. */
 .hd, .nv, #badge, .btn { font-family: var(--font-display); font-weight: 700; font-size: 13px; text-transform: uppercase; }
@@ -16,7 +16,8 @@ html, body { height: 100%; overflow: hidden; }
 [data-fit] { white-space: nowrap; }
 
 #top { display: flex; align-items: center; gap: 14px; padding: 0 10px; }
-#wordmark { height: 24px; width: auto; display: block; }
+/* The logo file is 3:1 (204x68, twice what is shown, so it stays sharp on a 200 % display). */
+#wordmark { height: 34px; width: auto; display: block; }
 #version { color: var(--muted); font-size: 12px; padding-left: 14px; border-left: 1px solid var(--line-soft); line-height: 20px; }
 .spring { flex: 1; }
 #actions { display: flex; gap: 6px; align-items: center; }
@@ -28,6 +29,15 @@ html, body { height: 100%; overflow: hidden; }
 #status-text { flex: 0 1 auto; min-width: 0; color: var(--text-2); }
 #status-right { margin-left: auto; flex: none; white-space: nowrap; }
 #profile { padding: 4px 10px; color: var(--warn); }
+
+/* The progress bar of a running job: label, bar, percentage, detail. Static: no animation. */
+#job { display: flex; align-items: center; gap: 12px; padding: 0 10px 6px; min-width: 0; }
+#job[hidden] { display: none; }
+.job-label { flex: none; color: var(--text-2); font: 700 12px var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+.track { flex: 0 1 300px; min-width: 110px; height: 12px; border: 2px solid var(--line-strong); background: var(--box); }
+.track i { display: block; height: 100%; background: var(--ice); }
+.job-pct { flex: none; min-width: 3.5ch; text-align: right; color: var(--ice); font-size: 12px; }
+.job-detail { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; font-weight: 400; }
 
 #body {
   display: grid; grid-template-columns: 170px 200px minmax(0, 1fr); gap: 8px; padding: 0 8px 8px; min-height: 0;
