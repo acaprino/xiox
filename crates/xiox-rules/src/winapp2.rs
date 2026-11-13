@@ -1470,11 +1470,11 @@ mod tests {
         true
     }
 
-    /// `PC_RULES_WINAPP2=<percorso> cargo test -p xiox-rules parses_the_real_file -- --ignored --nocapture`
+    /// `XIOX_RULES_WINAPP2=<percorso> cargo test -p xiox-rules parses_the_real_file -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn parses_the_real_file() {
-        let path = std::env::var("PC_RULES_WINAPP2").expect("PC_RULES_WINAPP2 non impostata");
+        let path = std::env::var("XIOX_RULES_WINAPP2").expect("XIOX_RULES_WINAPP2 non impostata");
         let text = std::fs::read_to_string(path).unwrap();
         let t0 = std::time::Instant::now();
         let (w, warnings) = parse(&text);

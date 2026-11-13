@@ -812,12 +812,12 @@ mod tests {
         assert!(t(r"\.(log|tmp)").is_ok());
     }
 
-    /// I file veri dell'utente: sola lettura della cartella in `PC_RULES_CLEANERS`.
+    /// I file veri dell'utente: sola lettura della cartella in `XIOX_RULES_CLEANERS`.
     #[test]
     #[ignore]
     fn parses_the_eleven_user_files() {
-        let dir = std::env::var("PC_RULES_CLEANERS")
-            .expect("PC_RULES_CLEANERS deve puntare alla cartella dei file XML");
+        let dir = std::env::var("XIOX_RULES_CLEANERS")
+            .expect("XIOX_RULES_CLEANERS deve puntare alla cartella dei file XML");
         let env = full_env();
         let mut names: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()

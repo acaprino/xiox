@@ -1846,7 +1846,7 @@ fn keep_only_under(scan: &mut DevScan, root: &Path) {
 
 /// File che segna la radice di un albero finto per `--dev-demo`.
 #[cfg(debug_assertions)]
-pub const DEMO_MARKER: &str = ".pulisci-demo";
+pub const DEMO_MARKER: &str = ".xiox-demo";
 
 /// `--dev-demo` cancella in modo definitivo: vale solo con `--only-root` (`!persist`) e una sola
 /// radice dentro la cartella temporanea di sistema o con [`DEMO_MARKER`] alla radice.
