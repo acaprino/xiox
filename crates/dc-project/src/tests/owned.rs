@@ -94,7 +94,13 @@ fn rust_target_and_node_modules_are_builds_recommended_even_if_the_project_was_u
         },
         worktrees: Vec::new(),
     }];
-    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: now };
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: now,
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let t = item(&scan, &target);
@@ -205,7 +211,13 @@ fn archived_session_started_in_a_worktree_belongs_to_the_project_and_one_elsewhe
         archived(Agent::Claude, "elsewhere", Some(&other), false),
         archived(Agent::Pi, "no-cwd", None, false),
     ];
-    let env = Env { sessions: &[], archived: &archived, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &[],
+        archived: &archived,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let s = of(&scan, Category::Sessions);
@@ -229,7 +241,13 @@ fn light_mode_measures_nothing() {
     rust_build(&root, 2 * MB);
     let wt = worktree(&root, &base.join("proj-wt"), "feature");
     let archived = vec![archived(Agent::Claude, "a", Some(&root), false)];
-    let env = Env { sessions: &[], archived: &archived, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &[],
+        archived: &archived,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let opts = Options { measure: false, ..Options::default() };
     let scan = analyze_with(&root, &opts, &env).unwrap();
@@ -253,7 +271,13 @@ fn items_are_ordered_by_category_then_size() {
     let wt = worktree(&root, &base.join("proj-wt"), "feature");
     let wt_build = rust_build(&wt, 3 * MB);
     let archived = vec![archived(Agent::Claude, "a", Some(&root), false)];
-    let env = Env { sessions: &[], archived: &archived, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &[],
+        archived: &archived,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let keys: Vec<&str> = scan.items.iter().map(|i| i.key.as_str()).collect();
@@ -302,7 +326,13 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
     // No build folder: the engine has no report for this worktree, the session record decides.
     let wt = worktree(&root, &base.join("proj-wt"), "feature");
     let sessions = sessions_in(&wt.join("src"), true);
-    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let w = item(&scan, &wt);
@@ -311,7 +341,13 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
 
     // The same session, not live: nothing blocks.
     let sessions = sessions_in(&wt.join("src"), false);
-    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let w = item(&scan, &wt);
     assert!(w.blocked.is_empty(), "{:?}", w.blocked);
@@ -324,7 +360,13 @@ fn build_of_a_project_with_a_live_session_is_blocked_live_session_and_keeps_its_
     let root = repo(&base.join("proj"));
     let target = rust_build(&root, 2 * MB);
     let sessions = sessions_in(&root, true);
-    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let t = item(&scan, &target);
@@ -403,7 +445,13 @@ fn build_inside_a_worktree_nested_under_the_root_is_listed_once_with_the_live_se
     let wt_build = rust_build(&wt, 2 * MB);
     let root_build = rust_build(&root, 2 * MB);
     let sessions = sessions_in(&wt, true);
-    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     // The worktree's build folder is reachable from both scan roots but listed once.
@@ -433,4 +481,208 @@ fn analyze_project_without_sessions_searches_only_the_given_roots_and_lists_no_s
     assert_eq!(item(&scan, &copy).category, Category::Named);
     // Elevation is a plain query that never fails.
     let _ = is_elevated();
+}
+
+// ───────────────────────────── final review ─────────────────────────────
+
+#[test]
+fn i5_a_folder_holding_several_repositories_is_a_container_and_says_so() {
+    let (_t, base) = tmp();
+    let holder = base.join("Projects");
+    repo(&holder.join("alpha"));
+    repo(&holder.join("beta"));
+    fs::create_dir_all(holder.join("alpha").join("target")).unwrap();
+
+    let scan = analyze_with(&holder, &Options { drives: false, ..Options::default() }, &env()).unwrap();
+    assert!(!scan.project.is_repo);
+    assert!(scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
+    // `--builds`, `--worktrees`, `--logs`, `--sessions` are refused; naming a path still works.
+    for c in [Category::Builds, Category::Worktrees, Category::Logs, Category::Sessions] {
+        let req = CleanRequest { categories: vec![c], include: Vec::new(), mode: dc_model::RemoveMode::Permanent };
+        assert_eq!(select(&scan, &req).unwrap_err(), SelectError::ContainerRoot(holder.clone()), "{c}");
+    }
+    assert_eq!(
+        SelectError::ContainerRoot(holder.clone()).to_string(),
+        format!("refusing to clean everything under {}: run it on one project", holder.display())
+    );
+}
+
+#[test]
+fn i5_one_project_in_a_plain_folder_is_not_a_container() {
+    let (_t, base) = tmp();
+    let proj = base.join("work").join("plain");
+    fs::create_dir_all(&proj).unwrap();
+    let target = rust_build(&proj, 2 * MB);
+    // One repository below is still one project.
+    repo(&proj.join("only"));
+    let scan = analyze_with(&proj, &Options { drives: false, ..Options::default() }, &env()).unwrap();
+    assert!(!scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
+    let req = CleanRequest { categories: vec![Category::Builds], include: Vec::new(), mode: dc_model::RemoveMode::Permanent };
+    let chosen = select(&scan, &req).unwrap();
+    assert_eq!(chosen.keys, vec![path_key(&target)]);
+}
+
+#[test]
+fn i5_include_of_an_explicit_path_still_works_in_a_container() {
+    let (_t, base) = tmp();
+    let holder = base.join("Projects");
+    repo(&holder.join("alpha"));
+    repo(&holder.join("beta"));
+    let target = rust_build(&holder.join("alpha"), MB);
+    let scan = analyze_with(&holder, &Options { drives: false, ..Options::default() }, &env()).unwrap();
+    assert!(scan.notes.contains(&Note::ContainerRoot));
+    let req = CleanRequest { categories: Vec::new(), include: vec![target.clone()], mode: dc_model::RemoveMode::Permanent };
+    let chosen = select(&scan, &req).unwrap();
+    assert_eq!(chosen.keys, vec![path_key(&target)]);
+}
+
+#[test]
+fn i5_the_container_rule() {
+    use crate::container::is_container;
+    let home = Path::new(r"C:\Users\ann");
+    let h = Some(home);
+    // A drive root, the profile folder and any folder above it, whatever they hold.
+    assert!(is_container(Path::new(r"D:\"), false, h, 1, 0));
+    assert!(is_container(Path::new(r"D:\"), true, h, 1, 0));
+    assert!(is_container(home, false, h, 1, 0));
+    assert!(is_container(home, true, h, 1, 0), "a dotfiles repository at the profile folder");
+    assert!(is_container(Path::new(r"C:\Users"), false, h, 1, 0));
+    assert!(is_container(Path::new(r"C:\"), false, h, 1, 0));
+    // A folder inside the profile, one project.
+    assert!(!is_container(Path::new(r"C:\Users\ann\Projects\x"), false, h, 1, 0));
+    assert!(!is_container(Path::new(r"C:\Users\anna"), false, h, 1, 0), "a sibling with a longer name is not an ancestor");
+    // More than one repository, or more than one project root, in a folder that is not a repository.
+    assert!(is_container(Path::new(r"D:\Projects"), false, h, 1, 2));
+    assert!(is_container(Path::new(r"D:\Projects"), false, h, 2, 0));
+    assert!(!is_container(Path::new(r"D:\Projects"), false, h, 1, 1));
+    // A repository that holds other repositories (vendored clones) is still one project.
+    assert!(!is_container(Path::new(r"D:\Projects\big"), true, h, 3, 5));
+    // No home known: only the drive rule and the counts.
+    assert!(!is_container(Path::new(r"D:\Projects\x"), false, None, 1, 0));
+}
+
+#[test]
+fn the_repository_count_is_bounded_and_stops_at_two() {
+    use crate::container::repos_below;
+    let (_t, base) = tmp();
+    let holder = base.join("many");
+    for n in 0..5 {
+        repo(&holder.join(format!("r{n}")));
+    }
+    assert_eq!(repos_below(&holder, 2), 2);
+    assert_eq!(repos_below(&holder.join("r0"), 2), 0, "a repository is not below itself");
+    // Not descended into a repository: its nested repository is not counted separately.
+    let nest = base.join("nest");
+    repo(&nest.join("outer"));
+    repo(&nest.join("outer").join("inner"));
+    assert_eq!(repos_below(&nest, 2), 1);
+    // Depth is limited.
+    let deep = base.join("deep").join("a").join("b").join("c").join("d");
+    repo(&deep.join("r"));
+    assert_eq!(repos_below(&base.join("deep"), 2), 0);
+}
+
+#[test]
+fn the_remote_credentials_never_reach_the_project() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    git(&root, &["remote", "add", "origin", "https://user:s3cr3t@github.com/acme/proj.git"]);
+    let project = resolve_project(&root).unwrap();
+    assert_eq!(project.origin.as_deref(), Some("https://github.com/acme/proj.git"));
+    let json = serde_json::to_string(&project).unwrap();
+    assert!(!json.contains("s3cr3t") && !json.contains("user:"), "{json}");
+    // A copy with the same remote (without the credentials) is still recognised.
+    let copy = base.join("other").join("zzz");
+    fs::create_dir_all(&copy).unwrap();
+    git(&copy, &["init", "-q", "-b", "main"]);
+    commit(&copy, "different.txt");
+    git(&copy, &["remote", "add", "origin", "https://github.com/acme/proj"]);
+    let e = Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(vec![base.join("other")]),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
+    let scan = analyze_with(&root, &Options::default(), &e).unwrap();
+    assert!(scan.items.iter().any(|i| i.category == Category::Copies), "{:?}", scan.items);
+}
+
+#[test]
+fn m4_a_failed_session_read_is_a_note_and_a_clean_read_is_not() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let mk = |health| Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health,
+    };
+    let ok = analyze_with(&root, &Options::default(), &mk(SessionHealth::default())).unwrap();
+    assert!(!ok.notes.contains(&Note::SessionsNotRead), "{:?}", ok.notes);
+    for health in [
+        SessionHealth { live_failed: true, archived_failed: false },
+        SessionHealth { live_failed: false, archived_failed: true },
+    ] {
+        let s = analyze_with(&root, &Options::default(), &mk(health)).unwrap();
+        assert!(s.notes.contains(&Note::SessionsNotRead), "{health:?}: {:?}", s.notes);
+    }
+}
+
+#[test]
+fn m4_the_health_of_a_session_read_comes_from_its_warnings_and_what_it_returned() {
+    use dc_model::Loaded;
+    let loaded = |items: usize, warnings: usize| dc_app::Preloaded {
+        agent: Agent::Claude,
+        loaded: Loaded {
+            items: (0..items)
+                .map(|n| dc_model::SessionRecord {
+                    agent: Agent::Claude,
+                    session_id: Some(format!("s{n}")),
+                    project_path: std::path::PathBuf::from("X:\\p"),
+                    last_activity_ms: 1,
+                    archived: false,
+                    live: false,
+                })
+                .collect(),
+            warnings: vec!["w".to_string(); warnings],
+        },
+        worktrees: Vec::new(),
+    };
+    let h = |sessions: &[dc_app::Preloaded], extra: &[String], archived: &[ArchivedSession], aw: &[String]| {
+        crate::session_health(sessions, extra, archived, aw)
+    };
+    // Nothing read, nothing said: an empty PC, not a failure.
+    assert_eq!(h(&[loaded(0, 0)], &[], &[], &[]), SessionHealth::default());
+    // Sessions read, with a warning about some that were left out: not a failure.
+    assert_eq!(h(&[loaded(3, 2)], &[], &[], &[]), SessionHealth::default());
+    // A listing that returned nothing and complained: failed.
+    assert!(h(&[loaded(0, 1)], &[], &[], &[]).live_failed);
+    // A harness that failed beside one that worked: failed.
+    assert!(h(&[loaded(5, 0), loaded(0, 1)], &[], &[], &[]).live_failed);
+    // A warning of the loader itself (the managed worktrees).
+    assert!(h(&[loaded(5, 0)], &["x".to_string()], &[], &[]).live_failed);
+    // The archived listing: only the archived flag.
+    let a = h(&[loaded(1, 0)], &[], &[], &["w".to_string()]);
+    assert!(a.archived_failed && !a.live_failed);
+}
+
+#[test]
+fn block_wording_has_one_source_of_truth() {
+    for b in [
+        Block::LiveSession,
+        Block::DirtyGit,
+        Block::UnpushedCommits,
+        Block::Unreachable,
+        Block::SessionLocked,
+        Block::UnsavedWork,
+        Block::UnsavedWorkUnknown,
+        Block::Unknown,
+    ] {
+        assert_eq!(b.to_string(), b.reason());
+        assert!(b.reason().is_ascii() && !b.reason().is_empty());
+    }
+    assert_eq!(Block::LiveSession.reason(), "an agent session is open");
+    assert_eq!(Block::UnsavedWorkUnknown.reason(), "could not be checked for unsaved work");
 }

@@ -22,10 +22,17 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         notes.push(if dc_git::git_available() { Note::NotARepository } else { Note::GitMissing });
     }
 
+    if env.health.live_failed || env.health.archived_failed {
+        notes.push(Note::SessionsNotRead);
+    }
+
     let reports = engine_reports(&project, env, &mut notes);
+    if crate::container::container_root(&project, project_roots(&project, &reports)) {
+        notes.push(Note::ContainerRoot);
+    }
     let mut items = builds(&project, &reports, opts);
     let build_dirs: Vec<PathBuf> = items.iter().filter_map(|i| i.path.clone()).collect();
-    items.extend(crate::logs::log_items(&project, &build_dirs));
+    items.extend(crate::logs::log_items(&project, &build_dirs, &mut notes));
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
     let found = crate::search::search(&project, opts, env);
@@ -61,6 +68,16 @@ pub(crate) fn sort_items(items: &mut [Item]) {
 }
 
 // ───────────────────────────────── helpers ─────────────────────────────────
+
+/// How many project roots the engine found at or below the project root and its worktrees.
+fn project_roots(project: &Project, reports: &[ProjectReport]) -> usize {
+    let roots: Vec<String> = scan_roots(project).iter().map(|r| path_key(r)).collect();
+    let mut found: Vec<String> =
+        reports.iter().filter(|r| within_any(&r.root, &roots)).map(|r| path_key(&r.root)).collect();
+    found.sort();
+    found.dedup();
+    found.len()
+}
 
 /// Component-aware "`child` is `parent` or inside it", on `path_key` strings.
 pub fn key_within(child: &str, parent: &str) -> bool {
@@ -187,16 +204,17 @@ pub(crate) fn builds(project: &Project, reports: &[ProjectReport], opts: &Option
 
 // ──────────────────────────────── worktrees ────────────────────────────────
 
+/// A live session record that works at or inside `dir`.
+pub(crate) fn live_session_in(dir: &Path, env: &Env) -> bool {
+    let k = [path_key(dir)];
+    env.sessions.iter().flat_map(|p| p.loaded.items.iter()).any(|s| s.live && within_any(&s.project_path, &k))
+}
+
 /// A live session in `dir`: an engine report at or inside it is `InUse`, or a live session
 /// record works there (a worktree without build folders has no engine report).
 fn live_in(dir: &Path, reports: &[ProjectReport], env: &Env) -> bool {
     let k = [path_key(dir)];
-    reports.iter().any(|r| r.status == ProjectStatus::InUse && within_any(&r.root, &k))
-        || env
-            .sessions
-            .iter()
-            .flat_map(|p| p.loaded.items.iter())
-            .any(|s| s.live && within_any(&s.project_path, &k))
+    reports.iter().any(|r| r.status == ProjectStatus::InUse && within_any(&r.root, &k)) || live_session_in(dir, env)
 }
 
 fn worktrees(

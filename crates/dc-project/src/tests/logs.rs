@@ -1,7 +1,7 @@
 //! Log and temporary files, and the stale branch list.
 
 use super::fixtures::*;
-use crate::{Category, Item, Options, ProjectScan, Target, Why, analyze_with, resolve_project};
+use crate::{Category, Item, Note, Options, ProjectScan, Target, Why, analyze_with, resolve_project};
 use dc_model::Level;
 use std::fs;
 use std::path::Path;
@@ -126,4 +126,20 @@ fn merged_branch_is_reported_as_stale_and_unmerged_is_not() {
     assert!(merged.merged && !merged.worktree_missing);
     assert!(s.branches.iter().all(|b| b.name != "unmerged-b"), "{:?}", s.branches);
     assert!(s.branches.iter().all(|b| !b.worktree_missing), "{:?}", s.branches);
+}
+
+#[test]
+fn m5_a_root_git_cannot_list_is_a_note_not_a_silent_nothing() {
+    let (_t, base) = tmp();
+    let p = repo(&base.join("proj"));
+    let wt = worktree(&p, &base.join("proj-wt"), "feature");
+    let s = scan(&p);
+    assert!(!s.notes.contains(&Note::LogsNotChecked), "{:?}", s.notes);
+
+    // The worktree folder is there, but git cannot read it any more.
+    fs::write(wt.join(".git"), "gitdir: nowhere\n").unwrap();
+    let s = scan(&p);
+    assert!(s.items.iter().any(|i| i.category == Category::Worktrees), "{:?}", s.items);
+    assert!(s.notes.contains(&Note::LogsNotChecked), "{:?}", s.notes);
+    assert_eq!(s.notes.iter().filter(|n| **n == Note::LogsNotChecked).count(), 1, "once, not per root");
 }

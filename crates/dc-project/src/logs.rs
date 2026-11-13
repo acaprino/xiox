@@ -2,7 +2,7 @@
 //! that git does not track, inside the project root and its linked worktrees.
 
 use crate::owned::key_within;
-use crate::{Category, Item, Project, Target, Why};
+use crate::{Category, Item, Note, Project, Target, Why};
 use dc_model::{Level, normalize_path, path_key};
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,8 @@ fn wanted_extension(p: &Path) -> bool {
 /// Log/temporary files of the project root and each existing worktree. `build_dirs` are the
 /// folders already listed under `builds`: nothing inside them is listed twice. Two git calls per
 /// root (ignored, then untracked and not ignored); a root that is not a repository adds nothing.
-pub(crate) fn log_items(project: &Project, build_dirs: &[PathBuf]) -> Vec<Item> {
+/// A root git cannot list adds one `Note::LogsNotChecked`: "no logs found" is then not a verdict.
+pub(crate) fn log_items(project: &Project, build_dirs: &[PathBuf], notes: &mut Vec<Note>) -> Vec<Item> {
     if !project.is_repo {
         return Vec::new();
     }
@@ -28,7 +29,12 @@ pub(crate) fn log_items(project: &Project, build_dirs: &[PathBuf]) -> Vec<Item> 
     let mut out: Vec<Item> = Vec::new();
     for root in std::iter::once(&project.root).chain(project.worktrees.iter()) {
         for (ignored, level) in [(true, Level::Recommended), (false, Level::Caution)] {
-            let Some(files) = dc_git::untracked_files(root, ignored) else { continue };
+            let Some(files) = dc_git::untracked_files(root, ignored) else {
+                if !notes.contains(&Note::LogsNotChecked) {
+                    notes.push(Note::LogsNotChecked);
+                }
+                continue;
+            };
             for rel in files.into_iter().filter(|f| wanted_extension(f)) {
                 let path = root.join(&rel);
                 let key = path_key(&path);

@@ -238,7 +238,13 @@ fn sessions_flag_takes_unblocked_sessions_only() {
         archived(Agent::Claude, "s2", &root, None, true),
         archived(Agent::Codex, "s3", &root, None, false),
     ];
-    let e = Env { sessions: &[], archived: &sessions, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let e = Env {
+        sessions: &[],
+        archived: &sessions,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     let scan = scan_in(&root, &e);
 
     let mut chosen = select(&scan, &req(&[Category::Sessions], &[])).unwrap();
@@ -564,7 +570,13 @@ fn sessions_are_revalidated_then_deleted_and_one_that_got_locked_is_skipped() {
         archived(Agent::Claude, "s1", &root, Some(f1.clone()), false),
         archived(Agent::Claude, "s2", &root, Some(f2.clone()), false),
     ];
-    let e = Env { sessions: &[], archived: &sessions, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let e = Env {
+        sessions: &[],
+        archived: &sessions,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     let scan = scan_in(&root, &e);
     let chosen = select(&scan, &req(&[Category::Sessions], &[])).unwrap();
     assert_eq!(chosen.keys.len(), 2);
@@ -597,7 +609,13 @@ fn sessions_dry_run_deletes_nothing() {
     let f1 = base.join("sessions").join("s1.jsonl");
     write_sized(&f1, 100);
     let sessions = [archived(Agent::Claude, "s1", &root, Some(f1.clone()), false)];
-    let e = Env { sessions: &[], archived: &sessions, search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let e = Env {
+        sessions: &[],
+        archived: &sessions,
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     let scan = scan_in(&root, &e);
     let chosen = select(&scan, &req(&[Category::Sessions], &[])).unwrap();
     let fresh = |_: Agent| vec![archived(Agent::Claude, "s1", &root, Some(f1.clone()), false)];
@@ -758,12 +776,24 @@ fn copy_of(base: &Path, root: &Path) -> PathBuf {
 
 /// `scan_in` for a project whose copies are searched in `base/other`.
 fn scan_with_copies(root: &Path, base: &Path) -> ProjectScan {
-    let e = Env { sessions: &[], archived: &[], search_roots: Some(vec![base.join("other")]), now_ms: dc_app::now_ms() };
+    let e = Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(vec![base.join("other")]),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     scan_in(root, &e)
 }
 
 fn rerun(scan: &ProjectScan, chosen: &Chosen, base: &Path) -> CleanOutcome {
-    let e = Env { sessions: &[], archived: &[], search_roots: Some(vec![base.join("other")]), now_ms: dc_app::now_ms() };
+    let e = Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(vec![base.join("other")]),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     let bin = FakeBin::new(PathBuf::from("unused"));
     run_with(scan, chosen, RemoveMode::Permanent, false, &e, &bin, &|_| Vec::new())
 }
@@ -808,7 +838,8 @@ fn recheck_skips_a_copy_whose_fresh_listing_says_it_has_own_work_even_if_unblock
     };
     let old = mk(Some(false), Vec::new());
     assert!(crate::clean::recheck(&old, Some(&mk(Some(false), Vec::new()))).is_ok());
-    assert!(crate::clean::recheck(&old, Some(&mk(None, Vec::new()))).is_ok());
+    // No answer from git now is not "no own work": see the m1 test further down.
+    assert!(crate::clean::recheck(&old, Some(&mk(None, Vec::new()))).is_err());
     assert_eq!(
         crate::clean::recheck(&old, Some(&mk(Some(true), Vec::new()))).unwrap_err(),
         "now has commits or changes the project does not have"
@@ -936,7 +967,7 @@ fn not_removed_counts_skipped_and_failed_but_not_the_overlap_with_a_removed_fold
         dry_run: false,
         items: vec![
             item("a", Outcome::Removed { bytes_freed: 1 }),
-            item("a\\inner",Outcome::Skipped { reason: format!("{}a", crate::clean::ALREADY_REMOVED) }),
+            item("a\\inner", Outcome::Skipped { reason: format!("{}a", crate::clean::ALREADY_REMOVED) }),
             item("b", Outcome::Skipped { reason: "no longer there".into() }),
             item("c", Outcome::Failed { error: "x".into() }),
         ],
@@ -949,4 +980,308 @@ fn not_removed_counts_skipped_and_failed_but_not_the_overlap_with_a_removed_fold
     let only_overlap = CleanOutcome { items: out.items[..2].to_vec(), ..out };
     assert_eq!(only_overlap.not_removed(), 0);
     assert!(!only_overlap.partial());
+}
+
+// ─────────────────────── final review: blocked items inside a folder ───────────────────────
+
+/// `base/other/proj-old` (a folder named after the project) holding `copy`, a clone of the project
+/// with a private commit: the copy is blocked, the folder around it is only a name match.
+fn named_folder_holding_a_blocked_copy(base: &Path, root: &Path) -> (PathBuf, PathBuf) {
+    let named = base.join("other").join("proj-old");
+    let copy = named.join("copy");
+    fs::create_dir_all(&named).unwrap();
+    git(base, &["clone", "-q", &root.to_string_lossy(), &copy.to_string_lossy()]);
+    let copy = canon(&copy);
+    commit(&copy, "private.txt");
+    (canon(&named), copy)
+}
+
+#[test]
+fn c1_an_included_named_folder_never_takes_a_blocked_copy_inside_it() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let (named, copy) = named_folder_holding_a_blocked_copy(&base, &root);
+    let scan = scan_with_copies(&root, &base);
+    let copy_item = scan.items.iter().find(|i| i.key == path_key(&copy)).expect("the copy is listed");
+    assert_eq!(copy_item.blocked, vec![Block::UnsavedWork]);
+    let named_item = scan.items.iter().find(|i| i.key == path_key(&named)).expect("the folder is listed");
+    assert_eq!(named_item.category, Category::Named);
+
+    // Either the request is refused, or the removal skips the folder: the copy must survive.
+    match select(&scan, &req(&[], &[&named])) {
+        Err(_) => {}
+        Ok(chosen) => {
+            let out = rerun(&scan, &chosen, &base);
+            assert!(matches!(outcome_of(&out, &named), Outcome::Skipped { .. }), "{:#?}", out.items);
+        }
+    }
+    assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+}
+
+#[test]
+fn c1_select_refuses_a_folder_that_holds_a_blocked_item_and_says_which() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let (named, copy) = named_folder_holding_a_blocked_copy(&base, &root);
+    let scan = scan_with_copies(&root, &base);
+    match select(&scan, &req(&[], &[&named])).unwrap_err() {
+        SelectError::ContainsBlocked { path, inner, why } => {
+            assert_eq!(path, named);
+            assert_eq!(inner, copy);
+            assert_eq!(why, vec![Block::UnsavedWork]);
+        }
+        e => panic!("{e:?}"),
+    }
+    let text = select(&scan, &req(&[], &[&named])).unwrap_err().to_string();
+    assert_eq!(
+        text,
+        format!(
+            "cannot be removed: it holds {} (has commits or changes the project does not have): {}",
+            copy.display(),
+            named.display()
+        )
+    );
+    assert!(copy.join("private.txt").exists());
+}
+
+#[test]
+fn c1_without_the_wide_search_the_copy_is_not_listed_and_the_removal_still_refuses() {
+    // `--no-drives`: only the project's parent is searched, one level deep. The folder is listed,
+    // the copy inside it is not: nothing in the analysis says it is there.
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let named = base.join("proj-old");
+    let copy = named.join("copy");
+    fs::create_dir_all(&named).unwrap();
+    git(&base, &["clone", "-q", &root.to_string_lossy(), &copy.to_string_lossy()]);
+    let copy = canon(&copy);
+    commit(&copy, "private.txt");
+    let named = canon(&named);
+
+    let opts = Options { drives: false, ..Options::default() };
+    let scan = analyze_with(&root, &opts, &env()).unwrap();
+    assert_eq!(scan.search, SearchMode::ParentOnly);
+    assert!(scan.items.iter().all(|i| i.key != path_key(&copy)), "the copy must not be listed at depth 2");
+    let chosen = select(&scan, &req(&[], &[&named])).expect("nothing in the scan says it is blocked");
+
+    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    match outcome_of(&out, &named) {
+        Outcome::Skipped { reason } => {
+            assert!(reason.contains("git repository"), "{reason}");
+            assert!(reason.contains(&copy.display().to_string()), "{reason}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(out.partial());
+    assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+    assert_english(&out);
+
+    // A dry run runs the same check.
+    let dry = run(&scan, &chosen, RemoveMode::Permanent, true);
+    assert!(matches!(outcome_of(&dry, &named), Outcome::Skipped { .. }), "{:#?}", dry.items);
+}
+
+#[test]
+fn c1_a_hand_made_choice_of_the_folder_is_skipped_too_when_the_copy_is_listed_and_blocked() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let (named, copy) = named_folder_holding_a_blocked_copy(&base, &root);
+    let scan = scan_with_copies(&root, &base);
+    let chosen = Chosen { keys: vec![path_key(&named)], bytes: 0, permanent_anyway: Vec::new() };
+    let out = rerun(&scan, &chosen, &base);
+    match outcome_of(&out, &named) {
+        Outcome::Skipped { reason } => assert!(reason.contains("is blocked"), "{reason}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(copy.join("private.txt").exists());
+    assert_english(&out);
+}
+
+#[test]
+fn a_named_folder_holding_a_clean_listed_copy_goes_with_it() {
+    // Not over-cautious: the copy inside is listed, unblocked and has no work of its own.
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let named = base.join("other").join("proj-old");
+    let copy = named.join("copy");
+    fs::create_dir_all(&named).unwrap();
+    git(&base, &["clone", "-q", &root.to_string_lossy(), &copy.to_string_lossy()]);
+    let (named, copy) = (canon(&named), canon(&copy));
+    let scan = scan_with_copies(&root, &base);
+    assert!(scan.items.iter().find(|i| i.key == path_key(&copy)).is_some_and(|i| i.blocked.is_empty()));
+    let chosen = select(&scan, &req(&[], &[&named])).unwrap();
+    let out = rerun(&scan, &chosen, &base);
+    assert!(matches!(outcome_of(&out, &named), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert!(!named.exists());
+}
+
+#[test]
+fn a_named_folder_with_an_unlisted_git_repository_inside_is_refused_whatever_that_repository_is() {
+    // An independent repository the search never lists (it is not a copy and its name does not
+    // match): the folder around it is not removed, there is nothing to prove it is safe.
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let named = base.join("proj-old");
+    fs::create_dir_all(named.join("vendor")).unwrap();
+    let inner = repo(&named.join("vendor").join("lib"));
+    let opts = Options { drives: false, ..Options::default() };
+    let scan = analyze_with(&root, &opts, &env()).unwrap();
+    let named = canon(&named);
+    let chosen = select(&scan, &req(&[], &[&named])).unwrap();
+    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    assert!(matches!(outcome_of(&out, &named), Outcome::Skipped { .. }), "{:#?}", out.items);
+    assert!(inner.join("README.md").exists());
+}
+
+fn contents_item(path: &Path, kind: ArtifactKind, category: Category) -> Item {
+    Item {
+        key: path_key(path),
+        category,
+        path: Some(path.to_path_buf()),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target: Target::Dir { kind },
+    }
+}
+
+#[test]
+fn i7_a_catalog_folder_that_holds_a_worktree_or_the_project_is_refused() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    // A worktree under a folder the catalog calls a build folder.
+    let out_dir = root.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let wt = worktree(&root, &out_dir.join("wt"), "feature");
+    let project = resolve_project(&root).unwrap();
+    assert_eq!(project.worktrees, vec![wt.clone()]);
+
+    let folder = contents_item(&out_dir, ArtifactKind::Other, Category::Builds);
+    let err = crate::clean::check_contents(&folder, &project, &[]).unwrap_err();
+    assert_eq!(err, "it holds the project or one of its worktrees");
+
+    // A plain build folder of the project is fine.
+    let target = root.join("target");
+    fill(&target, 1, 100);
+    let ok = contents_item(&target, ArtifactKind::RustTarget, Category::Builds);
+    assert!(crate::clean::check_contents(&ok, &project, &[]).is_ok());
+
+    // A build folder that holds an item the analysis lists as a worktree, copy or named folder.
+    let holder = base.join("proj").join("build");
+    let inner = holder.join("proj-extra");
+    fs::create_dir_all(&inner).unwrap();
+    let holder_item = contents_item(&holder, ArtifactKind::Other, Category::Builds);
+    let listed = vec![contents_item(&inner, ArtifactKind::ProjectFolder, Category::Named)];
+    let err = crate::clean::check_contents(&holder_item, &project, &listed).unwrap_err();
+    assert!(err.starts_with("it holds "), "{err}");
+    assert!(err.contains("listed separately"), "{err}");
+}
+
+#[test]
+fn check_contents_lets_a_named_folder_hold_only_unblocked_listed_items() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let project = resolve_project(&root).unwrap();
+    let named = base.join("proj-old");
+    let inner = named.join("copy");
+    git(&base, &["clone", "-q", &root.to_string_lossy(), &inner.to_string_lossy()]);
+    let (named, inner) = (canon(&named), canon(&inner));
+    let named_item = contents_item(&named, ArtifactKind::ProjectFolder, Category::Named);
+
+    // Listed and unblocked: allowed.
+    let mut listed_inner = contents_item(&inner, ArtifactKind::ProjectFolder, Category::Copies);
+    assert!(crate::clean::check_contents(&named_item, &project, std::slice::from_ref(&listed_inner)).is_ok());
+    // Listed and blocked: refused, and the reason names it.
+    listed_inner.blocked = vec![Block::UnsavedWork];
+    let err = crate::clean::check_contents(&named_item, &project, std::slice::from_ref(&listed_inner)).unwrap_err();
+    assert!(err.contains("is blocked") && err.contains(&inner.display().to_string()), "{err}");
+    // Not listed at all: refused.
+    let err = crate::clean::check_contents(&named_item, &project, &[]).unwrap_err();
+    assert!(err.contains("git repository") && err.contains(&inner.display().to_string()), "{err}");
+    // A copy is its own repository: the check is about what is below it.
+    let copy_item = contents_item(&inner, ArtifactKind::ProjectFolder, Category::Copies);
+    assert!(crate::clean::check_contents(&copy_item, &project, &[]).is_ok());
+}
+
+#[test]
+fn m1_a_copy_whose_fresh_own_work_check_gives_no_answer_is_skipped() {
+    let mk = |own: Option<bool>| Item {
+        key: "k".into(),
+        category: Category::Copies,
+        path: Some(PathBuf::from("X-a-b")),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+    };
+    let old = mk(Some(false));
+    assert!(crate::clean::recheck(&old, Some(&mk(Some(false)))).is_ok());
+    assert_eq!(
+        crate::clean::recheck(&old, Some(&mk(None))).unwrap_err(),
+        "git could not say whether it has commits or changes the project does not have"
+    );
+    assert_eq!(
+        crate::clean::recheck(&old, Some(&mk(Some(true)))).unwrap_err(),
+        "now has commits or changes the project does not have"
+    );
+}
+
+#[test]
+fn m4_a_failed_session_read_skips_worktrees_copies_and_named_folders_but_not_builds() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let wt = worktree(&root, &base.join("proj-wt"), "feature");
+    let target = rust_build(&root, 2 * MB);
+    let named = base.join("proj-scratch");
+    fill(&named, 1, 100);
+    let named = canon(&named);
+    let scan = scan_of(&root);
+    let chosen = select(&scan, &req(&[Category::Builds, Category::Worktrees], &[&named])).unwrap();
+    assert!(chosen.keys.contains(&path_key(&wt)) && chosen.keys.contains(&path_key(&target)));
+
+    let blind = Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: SessionHealth { live_failed: true, archived_failed: false },
+    };
+    let bin = FakeBin::new(PathBuf::from("unused"));
+    let out = run_with(&scan, &chosen, RemoveMode::Permanent, false, &blind, &bin, &|_| Vec::new());
+    for p in [&wt, &named] {
+        match outcome_of(&out, p) {
+            Outcome::Skipped { reason } => {
+                assert_eq!(
+                    reason,
+                    "the sessions of this PC could not be read, so a live agent session cannot be ruled out"
+                );
+            }
+            other => panic!("{p:?}: {other:?}"),
+        }
+        assert!(p.exists());
+    }
+    assert!(matches!(outcome_of(&out, &target), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert_english(&out);
+}
+
+#[test]
+fn i6_localized_trash_and_os_text_never_reaches_the_outcome() {
+    let trash = "could not move D:\\p\\target to the Recycle Bin: Error during a `trash` operation: \
+Os { code: -2147024864, description: \"Il file \\\"x.dll\\\" (in uso) \u{e8} utilizzato da un altro processo.\" }\
+; blocked by D:\\p\\target\\x.dll: Il processo non pu\u{f2} accedere al file perch\u{e9} \u{e8} utilizzato da un altro processo. (os error 32)";
+    let text = english_error(trash, &["devenv.exe".to_string()]);
+    assert_eq!(
+        text,
+        "could not move D:\\p\\target to the Recycle Bin: Error during a `trash` operation: os error -2147024864\
+; blocked by D:\\p\\target\\x.dll: os error 32 (in use by: devenv.exe)"
+    );
+    // The same cut on its own.
+    assert_eq!(strip_os_text("a: Os { code: 5, description: \"Accesso negato.\" } b"), "a: os error 5 b");
+    // A description with an escaped quote and a closing brace inside.
+    assert_eq!(strip_os_text("Os { code: 5, description: \"x \\\" } y\" } end"), "os error 5 end");
+    // Text that only looks like it is left alone.
+    assert_eq!(strip_os_text("Os { code: x }"), "Os { code: x }");
+    assert_eq!(strip_os_text("no code here"), "no code here");
 }

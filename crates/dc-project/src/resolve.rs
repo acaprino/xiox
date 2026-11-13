@@ -32,6 +32,7 @@ pub(crate) fn resolve_full(path: &Path) -> Result<(Project, Vec<WorktreeEntry>),
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.to_string_lossy().into_owned());
-    let origin = if is_repo { dc_git::origin_url(&root) } else { None };
+    // The credentials of a remote (`https://user:token@host/…`) never leave the analysis.
+    let origin = if is_repo { dc_git::origin_url(&root).map(|u| dc_git::strip_credentials(&u)) } else { None };
     Ok((Project { root, name, is_repo, origin, worktrees }, entries))
 }

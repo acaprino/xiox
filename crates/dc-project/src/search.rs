@@ -10,12 +10,12 @@
 
 use crate::owned::key_within;
 use crate::{Block, Category, Env, Item, Note, Options, Project, SearchMode, Target, Why};
-use dc_git::GitCli;
-use dc_model::{ArtifactKind, DirIndex, GitProbe, Level, is_system_dir, normalize_path, path_key};
+use crate::nested::nested_repos;
+use crate::owned::live_session_in;
+use dc_model::{ArtifactKind, DirIndex, Level, is_system_dir, normalize_path, path_key};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// A project name shorter than this (in characters) is never searched by name (copies still are, by identity).
 const MIN_NAME_CHARS: usize = 4;
@@ -133,59 +133,69 @@ pub(crate) fn classify(
     name_matches_project(&project.name, &name).then_some((Category::Named, Why::NameOnly))
 }
 
-/// `Some(true)`: the copy is dirty, or HEAD or any local branch tip of it is a commit the
-/// project's repository does not have. `Some(false)`: clean and every tip is contained.
-/// `None`: git cannot tell.
+/// `Some(true)`: the copy is dirty, or HEAD, a local branch, a tag or a stash entry of it is a
+/// commit that no ref of the project's repository reaches (a commit the project has only as a
+/// dangling object, after a deleted branch or a rebase, is the copy's own work). `Some(false)`:
+/// clean and every tip reachable. `None`: git cannot tell. Every git call goes through `dc_git`
+/// (timeout, clean environment).
 fn has_own_work(project: &Project, copy: &Path) -> Option<bool> {
-    let dirty = GitCli.state(copy).dirty;
-    let mut tips: Vec<String> = git_head(copy).into_iter().collect();
-    let refs = git_command(copy).args(["for-each-ref", "--format=%(objectname)", "refs/heads"]).output().ok();
-    let listed = refs.as_ref().is_some_and(|o| o.status.success());
-    if let Some(o) = refs {
-        tips.extend(String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
+    let dirty = dc_git::working_tree_dirty(copy);
+    let missing = match dc_git::work_tips(copy) {
+        Some(tips) if !tips.is_empty() => dc_git::tips_missing_from_refs(&project.root, &tips),
+        _ => None,
+    };
+    match (dirty, missing) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
     }
-    tips.sort();
-    tips.dedup();
-    let mut unknown = !listed || tips.is_empty();
-    let mut missing = false;
-    for tip in &tips {
-        match git_exit(&project.root, &["cat-file", "-e", tip]) {
-            Some(false) => missing = true,
-            Some(true) => {}
-            None => unknown = true,
+}
+
+/// What a git repository that is not a copy of the project holds.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Clean, and every commit is in a remote-tracking branch.
+    Safe,
+    /// Uncommitted changes, or commits no remote has: its history exists only here.
+    Work,
+    /// git cannot read it (`dubious ownership`, a broken `.git`) or gave no answer.
+    Unreadable,
+}
+
+fn independent_verdict(dir: &Path) -> Verdict {
+    match dc_git::working_tree_dirty(dir) {
+        None => Verdict::Unreadable,
+        Some(true) => Verdict::Work,
+        Some(false) => match dc_git::work_tips(dir).map(|tips| dc_git::tips_not_pushed(dir, &tips)) {
+            Some(Some(false)) => Verdict::Safe,
+            Some(Some(true)) => Verdict::Work,
+            _ => Verdict::Unreadable,
+        },
+    }
+}
+
+/// The blocks of a name-matched folder: it is, or holds, a git repository. The folder itself
+/// being a repository with work of its own blocks it; a repository git cannot read, in it or
+/// below it, blocks it (nothing can show it has no unsaved work). What is below a folder and
+/// is not listed is checked again when the folder is removed (`clean::check_contents`).
+fn named_blocks(dir: &Path) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut unknown = false;
+    if is_git_repo(dir) {
+        match independent_verdict(dir) {
+            Verdict::Safe => {}
+            Verdict::Work => blocks.push(Block::UnsavedWork),
+            Verdict::Unreadable => unknown = true,
         }
     }
-    match (dirty, missing) {
-        (Some(true), _) | (_, true) => Some(true),
-        (Some(false), false) if !unknown => Some(false),
-        _ => None,
+    match nested_repos(dir) {
+        Ok(repos) => unknown |= repos.iter().any(|r| dc_git::working_tree_dirty(r).is_none()),
+        Err(_) => unknown = true,
     }
-}
-
-fn git_command(dir: &Path) -> Command {
-    let mut c = Command::new("git");
-    c.arg("-C").arg(dir).arg("--no-optional-locks").env("GIT_TERMINAL_PROMPT", "0");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    if unknown {
+        blocks.push(Block::UnsavedWorkUnknown);
     }
-    c
-}
-
-fn git_head(dir: &Path) -> Option<String> {
-    let o = git_command(dir).args(["rev-parse", "--verify", "-q", "HEAD"]).output().ok()?;
-    let sha = String::from_utf8_lossy(&o.stdout).trim().to_string();
-    (o.status.success() && !sha.is_empty()).then_some(sha)
-}
-
-/// `Some(true)` on exit 0, `Some(false)` on exit 1, `None` when git did not run or failed otherwise.
-fn git_exit(dir: &Path, args: &[&str]) -> Option<bool> {
-    match git_command(dir).args(args).output().ok()?.status.code()? {
-        0 => Some(true),
-        1 => Some(false),
-        _ => None,
-    }
+    blocks
 }
 
 // ───────────────────────────────── helpers ─────────────────────────────────
@@ -231,7 +241,7 @@ pub(crate) fn is_link(meta: &fs::Metadata) -> bool {
 }
 
 /// A `.git` folder or file (a linked worktree or submodule has a file).
-fn is_git_repo(dir: &Path) -> bool {
+pub(crate) fn is_git_repo(dir: &Path) -> bool {
     dir.join(".git").symlink_metadata().is_ok()
 }
 
@@ -252,7 +262,7 @@ fn inside_other_repo(path: &Path) -> bool {
     false
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .filter(|v| !v.is_empty())
         .or_else(|| std::env::var_os("HOME").filter(|v| !v.is_empty()))
@@ -362,11 +372,17 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
         .into_iter()
         .filter_map(|c| {
             let (category, why) = classify(project, &roots, project.origin.as_deref(), &c)?;
-            // A copy with commits or changes the project lacks cannot be removed at all.
-            let blocked = match &why {
+            // What cannot be removed at all: a copy with work the project lacks (or whose work
+            // cannot be checked), a repository git cannot read, a live agent session inside.
+            let mut blocked = match &why {
                 Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
+                Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
+                Why::NameOnly => named_blocks(&c),
                 _ => Vec::new(),
             };
+            if live_session_in(&c, env) {
+                blocked.push(Block::LiveSession);
+            }
             Some(Item {
                 key: path_key(&c),
                 category,

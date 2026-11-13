@@ -11,10 +11,12 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
+use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
-    Block, Category, Env, Item, Options, Project, ProjectScan, SCHEMA, SearchMode, Target, Why, analyze_with,
+    Block, Category, Env, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
+    Why, analyze_with,
 };
 use dc_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use dc_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
@@ -27,6 +29,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Why worktrees, copies and named folders are left alone when the sessions could not be read.
+const SESSIONS_UNREAD: &str = "the sessions of this PC could not be read, so a live agent session cannot be ruled out";
 
 /// Start of the reason of an item that went with a chosen item that holds it.
 pub(crate) const ALREADY_REMOVED: &str = "already removed with ";
@@ -55,6 +60,11 @@ pub enum SelectError {
     Blocked { path: PathBuf, why: Vec<Block> },
     /// `Copies` or `Named` passed as a category.
     CategoryNeedsInclude(Category),
+    /// `--include` of a folder that holds an item the analysis lists as blocked (a copy with
+    /// work of its own, a worktree with changes): removing the folder would remove that item.
+    ContainsBlocked { path: PathBuf, inner: PathBuf, why: Vec<Block> },
+    /// A category flag on a drive root, the user profile or a folder that holds several projects.
+    ContainerRoot(PathBuf),
 }
 
 impl fmt::Display for SelectError {
@@ -66,6 +76,16 @@ impl fmt::Display for SelectError {
             }
             SelectError::CategoryNeedsInclude(c) => {
                 write!(f, "'{c}' cannot be selected as a whole: name each folder with --include <path>")
+            }
+            SelectError::ContainsBlocked { path, inner, why } => write!(
+                f,
+                "cannot be removed: it holds {} ({}): {}",
+                inner.display(),
+                join_blocks(why),
+                path.display()
+            ),
+            SelectError::ContainerRoot(root) => {
+                write!(f, "refusing to clean everything under {}: run it on one project", root.display())
             }
         }
     }
@@ -86,11 +106,15 @@ pub struct Chosen {
 }
 
 /// Category flags take the `Recommended`, unblocked items (for `Sessions`: every unblocked one).
-/// `include` adds any unblocked item of any level except sessions, by path. Nothing is chosen
-/// when the request is refused.
+/// `include` adds any unblocked item of any level except sessions, by path; a folder that holds a
+/// blocked item is refused (it would take the blocked item with it). Category flags are refused
+/// on a container root. Nothing is chosen when the request is refused.
 pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectError> {
     if let Some(c) = req.categories.iter().find(|c| matches!(c, Category::Copies | Category::Named)) {
         return Err(SelectError::CategoryNeedsInclude(*c));
+    }
+    if !req.categories.is_empty() && scan.notes.contains(&Note::ContainerRoot) {
+        return Err(SelectError::ContainerRoot(scan.project.root.clone()));
     }
     let mut keys: HashSet<&str> = HashSet::new();
     for c in &req.categories {
@@ -109,6 +133,13 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
         if !i.blocked.is_empty() {
             return Err(SelectError::Blocked { path: given.clone(), why: i.blocked.clone() });
         }
+        if let Some(inner) = blocked_inside(&scan.items, i) {
+            return Err(SelectError::ContainsBlocked {
+                path: given.clone(),
+                inner: inner.path.clone().unwrap_or_default(),
+                why: inner.blocked.clone(),
+            });
+        }
         keys.insert(&i.key);
     }
 
@@ -126,6 +157,13 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
             .collect(),
         keys: chosen.iter().map(|i| i.key.clone()).collect(),
     })
+}
+
+/// The first item of `items` that sits inside `outer` (not `outer` itself) and is blocked.
+fn blocked_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
+    items
+        .iter()
+        .find(|j| j.path.is_some() && j.key != outer.key && !j.blocked.is_empty() && key_within(&j.key, &outer.key))
 }
 
 /// Keys of the items that sit inside another item of `items` (removing the outer one removes them).
@@ -206,8 +244,9 @@ fn failed(error: impl Into<String>) -> Outcome {
 /// N)`, in the language of Windows) cut down to `os error N`. Nothing else is touched.
 pub(crate) fn strip_os_text(s: &str) -> String {
     const TAG: &str = "(os error ";
+    let s = strip_os_struct(s);
     let mut out = String::new();
-    let mut rest = s;
+    let mut rest = s.as_str();
     while let Some(p) = rest.find(TAG) {
         let head = &rest[..p];
         let after = &rest[p + TAG.len()..];
@@ -222,6 +261,54 @@ pub(crate) fn strip_os_text(s: &str) -> String {
         out.push_str("os error ");
         out.push_str(code);
         rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `Os { code: N, description: "..." }` (how the `trash` crate prints a Windows error: the
+/// description is in the language of Windows) cut down to `os error N`.
+fn strip_os_struct(s: &str) -> String {
+    const OPEN: &str = "Os { code: ";
+    // `(code, text after the closing brace)` of the struct whose text starts after `OPEN`.
+    fn parse(after_open: &str) -> Option<(&str, &str)> {
+        let (code, rest) = after_open.split_once(", description: \"")?;
+        let digits = code.strip_prefix('-').unwrap_or(code);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        // The Debug string ends at the first quote that is not escaped.
+        let mut escaped = false;
+        let end = rest.char_indices().find_map(|(i, c)| {
+            if escaped {
+                escaped = false;
+                None
+            } else if c == '\\' {
+                escaped = true;
+                None
+            } else {
+                (c == '"').then_some(i)
+            }
+        })?;
+        let tail = rest[end + 1..].strip_prefix(" }")?;
+        Some((code, tail))
+    }
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(p) = rest.find(OPEN) {
+        let after = &rest[p + OPEN.len()..];
+        match parse(after) {
+            Some((code, tail)) => {
+                out.push_str(&rest[..p]);
+                out.push_str("os error ");
+                out.push_str(code);
+                rest = tail;
+            }
+            None => {
+                out.push_str(&rest[..p + OPEN.len()]);
+                rest = after;
+            }
+        }
     }
     out.push_str(rest);
     out
@@ -399,15 +486,22 @@ fn clean_impl(
     match sessions {
         Sessions::Real => {
             let cache = Some(dc_app::cache_dir());
-            let (loaded, _) = dc_app::load_sessions(cache.clone());
-            let (archived, _) = dc_app::load_archived_sessions(cache);
-            let env = Env { sessions: &loaded, archived: &archived, search_roots, now_ms: dc_app::now_ms() };
+            let (loaded, loader_warnings) = dc_app::load_sessions(cache.clone());
+            let (archived, archived_warnings) = dc_app::load_archived_sessions(cache);
+            let health = crate::session_health(&loaded, &loader_warnings, &archived, &archived_warnings);
+            let env = Env { sessions: &loaded, archived: &archived, health, search_roots, now_ms: dc_app::now_ms() };
             let cli = SystemCli::locate();
             let io = Io { cli: &cli, trash: &SystemTrash, fresh: &dc_app::fresh_archived };
             clean_with(scan, chosen, mode, dry_run, &env, &io)
         }
         Sessions::None => {
-            let env = Env { sessions: &[], archived: &[], search_roots, now_ms: dc_app::now_ms() };
+            let env = Env {
+                sessions: &[],
+                archived: &[],
+                health: SessionHealth::default(),
+                search_roots,
+                now_ms: dc_app::now_ms(),
+            };
             // No harness program is looked for: nothing here can run one.
             let cli = SystemCli { codex: None, opencode: None, timeout: std::time::Duration::from_secs(1) };
             let io = Io { cli: &cli, trash: &SystemTrash, fresh: &no_archived };
@@ -437,7 +531,7 @@ pub(crate) fn clean_with(
     };
     match analyze_with(&scan.project.root, &opts, env) {
         Ok(fresh) => {
-            let run = Run { mode, dry_run, project: &fresh.project, env, io };
+            let run = Run { mode, dry_run, project: &fresh.project, items: &fresh.items, env, io };
             run.remove(&old, &fresh, &mut done);
         }
         Err(e) => {
@@ -495,6 +589,8 @@ struct Run<'a> {
     dry_run: bool,
     /// The project as it is now.
     project: &'a Project,
+    /// Everything the fresh analysis lists.
+    items: &'a [Item],
     env: &'a Env<'a>,
     io: &'a Io<'a>,
 }
@@ -510,8 +606,16 @@ pub(crate) fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Ite
     if !f.blocked.is_empty() {
         return Err(format!("now blocked: {}", join_blocks(&f.blocked)));
     }
-    if let Why::SameRepository { has_own_work: Some(true), .. } = f.why {
-        return Err("now has commits or changes the project does not have".to_string());
+    if let Why::SameRepository { has_own_work, .. } = &f.why {
+        match has_own_work {
+            Some(false) => {}
+            Some(true) => return Err("now has commits or changes the project does not have".to_string()),
+            None => {
+                return Err(
+                    "git could not say whether it has commits or changes the project does not have".to_string()
+                );
+            }
+        }
     }
     if f.level == Level::Caution && old.level != Level::Caution {
         return Err("now needs a manual review (it is no longer a recommended item)".to_string());
@@ -525,6 +629,14 @@ impl Run<'_> {
         let mut paths: Vec<Todo> = Vec::new();
         let mut sessions: Vec<Todo> = Vec::new();
         for o in old {
+            // A failed session read blinds the live-session block: what an agent may be working
+            // in is left alone.
+            if self.env.health.live_failed
+                && matches!(o.category, Category::Worktrees | Category::Copies | Category::Named)
+            {
+                done.insert(o.key.clone(), skipped(SESSIONS_UNREAD));
+                continue;
+            }
             match recheck(o, by_key.get(o.key.as_str()).copied()) {
                 Err(reason) => {
                     done.insert(o.key.clone(), skipped(reason));
@@ -586,7 +698,9 @@ impl Run<'_> {
     fn remove_dirs(&self, todos: &[&Todo], done: &mut HashMap<String, Outcome>) {
         let mut checked: Vec<(&Todo, PlanItem)> = Vec::new();
         for t in todos {
-            match check_dir(t.fresh, t.old.bytes.unwrap_or(0), self.project) {
+            let verdict = check_dir(t.fresh, t.old.bytes.unwrap_or(0), self.project)
+                .and_then(|pi| check_contents(t.fresh, self.project, self.items).map(|()| pi));
+            match verdict {
                 Ok(pi) => checked.push((t, pi)),
                 Err(reason) => {
                     done.insert(t.fresh.key.clone(), skipped(reason));
@@ -811,4 +925,54 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
     };
     guard::validate(&item).map_err(|r| strip_os_text(&r))?;
     Ok(item)
+}
+
+/// What is inside the folder or worktree, looked at right before it goes: removing it removes
+/// all of that. `listed` is the fresh analysis. A folder is refused when it holds
+/// - the project or one of its worktrees (`check_dir` says so first for a name-matched folder);
+/// - an item the analysis lists as blocked;
+/// - for a catalog (build) folder, a worktree, a copy or a name-matched folder: they have their own checks;
+/// - for a copy or a name-matched folder, a git repository that is not itself a listed, unblocked
+///   item: the analysis cannot vouch for it (the search is bounded, `--no-drives` goes one level
+///   deep), so nothing is assumed. The folder's own `.git` (a copy has one) is not looked at.
+pub(crate) fn check_contents(fresh: &Item, project: &Project, listed: &[Item]) -> Result<(), String> {
+    let Some(path) = fresh.path.as_deref() else { return Ok(()) };
+    let key = &fresh.key;
+    let holds_own = std::iter::once(&project.root)
+        .chain(project.worktrees.iter())
+        .map(|own| path_key(own))
+        .any(|own| own != *key && key_within(&own, key));
+    if holds_own {
+        return Err("it holds the project or one of its worktrees".to_string());
+    }
+    if let Some(inner) = blocked_inside(listed, fresh) {
+        let at = inner.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
+        return Err(format!("it holds {at}, which is blocked ({})", join_blocks(&inner.blocked)));
+    }
+    let is_project_folder = matches!(fresh.target, Target::Dir { kind: ArtifactKind::ProjectFolder });
+    if matches!(fresh.target, Target::Dir { .. }) && !is_project_folder {
+        let separate = listed.iter().find(|j| {
+            matches!(j.category, Category::Worktrees | Category::Copies | Category::Named)
+                && j.key != *key
+                && key_within(&j.key, key)
+        });
+        if let Some(j) = separate {
+            let at = j.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
+            return Err(format!("it holds {at}, which is listed separately"));
+        }
+    }
+    if is_project_folder {
+        let repos =
+            nested_repos(path).map_err(|_| "it is too big to check for git repositories inside it".to_string())?;
+        for r in repos {
+            let rk = path_key(&r);
+            let vouched = listed.iter().any(|j| {
+                j.key == rk && j.blocked.is_empty() && matches!(j.category, Category::Copies | Category::Named)
+            });
+            if !vouched {
+                return Err(format!("it holds the git repository {}, which is not listed as removable", r.display()));
+            }
+        }
+    }
+    Ok(())
 }

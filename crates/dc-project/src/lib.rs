@@ -9,7 +9,9 @@
 //! warnings) are never copied.
 
 mod clean;
+mod container;
 mod logs;
+mod nested;
 mod owned;
 mod resolve;
 mod search;
@@ -56,7 +58,26 @@ pub enum Block {
     SessionLocked,
     /// A copy of the repository with commits or changes the project does not have.
     UnsavedWork,
+    /// A copy, or a folder that is or holds a git repository, whose unsaved work git could not
+    /// check (it cannot read the repository, or answered nothing).
+    UnsavedWorkUnknown,
     Unknown,
+}
+
+impl Block {
+    /// The English reason, in the one wording used everywhere (the listing, `--include` errors, the guide).
+    pub fn reason(self) -> &'static str {
+        match self {
+            Block::LiveSession => "an agent session is open",
+            Block::DirtyGit => "uncommitted changes",
+            Block::UnpushedCommits => "commits not kept anywhere else",
+            Block::Unreachable => "could not be checked",
+            Block::SessionLocked => "session locked by its harness",
+            Block::UnsavedWork => "has commits or changes the project does not have",
+            Block::UnsavedWorkUnknown => "could not be checked for unsaved work",
+            Block::Unknown => "unknown reason",
+        }
+    }
 }
 
 impl fmt::Display for Category {
@@ -74,15 +95,7 @@ impl fmt::Display for Category {
 
 impl fmt::Display for Block {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Block::UnsavedWork => "has commits or changes the project does not have",
-            Block::LiveSession => "live agent session",
-            Block::DirtyGit => "uncommitted changes",
-            Block::UnpushedCommits => "commits that no other branch has",
-            Block::Unreachable => "unreachable",
-            Block::SessionLocked => "session locked",
-            Block::Unknown => "unknown reason",
-        })
+        f.write_str(self.reason())
     }
 }
 
@@ -135,7 +148,7 @@ pub struct Project {
     /// Last component of `root`.
     pub name: String,
     pub is_repo: bool,
-    /// `remote.origin.url` as git has it.
+    /// `remote.origin.url` without the credentials of its authority (`user:token@`).
     pub origin: Option<String>,
     /// Linked worktrees whose folder exists (main excluded). Normalized.
     pub worktrees: Vec<PathBuf>,
@@ -162,6 +175,14 @@ pub enum Note {
     PrunableWorktree { path: PathBuf },
     /// The engine reported at least one warning (its text is not English, so it is not copied).
     EngineWarning,
+    /// The session listing of this PC failed: live agent sessions may be missed and archived
+    /// sessions may be missing.
+    SessionsNotRead,
+    /// Git could not list the files of the project (or of a worktree): no log files are listed from it.
+    LogsNotChecked,
+    /// The folder is a drive root, the user profile (or a folder above it), or holds several
+    /// projects: the category flags of `clean` refuse it.
+    ContainerRoot,
 }
 
 /// A local branch that looks stale: listed, never deleted.
@@ -222,10 +243,36 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Whether the session listings of this PC could be read. A failed live listing blinds the
+/// live-session block, so `clean` leaves worktrees, copies and named folders alone then.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SessionHealth {
+    pub live_failed: bool,
+    pub archived_failed: bool,
+}
+
+/// The health of the listings that [`dc_app::load_sessions`] and [`dc_app::load_archived_sessions`]
+/// returned. A listing that returned nothing and complained failed; one that returned sessions
+/// and complained about some it left out (no working folder, no date) did not.
+pub(crate) fn session_health(
+    sessions: &[dc_app::Preloaded],
+    loader_warnings: &[String],
+    archived: &[dc_mukade::ArchivedSession],
+    archived_warnings: &[String],
+) -> SessionHealth {
+    SessionHealth {
+        live_failed: !loader_warnings.is_empty()
+            || sessions.iter().any(|p| p.loaded.items.is_empty() && !p.loaded.warnings.is_empty()),
+        archived_failed: archived.is_empty() && !archived_warnings.is_empty(),
+    }
+}
+
 /// Everything outside the project tree, injected (tests pass fakes).
 pub(crate) struct Env<'a> {
     pub sessions: &'a [dc_app::Preloaded],
     pub archived: &'a [dc_mukade::ArchivedSession],
+    /// Whether the listings above could be read (tests pass the default: all fine).
+    pub health: SessionHealth,
     /// Where `copies`/`named` are walked below the project's parent, to depth 3; `None` = every
     /// fixed drive and the user's home.
     pub search_roots: Option<Vec<PathBuf>>,
@@ -236,9 +283,16 @@ pub(crate) struct Env<'a> {
 /// except the session listing cache the engine already writes (`dc_app::cache_dir()`).
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
     let cache = Some(dc_app::cache_dir());
-    let (sessions, _) = dc_app::load_sessions(cache.clone());
-    let (archived, _) = dc_app::load_archived_sessions(cache);
-    let env = Env { sessions: &sessions, archived: &archived, search_roots: None, now_ms: dc_app::now_ms() };
+    let (sessions, loader_warnings) = dc_app::load_sessions(cache.clone());
+    let (archived, archived_warnings) = dc_app::load_archived_sessions(cache);
+    let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
+    let env = Env {
+        sessions: &sessions,
+        archived: &archived,
+        health,
+        search_roots: None,
+        now_ms: dc_app::now_ms(),
+    };
     analyze_with(path, opts, &env)
 }
 
@@ -247,11 +301,13 @@ pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error
 /// Still reads the real sessions of this PC.
 pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf]) -> Result<ProjectScan, Error> {
     let cache = Some(dc_app::cache_dir());
-    let (sessions, _) = dc_app::load_sessions(cache.clone());
-    let (archived, _) = dc_app::load_archived_sessions(cache);
+    let (sessions, loader_warnings) = dc_app::load_sessions(cache.clone());
+    let (archived, archived_warnings) = dc_app::load_archived_sessions(cache);
+    let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
     let env = Env {
         sessions: &sessions,
         archived: &archived,
+        health,
         search_roots: Some(search_roots.to_vec()),
         now_ms: dc_app::now_ms(),
     };
@@ -265,7 +321,13 @@ pub fn analyze_project_without_sessions(
     opts: &Options,
     search_roots: &[PathBuf],
 ) -> Result<ProjectScan, Error> {
-    let env = Env { sessions: &[], archived: &[], search_roots: Some(search_roots.to_vec()), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &[],
+        archived: &[],
+        health: SessionHealth::default(),
+        search_roots: Some(search_roots.to_vec()),
+        now_ms: dc_app::now_ms(),
+    };
     analyze_with(path, opts, &env)
 }
 

@@ -27,9 +27,11 @@ pub fn canon(p: &Path) -> PathBuf {
     normalize_path(&fs::canonicalize(p).unwrap())
 }
 
-pub fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
+/// The command the fixtures run git with: a fixed identity, no prompt, and never an inherited
+/// repository selection (a test run from a git hook must not read or write the hook's repository).
+pub fn git_command(dir: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new("git");
+    c.arg("-C")
         .arg(dir)
         .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
         .args(args)
@@ -37,11 +39,26 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git must be installed to run these tests");
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"] {
+        c.env_remove(var);
+    }
+    c
+}
+
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let out = git_command(dir, args).output().expect("git must be installed to run these tests");
     assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn the_fixture_git_never_inherits_a_repository_selection() {
+    let c = git_command(Path::new("."), &["status"]);
+    for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"] {
+        let set = c.get_envs().find(|(k, _)| *k == std::ffi::OsStr::new(var));
+        assert!(matches!(set, Some((_, None))), "{var} must be removed from the child environment");
+    }
 }
 
 /// `dir` (created) as a git repository with one commit; returns its canonical path.
@@ -96,7 +113,13 @@ pub fn node_modules(project: &Path, bytes: usize) -> PathBuf {
 
 /// No sessions, no archived sessions, nothing searched.
 pub fn env() -> Env<'static> {
-    Env { sessions: &[], archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() }
+    Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(Vec::new()),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    }
 }
 
 pub const MB: usize = 1 << 20;

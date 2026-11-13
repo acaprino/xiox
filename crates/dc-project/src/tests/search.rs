@@ -26,7 +26,13 @@ fn project_in(base: &Path) -> PathBuf {
 }
 
 fn scan(project: &Path, roots: Vec<PathBuf>, opts: &Options) -> ProjectScan {
-    let env = Env { sessions: &[], archived: &[], search_roots: Some(roots), now_ms: dc_app::now_ms() };
+    let env = Env {
+        sessions: &[],
+        archived: &[],
+        search_roots: Some(roots),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
     analyze_with(project, opts, &env).unwrap()
 }
 
@@ -361,4 +367,232 @@ fn project_nested_in_an_outer_repository_lists_no_sibling() {
 
     let s = scan(&project, vec![outer.clone()], &Options::default());
     assert!(found(&s).is_empty(), "{:?}", s.items);
+}
+
+// ───────────────────────────── final review ─────────────────────────────
+
+fn copy_item<'a>(s: &'a ProjectScan, p: &Path) -> &'a crate::Item {
+    s.items.iter().find(|i| i.path.as_deref() == Some(p)).unwrap_or_else(|| panic!("{p:?} not listed: {:#?}", s.items))
+}
+
+#[test]
+fn i1_a_clean_copy_whose_only_work_is_a_stash_is_blocked() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("stashy"));
+    fs::write(copy.join("README.md"), "changed\n").unwrap();
+    git(&copy, &["stash", "push", "-q"]);
+    assert!(git(&copy, &["status", "--porcelain"]).is_empty(), "the stash leaves the copy clean");
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let i = copy_item(&s, &copy);
+    assert!(matches!(i.why, Why::SameRepository { has_own_work: Some(true), .. }), "{:?}", i.why);
+    assert_eq!(i.blocked, vec![Block::UnsavedWork]);
+}
+
+#[test]
+fn i1_a_clean_copy_whose_only_work_is_a_tag_on_a_unique_commit_is_blocked() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("tagged"));
+    commit(&copy, "private.txt");
+    git(&copy, &["tag", "keep-me"]);
+    git(&copy, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let i = copy_item(&s, &copy);
+    assert!(matches!(i.why, Why::SameRepository { has_own_work: Some(true), .. }), "{:?}", i.why);
+    assert_eq!(i.blocked, vec![Block::UnsavedWork]);
+}
+
+#[test]
+fn i1_a_commit_the_project_only_has_as_a_dangling_object_is_the_copys_own_work() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    // The project had a branch with one more commit, a copy took it, the project dropped the branch.
+    git(&project, &["checkout", "-q", "-b", "temp"]);
+    commit(&project, "temp.txt");
+    git(&project, &["checkout", "-q", "main"]);
+    let copy = clone(&project, &base.join("other").join("took-it"));
+    git(&copy, &["fetch", "-q", &project.to_string_lossy(), "temp"]);
+    git(&copy, &["checkout", "-q", "-b", "mine", "FETCH_HEAD"]);
+    git(&copy, &["checkout", "-q", "main"]);
+    git(&project, &["branch", "-D", "temp"]);
+    // The object is still in the project's database.
+    let tip = git(&copy, &["rev-parse", "mine"]);
+    git(&project, &["cat-file", "-e", &tip]);
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let i = copy_item(&s, &copy);
+    assert!(matches!(i.why, Why::SameRepository { has_own_work: Some(true), .. }), "{:?}", i.why);
+    assert_eq!(i.blocked, vec![Block::UnsavedWork]);
+}
+
+#[test]
+fn i2_the_search_runs_git_only_through_the_hardened_helper_of_dc_git() {
+    // `dc_git::git` has the timeout, the clean environment (no inherited GIT_DIR/GIT_WORK_TREE) and
+    // the literal pathspecs; a second copy of that helper in the search would lose them.
+    let source = include_str!("../search.rs");
+    assert!(!source.contains("Command::new"), "the search must not start processes by itself");
+}
+
+/// A folder where git cannot find a repository although `.git` is there.
+fn broken_repo(dir: &Path) {
+    fs::create_dir_all(dir.join(".git")).unwrap();
+}
+
+#[test]
+fn i3_a_named_folder_that_is_a_repository_git_cannot_read_is_blocked_and_listed() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let broken = base.join("work").join("mukade-tools");
+    broken_repo(&broken);
+
+    let s = scan(&project, Vec::new(), &Options::default());
+    let i = copy_item(&s, &canon(&broken));
+    assert_eq!(i.category, Category::Named);
+    assert_eq!(i.blocked, vec![Block::UnsavedWorkUnknown]);
+}
+
+#[test]
+fn i3_a_named_folder_that_holds_a_repository_git_cannot_read_is_blocked() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let named = base.join("work").join("mukade-old");
+    broken_repo(&named.join("deep").join("inner"));
+
+    let s = scan(&project, Vec::new(), &Options::default());
+    let i = copy_item(&s, &canon(&named));
+    assert_eq!(i.category, Category::Named);
+    assert_eq!(i.blocked, vec![Block::UnsavedWorkUnknown]);
+}
+
+#[test]
+fn i3_a_plain_named_folder_is_not_blocked() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let plain = base.join("work").join("mukade-scratch");
+    fill(&plain.join("sub"), 2, 100);
+    let s = scan(&project, Vec::new(), &Options::default());
+    assert!(copy_item(&s, &canon(&plain)).blocked.is_empty());
+}
+
+#[test]
+fn m2_a_copy_whose_own_work_cannot_be_checked_is_blocked() {
+    // Same origin, no commit at all: git cannot say what the copy has that the project lacks.
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    git(&project, &["remote", "add", "origin", "https://example.com/acme/mukade.git"]);
+    let other = base.join("other").join("zzz");
+    fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    git(&other, &["remote", "add", "origin", "https://example.com/acme/mukade.git"]);
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let i = copy_item(&s, &canon(&other));
+    assert!(matches!(i.why, Why::SameRepository { has_own_work: None, .. }), "{:?}", i.why);
+    assert_eq!(i.blocked, vec![Block::UnsavedWorkUnknown]);
+}
+
+#[test]
+fn an_independent_repository_named_like_the_project_is_blocked_while_it_has_unpushed_commits_or_changes() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    // No remote: its only history is here.
+    let lone = base.join("work").join("mukade-lone");
+    fs::create_dir_all(&lone).unwrap();
+    git(&lone, &["init", "-q", "-b", "main"]);
+    commit(&lone, "x.txt");
+    // Everything pushed, clean.
+    let bare = base.join("remotes").join("mukade-pushed.git");
+    fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    let pushed = base.join("work").join("mukade-pushed");
+    fs::create_dir_all(&pushed).unwrap();
+    git(&pushed, &["init", "-q", "-b", "main"]);
+    commit(&pushed, "y.txt");
+    git(&pushed, &["remote", "add", "origin", &bare.to_string_lossy()]);
+    git(&pushed, &["push", "-q", "-u", "origin", "main"]);
+    // Pushed, then edited.
+    let edited = base.join("work").join("mukade-edited");
+    git(&base, &["clone", "-q", &bare.to_string_lossy(), &edited.to_string_lossy()]);
+    fs::write(edited.join("wip.txt"), "wip").unwrap();
+
+    let s = scan(&project, Vec::new(), &Options::default());
+    assert_eq!(copy_item(&s, &canon(&lone)).blocked, vec![Block::UnsavedWork]);
+    assert_eq!(copy_item(&s, &canon(&edited)).blocked, vec![Block::UnsavedWork]);
+    assert!(copy_item(&s, &canon(&pushed)).blocked.is_empty());
+}
+
+fn live_session_in(dir: &Path, live: bool) -> Vec<dc_app::Preloaded> {
+    use dc_model::{Agent, Loaded, SessionRecord};
+    vec![dc_app::Preloaded {
+        agent: Agent::Claude,
+        loaded: Loaded {
+            items: vec![SessionRecord {
+                agent: Agent::Claude,
+                session_id: Some("s1".into()),
+                project_path: dir.to_path_buf(),
+                last_activity_ms: dc_app::now_ms(),
+                archived: false,
+                live,
+            }],
+            warnings: Vec::new(),
+        },
+        worktrees: Vec::new(),
+    }]
+}
+
+#[test]
+fn i4_a_live_session_inside_a_copy_or_a_named_folder_blocks_it() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("zzz"));
+    let named = base.join("other").join("mukade-scratch");
+    fill(&named.join("src"), 1, 100);
+    let named = canon(&named);
+
+    let live = live_session_in(&named.join("src"), true);
+    let live_copy = live_session_in(&copy.join("src"), true);
+    let analyze = |sessions: &[dc_app::Preloaded]| {
+        let env = Env {
+            sessions,
+            archived: &[],
+            search_roots: Some(vec![base.join("other")]),
+            now_ms: dc_app::now_ms(),
+            health: Default::default(),
+        };
+        analyze_with(&project, &Options::default(), &env).unwrap()
+    };
+
+    let s = analyze(&live);
+    assert_eq!(copy_item(&s, &named).blocked, vec![Block::LiveSession]);
+    assert!(copy_item(&s, &copy).blocked.is_empty(), "the session is not in the copy");
+
+    let s = analyze(&live_copy);
+    assert_eq!(copy_item(&s, &copy).blocked, vec![Block::LiveSession]);
+    assert!(copy_item(&s, &named).blocked.is_empty());
+
+    // The same session, not live: nothing blocks.
+    let s = analyze(&live_session_in(&named.join("src"), false));
+    assert!(copy_item(&s, &named).blocked.is_empty());
+}
+
+#[test]
+fn i4_a_copy_with_own_work_and_a_live_session_lists_both_blocks() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("zzz"));
+    commit(&copy, "private.txt");
+    let sessions = live_session_in(&copy, true);
+    let env = Env {
+        sessions: &sessions,
+        archived: &[],
+        search_roots: Some(vec![base.join("other")]),
+        now_ms: dc_app::now_ms(),
+        health: Default::default(),
+    };
+    let s = analyze_with(&project, &Options::default(), &env).unwrap();
+    let blocked = &copy_item(&s, &copy).blocked;
+    assert!(blocked.contains(&Block::UnsavedWork) && blocked.contains(&Block::LiveSession), "{blocked:?}");
 }
