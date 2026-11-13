@@ -647,6 +647,7 @@ dependencies = [
  "dc-model",
  "dc-mukade",
  "dc-scanner",
+ "dc-sessions",
  "serde",
  "serde_json",
  "tempfile",

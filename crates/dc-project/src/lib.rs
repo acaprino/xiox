@@ -8,6 +8,7 @@
 //! Italian texts (`ProjectReport::reason`, `Artifact::label`/`note`, `ArchivedSession::blocked`,
 //! warnings) are never copied.
 
+mod clean;
 mod logs;
 mod owned;
 mod resolve;
@@ -16,6 +17,9 @@ mod search;
 #[cfg(test)]
 mod tests;
 
+pub use clean::{
+    CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, recycle_shortfall, select,
+};
 pub use resolve::resolve_project;
 
 use dc_model::{Agent, ArtifactKind, Level};

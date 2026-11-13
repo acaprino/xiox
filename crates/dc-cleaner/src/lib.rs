@@ -9,7 +9,7 @@
 //! killed; `locked_by` is informational (Windows Restart Manager).
 
 mod fsops;
-mod guard;
+pub mod guard;
 mod locks;
 mod parallel;
 mod recycle;

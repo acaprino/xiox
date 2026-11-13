@@ -214,7 +214,7 @@ impl Own {
 }
 
 /// Symlink, junction or any other reparse point.
-fn is_link(meta: &fs::Metadata) -> bool {
+pub(crate) fn is_link(meta: &fs::Metadata) -> bool {
     if meta.file_type().is_symlink() {
         return true;
     }
@@ -369,8 +369,7 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
                 level: Level::Caution,
                 blocked: Vec::new(),
                 why,
-                // `ArtifactKind::ProjectFolder` arrives with the cleaning plan (Task 5).
-                target: Target::Dir { kind: ArtifactKind::Other },
+                target: Target::Dir { kind: ArtifactKind::ProjectFolder },
                 path: Some(c),
             })
         })

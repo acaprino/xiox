@@ -178,6 +178,59 @@ fn refuses_dangerous_or_corrupt_items() {
 }
 
 #[test]
+fn guard_still_refuses_a_project_folder_in_a_protected_location() {
+    let tmp = TempDir::new().unwrap();
+    let ok = tmp.path().join("proj-old-copy");
+    write(&ok.join("a.txt"), 10);
+    // Any name is plausible for a project folder...
+    assert!(guard::validate(&item(&ok, ArtifactKind::ProjectFolder)).is_ok());
+
+    // ...but every other check stands.
+    let profile = PathBuf::from(std::env::var_os("USERPROFILE").unwrap());
+    let cases: Vec<(PathBuf, &str)> = vec![
+        (PathBuf::from(r"proj\proj-copy"), "not absolute"),
+        (PathBuf::from(r"C:\proj-copy"), "shallow"),
+        (PathBuf::from(r"C:\Windows\proj-copy"), "system"),
+        (PathBuf::from(r"C:\Program Files\proj-copy"), "system"),
+        (PathBuf::from(r"C:\ProgramData\proj-copy"), "system"),
+        (profile.clone(), "profile"),
+        (profile.join("Documents"), "never a removable"),
+        (ok.join("..").join("proj-copy"), "'..'"),
+        (tmp.path().join("nope").join("proj-copy"), "does not exist"),
+        (ok.join("a.txt"), "not a directory"),
+    ];
+    for (path, needle) in cases {
+        let r = guard::validate(&item(&path, ArtifactKind::ProjectFolder)).err().unwrap_or_default();
+        assert!(r.contains(needle), "{}: reason '{r}' lacks '{needle}'", path.display());
+    }
+}
+
+#[test]
+fn validate_file_accepts_a_regular_file_and_refuses_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    let f = tmp.path().join("proj").join("app.log");
+    write(&f, 10);
+    assert_eq!(guard::validate_file(&f).unwrap(), dc_model::normalize_path(&f));
+
+    let profile = PathBuf::from(std::env::var_os("USERPROFILE").unwrap());
+    let cases: Vec<(PathBuf, &str)> = vec![
+        (PathBuf::from(r"proj\app.log"), "not absolute"),
+        (PathBuf::from(r"C:\app.log"), "shallow"),
+        (PathBuf::from(r"C:\Windows\System32\app.log"), "system"),
+        (PathBuf::from(r"C:\Program Files\x\app.log"), "system"),
+        (profile.join("Documents"), "never a removable"),
+        (f.parent().unwrap().join("..").join("app.log"), "'..'"),
+        (tmp.path().join("proj").join("gone.log"), "does not exist"),
+        (f.parent().unwrap().to_path_buf(), "not a regular file"),
+    ];
+    for (path, needle) in cases {
+        let r = guard::validate_file(&path).err().unwrap_or_default();
+        assert!(r.contains(needle), "{}: reason '{r}' lacks '{needle}'", path.display());
+    }
+    assert!(f.exists());
+}
+
+#[test]
 fn dry_run_changes_nothing_and_reports_size() {
     let tmp = TempDir::new().unwrap();
     let t = make_target(tmp.path());

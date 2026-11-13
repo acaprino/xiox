@@ -104,7 +104,7 @@ fn label_en(a: &Artifact) -> String {
         ArtifactKind::DotNet => ".NET build",
         ArtifactKind::CMake => "CMake build",
         ArtifactKind::WorktreeDir => "Worktree",
-        ArtifactKind::Catalog | ArtifactKind::Other => "",
+        ArtifactKind::Catalog | ArtifactKind::Other | ArtifactKind::ProjectFolder => "",
     };
     if !fixed.is_empty() {
         return fixed.to_string();

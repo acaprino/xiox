@@ -142,6 +142,9 @@ pub enum ArtifactKind {
     /// An entry of the folder catalog (the catalog says what it is through `label`/`class`).
     Catalog,
     Other,
+    /// A folder outside the project found by the targeted analysis (a copy of the repository or
+    /// a folder named after it). Any name is plausible; the guard's other checks stand.
+    ProjectFolder,
 }
 
 /// What an artifact folder holds (C B D L P of the catalog spec).

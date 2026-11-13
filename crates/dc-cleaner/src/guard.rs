@@ -46,6 +46,8 @@ fn name_plausible(kind: ArtifactKind, name: &str) -> bool {
         ArtifactKind::Catalog => false,
         // `Other` has no fixed name: only the deny list protects it.
         ArtifactKind::Other => true,
+        // A copy of a project or a folder named after it: any name, the deny list still applies.
+        ArtifactKind::ProjectFolder => true,
     }
 }
 
@@ -160,4 +162,42 @@ pub fn validate(item: &PlanItem) -> Result<Checked, String> {
         }
     }
     Ok(Checked { path, is_link })
+}
+
+/// Validate a loose file before it is deleted or sent to the Recycle Bin. `Ok` is the normalized
+/// path of a regular file (never a link of any kind) whose location is not protected: the same
+/// lexical and protected-location rules a folder item gets (no drive root or top-level file, no
+/// system area, no `.git`/`.ssh`/… name, not the user profile), and the same re-check of the
+/// *parent* chain, so a folder that is a junction into a protected area does not let a file go.
+/// `Err(reason)` means the file must be reported as skipped.
+pub fn validate_file(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("path is not absolute".into());
+    }
+    let path = normalize_path(path);
+    if let Some(r) = lexical_refusal(&path, ArtifactKind::Other) {
+        return Err(r);
+    }
+    let md = match fs::symlink_metadata(verbatim(&path)) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err("path does not exist".into()),
+        Err(e) => return Err(format!("cannot access path ({})", e.raw_os_error().map_or("no code".into(), |c| format!("os error {c}")))),
+    };
+    if md.file_type().is_symlink() {
+        return Err("path is a link: not followed".into());
+    }
+    if !md.is_file() {
+        return Err("path is not a regular file".into());
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Ok(real_parent) = fs::canonicalize(verbatim(parent))
+    {
+        let real = normalize_path(&real_parent).join(name);
+        if path_key(&real) != path_key(&path)
+            && let Some(r) = lexical_refusal(&real, ArtifactKind::Other)
+        {
+            return Err(format!("resolves to {}: {r}", real.display()));
+        }
+    }
+    Ok(path)
 }

@@ -63,7 +63,7 @@ fn sibling_folder_with_the_project_name_is_named_caution() {
     assert_eq!(item.path.as_deref(), Some(canon(&sibling).as_path()));
     assert_eq!(item.level, Level::Caution);
     assert_eq!(item.why, Why::NameOnly);
-    assert_eq!(item.target, Target::Dir { kind: ArtifactKind::Other });
+    assert_eq!(item.target, Target::Dir { kind: ArtifactKind::ProjectFolder });
     assert!(item.blocked.is_empty());
     assert!(item.bytes.is_some_and(|b| b >= 2000), "{:?}", item.bytes);
     assert!(paths(&s, Category::Copies).is_empty());
@@ -83,7 +83,7 @@ fn clone_elsewhere_is_a_copy_even_with_another_name() {
     assert_eq!(copies.len(), 1, "{:?}", s.items);
     assert_eq!(copies[0].path.as_deref(), Some(zzz.as_path()));
     assert_eq!(copies[0].level, Level::Caution);
-    assert_eq!(copies[0].target, Target::Dir { kind: ArtifactKind::Other });
+    assert_eq!(copies[0].target, Target::Dir { kind: ArtifactKind::ProjectFolder });
     assert!(copies[0].blocked.is_empty());
     assert!(
         matches!(copies[0].why, Why::SameRepository { shared_root_commit: true, same_origin: false, .. }),
