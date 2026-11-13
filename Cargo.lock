@@ -636,6 +636,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dc-project"
+version = "0.1.0"
+dependencies = [
+ "dc-app",
+ "dc-cleaner",
+ "dc-disktree",
+ "dc-engine",
+ "dc-git",
+ "dc-model",
+ "dc-mukade",
+ "dc-scanner",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "dc-scanner"
 version = "0.1.0"
 dependencies = [

@@ -223,6 +223,12 @@ fn load_archived(cache_dir: Option<PathBuf>) -> Loaded<ArchivedSession> {
     out
 }
 
+/// Archived root sessions of every harness, read as [`run_scan`] reads them, and the warnings.
+pub fn load_archived_sessions(cache_dir: Option<PathBuf>) -> (Vec<ArchivedSession>, Vec<String>) {
+    let l = load_archived(cache_dir);
+    (l.items, l.warnings)
+}
+
 /// The roots one scan walks, and where they came from.
 pub struct ScanRoots {
     /// Outer roots only, sorted by `path_key`: a root inside another one is walked as part of it.
