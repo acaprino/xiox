@@ -2,7 +2,7 @@
 
 Ogni voce ha la sua fonte (documentazione o repository ufficiale dello strumento). Dove la fonte dice `~` si intende `%USERPROFILE%`. File 🔒 non toccati: `token`, `stored_tokens` (Hugging Face), `keras.json`, `settings.json` e `keybindings.json` (editor), `auth.ini` di pnpm.
 
-Convenzione: «tolta» = voce non documentata, non scritta nel cleaner. «Variabile non nella lista consentita» = nome non presente in `TOOL_VARS` di `crates/pc-rules/src/model.rs`; il percorso è scritto senza quel valore.
+Convenzione: «tolta» = voce non documentata, non scritta nel cleaner. «Variabile non nella lista consentita» = nome non presente in `TOOL_VARS` di `crates/xiox-rules/src/model.rs`; il percorso è scritto senza quel valore.
 
 ## npm (`cleaners/bbag_npm.xml`, opzione `custom_cache`)
 

@@ -101,7 +101,7 @@ L'elenco di `report` e di `project_leftovers` ha la stessa forma del `--json` di
 - A ogni richiesta (`report` o `project_leftovers`): analisi leggera e nuova misura dei pesi,
   poi la risposta. Se un controllo è in corso aspetta fino a 20 secondi; oltre, risponde con
   l'ultimo risultato e `stale: true`.
-- L'analisi leggera (senza pesi) e la chiave stabile di ogni voce (`dc_model::path_key` del
+- L'analisi leggera (senza pesi) e la chiave stabile di ogni voce (`xiox_model::path_key` del
   percorso) fanno parte della funzione di libreria dell'analisi mirata.
 
 ## Vincoli

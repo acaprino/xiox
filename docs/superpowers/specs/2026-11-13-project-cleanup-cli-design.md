@@ -40,7 +40,7 @@ cambia solo il livello e la preselezione.
 
 - **Due eseguibili, come mukade** (`mukade.exe` riga di comando, `mukade-ui.exe` finestra):
   `xiox.exe` è un programma da console, manifest `asInvoker`, nessuna richiesta UAC. La finestra
-  resta `PulisciPC.exe` finché il secondo progetto non la rinomina (`xiox-ui.exe`). Motivo: la
+  è `xiox-ui.exe` (con il cambio di nome in Xiox ha sostituito `PulisciPC.exe`). Motivo: la
   finestra ha `windows_subsystem = "windows"` e in release il manifest `requireAdministrator`;
   nello stesso exe un comando da terminale aprirebbe la richiesta UAC e non scriverebbe nella
   console.
@@ -54,7 +54,7 @@ cambia solo il livello e la preselezione.
 - I branch vecchi vengono elencati ma non cancellati (non occupano spazio).
 - **Ogni worktree collegato del progetto si può togliere, non solo quelli creati dagli agenti.**
   Oggi il motore toglie interi solo i worktree degli agenti (`is_agent_worktree`,
-  `dc_engine::whole_worktree_repo`, `checked_plan`) e mostra gli altri «solo per informazione».
+  `xiox_engine::whole_worktree_repo`, `checked_plan`) e mostra gli altri «solo per informazione».
   Nell'analisi mirata l'utente nomina il progetto, e i worktree fatti a mano
   (`D:\Projects\mukade-chunked`) sono proprio ciò che vuole togliere. I controlli che oggi
   valgono per i worktree degli agenti (modifiche non salvate, commit non pubblicati) vanno
@@ -71,7 +71,7 @@ cambia solo il livello e la preselezione.
   vengono tradotte qui: la riga di comando costruisce i suoi testi in inglese dai campi
   strutturati (`status`, `blocked_by`, `level`, `class`, `kind`). La traduzione del motore è del
   secondo progetto.
-- Impostazioni e cache restano dove sono oggi (`dc_app::settings_path()`, `cache_dir()`); il
+- Impostazioni e cache restano dove sono oggi (`xiox_app::settings_path()`, `cache_dir()`); il
   cambio di nome delle cartelle è del secondo progetto.
 
 ## Cosa appartiene a un progetto
@@ -98,7 +98,7 @@ il cui worktree non esiste più.
 Limiti della ricerca per nome, per non attribuire a un progetto cartelle altrui:
 - il nome del progetto deve avere almeno 4 caratteri, altrimenti la categoria `named` è vuota e
   l'uscita lo dice;
-- mai dentro le cartelle di sistema (`dc_model::is_system_dir`), dentro `AppData`, dentro un altro
+- mai dentro le cartelle di sistema (`xiox_model::is_system_dir`), dentro `AppData`, dentro un altro
   repository git o dentro il progetto stesso;
 - una cartella trovata per nome non viene mai cancellata da un parametro di categoria.
 
@@ -128,9 +128,9 @@ xiox --help | --version
   cancellare nemmeno con `--include`: l'uscita dice perché.
 - `--dry-run`: fa tutto tranne cancellare, e stampa ciò che avrebbe cancellato.
 - Prima di cancellare: riepilogo (voci, peso, Cestino o definitiva, avviso se il Cestino non ha
-  spazio: `dc_app::recycle_shortfall`) e conferma `y/N`.
+  spazio: `xiox_app::recycle_shortfall`) e conferma `y/N`.
 - Una sola conferma e un solo resoconto per cartelle, file, worktree e sessioni, anche se dentro
-  passano da strade diverse (`CleanPlan` per cartelle e worktree, `dc_app::revalidate_archived` e
+  passano da strade diverse (`CleanPlan` per cartelle e worktree, `xiox_app::revalidate_archived` e
   `delete_archived` per le sessioni, la rimozione di file già usata da «Pulizia file» per i
   `logs`). L'analisi è fatta nello stesso processo subito prima: la regola dei 30 minuti
   (`MAX_SCAN_AGE_MS`) non serve.
@@ -171,11 +171,11 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 - Mai provare o tarare sui progetti veri dell'utente: test su alberi finti in `%TEMP%`, con
   repository git creati dai test.
 - Macchina: `cargo` sempre con `-j 1`, mai due build insieme, dischi quasi pieni.
-- Il motore resta nei crate `dc-*`; l'analisi mirata è una funzione di libreria (in `dc-app` o in
+- Il motore resta nei crate `dc-*`; l'analisi mirata è una funzione di libreria (in `xiox-app` o in
   un crate nuovo) che la finestra Tauri potrà chiamare tale e quale. Il binario `xiox` contiene
   solo argomenti, stampa e conferma. La funzione ha un modo leggero che non misura i pesi
   (serve all'osservatore, `2026-11-13-project-observer-mcp-design.md`) e ogni voce ha una chiave
-  stabile (`dc_model::path_key` del percorso).
+  stabile (`xiox_model::path_key` del percorso).
 - Nessuna dipendenza nuova pesante: per gli argomenti va bene un parser piccolo o scritto a mano.
 
 ## Non si fa
@@ -195,10 +195,10 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 
 ## Lasciato al builder
 
-- Dove vive il codice (funzione in `dc-app` o crate `dc-project`), nomi dei tipi, forma esatta
+- Dove vive il codice (funzione in `xiox-app` o crate `xiox-project`), nomi dei tipi, forma esatta
   del JSON, testi inglesi.
 - Come riusare `run_scan` limitandolo a un progetto e ai suoi worktree.
-- Come ottenere l'elenco dei worktree e l'identità del repository (`dc-git` ha già
+- Come ottenere l'elenco dei worktree e l'identità del repository (`xiox-git` ha già
   `main_worktree` e `worktree_info`, privati).
 - Soglie e dettagli della camminata senza MFT.
 
@@ -206,12 +206,12 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 
 Costruito il 2026-11-13. Da `e95e931` fino a `2b40f09` (guida e questa sezione comprese; `git diff --shortstat e95e931..2b40f09`): 34 file modificati, 7.724 righe aggiunte, 13 tolte.
 
-- `dc-git` (`project.rs`): `repo_main_root`, `list_worktrees`, `root_commits`, `origin_url`,
+- `xiox-git` (`project.rs`): `repo_main_root`, `list_worktrees`, `root_commits`, `origin_url`,
   `normalize_remote`, `head_kept_elsewhere`, `untracked_files`, `stale_branches`.
-- `dc-project` (crate nuovo): `resolve_project`, builds/worktrees/sessioni (`owned.rs`), ricerca
+- `xiox-project` (crate nuovo): `resolve_project`, builds/worktrees/sessioni (`owned.rs`), ricerca
   di copie e cartelle per nome (`search.rs`: indice MFT da terminale elevato, altrimenti
   camminata), log (`logs.rs`), selezione, riconvalida e rimozione (`clean.rs`), controllo del
-  Cestino. Piccole aggiunte in `dc-cleaner` (`guard` pubblico), `dc-app`, `dc-model`
+  Cestino. Piccole aggiunte in `xiox-cleaner` (`guard` pubblico), `xiox-app`, `xiox-model`
   (`ArtifactKind::ProjectFolder`).
 - `xiox-cli` (crate nuovo, `xiox.exe`): parser degli argomenti scritto a mano, uscita leggibile,
   JSON schema 1, manifest `asInvoker` (non chiede mai l'elevazione).
@@ -219,7 +219,7 @@ Costruito il 2026-11-13. Da `e95e931` fino a `2b40f09` (guida e questa sezione c
   progetto finto.
 
 Test: `cargo test -j 1 --workspace --exclude mukade` = 941 passati, 0 falliti, 20 ignorati
-(`dc-git` 34, `dc-project` 74, `xiox-cli` 34 unitari + 18 sul binario). Eseguibile release
+(`xiox-git` 34, `xiox-project` 74, `xiox-cli` 34 unitari + 18 sul binario). Eseguibile release
 `target/release/xiox.exe`: 2.928.640 byte (2,8 MB).
 
 Scostamenti dalla spec, decisi in revisione:
@@ -227,7 +227,7 @@ Scostamenti dalla spec, decisi in revisione:
 - Una copia con commit o modifiche che il progetto non ha è **bloccata** (`unsaved-work`) e non
   si cancella nemmeno con `--include`: è il caso di fallimento della spec («una copia con lavoro
   non salvato venisse cancellata»), che la tabella non copriva.
-- Le cartelle direttamente sotto la radice di un disco sono rifiutate dal guard di `dc_cleaner`
+- Le cartelle direttamente sotto la radice di un disco sono rifiutate dal guard di `xiox_cleaner`
   per ogni tipo di voce: `analyze` le segna («cannot be removed: top-level folder»), il riepilogo
   di `clean` le avvisa e `clean` le salta (uscita 3).
 - Flussi: quando `clean` sta per chiedere la conferma, riepilogo, domanda e `Cancelled.` vanno su
@@ -262,7 +262,7 @@ Limiti noti e rinvii (dal registro `.superpowers/sdd/2026-11-13-project-cleanup-
 - Non provati da test automatici: il Cestino vero e la domanda `y/N` su un terminale vero (solo
   stdin non interattivo e finti). Se la scrittura su stdout fallisce dopo una rimozione, il
   resoconto va su stderr; una pipe chiusa da sola non è un errore.
-- Minori di stile: due punti da `cargo fmt` (`dc-project/src/tests/clean.rs`, un test di
+- Minori di stile: due punti da `cargo fmt` (`xiox-project/src/tests/clean.rs`, un test di
   `render.rs`).
 
 ### Dopo la review finale
@@ -283,7 +283,7 @@ una sola ondata di correzioni li ha chiusi, con i minori che toccavano la sicure
 - **Il controllo del lavoro proprio** considera HEAD, branch locali, tag e ogni voce di stash, e
   usa la raggiungibilità (`git rev-list -n1 --missing=print <punte> --not --all` nel progetto),
   non l'esistenza dell'oggetto: un commit che il progetto ha solo come oggetto penzolante (branch
-  cancellato) è lavoro della copia. Tutte le chiamate git passano da `dc_git` (timeout, ambiente
+  cancellato) è lavoro della copia. Tutte le chiamate git passano da `xiox_git` (timeout, ambiente
   pulito); la copia privata del comando in `search.rs` è sparita.
 - **Repository illeggibili.** Una cartella `named` che è o contiene un repository che git non sa
   leggere è bloccata (`unsaved-work-unknown`, nuovo); lo stesso una copia il cui lavoro proprio
@@ -310,7 +310,7 @@ una sola ondata di correzioni li ha chiusi, con i minori che toccavano la sicure
   i worktree vanno via per sempre; una sola dicitura per i blocchi (`Block::reason`); la guida non
   dice più che il `recommended` «non può perdere nulla» (git cancella i file ignorati di un
   worktree rimosso, e un `*.bak` ignorato è `recommended`); i test non ereditano più
-  `GIT_DIR`/`GIT_WORK_TREE` (fixture di `dc-project`, `dc-git`, `xiox`).
+  `GIT_DIR`/`GIT_WORK_TREE` (fixture di `xiox-project`, `xiox-git`, `xiox`).
 
 Scostamenti registrati: (1) `checked_plan` (righe 163-164) non c'è: il codice la sostituisce con
 una lista di ammissione costruita dall'analisi fresca (`Run::remove` rilegge il progetto e
@@ -328,4 +328,4 @@ workspace non è formattato con `cargo fmt` e non è stato toccato.
 Sostituiti da questa sezione: il limite «`has_own_work` sconosciuto lascia la copia non
 bloccata» e «i log ignorati spariscono senza una nota».
 
-Test dopo le correzioni: `cargo test -j 1 --workspace --exclude mukade` = 991 passati, 0 falliti, 20 ignorati (prima 941; `dc-git` 42, `dc-project` 107, `xiox-cli` 39 unitari + 22 sul binario).
+Test dopo le correzioni: `cargo test -j 1 --workspace --exclude mukade` = 991 passati, 0 falliti, 20 ignorati (prima 941; `xiox-git` 42, `xiox-project` 107, `xiox-cli` 39 unitari + 22 sul binario).

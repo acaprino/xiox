@@ -93,7 +93,7 @@ Exit codes: `0` done, `1` error, `2` bad usage or refused, `3` partial (somethin
 
 ## The desktop app
 
-The Windows app (today `PulisciPC.exe`, becoming Xiox) has four sections:
+The Windows app (`xiox-ui.exe`) has four sections:
 
 | Section | What it does |
 |---|---|
@@ -129,16 +129,16 @@ You need [Rust](https://rustup.rs/) (stable) and Git on Windows.
 ```text
 git clone https://github.com/acaprino/xiox.git
 cd xiox
-cargo build --release --locked -p xiox-cli -p pulisci-pc
+cargo build --release --locked -p xiox-cli -p xiox-desktop
 ```
 
-Binaries land in `target\release\`: `xiox.exe` (command line) and `PulisciPC.exe` (desktop app). Tests:
+Binaries land in `target\release\`: `xiox.exe` (command line) and `xiox-ui.exe` (desktop app). Tests:
 
 ```text
 cargo test --workspace --exclude mukade
 ```
 
-The workspace is the Rust engine as crates: `dc-git` (git queries), `dc-scanner` and `dc-engine` (what exists and what it is), `dc-cleaner` (the only code that removes), `dc-project` (per-project analysis and cleaning), `dc-sessions` and `dc-mukade` (agent sessions), `pc-rules` (the Winapp2-style catalog), `xiox-cli`.
+The workspace is the Rust engine as crates: `xiox-git` (git queries), `xiox-scanner` and `xiox-engine` (what exists and what it is), `xiox-cleaner` (the only code that removes), `xiox-project` (per-project analysis and cleaning), `xiox-sessions` and `xiox-mukade` (agent sessions), `xiox-rules` (the Winapp2-style catalog), `xiox-cli`.
 
 ## Roadmap
 

@@ -4,7 +4,7 @@
 
 **Goal:** Given one project, list everything on the PC that belongs to it (builds, worktrees, copies, name-matched folders, logs, archived sessions) and remove only what the command-line flags name.
 
-**Architecture:** A new library crate `dc-project` does the targeted analysis and the cleaning on top of the existing engine crates (`dc-git`, `dc-engine`, `dc-scanner`, `dc-cleaner`, `dc-app`). A new binary crate `xiox-cli` (binary `xiox`, console subsystem, `asInvoker`) holds only argument parsing, printing and the confirmation prompt. The egui app is not touched.
+**Architecture:** A new library crate `xiox-project` does the targeted analysis and the cleaning on top of the existing engine crates (`xiox-git`, `xiox-engine`, `xiox-scanner`, `xiox-cleaner`, `xiox-app`). A new binary crate `xiox-cli` (binary `xiox`, console subsystem, `asInvoker`) holds only argument parsing, printing and the confirmation prompt. The egui app is not touched.
 
 **Tech Stack:** Rust 2024, the workspace's existing crates, `serde`/`serde_json` (already in the build), `embed-resource` (already a build dependency of the root package), `tempfile` for tests. No new runtime dependency.
 
@@ -16,8 +16,8 @@
 - `cargo` always with `-j 1` and `CARGO_INCREMENTAL=0`; never two cargo processes at once (other sessions build on this machine: if `cargo`/`rustc` is already running, wait).
 - Never run the analysis or the cleaning on the user's real projects or sessions. Tests build fake trees and fake git repositories under `tempfile::tempdir()`.
 - The product rule: the app proposes, the user chooses. `clean` removes nothing a flag does not name. Nothing is hidden: blocked and `caution` items are listed.
-- Safety equal to today: no link is followed, every item is re-validated right before removal, worktrees go through `PlanAction::GitWorktreeRemove` (never `--force`), protected locations stay refused (`dc_cleaner::guard`).
-- `xiox` never asks for elevation. `analyze` writes nothing except the session listing cache the engine already writes (`dc_app::cache_dir()`).
+- Safety equal to today: no link is followed, every item is re-validated right before removal, worktrees go through `PlanAction::GitWorktreeRemove` (never `--force`), protected locations stay refused (`xiox_cleaner::guard`).
+- `xiox` never asks for elevation. `analyze` writes nothing except the session listing cache the engine already writes (`xiox_app::cache_dir()`).
 - Do not change the behaviour of the egui app (`src/`), and do not touch `vendor/mukade`.
 - Commits: only the files the task names, message in Italian like the rest of the history (`feat(xiox): …`), ending with the attribution lines the dispatcher gives.
 
@@ -35,34 +35,34 @@
 
 | File | Responsibility |
 |---|---|
-| `crates/dc-git/src/project.rs` (new) + `lib.rs` re-export | git queries the targeted analysis needs |
-| `crates/dc-project/Cargo.toml`, `src/lib.rs` | public types and `analyze_project` |
-| `crates/dc-project/src/resolve.rs` | from a path to the project identity |
-| `crates/dc-project/src/owned.rs` | builds, worktrees, sessions (engine reuse) |
-| `crates/dc-project/src/search.rs` | copies and name-matched folders on the drives |
-| `crates/dc-project/src/logs.rs` | log/temp files and stale branches |
-| `crates/dc-project/src/clean.rs` | selection, re-validation, removal, outcome |
-| `crates/dc-project/src/tests/` | one test module per source file, shared `fixtures.rs` |
-| `crates/dc-model/src/lib.rs`, `crates/dc-cleaner/src/guard.rs` | new `ArtifactKind::ProjectFolder` |
+| `crates/xiox-git/src/project.rs` (new) + `lib.rs` re-export | git queries the targeted analysis needs |
+| `crates/xiox-project/Cargo.toml`, `src/lib.rs` | public types and `analyze_project` |
+| `crates/xiox-project/src/resolve.rs` | from a path to the project identity |
+| `crates/xiox-project/src/owned.rs` | builds, worktrees, sessions (engine reuse) |
+| `crates/xiox-project/src/search.rs` | copies and name-matched folders on the drives |
+| `crates/xiox-project/src/logs.rs` | log/temp files and stale branches |
+| `crates/xiox-project/src/clean.rs` | selection, re-validation, removal, outcome |
+| `crates/xiox-project/src/tests/` | one test module per source file, shared `fixtures.rs` |
+| `crates/xiox-model/src/lib.rs`, `crates/xiox-cleaner/src/guard.rs` | new `ArtifactKind::ProjectFolder` |
 | `crates/xiox-cli/Cargo.toml`, `build.rs`, `xiox.rc`, `xiox.manifest` | binary `xiox`, `asInvoker` |
 | `crates/xiox-cli/src/main.rs`, `args.rs`, `render.rs`, `json.rs`, `run.rs` | CLI |
 | `docs/xiox-cli.md`, `README.md` | user guide (English) |
 
 ---
 
-### Task 1: git queries for a project (`dc-git`)
+### Task 1: git queries for a project (`xiox-git`)
 
 **Files:**
-- Create: `crates/dc-git/src/project.rs`
-- Modify: `crates/dc-git/src/lib.rs` (`mod project; pub use project::*;`; make the private `git()` helper and `resolve()` visible to the module with `pub(crate)`)
-- Test: in `crates/dc-git/src/project.rs` (`#[cfg(test)] mod tests`), using real `git` in temp dirs like the existing tests at `crates/dc-git/src/lib.rs:540`
+- Create: `crates/xiox-git/src/project.rs`
+- Modify: `crates/xiox-git/src/lib.rs` (`mod project; pub use project::*;`; make the private `git()` helper and `resolve()` visible to the module with `pub(crate)`)
+- Test: in `crates/xiox-git/src/project.rs` (`#[cfg(test)] mod tests`), using real `git` in temp dirs like the existing tests at `crates/xiox-git/src/lib.rs:540`
 
 **Interfaces:**
 - Produces:
 
 ```rust
 pub struct WorktreeEntry {
-    pub path: PathBuf,          // normalized (dc_model::normalize_path)
+    pub path: PathBuf,          // normalized (xiox_model::normalize_path)
     pub head: Option<String>,   // full sha
     pub branch: Option<String>, // short name; None when detached
     pub is_main: bool,          // first entry of the list
@@ -108,21 +108,21 @@ pub fn stale_branches(repo: &Path) -> Vec<BranchInfo>;
 #[test] fn not_a_repository_gives_none_everywhere()
 ```
 
-- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p dc-git project::` — FAIL (functions missing).
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-git project::` — FAIL (functions missing).
 - [ ] **Step 3:** Implement the functions with the crate's existing `git(root, args)` helper (it already sets literal pathspecs, timeout and `CREATE_NO_WINDOW`). `head_kept_elsewhere`: parse `git branch -a --contains HEAD --format=%(refname)`; true if any `refs/remotes/*`, or any `refs/heads/X` where X is not the branch checked out in this worktree.
-- [ ] **Step 4:** Run the same command — PASS; then `cargo test -j 1 -p dc-git` — all green.
-- [ ] **Step 5:** Commit `crates/dc-git/src/project.rs crates/dc-git/src/lib.rs` — `feat(dc-git): elenco dei worktree e identità del repository`.
+- [ ] **Step 4:** Run the same command — PASS; then `cargo test -j 1 -p xiox-git` — all green.
+- [ ] **Step 5:** Commit `crates/xiox-git/src/project.rs crates/xiox-git/src/lib.rs` — `feat(xiox-git): elenco dei worktree e identità del repository`.
 
 ---
 
-### Task 2: `dc-project` — model, project resolution, builds, worktrees, sessions
+### Task 2: `xiox-project` — model, project resolution, builds, worktrees, sessions
 
 **Files:**
-- Create: `crates/dc-project/Cargo.toml` (deps: `dc-model`, `dc-git`, `dc-engine`, `dc-scanner`, `dc-app`, `dc-mukade`, `dc-cleaner`, `dc-disktree`, `serde`, `serde_json`; dev: `tempfile = "3.27.0"`), `src/lib.rs`, `src/resolve.rs`, `src/owned.rs`, `src/tests/mod.rs`, `src/tests/fixtures.rs`, `src/tests/owned.rs`
+- Create: `crates/xiox-project/Cargo.toml` (deps: `xiox-model`, `xiox-git`, `xiox-engine`, `xiox-scanner`, `xiox-app`, `xiox-mukade`, `xiox-cleaner`, `xiox-disktree`, `serde`, `serde_json`; dev: `tempfile = "3.27.0"`), `src/lib.rs`, `src/resolve.rs`, `src/owned.rs`, `src/tests/mod.rs`, `src/tests/fixtures.rs`, `src/tests/owned.rs`
 - (The workspace `members = [".", "crates/*"]` picks the crate up.)
 
 **Interfaces:**
-- Consumes: Task 1 functions; `dc_engine::analyze(cfg, scanner, index, sources, git)`; `dc_app::load_sessions`, `dc_app::cache_dir`, `dc_app::now_ms`; `dc_model::{path_key, normalize_path, Level, RemoveMode, Agent}`; `dc_mukade::ArchivedSession`.
+- Consumes: Task 1 functions; `xiox_engine::analyze(cfg, scanner, index, sources, git)`; `xiox_app::load_sessions`, `xiox_app::cache_dir`, `xiox_app::now_ms`; `xiox_model::{path_key, normalize_path, Level, RemoveMode, Agent}`; `xiox_mukade::ArchivedSession`.
 - Produces (all `Serialize`, `#[serde(rename_all = "camelCase")]`, enums `kebab-case`):
 
 ```rust
@@ -137,7 +137,7 @@ pub enum Why {                                   // why the item belongs to the 
     ArchivedSession { agent: Agent, title: Option<String> },
 }
 pub enum Target {
-    Dir { kind: dc_model::ArtifactKind },
+    Dir { kind: xiox_model::ArtifactKind },
     File,
     Worktree { repo: PathBuf },
     Session { agent: Agent, id: String },
@@ -171,13 +171,13 @@ pub enum Error { PathNotFound(PathBuf), NotADirectory(PathBuf) }   // Display in
 pub fn resolve_project(path: &Path) -> Result<Project, Error>;
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error>;
 // test seam: everything outside the fake tree is injected
-pub(crate) struct Env<'a> { pub sessions: &'a [dc_app::Preloaded], pub archived: &'a [dc_mukade::ArchivedSession], pub search_roots: Option<Vec<PathBuf>>, pub now_ms: i64 }
+pub(crate) struct Env<'a> { pub sessions: &'a [xiox_app::Preloaded], pub archived: &'a [xiox_mukade::ArchivedSession], pub search_roots: Option<Vec<PathBuf>>, pub now_ms: i64 }
 pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error>;
 ```
 
 Rules this task implements (spec section «Cosa appartiene a un progetto»):
 - **Project:** `repo_main_root(path)` if git answers, else `path` itself (`Note::NotARepository`, or `GitMissing` when `!git_available()`). `name` = last component of the root.
-- **Builds:** run `dc_engine::analyze` with `roots` = project root + every non-prunable worktree, `container_roots` empty, `inactive_days` from `dc_app::default_settings()`, `ScanOptions::default()`, `dc_scanner::DefaultScanner`, no index, the injected sessions. One `Item` per artifact of the reports whose root is one of those roots. `level` = the artifact's level **recomputed as if the project were inactive** (project age does not gate here): take `artifact.class.base_level()`, then `Caution` if `!artifact.verified` or (`artifact.ambiguous` and git does not ignore it) or git tracks it — the same conditions as `dc_engine::assess` (`crates/dc-engine/src/lib.rs:467`); read that function and mirror it, do not change it. `blocked` = `LiveSession` when the report's status is `InUse`; `Unreachable` when `Unreachable`.
+- **Builds:** run `xiox_engine::analyze` with `roots` = project root + every non-prunable worktree, `container_roots` empty, `inactive_days` from `xiox_app::default_settings()`, `ScanOptions::default()`, `xiox_scanner::DefaultScanner`, no index, the injected sessions. One `Item` per artifact of the reports whose root is one of those roots. `level` = the artifact's level **recomputed as if the project were inactive** (project age does not gate here): take `artifact.class.base_level()`, then `Caution` if `!artifact.verified` or (`artifact.ambiguous` and git does not ignore it) or git tracks it — the same conditions as `xiox_engine::assess` (`crates/xiox-engine/src/lib.rs:467`); read that function and mirror it, do not change it. `blocked` = `LiveSession` when the report's status is `InUse`; `Unreachable` when `Unreachable`.
 - **Worktrees:** every `WorktreeEntry` that is not main. Prunable → `Note::PrunableWorktree`, no item. Otherwise `Target::Worktree { repo: project.root }`, bytes = measured size of the folder, blocked: `DirtyGit` if `GitCli.state(path).dirty != Some(false)`; `UnpushedCommits` if `head_kept_elsewhere(path) != Some(true)`; `LiveSession` if the engine report for that root is `InUse`. Level `Recommended` when not blocked, else `Caution`.
 - **Sessions:** archived sessions whose `cwd` key equals or is under the project root or one of its worktrees. `blocked = [SessionLocked]` when `ArchivedSession::blocked.is_some()`. Level `Optional`.
 - `opts.measure == false`: no folder is measured; `bytes` is `None` everywhere except sessions.
@@ -200,21 +200,21 @@ Rules this task implements (spec section «Cosa appartiene a un progetto»):
 #[test] fn items_are_ordered_by_category_then_size()
 ```
 
-- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p dc-project` — FAIL.
-- [ ] **Step 3:** Implement. `analyze_project` builds the real `Env` (`dc_app::load_sessions(Some(cache_dir()))`, archived sessions as `dc_app::run_scan` loads them — expose the private `load_archived` of `crates/dc-app/src/lib.rs` as `pub fn load_archived_sessions(cache: Option<PathBuf>) -> (Vec<ArchivedSession>, Vec<String>)` if needed, without changing its behaviour) and calls `analyze_with`. Engine warnings are not copied (they are Italian): one `Note::EngineWarning` if any.
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-project` — FAIL.
+- [ ] **Step 3:** Implement. `analyze_project` builds the real `Env` (`xiox_app::load_sessions(Some(cache_dir()))`, archived sessions as `xiox_app::run_scan` loads them — expose the private `load_archived` of `crates/xiox-app/src/lib.rs` as `pub fn load_archived_sessions(cache: Option<PathBuf>) -> (Vec<ArchivedSession>, Vec<String>)` if needed, without changing its behaviour) and calls `analyze_with`. Engine warnings are not copied (they are Italian): one `Note::EngineWarning` if any.
 - [ ] **Step 4:** Run — PASS.
-- [ ] **Step 5:** Commit the new crate (and `crates/dc-app/src/lib.rs` if touched) — `feat(dc-project): analisi mirata, build worktree e sessioni di un progetto`.
+- [ ] **Step 5:** Commit the new crate (and `crates/xiox-app/src/lib.rs` if touched) — `feat(xiox-project): analisi mirata, build worktree e sessioni di un progetto`.
 
 ---
 
-### Task 3: `dc-project` — copies and name-matched folders
+### Task 3: `xiox-project` — copies and name-matched folders
 
 **Files:**
-- Create: `crates/dc-project/src/search.rs`, `src/tests/search.rs`
-- Modify: `crates/dc-project/src/lib.rs` (call it from `analyze_with`)
+- Create: `crates/xiox-project/src/search.rs`, `src/tests/search.rs`
+- Modify: `crates/xiox-project/src/lib.rs` (call it from `analyze_with`)
 
 **Interfaces:**
-- Consumes: Task 1 (`root_commits`, `origin_url`, `normalize_remote`, `GitCli.state`), Task 2 types, `dc_model::{is_system_dir, DirIndex}`, `dc_disktree::{fixed_drives, build_for_roots}`.
+- Consumes: Task 1 (`root_commits`, `origin_url`, `normalize_remote`, `GitCli.state`), Task 2 types, `xiox_model::{is_system_dir, DirIndex}`, `xiox_disktree::{fixed_drives, build_for_roots}`.
 - Produces:
 
 ```rust
@@ -227,7 +227,7 @@ pub(crate) fn classify(project: &Project, project_roots: &[String], project_orig
 
 Rules:
 - Project name shorter than 4 characters → no search, `Note::NameTooShort`.
-- Where: `opts.drives == false` → the project's parent only, depth 1 (`SearchMode::ParentOnly`). Otherwise, with `opts.admin` → MFT index over the NTFS fixed drives, as `dc_app::run_scan` builds it, and `DirIndex::find_dirs_named` cannot do prefix search: list candidates from the index if it offers a way, **otherwise fall back to the walk** — decide by reading `crates/dc-disktree` and say which in the report. Without admin → bounded walk: project's parent depth 1, every fixed drive root depth 3, the user's home depth 3 (`SearchMode::BoundedWalk` + `Note::WalkMayMissDeepFolders`). `env.search_roots` replaces the drives and the home in tests.
+- Where: `opts.drives == false` → the project's parent only, depth 1 (`SearchMode::ParentOnly`). Otherwise, with `opts.admin` → MFT index over the NTFS fixed drives, as `xiox_app::run_scan` builds it, and `DirIndex::find_dirs_named` cannot do prefix search: list candidates from the index if it offers a way, **otherwise fall back to the walk** — decide by reading `crates/xiox-disktree` and say which in the report. Without admin → bounded walk: project's parent depth 1, every fixed drive root depth 3, the user's home depth 3 (`SearchMode::BoundedWalk` + `Note::WalkMayMissDeepFolders`). `env.search_roots` replaces the drives and the home in tests.
 - Never descend into, or accept: system folders (`is_system_dir`), any `AppData`, the project and its worktrees, a folder that is a git repository (it is tested as a candidate itself but not descended into), links (symlink/junction: never followed, never a candidate).
 - A candidate that is a git repository (not a registered worktree) sharing a root commit with the project **or** with the same normalized origin → `Category::Copies`, `Why::SameRepository { .. , has_own_work }` where `has_own_work = Some(true)` if it is dirty or has commits the project's repository does not contain (`git -C <project> cat-file -e <copy HEAD>` fails), `Some(false)` if neither, `None` if git cannot tell. Repositories are found by identity **even when the name does not match** only inside the walk roots at the same depths.
 - A candidate matching by name and not a copy and not a registered worktree → `Category::Named`, `Why::NameOnly`.
@@ -258,18 +258,18 @@ Rules:
 #[test] fn no_drives_option_looks_only_at_the_parent()
 ```
 
-- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p dc-project search` — FAIL.
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-project search` — FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run `cargo test -j 1 -p dc-project` — PASS.
-- [ ] **Step 5:** Commit `crates/dc-project/src/search.rs src/tests/search.rs src/lib.rs src/tests/mod.rs` — `feat(dc-project): copie del repository e cartelle con il nome del progetto`.
+- [ ] **Step 4:** Run `cargo test -j 1 -p xiox-project` — PASS.
+- [ ] **Step 5:** Commit `crates/xiox-project/src/search.rs src/tests/search.rs src/lib.rs src/tests/mod.rs` — `feat(xiox-project): copie del repository e cartelle con il nome del progetto`.
 
 ---
 
-### Task 4: `dc-project` — log/temp files and stale branches
+### Task 4: `xiox-project` — log/temp files and stale branches
 
 **Files:**
-- Create: `crates/dc-project/src/logs.rs`, `src/tests/logs.rs`
-- Modify: `crates/dc-project/src/lib.rs`
+- Create: `crates/xiox-project/src/logs.rs`, `src/tests/logs.rs`
+- Modify: `crates/xiox-project/src/lib.rs`
 
 **Interfaces:**
 - Consumes: Task 1 `untracked_files`, `stale_branches`; Task 2 types.
@@ -288,21 +288,21 @@ Rules: files (not directories, not links) with extension `log`, `tmp`, `bak`, `d
 #[test] fn merged_branch_is_reported_as_stale_and_unmerged_is_not()
 ```
 
-- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p dc-project logs` — FAIL.
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-project logs` — FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run `cargo test -j 1 -p dc-project` — PASS.
-- [ ] **Step 5:** Commit — `feat(dc-project): log, file temporanei e branch vecchi`.
+- [ ] **Step 4:** Run `cargo test -j 1 -p xiox-project` — PASS.
+- [ ] **Step 5:** Commit — `feat(xiox-project): log, file temporanei e branch vecchi`.
 
 ---
 
-### Task 5: `dc-project` — selection, re-validation, removal
+### Task 5: `xiox-project` — selection, re-validation, removal
 
 **Files:**
-- Create: `crates/dc-project/src/clean.rs`, `src/tests/clean.rs`
-- Modify: `crates/dc-project/src/lib.rs`, `src/search.rs` (use the new kind), `crates/dc-model/src/lib.rs` (`ArtifactKind::ProjectFolder`), `crates/dc-cleaner/src/guard.rs` (`name_plausible` accepts any name for `ProjectFolder`; every other check unchanged), plus any exhaustive `match` on `ArtifactKind` the compiler points at (give it the same arm as `Other`)
+- Create: `crates/xiox-project/src/clean.rs`, `src/tests/clean.rs`
+- Modify: `crates/xiox-project/src/lib.rs`, `src/search.rs` (use the new kind), `crates/xiox-model/src/lib.rs` (`ArtifactKind::ProjectFolder`), `crates/xiox-cleaner/src/guard.rs` (`name_plausible` accepts any name for `ProjectFolder`; every other check unchanged), plus any exhaustive `match` on `ArtifactKind` the compiler points at (give it the same arm as `Other`)
 
 **Interfaces:**
-- Consumes: Tasks 2–4; `dc_cleaner::{ParallelRemover, worker_count, remove_files_parallel, Cancel, Tick}`; `dc_cleaner::guard::validate`; `dc_app::{revalidate_archived, delete_archived, recycle_shortfall}`; `dc_model::{CleanPlan, PlanItem, PlanAction, RemoveMode, ItemOutcome}`.
+- Consumes: Tasks 2–4; `xiox_cleaner::{ParallelRemover, worker_count, remove_files_parallel, Cancel, Tick}`; `xiox_cleaner::guard::validate`; `xiox_app::{revalidate_archived, delete_archived, recycle_shortfall}`; `xiox_model::{CleanPlan, PlanItem, PlanAction, RemoveMode, ItemOutcome}`.
 - Produces:
 
 ```rust
@@ -330,9 +330,9 @@ pub fn clean(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run: boo
 
 Rules:
 - `clean` first re-runs the analysis for the project in light mode and keeps only the chosen keys that are still present, in the same category, and unblocked; the others become `Skipped { reason }` (English: "no longer there", "now blocked: uncommitted changes", …).
-- Dirs and worktrees → one `CleanPlan` (`RemoveDir` / `GitWorktreeRemove { repo }`), each item through `guard::validate` (a refusal is `Skipped` with the guard's reason), executed with `ParallelRemover { workers: worker_count() }.execute_with(&plan, dry_run, &|_| {}, &Cancel::default())` (check the real signature in `crates/dc-cleaner/src/parallel.rs`). A `ProjectFolder` item is additionally refused if its key contains or is contained in the project root or any worktree.
-- Files: `symlink_metadata` says regular file, the parent is validated like a directory item's parent (reuse the guard's protected-location check; expose a small `pub fn validate_file(path:&Path)->Result<PathBuf,String>` in `guard.rs` if nothing fits), then Recycle Bin or permanent delete according to `mode` — read how «Pulizia file» does both (`remove_files_parallel` and the recycle path in `crates/dc-cleaner/src/lib.rs`) and reuse it.
-- Sessions: `dc_app::revalidate_archived` then `dc_app::delete_archived` exactly as `src/dev.rs` calls them; read that call site first. Map each `SessionOutcome` to an `Outcome`.
+- Dirs and worktrees → one `CleanPlan` (`RemoveDir` / `GitWorktreeRemove { repo }`), each item through `guard::validate` (a refusal is `Skipped` with the guard's reason), executed with `ParallelRemover { workers: worker_count() }.execute_with(&plan, dry_run, &|_| {}, &Cancel::default())` (check the real signature in `crates/xiox-cleaner/src/parallel.rs`). A `ProjectFolder` item is additionally refused if its key contains or is contained in the project root or any worktree.
+- Files: `symlink_metadata` says regular file, the parent is validated like a directory item's parent (reuse the guard's protected-location check; expose a small `pub fn validate_file(path:&Path)->Result<PathBuf,String>` in `guard.rs` if nothing fits), then Recycle Bin or permanent delete according to `mode` — read how «Pulizia file» does both (`remove_files_parallel` and the recycle path in `crates/xiox-cleaner/src/lib.rs`) and reuse it.
+- Sessions: `xiox_app::revalidate_archived` then `xiox_app::delete_archived` exactly as `src/dev.rs` calls them; read that call site first. Map each `SessionOutcome` to an `Outcome`.
 - Worktrees are removed permanently in both modes; `Chosen::permanent_anyway` lists them so the CLI can say so.
 - `dry_run`: every check runs, nothing is touched, outcomes are `Removed { bytes_freed: expected }`.
 
@@ -352,20 +352,20 @@ Rules:
 #[test] fn folder_replaced_by_a_junction_after_the_analysis_is_skipped_and_the_target_survives()
 #[test] fn log_file_is_removed_and_a_file_that_vanished_is_skipped()
 #[test] fn dry_run_touches_nothing_and_reports_what_it_would_free()
-#[test] fn guard_still_refuses_a_project_folder_in_a_protected_location()    // unit test in dc-cleaner guard tests
+#[test] fn guard_still_refuses_a_project_folder_in_a_protected_location()    // unit test in xiox-cleaner guard tests
 ```
 
-- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p dc-project clean` — FAIL.
+- [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-project clean` — FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run `cargo test -j 1 -p dc-project`, then `cargo test -j 1 -p dc-cleaner -p dc-model -p dc-engine -p dc-app` — PASS, no warning.
-- [ ] **Step 5:** Commit the files above — `feat(dc-project): pulizia mirata con riconvalida prima di cancellare`.
+- [ ] **Step 4:** Run `cargo test -j 1 -p xiox-project`, then `cargo test -j 1 -p xiox-cleaner -p xiox-model -p xiox-engine -p xiox-app` — PASS, no warning.
+- [ ] **Step 5:** Commit the files above — `feat(xiox-project): pulizia mirata con riconvalida prima di cancellare`.
 
 ---
 
 ### Task 6: `xiox` binary — arguments and `analyze`
 
 **Files:**
-- Create: `crates/xiox-cli/Cargo.toml` (`[[bin]] name = "xiox"`, deps `dc-project`, `dc-model`, `serde_json`; build-dep `embed-resource` at the root package's version), `build.rs`, `xiox.rc`, `xiox.manifest` (`asInvoker`, copy `PulisciPC.dev.manifest` and its `.rc`), `src/main.rs`, `src/args.rs`, `src/render.rs`, `src/json.rs`, `src/run.rs`
+- Create: `crates/xiox-cli/Cargo.toml` (`[[bin]] name = "xiox"`, deps `xiox-project`, `xiox-model`, `serde_json`; build-dep `embed-resource` at the root package's version), `build.rs`, `xiox.rc`, `xiox.manifest` (`asInvoker`, copy `Xiox.dev.manifest` and its `.rc`), `src/main.rs`, `src/args.rs`, `src/render.rs`, `src/json.rs`, `src/run.rs`
 - Test: unit tests in `args.rs`, `render.rs`, `json.rs`; `crates/xiox-cli/tests/cli.rs` runs the built binary (`env!("CARGO_BIN_EXE_xiox")`) on fake trees with `XIOX_SEARCH_ROOTS` set
 
 **Interfaces:**
@@ -388,9 +388,9 @@ pub const EXIT_OK: i32 = 0; pub const EXIT_ERROR: i32 = 1; pub const EXIT_USAGE:
 Decisions:
 - Hand-written parser, no dependency. Flags: `--json`, `--no-drives`, `--builds`, `--worktrees`, `--logs`, `--sessions`, `--include <path>` (repeatable), `--permanent`, `--yes`, `--dry-run`, `--help`/`-h`, `--version`/`-V`. `--copies` and `--named` are rejected with: `--copies/--named do not exist: name each folder with --include <path>`. Unknown flag, a second positional, or a missing value → usage error.
 - No project argument → current directory.
-- Elevation: detect it (move or copy the check from `src/sys.rs::is_elevated` into `dc-project` as `pub fn is_elevated() -> bool`; the egui app keeps its own) and pass `Options.admin`.
-- `XIOX_SEARCH_ROOTS` (paths separated by `;`), read only in debug builds (`cfg!(debug_assertions)`), replaces the drives and the home — the tests need it; expose `dc_project::analyze_project_in(path, opts, search_roots)` for that.
-- Human output: header `Project  <name>   <root>   (git, origin <normalized>)` or `(not a git repository)`; `Search   <all fixed drives, MFT index | fixed drives to 3 levels (not elevated: deeper folders may be missed) | project's parent only>`; one block per non-empty category: title in capitals and total right-aligned, then `level  size  path  reason`, blocked items shown with `blocked` in place of the level and the reason (`uncommitted changes`, `commits not kept anywhere else`, `an agent session is open`, `session locked by its harness`); a `BRANCHES (not removed)` block; notes; `Total <size> · recommended <size>`; last line `Clean with: xiox clean "<root>" <flags for the non-empty recommended categories>` only when something is recommended. Sizes with `dc_model::fmt_size` if its output is English, otherwise an own formatter (`6.0 GB`, `265 MB`, binary units, one decimal for GB).
+- Elevation: detect it (move or copy the check from `src/sys.rs::is_elevated` into `xiox-project` as `pub fn is_elevated() -> bool`; the egui app keeps its own) and pass `Options.admin`.
+- `XIOX_SEARCH_ROOTS` (paths separated by `;`), read only in debug builds (`cfg!(debug_assertions)`), replaces the drives and the home — the tests need it; expose `xiox_project::analyze_project_in(path, opts, search_roots)` for that.
+- Human output: header `Project  <name>   <root>   (git, origin <normalized>)` or `(not a git repository)`; `Search   <all fixed drives, MFT index | fixed drives to 3 levels (not elevated: deeper folders may be missed) | project's parent only>`; one block per non-empty category: title in capitals and total right-aligned, then `level  size  path  reason`, blocked items shown with `blocked` in place of the level and the reason (`uncommitted changes`, `commits not kept anywhere else`, `an agent session is open`, `session locked by its harness`); a `BRANCHES (not removed)` block; notes; `Total <size> · recommended <size>`; last line `Clean with: xiox clean "<root>" <flags for the non-empty recommended categories>` only when something is recommended. Sizes with `xiox_model::fmt_size` if its output is English, otherwise an own formatter (`6.0 GB`, `265 MB`, binary units, one decimal for GB).
 - `--json`: stdout is exactly `scan_json` + newline; everything else to stderr.
 - Progress and errors to stderr. Path not found → `error: path not found: <path>`, exit 1.
 
@@ -418,7 +418,7 @@ Decisions:
 - [ ] **Step 2:** Run `CARGO_INCREMENTAL=0 cargo test -j 1 -p xiox-cli` — FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run — PASS. Also `cargo build -j 1 -p xiox-cli` and check `target/debug/xiox.exe --version` prints `xiox <version>`.
-- [ ] **Step 5:** Commit `crates/xiox-cli` (+ `crates/dc-project/src/lib.rs` if `is_elevated`/`analyze_project_in` were added, + `Cargo.lock`) — `feat(xiox): comando analyze`.
+- [ ] **Step 5:** Commit `crates/xiox-cli` (+ `crates/xiox-project/src/lib.rs` if `is_elevated`/`analyze_project_in` were added, + `Cargo.lock`) — `feat(xiox): comando analyze`.
 
 ---
 

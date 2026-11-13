@@ -1,4 +1,4 @@
-> Copia di `D:\Projects\KKK\devclean\docs\DESIGN.md` (progetto unito in PulisciPC come voce Sviluppatori), presa il 2026-11-12 prima di eliminare la cartella. I percorsi qui sotto (`src-tauri`, `vendor/mukade`, WizTree) sono quelli di devclean.
+> Copia di `D:\Projects\KKK\devclean\docs\DESIGN.md` (progetto unito in Xiox (prima PulisciPC) come voce Sviluppatori), presa il 2026-11-12 prima di eliminare la cartella. I percorsi qui sotto (`src-tauri`, `vendor/mukade`, WizTree) sono quelli di devclean. Dal 2026-11-13 i crate `dc-*` si chiamano `xiox-*` (`dc-mukade` -> `xiox-mukade`); il resto del testo è quello di allora.
 
 # devclean: design (v0, 2026-11-08)
 

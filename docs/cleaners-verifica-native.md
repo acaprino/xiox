@@ -156,7 +156,7 @@ Il sorgente (`pkg/minikube/localpath/localpath.go`) non aggiunge un secondo `.mi
 | Voce | Percorso | Stato | Fonte |
 |---|---|---|---|
 | Helm | `%HELM_CACHE_HOME%`, poi `%TEMP%\helm` | tenuta | https://helm.sh/docs/helm/helm/ (tabella dei percorsi predefiniti: cache Windows `%TEMP%\helm`) |
-| kubectl | `%USERPROFILE%\.kube\cache` | **tolta** | non supportato: la cartella `.kube` è protetta per intero dal guard (`crates/pc-rules/src/guard.rs`, `CREDENTIAL_CONTENT_DIRS`, perché contiene `config` con le credenziali dei cluster); `collect` scarterebbe ogni file come «percorso protetto». Se il controller allenta il guard per `.kube\cache`, si aggiunge `<option id="kubectl_cache">` con `walk.all` su `%USERPROFILE%\.kube\cache` |
+| kubectl | `%USERPROFILE%\.kube\cache` | **tolta** | non supportato: la cartella `.kube` è protetta per intero dal guard (`crates/xiox-rules/src/guard.rs`, `CREDENTIAL_CONTENT_DIRS`, perché contiene `config` con le credenziali dei cluster); `collect` scarterebbe ogni file come «percorso protetto». Se il controller allenta il guard per `.kube\cache`, si aggiunge `<option id="kubectl_cache">` con `walk.all` su `%USERPROFILE%\.kube\cache` |
 | 🔒 `.kube\config` | — | mai toccato | — |
 
 Il cleaner si chiama `kubectl` (id del lotto) ma oggi offre solo Helm: etichetta e descrizione lo dicono.

@@ -1,4 +1,4 @@
-# PulisciPC – regole ricavate dal programma originale
+# Xiox – regole ricavate dal programma originale
 
 Fonte: CCleaner64.exe (sha256 30de2996…a5fe53), letto con il decompilatore integrato
 (Ghidra non è partito). Ogni valore ha la sua fonte; "stimato" = cercato nel codice ma non trovato.

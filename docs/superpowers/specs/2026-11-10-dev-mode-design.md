@@ -1,3 +1,5 @@
+> Nota (2026-11-13): il prodotto ora si chiama **Xiox**. I nomi di questo documento (PulisciPC, `pulisci-pc`, `pc-rules`, i crate `dc-*`) sono quelli di allora; oggi sono `xiox-desktop` (binario `xiox-ui`), `xiox-rules` e `xiox-*` (`dc-app` -> `xiox-app`, ecc.). Il testo qui sotto non è stato aggiornato.
+
 # PulisciPC: modalità Sviluppatori, regole Winapp2/CleanerML, copertura CCleaner
 
 Data: 2026-11-10. Stato: **approvato** dall'utente il 2026-11-10, con il vincolo di mantenere tutto il layout di ccleaner64.

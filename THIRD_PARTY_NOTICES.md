@@ -1,40 +1,40 @@
 # Third-party notices
 
-PulisciPC studies and adapts parts of the projects below. Only MIT-licensed code is adapted; cleanup-cc has no licence and only informed our ideas (no code taken).
+Xiox studies and adapts parts of the projects below. Only MIT-licensed code is adapted; cleanup-cc has no licence and only informed our ideas (no code taken).
 
 ### kondo
 
 Source: https://github.com/tbillington/kondo
 Copyright (c) 2020 Trent Billington
-Licensed under the MIT License. Portions of PulisciPC adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
+Licensed under the MIT License. Portions of Xiox adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
 
 ### ai-session-tidy
 
 Source: https://github.com/sooink/ai-session-tidy
 Copyright (c) 2025 sooink
-Licensed under the MIT License. Portions of PulisciPC adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
+Licensed under the MIT License. Portions of Xiox adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
 
 ### claude-code-cleaner
 
 Source: https://github.com/GarrickZ2/claude-code-cleaner
 Copyright (c) 2026 GarrickZ2
-Licensed under the MIT License. Portions of PulisciPC adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
+Licensed under the MIT License. Portions of Xiox adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
 
 ### claude-chats-delete
 
 Source: https://github.com/ataleckij/claude-chats-delete
 Copyright (c) 2026 ataleckij
-Licensed under the MIT License. Portions of PulisciPC adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
+Licensed under the MIT License. Portions of Xiox adapt ideas or code from this project; the full MIT text is reproduced at the end of this file.
 
 ### mukade (vendored, compiled into the app)
 
-Source: https://github.com/acaprino/mukade (same author as PulisciPC), commit dfde57e (2026-11-10).
+Source: https://github.com/acaprino/mukade (same author as Xiox), commit dfde57e (2026-11-10).
 Copyright (c) acaprino. MIT. Library-only copy in `vendor/mukade/` (see `vendor/mukade/VENDORED.md`); used to read the sessions of Claude Code, Codex, OpenCode and Pi (listings only, read-only).
 
 ### Winapp2 (rules downloaded at runtime)
 
 Source: https://github.com/MoscaDotTo/Winapp2
-Licensed under CC-BY-SA-4.0. PulisciPC downloads `Winapp2.ini` at runtime to read its cleaning rules: il file si scarica a runtime, non fa parte dell'eseguibile. The file is kept unmodified in the user's data folder and keeps its own licence.
+Licensed under CC-BY-SA-4.0. Xiox downloads `Winapp2.ini` at runtime to read its cleaning rules: il file si scarica a runtime, non fa parte dell'eseguibile. The file is kept unmodified in the user's data folder and keeps its own licence.
 
 ### Embedded CleanerML cleaners
 
