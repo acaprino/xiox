@@ -10,6 +10,7 @@
 
 mod owned;
 mod resolve;
+mod search;
 
 #[cfg(test)]
 mod tests;
@@ -187,8 +188,8 @@ impl std::error::Error for Error {}
 pub(crate) struct Env<'a> {
     pub sessions: &'a [dc_app::Preloaded],
     pub archived: &'a [dc_mukade::ArchivedSession],
-    /// Where `copies`/`named` are searched; `None` = the default places (later tasks).
-    #[allow(dead_code)]
+    /// Where `copies`/`named` are walked below the project's parent, to depth 3; `None` = every
+    /// fixed drive and the user's home.
     pub search_roots: Option<Vec<PathBuf>>,
     pub now_ms: i64,
 }

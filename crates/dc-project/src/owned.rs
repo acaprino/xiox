@@ -2,7 +2,7 @@
 
 use crate::resolve::resolve_full;
 use crate::{
-    Block, Category, Env, Error, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, StaleBranch, Target,
+    Block, Category, Env, Error, Item, Note, Options, Project, ProjectScan, SCHEMA, StaleBranch, Target,
     Why,
 };
 use dc_git::{GitCli, WorktreeEntry};
@@ -26,6 +26,9 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     let mut items = builds(&project, &reports, opts);
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
+    let found = crate::search::search(&project, opts, env);
+    items.extend(found.items);
+    notes.extend(found.notes);
     sort_items(&mut items);
 
     let branches = if project.is_repo {
@@ -36,21 +39,13 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     } else {
         Vec::new()
     };
-    let search = if !opts.drives {
-        SearchMode::ParentOnly
-    } else if opts.admin {
-        SearchMode::MftIndex
-    } else {
-        SearchMode::BoundedWalk
-    };
-
     Ok(ProjectScan {
         schema: SCHEMA,
         project,
         items,
         branches,
         notes,
-        search,
+        search: found.mode,
         scanned_at_ms: env.now_ms,
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
