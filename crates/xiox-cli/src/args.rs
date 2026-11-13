@@ -74,6 +74,7 @@ enum Which {
     Clean,
 }
 
+const NO_COPIES_FLAG: &str = "--copies/--named do not exist: name each folder with --include <path>";
 const INCLUDE_NEEDS_PATH: &str = "--include needs a path: --include <path>";
 
 /// Parse the arguments after the program name. `Err` is a usage message (exit code 2).
@@ -109,6 +110,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg.as_str(), None),
         };
+        if matches!(flag, "--copies" | "--named") {
+            return Err(NO_COPIES_FLAG.to_string());
+        }
         if inline.is_some() && flag != "--include" {
             return Err(format!("{flag} does not take a value"));
         }
@@ -158,9 +162,6 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                     return Err(INCLUDE_NEEDS_PATH.to_string());
                 }
                 include.push(PathBuf::from(value));
-            }
-            "--copies" | "--named" => {
-                return Err("--copies/--named do not exist: name each folder with --include <path>".to_string());
             }
             f if f.starts_with('-') && f.len() > 1 => return Err(format!("unknown flag: {f}")),
             _ => {
@@ -254,7 +255,7 @@ mod tests {
 
     #[test]
     fn copies_flag_explains_include() {
-        for f in ["--copies", "--named"] {
+        for f in ["--copies", "--named", "--copies=x", "--named=x"] {
             let e = p(&["clean", f]).unwrap_err();
             assert!(e.contains("--include <path>"), "{e}");
             assert!(e.contains("do not exist"), "{e}");

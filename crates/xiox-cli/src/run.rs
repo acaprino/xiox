@@ -80,10 +80,32 @@ fn analyze(project: Option<PathBuf>, json: bool, no_drives: bool, out: &mut dyn 
             return EXIT_ERROR;
         }
     };
-    if json {
-        let _ = writeln!(out, "{}", json::scan_json(&scan));
+    let text = if json {
+        match json::scan_json(&scan) {
+            Ok(v) => format!("{v}
+"),
+            Err(e) => {
+                let _ = writeln!(err, "error: cannot write the result as JSON: {e}");
+                return EXIT_ERROR;
+            }
+        }
     } else {
-        let _ = write!(out, "{}", render::render_scan(&scan));
+        render::render_scan(&scan)
+    };
+    if let Err(code) = write_result(out, err, &text) {
+        return code;
     }
     EXIT_OK
+}
+
+/// Write a result to stdout. A closed pipe (`| head`) is not an error; any other failure is.
+pub fn write_result(out: &mut dyn Write, err: &mut dyn Write, text: &str) -> Result<(), i32> {
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => {
+            let _ = writeln!(err, "error: cannot write to the output: {e}");
+            Err(EXIT_ERROR)
+        }
+    }
 }

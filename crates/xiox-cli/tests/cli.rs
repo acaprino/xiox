@@ -2,6 +2,10 @@
 //! `XIOX_SEARCH_ROOTS` replaces the drives and the home, `XIOX_NO_SESSIONS` skips the session
 //! listing (both are read by debug builds only).
 
+// The test switches (`XIOX_SEARCH_ROOTS`, `XIOX_NO_SESSIONS`) exist in debug builds only: without them
+// a release binary would read the real drives and sessions.
+#![cfg(debug_assertions)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -111,4 +115,21 @@ fn clean_is_not_implemented_yet_and_removes_nothing() {
     let out = xiox().arg("clean").arg(&project).arg("--builds").arg("--yes").output().unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(project.join("target").exists());
+}
+
+#[test]
+fn without_a_project_argument_the_current_folder_is_the_project() {
+    let (_t, project) = fake_project();
+    let out = xiox()
+        .arg("analyze")
+        .current_dir(&project)
+        .env("XIOX_SEARCH_ROOTS", project.parent().unwrap())
+        // The temp folder may sit inside someone's repository: git must not look above it.
+        .env("GIT_CEILING_DIRECTORIES", project.parent().unwrap().parent().unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.starts_with("Project  fakeproj"), "{stdout}");
+    assert!(stdout.contains(&project.join("target").to_string_lossy().into_owned()), "{stdout}");
 }

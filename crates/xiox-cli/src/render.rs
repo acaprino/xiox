@@ -139,16 +139,19 @@ fn path_text(item: &Item) -> String {
     }
 }
 
+/// The guard of `clean` (`dc_cleaner::guard`) refuses any path directly under a drive or share
+/// root, whatever the kind of item: it is shown, never offered.
+fn too_shallow(item: &Item) -> bool {
+    item.path.as_deref().is_some_and(is_top_level)
+}
+
 fn reason_text(item: &Item) -> String {
     let mut reason = if item.blocked.is_empty() {
         why_text(&item.why)
     } else {
         item.blocked.iter().map(|b| block_reason(*b)).collect::<Vec<_>>().join(", ")
     };
-    // `clean` goes through the guard, which refuses folders directly under a drive root.
-    if matches!(item.category, Category::Copies | Category::Named)
-        && item.path.as_deref().is_some_and(is_top_level)
-    {
+    if too_shallow(item) {
         reason.push_str("; cannot be removed: top-level folder");
     }
     reason
@@ -168,7 +171,7 @@ fn sum_bytes(items: &[&Item]) -> u64 {
 }
 
 fn is_recommended(i: &Item) -> bool {
-    i.level == Level::Recommended && i.blocked.is_empty()
+    i.level == Level::Recommended && i.blocked.is_empty() && !too_shallow(i)
 }
 
 fn note_text(n: &Note, scan: &ProjectScan) -> Option<String> {
@@ -289,8 +292,6 @@ pub fn render_scan(scan: &ProjectScan) -> String {
 mod tests {
     use super::*;
     use crate::testdata::*;
-    use dc_model::Level;
-    use dc_project::{Block, Category, Note, Why};
 
     fn line_with<'a>(text: &'a str, needle: &str) -> &'a str {
         text.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no line with {needle:?} in:\n{text}"))
@@ -382,6 +383,30 @@ mod tests {
     }
 
     #[test]
+    fn top_level_worktree_and_log_are_marked_and_never_in_the_hint() {
+        let wt = item(
+            Category::Worktrees,
+            r"D:\mukade-wt",
+            Some(10 * MB),
+            Level::Recommended,
+            vec![],
+            Why::LinkedWorktree { branch: Some("x".into()), head: None },
+        );
+        let log = item(Category::Logs, r"D:\app.log", Some(MB), Level::Recommended, vec![], Why::LogFile { ignored: false });
+        let out = render_scan(&scan(vec![wt.clone(), log]));
+        for needle in ["mukade-wt", "app.log"] {
+            let l = line_with(&out, needle);
+            assert!(l.contains("cannot be removed: top-level folder"), "{l}");
+        }
+        assert!(!out.contains("Clean with:"), "{out}");
+        assert!(out.contains("recommended 0 B"), "{out}");
+        // With a deep recommended item next to them, only that item's category is in the hint.
+        let out = render_scan(&scan(vec![wt, build()]));
+        assert!(out.trim_end().ends_with("--builds"), "{out}");
+        assert!(!out.contains("--worktrees"), "{out}");
+    }
+
+    #[test]
     fn sizes_are_english_and_binary() {
         assert_eq!(fmt_size(0), "0 B");
         assert_eq!(fmt_size(1023), "1023 B");
@@ -437,6 +462,5 @@ mod tests {
         for needle in ["blocked", "note: ", "BRANCHES", "log file", "first commit", "own work", "session"] {
             assert!(out.contains(needle), "{needle:?} missing in:\n{out}");
         }
-        let _ = (Level::Caution, Category::Logs, Why::NameOnly);
     }
 }

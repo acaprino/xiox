@@ -4,8 +4,10 @@ use dc_project::ProjectScan;
 
 /// The `ProjectScan` serialization: `{"schema":1,"project":…,"items":[…],…}`. Field names are
 /// camelCase, enum values kebab-case; every text in it is English.
-pub fn scan_json(scan: &ProjectScan) -> serde_json::Value {
-    serde_json::to_value(scan).expect("a ProjectScan always serializes")
+///
+/// `Err` when a path is not valid Unicode (JSON cannot carry it).
+pub fn scan_json(scan: &ProjectScan) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(scan)
 }
 
 #[cfg(test)]
@@ -15,7 +17,7 @@ mod tests {
 
     #[test]
     fn json_has_schema_1_and_camel_case_kebab_case_fields() {
-        let v = scan_json(&full_scan());
+        let v = scan_json(&full_scan()).unwrap();
         assert_eq!(v["schema"], 1);
         assert_eq!(v["project"]["name"], "mukade");
         assert_eq!(v["project"]["isRepo"], true);
