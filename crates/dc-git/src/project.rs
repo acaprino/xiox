@@ -189,10 +189,12 @@ pub fn untracked_files(root: &Path, ignored: bool) -> Option<Vec<PathBuf>> {
     }
     args.push("--exclude-standard");
     let o = git(root, &args).filter(|o| o.ok)?;
+    // A nested repository (or submodule folder) is listed as a directory entry (`inner/`):
+    // files only, never a folder that could be taken for a file and removed as a whole.
     Some(
         o.stdout
             .split(|b| *b == 0)
-            .filter(|f| !f.is_empty())
+            .filter(|f| !f.is_empty() && !matches!(f.last(), Some(b'/' | b'\\')))
             .map(|f| PathBuf::from(String::from_utf8_lossy(f).into_owned()))
             .collect(),
     )
@@ -414,6 +416,40 @@ mod tests {
         let mut plain = untracked_files(&r, false).expect("repo");
         plain.sort();
         assert_eq!(plain, vec![PathBuf::from("sub/b.tmp")]);
+    }
+
+    #[test]
+    fn untracked_files_never_returns_a_nested_repository() {
+        let t = Tmp::new();
+        let r = t.sub("r");
+        init(&r);
+        write(&r, ".gitignore", "*.log\nign/\n");
+        commit_file(&r, "tracked.txt", "t");
+        write(&r, "a.log", "x");
+        write(&r, "plain.tmp", "y");
+        for name in ["inner", "ign"] {
+            let nested = r.join(name);
+            fs::create_dir_all(&nested).unwrap();
+            init(&nested);
+            commit_file(&nested, "n.txt", "n");
+        }
+
+        for ignored in [false, true] {
+            let v = untracked_files(&r, ignored).expect("repo");
+            let shown: Vec<String> = v.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            assert!(
+                shown.iter().all(|s| !s.ends_with('/') && !s.ends_with('\\')),
+                "ignored={ignored}: directory entry returned: {shown:?}"
+            );
+            assert!(
+                shown.iter().all(|s| !s.starts_with("inner") && !s.starts_with("ign")),
+                "ignored={ignored}: nested repository content returned: {shown:?}"
+            );
+        }
+        let plain = untracked_files(&r, false).expect("repo");
+        assert!(plain.contains(&PathBuf::from("plain.tmp")));
+        let ign = untracked_files(&r, true).expect("repo");
+        assert!(ign.contains(&PathBuf::from("a.log")));
     }
 
     #[test]
