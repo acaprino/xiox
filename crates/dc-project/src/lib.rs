@@ -18,7 +18,8 @@ mod search;
 mod tests;
 
 pub use clean::{
-    CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, recycle_shortfall, select,
+    CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, clean_in, clean_without_sessions, recycle_shortfall,
+    select,
 };
 pub use dc_git::normalize_remote;
 pub use owned::key_within;

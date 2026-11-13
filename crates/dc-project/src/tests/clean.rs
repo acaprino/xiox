@@ -898,3 +898,31 @@ fn a_top_level_project_folder_is_refused_with_an_english_reason() {
     assert!(reason.starts_with("path too shallow"), "{reason}");
     assert!(top.is_dir());
 }
+
+#[test]
+fn clean_without_sessions_removes_a_chosen_build_and_reads_no_session() {
+    let (_t, base) = tmp();
+    let p = base.join("work").join("proj");
+    fs::create_dir_all(&p).unwrap();
+    let target = rust_build(&p, MB);
+    let roots = vec![base.join("work")];
+    let scan = analyze_project_without_sessions(&p, &Options { drives: false, measure: true, admin: false }, &roots).unwrap();
+    assert!(scan.items.iter().all(|i| i.category != Category::Sessions));
+    let chosen = select(&scan, &req(&[Category::Builds], &[])).unwrap();
+    assert_eq!(chosen.keys.len(), 1);
+
+    // A dry run touches nothing.
+    let dry = clean_without_sessions(&scan, &chosen, RemoveMode::Permanent, true, &roots);
+    assert!(!dry.partial() && dry.dry_run, "{dry:?}");
+    assert!(target.exists());
+
+    let out = clean_without_sessions(&scan, &chosen, RemoveMode::Permanent, false, &roots);
+    assert!(!out.partial(), "{out:?}");
+    assert!(matches!(out.items[0].3, Outcome::Removed { .. }), "{out:?}");
+    assert!(!target.exists());
+    assert!(p.join("Cargo.toml").exists());
+
+    // Nothing chosen: nothing done, no analysis.
+    let none = clean_without_sessions(&scan, &Chosen::default(), RemoveMode::Permanent, false, &roots);
+    assert!(none.items.is_empty() && !none.partial());
+}

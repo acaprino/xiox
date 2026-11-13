@@ -1,9 +1,10 @@
-//! Human output of `analyze`. Every text is English and built from structured fields: the
+//! Human output of `analyze` and `clean`. Every text is English and built from structured fields: the
 //! engine's own strings (`Artifact::note`, `ArchivedSession::blocked`, warnings) are never used.
 
-use dc_model::{Agent, Level};
+use dc_model::{Agent, Level, RemoveMode};
 use dc_project::{
-    Block, Category, Item, Note, ProjectScan, SearchMode, Target, Why, key_within, normalize_remote,
+    Block, Category, Chosen, CleanOutcome, Item, Note, Outcome, ProjectScan, SearchMode, Target, Why, key_within,
+    normalize_remote,
 };
 use std::path::{Component, Path};
 
@@ -288,6 +289,163 @@ pub fn render_scan(scan: &ProjectScan) -> String {
     o
 }
 
+// ───────────────────────────── clean ─────────────────────────────
+
+/// The items `chosen` names, in the order of `chosen.keys`.
+fn chosen_items<'a>(scan: &'a ProjectScan, chosen: &Chosen) -> Vec<&'a Item> {
+    chosen.keys.iter().filter_map(|k| scan.items.iter().find(|i| i.key == *k)).collect()
+}
+
+/// `Recycle Bin on C: is too small (3 MB to move, 1 MB free). Use --permanent, or empty the bin.`
+fn shortfall_text(drive: char, needed: u64, room: u64) -> String {
+    format!(
+        "Recycle Bin on {drive}: is too small ({} to move, {} free). Use --permanent, or empty the bin.",
+        fmt_size(needed),
+        fmt_size(room)
+    )
+}
+
+/// What is about to be removed, shown before the question: the chosen items by category with
+/// their sizes, the total, where they go (`to the Recycle Bin` or `permanently`), the worktree
+/// rule, every folder that was named with `--include` (copies and name-matched folders can only
+/// be chosen that way), the folders the guard will refuse, and the bins that are too small.
+pub fn render_summary(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, shortfall: &[(char, u64, u64)]) -> String {
+    let items = chosen_items(scan, chosen);
+    let mut o = String::new();
+    let path_w = items.iter().map(|i| path_text(i).chars().count()).max().unwrap_or(0).min(MAX_PATH_COL);
+    let width = MIN_WIDTH.max(2 + SIZE_W + 2 + path_w);
+    o.push_str("To be removed:\n");
+    for category in ORDER {
+        let of: Vec<&Item> = items.iter().copied().filter(|i| i.category == category).collect();
+        if of.is_empty() {
+            continue;
+        }
+        let title = title_of(category);
+        let total = fmt_size(sum_bytes(&of));
+        let pad = width.saturating_sub(title.len()).max(total.len() + 1);
+        o.push_str(&format!("\n{title}{total:>pad$}\n"));
+        for item in of {
+            let size = item.bytes.map_or_else(|| "-".to_string(), fmt_size);
+            let line = format!("  {size:>SIZE_W$}  {:<path_w$}  {}", path_text(item), why_text(&item.why));
+            o.push_str(line.trim_end());
+            o.push('\n');
+        }
+    }
+
+    // Copies and name-matched folders are never taken by a category: each one was named.
+    let named: Vec<&Item> =
+        items.iter().copied().filter(|i| matches!(i.category, Category::Copies | Category::Named)).collect();
+    if !named.is_empty() {
+        o.push_str("\nNamed with --include (check each one before you go on):\n");
+        for i in named {
+            let note = match &i.why {
+                Why::SameRepository { has_own_work: Some(false), .. } => {
+                    "copy of the repository, no unsaved work found".to_string()
+                }
+                Why::SameRepository { has_own_work: Some(true), .. } => {
+                    "copy of the repository WITH its own work".to_string()
+                }
+                Why::SameRepository { has_own_work: None, .. } => {
+                    "copy of the repository: could not check for unsaved work".to_string()
+                }
+                Why::NameOnly => "matched by name only: nothing else shows it belongs to the project".to_string(),
+                other => why_text(other),
+            };
+            o.push_str(&format!("  {}  {note}\n", path_text(i)));
+        }
+    }
+
+    let shallow: Vec<&Item> = items.iter().copied().filter(|i| too_shallow(i)).collect();
+    if !shallow.is_empty() {
+        o.push_str(
+            "\nWarning: these are top-level folders (directly under a drive or share root). \
+The safety guard refuses them, so they will be skipped:\n",
+        );
+        for i in shallow {
+            o.push_str(&format!("  {}\n", path_text(i)));
+        }
+    }
+
+    let count = items.len();
+    o.push_str(&format!(
+        "\nTotal {} in {count} item{}, {}.\n",
+        fmt_size(chosen.bytes),
+        if count == 1 { "" } else { "s" },
+        match mode {
+            RemoveMode::Recycle => "to the Recycle Bin",
+            RemoveMode::Permanent => "permanently",
+        }
+    ));
+    if mode == RemoveMode::Recycle && !chosen.permanent_anyway.is_empty() {
+        o.push_str("Worktrees are removed by git and do not go to the Recycle Bin.\n");
+    }
+    for (drive, needed, room) in shortfall {
+        o.push_str(&shortfall_text(*drive, *needed, *room));
+        o.push('\n');
+    }
+    o
+}
+
+/// `claude session abc-123` for `session:claude:abc-123`; the path of any other item.
+fn label_of(key: &str, path: &Option<std::path::PathBuf>) -> String {
+    if let Some(p) = path {
+        return p.display().to_string();
+    }
+    match key.strip_prefix("session:").and_then(|rest| rest.split_once(':')) {
+        Some((agent, id)) => format!("{agent} session {id}"),
+        None => key.to_string(),
+    }
+}
+
+const STATUS_W: usize = 12;
+
+/// What happened, item by item and in total. Every text is English (the reasons come from
+/// `dc_project` already in English).
+pub fn render_outcome(o: &CleanOutcome) -> String {
+    let mut out = String::new();
+    for (key, path, _category, outcome) in &o.items {
+        let label = label_of(key, path);
+        let line = match outcome {
+            Outcome::Removed { bytes_freed } => {
+                let status = if o.dry_run { "would remove" } else { "removed" };
+                format!("  {status:<STATUS_W$}  {:>SIZE_W$}  {label}", fmt_size(*bytes_freed))
+            }
+            Outcome::Skipped { reason } => format!("  {:<STATUS_W$}  {:>SIZE_W$}  {label}  ({reason})", "skipped", "-"),
+            Outcome::Failed { error } => format!("  {:<STATUS_W$}  {:>SIZE_W$}  {label}  ({error})", "failed", "-"),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    if o.dry_run {
+        out.push_str(&format!("Would free {}\n", fmt_size(o.bytes_freed)));
+    } else if o.recycled_bytes > 0 {
+        out.push_str(&format!(
+            "Freed {} ({} in the Recycle Bin: freed when it is emptied)\n",
+            fmt_size(o.bytes_freed),
+            fmt_size(o.recycled_bytes)
+        ));
+    } else {
+        out.push_str(&format!("Freed {}\n", fmt_size(o.bytes_freed)));
+    }
+    if o.partial() {
+        // The same rule as `partial()`: an item that went with the chosen folder holding it is fine.
+        let n = o
+            .items
+            .iter()
+            .filter(|(.., x)| match x {
+                Outcome::Removed { .. } => false,
+                Outcome::Skipped { reason } => !reason.starts_with("already removed with "),
+                Outcome::Failed { .. } => true,
+            })
+            .count();
+        out.push_str(&format!(
+            "Not everything was removed: {n} item{} skipped or failed.\n",
+            if n == 1 { "" } else { "s" }
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,5 +620,176 @@ mod tests {
         for needle in ["blocked", "note: ", "BRANCHES", "log file", "first commit", "own work", "session"] {
             assert!(out.contains(needle), "{needle:?} missing in:\n{out}");
         }
+    }
+
+    // ── clean: summary and outcome ──
+
+    fn chosen_of(scan: &ProjectScan, keys: &[&str]) -> Chosen {
+        let items: Vec<&Item> = scan.items.iter().filter(|i| keys.iter().any(|k| *k == i.key)).collect();
+        Chosen {
+            keys: items.iter().map(|i| i.key.clone()).collect(),
+            bytes: items.iter().map(|i| i.bytes.unwrap_or(0)).sum(),
+            permanent_anyway: items
+                .iter()
+                .filter(|i| matches!(i.target, Target::Worktree { .. }))
+                .map(|i| i.key.clone())
+                .collect(),
+        }
+    }
+
+    fn all_keys(scan: &ProjectScan) -> Vec<String> {
+        scan.items.iter().map(|i| i.key.clone()).collect()
+    }
+
+    #[test]
+    fn summary_mentions_the_recycle_bin_or_permanently() {
+        let s = scan(vec![build(), session()]);
+        let c = chosen_of(&s, &all_keys(&s).iter().map(String::as_str).collect::<Vec<_>>());
+        let recycle = render_summary(&s, &c, RemoveMode::Recycle, &[]);
+        assert!(recycle.contains("to the Recycle Bin"), "{recycle}");
+        assert!(!recycle.contains("permanently"), "{recycle}");
+        assert!(recycle.contains("Total 6.0 GB in 2 items, to the Recycle Bin."), "{recycle}");
+        assert!(line_with(&recycle, "D:\\Projects\\mukade\\target").contains("Rust build"), "{recycle}");
+        assert!(line_with(&recycle, "claude session abc-123").contains("refactor the parser"), "{recycle}");
+        assert!(recycle.lines().any(|l| l.starts_with("BUILDS") && l.ends_with("6.0 GB")), "{recycle}");
+        // No worktree: no worktree rule.
+        assert!(!recycle.contains("removed by git"), "{recycle}");
+
+        let permanent = render_summary(&s, &c, RemoveMode::Permanent, &[]);
+        assert!(permanent.contains("Total 6.0 GB in 2 items, permanently."), "{permanent}");
+        assert!(!permanent.contains("Recycle Bin"), "{permanent}");
+    }
+
+    #[test]
+    fn summary_says_worktrees_never_go_to_the_bin_only_when_there_is_one_and_the_bin_is_used() {
+        let s = scan(vec![build(), clean_worktree()]);
+        let both = chosen_of(&s, &all_keys(&s).iter().map(String::as_str).collect::<Vec<_>>());
+        let rule = "Worktrees are removed by git and do not go to the Recycle Bin.";
+        assert!(render_summary(&s, &both, RemoveMode::Recycle, &[]).contains(rule));
+        assert!(!render_summary(&s, &both, RemoveMode::Permanent, &[]).contains(rule));
+        let only_build = chosen_of(&s, &[s.items[0].key.as_str()]);
+        assert!(!render_summary(&s, &only_build, RemoveMode::Recycle, &[]).contains(rule));
+    }
+
+    #[test]
+    fn summary_flags_included_folders_unchecked_copies_and_top_level_folders() {
+        let mut unchecked = copy_with_work();
+        unchecked.blocked.clear();
+        unchecked.why = Why::SameRepository { shared_root_commit: true, same_origin: true, has_own_work: None };
+        let mut checked = copy_with_work();
+        checked.blocked.clear();
+        checked.key = dc_model::path_key(std::path::Path::new("D:\\Projects\\old\\other-copy"));
+        checked.path = Some(std::path::PathBuf::from("D:\\Projects\\old\\other-copy"));
+        checked.why = Why::SameRepository { shared_root_commit: true, same_origin: true, has_own_work: Some(false) };
+        let s = scan(vec![build(), unchecked, checked, named_top_level()]);
+        let c = chosen_of(&s, &all_keys(&s).iter().map(String::as_str).collect::<Vec<_>>());
+        let out = render_summary(&s, &c, RemoveMode::Permanent, &[]);
+        assert!(out.contains("Named with --include"), "{out}");
+        let block = out.split("Named with --include").nth(1).unwrap();
+        assert!(line_with(block, "mukade-copy").contains("could not check for unsaved work"), "{out}");
+        assert!(line_with(block, "other-copy").contains("no unsaved work found"), "{out}");
+        assert!(line_with(block, "mukade-test-scratch").contains("matched by name only"), "{out}");
+        // The build is not an --include-only item.
+        assert!(!block.split("Warning").next().unwrap().contains("Projects\\mukade\\target"), "{out}");
+        // D:\mukade-test-scratch is directly under the drive root: the guard refuses it.
+        let warning = out.split("Warning:").nth(1).expect("a warning");
+        assert!(warning.contains("will be skipped"), "{out}");
+        assert!(warning.contains("D:\\mukade-test-scratch"), "{out}");
+        assert!(!warning.contains("mukade-copy"), "{out}");
+    }
+
+    #[test]
+    fn summary_without_a_top_level_folder_or_an_include_has_neither_warning() {
+        let s = scan(vec![build()]);
+        let c = chosen_of(&s, &all_keys(&s).iter().map(String::as_str).collect::<Vec<_>>());
+        let out = render_summary(&s, &c, RemoveMode::Recycle, &[]);
+        assert!(!out.contains("Warning") && !out.contains("--include"), "{out}");
+        assert!(out.contains("Total 6.0 GB in 1 item, to the Recycle Bin."), "{out}");
+    }
+
+    #[test]
+    fn summary_carries_the_recycle_bin_shortfall() {
+        let s = scan(vec![build()]);
+        let c = chosen_of(&s, &[s.items[0].key.as_str()]);
+        let out = render_summary(&s, &c, RemoveMode::Recycle, &[('D', 6 * GB, 2 * MB)]);
+        assert!(
+            out.contains("Recycle Bin on D: is too small (6.0 GB to move, 2 MB free). Use --permanent, or empty the bin."),
+            "{out}"
+        );
+    }
+
+    fn outcome(dry_run: bool, items: Vec<(String, Option<std::path::PathBuf>, Category, Outcome)>) -> CleanOutcome {
+        let freed = items
+            .iter()
+            .map(|(.., o)| if let Outcome::Removed { bytes_freed } = o { *bytes_freed } else { 0 })
+            .sum();
+        CleanOutcome {
+            schema: 1,
+            mode: RemoveMode::Permanent,
+            dry_run,
+            items,
+            bytes_freed: freed,
+            recycled_bytes: 0,
+            elapsed_ms: 5,
+        }
+    }
+
+    fn entry(path: &str, category: Category, o: Outcome) -> (String, Option<std::path::PathBuf>, Category, Outcome) {
+        (dc_model::path_key(std::path::Path::new(path)), Some(std::path::PathBuf::from(path)), category, o)
+    }
+
+    #[test]
+    fn outcome_lists_skipped_items_with_their_reason() {
+        let o = outcome(
+            false,
+            vec![
+                entry("D:\\p\\target", Category::Builds, Outcome::Removed { bytes_freed: 3 * MB }),
+                entry("D:\\p\\wt", Category::Worktrees, Outcome::Skipped { reason: "now blocked: uncommitted changes".into() }),
+                entry("D:\\p\\old", Category::Named, Outcome::Failed { error: "access denied (os error 5)".into() }),
+                (
+                    "session:claude:abc-123".into(),
+                    None,
+                    Category::Sessions,
+                    Outcome::Skipped { reason: "no longer archived, or in use now".into() },
+                ),
+            ],
+        );
+        let out = render_outcome(&o);
+        assert!(line_with(&out, "D:\\p\\target").contains("removed") && line_with(&out, "D:\\p\\target").contains("3 MB"), "{out}");
+        let wt = line_with(&out, "D:\\p\\wt");
+        assert!(wt.contains("skipped") && wt.contains("(now blocked: uncommitted changes)"), "{out}");
+        let old = line_with(&out, "D:\\p\\old");
+        assert!(old.contains("failed") && old.contains("(access denied (os error 5))"), "{out}");
+        assert!(line_with(&out, "claude session abc-123").contains("no longer archived"), "{out}");
+        assert!(out.contains("Freed 3 MB\n"), "{out}");
+        assert!(out.contains("Not everything was removed: 3 items skipped or failed."), "{out}");
+    }
+
+    #[test]
+    fn outcome_says_what_goes_to_the_bin_what_a_dry_run_would_free_and_ignores_overlap() {
+        let mut o = outcome(false, vec![entry("D:\\p\\target", Category::Builds, Outcome::Removed { bytes_freed: 3 * MB })]);
+        o.mode = RemoveMode::Recycle;
+        o.recycled_bytes = 3 * MB;
+        assert!(render_outcome(&o).contains("Freed 3 MB (3 MB in the Recycle Bin: freed when it is emptied)"));
+
+        let dry = outcome(true, vec![entry("D:\\p\\target", Category::Builds, Outcome::Removed { bytes_freed: 3 * MB })]);
+        let out = render_outcome(&dry);
+        assert!(out.contains("would remove") && out.contains("Would free 3 MB"), "{out}");
+        assert!(!out.contains("Freed"), "{out}");
+
+        // An item that went with the folder holding it is the ordinary overlap, not a failure.
+        let overlap = outcome(
+            false,
+            vec![
+                entry("D:\\p\\target", Category::Builds, Outcome::Removed { bytes_freed: MB }),
+                entry(
+                    "D:\\p\\target\\debug",
+                    Category::Builds,
+                    Outcome::Skipped { reason: "already removed with D:\\p\\target".into() },
+                ),
+            ],
+        );
+        let out = render_outcome(&overlap);
+        assert!(out.contains("already removed with") && !out.contains("Not everything"), "{out}");
     }
 }

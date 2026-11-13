@@ -326,6 +326,56 @@ pub(crate) struct Io<'a> {
 /// `dry_run` every check runs and nothing is touched; the outcomes say what would be freed.
 /// Reads the real sessions of this PC, like the analysis does.
 pub fn clean(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run: bool) -> CleanOutcome {
+    clean_impl(scan, chosen, mode, dry_run, Sessions::Real, None)
+}
+
+/// [`clean`] with `copies`/`named` searched again only below `search_roots` (to depth 3), as
+/// [`crate::analyze_project_in`] does. Still reads the real sessions of this PC.
+pub fn clean_in(
+    scan: &ProjectScan,
+    chosen: &Chosen,
+    mode: RemoveMode,
+    dry_run: bool,
+    search_roots: &[PathBuf],
+) -> CleanOutcome {
+    clean_impl(scan, chosen, mode, dry_run, Sessions::Real, Some(search_roots.to_vec()))
+}
+
+/// [`clean_in`] without reading any session of this PC: no session listing, no cache written,
+/// no session can be removed (a chosen `sessions` item is skipped as no longer archived). The
+/// pair of [`crate::analyze_project_without_sessions`], for tests that run on fake trees.
+pub fn clean_without_sessions(
+    scan: &ProjectScan,
+    chosen: &Chosen,
+    mode: RemoveMode,
+    dry_run: bool,
+    search_roots: &[PathBuf],
+) -> CleanOutcome {
+    clean_impl(scan, chosen, mode, dry_run, Sessions::None, Some(search_roots.to_vec()))
+}
+
+/// Where the sessions of a cleanup come from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sessions {
+    /// The ones of this PC (and its cache).
+    Real,
+    /// None: nothing is read, nothing is written.
+    None,
+}
+
+/// No harness has archived sessions: used where [`Sessions::None`] applies.
+fn no_archived(_: Agent) -> Vec<ArchivedSession> {
+    Vec::new()
+}
+
+fn clean_impl(
+    scan: &ProjectScan,
+    chosen: &Chosen,
+    mode: RemoveMode,
+    dry_run: bool,
+    sessions: Sessions,
+    search_roots: Option<Vec<PathBuf>>,
+) -> CleanOutcome {
     if chosen.keys.is_empty() {
         // Nothing chosen: no session listing, no analysis.
         return CleanOutcome {
@@ -338,13 +388,24 @@ pub fn clean(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run: boo
             elapsed_ms: 0,
         };
     }
-    let cache = Some(dc_app::cache_dir());
-    let (sessions, _) = dc_app::load_sessions(cache.clone());
-    let (archived, _) = dc_app::load_archived_sessions(cache);
-    let env = Env { sessions: &sessions, archived: &archived, search_roots: None, now_ms: dc_app::now_ms() };
-    let cli = SystemCli::locate();
-    let io = Io { cli: &cli, trash: &SystemTrash, fresh: &dc_app::fresh_archived };
-    clean_with(scan, chosen, mode, dry_run, &env, &io)
+    match sessions {
+        Sessions::Real => {
+            let cache = Some(dc_app::cache_dir());
+            let (loaded, _) = dc_app::load_sessions(cache.clone());
+            let (archived, _) = dc_app::load_archived_sessions(cache);
+            let env = Env { sessions: &loaded, archived: &archived, search_roots, now_ms: dc_app::now_ms() };
+            let cli = SystemCli::locate();
+            let io = Io { cli: &cli, trash: &SystemTrash, fresh: &dc_app::fresh_archived };
+            clean_with(scan, chosen, mode, dry_run, &env, &io)
+        }
+        Sessions::None => {
+            let env = Env { sessions: &[], archived: &[], search_roots, now_ms: dc_app::now_ms() };
+            // No harness program is looked for: nothing here can run one.
+            let cli = SystemCli { codex: None, opencode: None, timeout: std::time::Duration::from_secs(1) };
+            let io = Io { cli: &cli, trash: &SystemTrash, fresh: &no_archived };
+            clean_with(scan, chosen, mode, dry_run, &env, &io)
+        }
+    }
 }
 
 pub(crate) fn clean_with(
