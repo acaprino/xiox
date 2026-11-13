@@ -5,6 +5,9 @@
 //! killed on timeout). A missing git binary, a timeout or a `dubious ownership` refusal
 //! never panics: the affected `GitState` fields are simply `None` / `false`.
 
+mod project;
+pub use project::*;
+
 use dc_model::{GitProbe, GitState, normalize_path, path_key};
 use std::io::Read;
 #[cfg(windows)]
@@ -118,13 +121,13 @@ fn worktree_info(root: &Path) -> (bool, Option<PathBuf>) {
 }
 
 /// Absolute, normalized form of a path printed by git (absolute, or relative to `root`).
-fn resolve(root: &Path, p: &str) -> PathBuf {
+pub(crate) fn resolve(root: &Path, p: &str) -> PathBuf {
     let joined = root.join(p);
     normalize_path(&std::fs::canonicalize(&joined).unwrap_or(joined))
 }
 
 /// First entry of `git worktree list --porcelain` (always the main working tree).
-fn main_worktree(root: &Path) -> Option<PathBuf> {
+pub(crate) fn main_worktree(root: &Path) -> Option<PathBuf> {
     // -z (git >= 2.36) avoids path quoting; fall back to the quoted form on older git.
     let path = if let Some(o) = git(root, &["worktree", "list", "--porcelain", "-z"]).filter(|o| o.ok) {
         let first = o.stdout.split(|b| *b == 0).next()?;
@@ -141,7 +144,7 @@ fn main_worktree(root: &Path) -> Option<PathBuf> {
 }
 
 /// Undo git's C-style path quoting (`"caff\303\250"`); unquoted input is returned as is.
-fn unquote_c(s: &str) -> String {
+pub(crate) fn unquote_c(s: &str) -> String {
     let Some(inner) = s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
         return s.to_string();
     };
@@ -183,7 +186,7 @@ fn unquote_c(s: &str) -> String {
 
 // ───────────────────────────── process plumbing ─────────────────────────────
 
-struct Out {
+pub(crate) struct Out {
     ok: bool,
     code: Option<i32>,
     stdout: Vec<u8>,
@@ -214,7 +217,7 @@ fn base_command() -> Command {
     c
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<Out> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Option<Out> {
     let mut c = base_command();
     c.arg("-C")
         .arg(root)
@@ -299,16 +302,16 @@ mod tests {
     }
 
     /// Self-cleaning temp dir, canonicalized so paths compare equal to what git prints.
-    struct Tmp(PathBuf);
+    pub(super) struct Tmp(pub(super) PathBuf);
 
     impl Tmp {
-        fn new() -> Tmp {
+        pub(super) fn new() -> Tmp {
             let n = COUNTER.fetch_add(1, Ordering::SeqCst);
             let p = temp_root().join(format!("dcgit-{}-{n}", std::process::id()));
             fs::create_dir_all(&p).unwrap();
             Tmp(normalize_path(&fs::canonicalize(&p).unwrap()))
         }
-        fn sub(&self, name: &str) -> PathBuf {
+        pub(super) fn sub(&self, name: &str) -> PathBuf {
             let p = self.0.join(name);
             fs::create_dir_all(&p).unwrap();
             p
@@ -346,21 +349,21 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    fn g(dir: &Path, args: &[&str]) -> String {
+    pub(super) fn g(dir: &Path, args: &[&str]) -> String {
         git_env(dir, args, &[])
     }
 
-    fn init(dir: &Path) {
+    pub(super) fn init(dir: &Path) {
         g(dir, &["init", "-q", "-b", "main"]);
     }
 
-    fn write(dir: &Path, rel: &str, content: &str) {
+    pub(super) fn write(dir: &Path, rel: &str, content: &str) {
         let p = dir.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, content).unwrap();
     }
 
-    fn commit_file(dir: &Path, rel: &str, content: &str) {
+    pub(super) fn commit_file(dir: &Path, rel: &str, content: &str) {
         write(dir, rel, content);
         g(dir, &["add", "-A"]);
         g(dir, &["commit", "-q", "-m", &format!("add {rel}")]);
