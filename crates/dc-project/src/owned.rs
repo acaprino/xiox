@@ -24,6 +24,8 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
 
     let reports = engine_reports(&project, env, &mut notes);
     let mut items = builds(&project, &reports, opts);
+    let build_dirs: Vec<PathBuf> = items.iter().filter_map(|i| i.path.clone()).collect();
+    items.extend(crate::logs::log_items(&project, &build_dirs));
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
     let found = crate::search::search(&project, opts, env);

@@ -8,6 +8,7 @@
 //! Italian texts (`ProjectReport::reason`, `Artifact::label`/`note`, `ArchivedSession::blocked`,
 //! warnings) are never copied.
 
+mod logs;
 mod owned;
 mod resolve;
 mod search;
