@@ -204,7 +204,7 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 
 ## Esito
 
-Costruito il 2026-11-13 (commit da `e95e931` a questo; 32 file, circa 6.900 righe):
+Costruito il 2026-11-13. Da `e95e931` fino a `2b40f09` (guida e questa sezione comprese; `git diff --shortstat e95e931..2b40f09`): 34 file modificati, 7.724 righe aggiunte, 13 tolte.
 
 - `dc-git` (`project.rs`): `repo_main_root`, `list_worktrees`, `root_commits`, `origin_url`,
   `normalize_remote`, `head_kept_elsewhere`, `untracked_files`, `stale_branches`.
@@ -227,8 +227,6 @@ Scostamenti dalla spec, decisi in revisione:
 - Una copia con commit o modifiche che il progetto non ha è **bloccata** (`unsaved-work`) e non
   si cancella nemmeno con `--include`: è il caso di fallimento della spec («una copia con lavoro
   non salvato venisse cancellata»), che la tabella non copriva.
-- Un nome di progetto più corto di 4 caratteri svuota solo `named`: le copie si trovano comunque
-  per identità git.
 - Le cartelle direttamente sotto la radice di un disco sono rifiutate dal guard di `dc_cleaner`
   per ogni tipo di voce: `analyze` le segna («cannot be removed: top-level folder»), il riepilogo
   di `clean` le avvisa e `clean` le salta (uscita 3).
@@ -241,6 +239,10 @@ Scostamenti dalla spec, decisi in revisione:
 - Dopo la scelta, `clean` riesegue l'analisi leggera e rimuove la voce *fresca*; una voce
   diventata più sospetta viene saltata. Risposta «no» alla domanda: uscita 0. Cestino troppo
   piccolo: uscita 1, anche con `--dry-run` (la spec non lo diceva).
+
+Scostamento dal piano (non dalla spec): un nome di progetto più corto di 4 caratteri svuota solo
+`named` e le copie si trovano comunque per identità git (spec, righe 99-100); il piano diceva
+«nessuna ricerca».
 
 Limiti noti e rinvii (dal registro `.superpowers/sdd/2026-11-13-project-cleanup-cli/progress.md`):
 

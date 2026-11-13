@@ -22,7 +22,8 @@ agents (`--json`, stable exit codes).
 
 ## Install
 
-There is no installer. Build the release executable from the workspace root:
+There is no installer. Build the release executable from the workspace root (the `ccleaner64\app`
+folder of the repository). You need a Rust toolchain (`cargo`):
 
 ```powershell
 cargo build --release -p xiox-cli
@@ -112,12 +113,14 @@ can be selected.
 
 **`builds`: build and dependency folders.** Folders that tools regenerate: `target` (Rust),
 `node_modules`, `.venv`, `__pycache__`, `.gradle`, `obj`, `dist`, `build` and the others of the
-Xiox folder catalog. They are looked for inside the project folder and inside each of its
+folder catalog of the desktop app. They are looked for inside the project folder and inside each of its
 linked worktrees. Cache and build-output folders are `recommended`; dependency folders
 (`node_modules`, `.venv`) are `optional`; a folder is `caution` when git tracks something in
 it, when it is not confirmed to be generated, or when its name is generic (`dist`, `build`) and
-git does not ignore it. Selected with `--builds` (the recommended ones, so not `node_modules`)
-or `--include <path>`.
+git does not ignore it. Catalog folders that may hold your own data (`.hypothesis`, `wandb`,
+`mlruns`, `runs`, `checkpoint-*`, Unity's `UserSettings`, Unreal's `Saved` and `Binaries`) are
+always `caution`, labelled `Personal data (<name>)`. Selected with `--builds` (the recommended
+ones, so not `node_modules`, and never the personal-data ones) or `--include <path>`.
 
 **`worktrees`: linked git worktrees.** The linked worktrees git lists for the repository
 (`git worktree list`), wherever they are on disk. A worktree is `recommended` when it is clean
@@ -164,8 +167,10 @@ they cannot be named with `--include`.
 
 Besides the items, the listing shows **branches**: local branches already merged into the
 current branch of the main working tree, or whose worktree folder is gone. They are
-information only: `xiox` never deletes a branch. Branches that are checked out in a linked
-worktree also appear (`feature` and `wip` above).
+information only: `xiox` never deletes a branch. Each line says `merged` or `not merged`,
+and adds `its worktree folder is gone` when that is the case (so a line can read `not merged,
+its worktree folder is gone`). Branches that are checked out in a linked worktree also appear
+(`feature` and `wip` above).
 
 ## Levels and blocks
 
@@ -212,7 +217,7 @@ xiox analyze [<project>] [--json] [--no-drives]
 | `-V`, `--version` | Show the version. |
 
 `analyze` removes nothing and writes nothing, apart from the small cache of the session
-listing that the Xiox app already keeps. It exits 0 whenever the analysis worked, whatever it
+listing that the desktop app already keeps. It exits 0 whenever the analysis worked, whatever it
 found.
 
 Reading the output (see the example above):
@@ -315,8 +320,11 @@ Remove 2 items (12 MB)? [y/N]
 Only `y` or `yes` (any case) confirms. Anything else, an empty line or the end of the input is
 a no: `Cancelled.` is printed, nothing is removed, and the exit code is 0.
 
-Without a terminal on stdin (a script, a pipe) there is nobody to ask, so `clean` refuses
-instead of guessing. Run from a script with no `--yes`, the same command as above gives:
+When stdin is redirected or is not a console (a pipe, a file, a scheduled task, an agent) there
+is nobody to ask, so `clean` refuses instead of guessing. The check is only on stdin: a script
+run from an interactive console still has a terminal and **would prompt**, with the question on
+stderr (invisible after `2>$null`). A script must therefore **always pass `--yes` or
+`--dry-run`**. With stdin redirected and no `--yes`, the same command as above gives:
 
 ```text
 > xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --builds --worktrees
@@ -348,7 +356,9 @@ with `--json`. `Analyzing ...` and errors always go to stderr.
 ### Dry run
 
 `--dry-run` does everything except removing, including the re-check described under
-[Safety](#safety), and tells you what a real run would do. It uses the real mode, so a dry run
+[Safety](#safety), and tells you what a real run would do. A dry run always exits 0, even when
+some items come out as `skipped`: read the `skipped` lines (or `outcome.items` with `--json`)
+before you run it for real. It uses the real mode, so a dry run
 without `--permanent` says `to the Recycle Bin`:
 
 ```text
@@ -671,7 +681,7 @@ A real dry-run result (shortened to the `outcome`):
 
 | Code | Meaning |
 |---|---|
-| `0` | Done. This includes any `analyze`, `--dry-run`, `Nothing selected`, `Nothing to clean`, and an answer of no (`Cancelled.`). |
+| `0` | Done. This includes any `analyze`, any `--dry-run` (even one whose outcome has `skipped` items: check them), `Nothing selected`, `Nothing to clean`, and an answer of no (`Cancelled.`). |
 | `1` | Error: the path does not exist or is not a folder; not enough room in the Recycle Bin; the result could not be written (for example a path JSON cannot carry). Nothing was removed, except when the report itself could not be written after a removal (it then goes to stderr when possible). |
 | `2` | Wrong usage: unknown command or flag, a `clean` flag given to `analyze`, `--copies` or `--named`, `--include` without a value, a second project, an `--include` that is not in the analysis or is blocked, no terminal and no `--yes`, `--json` without `--yes`. Nothing was removed. |
 | `3` | Partly cleaned: at least one item was skipped or failed. Read the report, or `outcome.items`. |
@@ -686,8 +696,11 @@ $scan = xiox analyze $project --json 2>$null | ConvertFrom-Json
 $ready = $scan.items | Where-Object { $_.level -eq 'recommended' -and $_.blocked.Count -eq 0 }
 "{0} recommended items, {1:N0} MB" -f $ready.Count, (($ready | Measure-Object bytes -Sum).Sum / 1MB)
 
-# 2. Rehearse, then remove for good.
-xiox clean $project --builds --worktrees --logs --dry-run --json 2>$null | Out-Null
+# 2. Rehearse (same mode as the real run, nothing is removed), then remove for good.
+$rehearsal = xiox clean $project --builds --worktrees --logs --dry-run --permanent --json 2>$null | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$skipped = @($rehearsal.outcome.items | Where-Object { $_.outcome.type -ne 'removed' })
+if ($skipped.Count -gt 0) { $skipped | Format-List; exit 3 }
 $result = xiox clean $project --builds --worktrees --logs --yes --permanent --json 2>$null | ConvertFrom-Json
 switch ($LASTEXITCODE) {
     0 { "Freed {0:N0} MB" -f ($result.outcome.bytesFreed / 1MB) }
@@ -727,8 +740,8 @@ You can call `xiox` as a tool. A safe routine:
 - **through a link**: symbolic links and junctions are not followed, are never listed as copies,
   name-matched folders or logs, and an item that has become a link since the analysis is
   skipped (`now a link: not followed`);
-- **a protected location**: the safety guard of the cleaner (the same one the Xiox window app
-  uses) refuses system locations and any folder directly under a drive or share root;
+- **a protected location**: the safety guard of the cleaner (the same one the desktop
+  app uses) refuses system locations and any folder directly under a drive or share root;
 - **branches** or git history: `git worktree remove` is never forced, and `git gc` is never run.
 
 **Re-validation.** The listing is a proposal, not a promise. Right before it removes anything,
@@ -787,8 +800,13 @@ drive cannot take what you chose. Empty it, or add `--permanent`.
 **Exit code 3.** Not everything was removed. Each `skipped` or `failed` line of the report has a
 reason: the item changed since the analysis (run `xiox analyze` again); it is in use (`in use
 by: <program>`); `git refused to remove the worktree (not forced; local changes are never
-discarded)` (commit or discard the changes yourself, then run again); or it is a top-level
-folder the guard refuses.
+discarded)` (commit or discard the changes yourself, then run again); or the safety guard
+refuses it. The guard refuses a folder directly under a drive or share root, `C:\Users\<name>`
+and the `Users` folder, the user-profile folder and any folder that contains it, system
+locations (`C:\Windows`, `Program Files`, `ProgramData`, ...), and names that are never a
+removable artifact. The reason is shown as, for example, `protected system location (...)`.
+The listing marks only the first of these (the top-level rule); the others show up when the
+item is skipped.
 
 **The analysis is slow.** It measures every folder and searches the drives. Use `--no-drives`
 when the copies and name-matched folders you care about are next to the project, or run it from
