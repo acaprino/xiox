@@ -82,7 +82,9 @@ Flags:
                    (default 2GB; units B, KB, MB, GB, TB, binary: 1.5GB, 500MiB)
   --worktree-threshold <n>
                    observe: new worktrees since the start that raise `attention` (default 3)
-  --mcp            observe: speak MCP on stdin/stdout instead of JSON lines
+  --mcp            observe: be a read-only MCP server on stdio (one tool, project_leftovers)
+                   instead of printing JSON lines. It checks only when the tool is called,
+                   so --interval does not apply, and ends when stdin closes.
   -h, --help       show this help
   -V, --version    show the version
 

@@ -625,3 +625,38 @@ fn observe_binary_on_a_missing_project_exits_1_with_empty_stdout() {
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("path not found"));
 }
+
+#[test]
+fn mcp_binary_answers_initialize_list_and_call_over_stdio() {
+    use std::io::Write;
+    let (_t, project) = repo_project();
+    let mut o = Observer::spawn(&project, &["--no-drives", "--mcp"]);
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_leftovers","arguments":{}}}"#,
+    ];
+    for line in requests {
+        writeln!(o.stdin.as_mut().unwrap(), "{line}").unwrap();
+    }
+    let init = o.next(60);
+    assert_eq!(init["id"], 1, "{init}");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(init["result"]["serverInfo"]["name"], "xiox");
+    let list = o.next(60);
+    assert_eq!(list["id"], 2, "{list}");
+    assert_eq!(list["result"]["tools"][0]["name"], "project_leftovers");
+    assert_eq!(list["result"]["tools"][0]["annotations"]["readOnlyHint"], true);
+    let call = o.next(60);
+    assert_eq!(call["id"], 3, "{call}");
+    assert_eq!(call["result"]["isError"], false, "{call}");
+    let report = &call["result"]["structuredContent"];
+    assert_eq!(report["project"]["name"], "fakeproj");
+    assert_eq!(report["stale"], false);
+    assert!(report["items"].as_array().unwrap().iter().any(|i| i["category"] == "builds" && i["new"] == false), "{report}");
+    // Closing stdin ends it with 0, and nothing else was ever written to stdout.
+    drop(o.stdin.take());
+    assert_eq!(o.exit_code(30), Some(0));
+    assert!(o.lines.recv_timeout(std::time::Duration::from_millis(500)).is_err());
+}

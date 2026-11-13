@@ -4,6 +4,7 @@
 
 mod args;
 mod json;
+mod mcp;
 mod observe;
 mod render;
 mod run;

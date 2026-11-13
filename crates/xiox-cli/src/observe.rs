@@ -111,20 +111,25 @@ pub fn install_panic_hook() {
 
 /// The command of the real PC: real stdin, the real clock.
 pub fn run_observe(cmd: ObserveArgs, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    if cmd.mcp {
-        let _ = writeln!(err, "error: --mcp is not available yet");
-        return EXIT_ERROR;
-    }
     install_panic_hook();
     let deps = Deps::real(&cmd);
+    if cmd.mcp {
+        return crate::mcp::serve(cmd.params(), std::io::stdin().lock(), out, err, &deps);
+    }
     observe(cmd, std::io::BufReader::new(std::io::stdin()), out, err, &deps)
 }
 
 /// An output that remembers a closed pipe: `write_result` treats it as success (the person just ran
 /// `| head`), but for a long-running process it means the caller is gone.
-struct Tap<'a> {
+pub(crate) struct Tap<'a> {
     inner: &'a mut dyn Write,
-    pipe_closed: bool,
+    pub(crate) pipe_closed: bool,
+}
+
+impl<'a> Tap<'a> {
+    pub(crate) fn new(inner: &'a mut dyn Write) -> Self {
+        Tap { inner, pipe_closed: false }
+    }
 }
 
 impl Write for Tap<'_> {
@@ -352,7 +357,7 @@ pub(crate) fn observe_with(
             return EXIT_ERROR;
         }
     };
-    let mut emitter = Emitter { out: Tap { inner: out, pipe_closed: false }, err, now_ms: &*deps.now_ms };
+    let mut emitter = Emitter { out: Tap::new(out), err, now_ms: &*deps.now_ms };
     if let Err(code) = emitter.write(&first) {
         return code;
     }
