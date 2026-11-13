@@ -121,7 +121,7 @@ impl PathSys for Fake {
         }
         match &self.backup_err {
             Some(e) => Err(e.clone()),
-            None => Ok(PathBuf::from(r"C:\Users\me\Documents\PulisciPC\backup_path.reg")),
+            None => Ok(PathBuf::from(r"C:\Users\me\Documents\Xiox\backup_path.reg")),
         }
     }
     fn volume_is_fixed(&self, p: &Path) -> bool {
@@ -727,7 +727,7 @@ fn item_is_off_by_default_with_the_agreed_warning() {
     assert!(!i.default_on && i.needs_admin);
     assert!(i.needs_preview);
     let w = i.warning.unwrap();
-    for part in ["installato dopo", "lettera", "strumenti e build", "solo le voci mostrate dall'ultima Analisi", r"Documenti\PulisciPC"] {
+    for part in ["installato dopo", "lettera", "strumenti e build", "solo le voci mostrate dall'ultima Analisi", r"Documenti\Xiox"] {
         assert!(w.contains(part), "{part}: {w}");
     }
     let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap());

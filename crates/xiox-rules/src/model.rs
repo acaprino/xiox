@@ -345,7 +345,7 @@ pub const PROTECT_PREFIX: &str = "protect:";
 /// Prefisso delle chiavi che solo la protezione legge: cartelle protette
 /// **con tutto il contenuto** (a differenza di [`PROTECT_PREFIX`], che le
 /// protegge solo prese intere). Le aggiunge chi usa le regole per le proprie
-/// cartelle (l'app: `%ProgramData%\PulisciPC`, i backup del registro).
+/// cartelle (l'app: `%ProgramData%\Xiox`, i backup del registro).
 /// Come [`PROTECT_PREFIX`], `expand` non le espande.
 pub const PROTECT_TREE_PREFIX: &str = "protect-tree:";
 

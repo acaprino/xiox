@@ -53,7 +53,7 @@ struct Fake {
     polls_before_exit: u32,
     exit_code: i32,
     poll_panics: bool,
-    /// Il compagno `PulisciPC_StateFlags0099` sotto `Previous Installations`.
+    /// Il compagno `Xiox_StateFlags0099` sotto `Previous Installations`.
     marker: Cell<bool>,
 }
 
@@ -519,7 +519,7 @@ fn folder_unchanged_after_cleanmgr_is_a_failure() {
 }
 
 #[test]
-fn leftover_flag_of_pulisci_pc_is_recognised_removed_and_the_clean_proceeds() {
+fn leftover_flag_of_xiox_is_recognised_removed_and_the_clean_proceeds() {
     let mut f = base();
     f.flagged = Ok(vec!["Previous Installations".into()]);
     f.marker.set(true);
@@ -534,7 +534,7 @@ fn leftover_flag_of_pulisci_pc_is_recognised_removed_and_the_clean_proceeds() {
     );
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0, "{:?}", out.notes);
-    assert!(out.notes.join("\n").contains("rimasto da una pulizia interrotta di PulisciPC"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("rimasto da una pulizia interrotta di Xiox"), "{:?}", out.notes);
 }
 
 #[test]
@@ -711,4 +711,65 @@ fn live_winold_analysis_read_only() {
     for l in &found.detail {
         println!("  {l}");
     }
+}
+
+// ----- compagno con il nome di prima -----
+
+/// Valori sotto `Previous Installations`: i nomi presenti.
+#[derive(Default)]
+struct Values {
+    names: RefCell<Vec<String>>,
+    /// Nomi la cui rimozione fallisce.
+    stuck: Vec<String>,
+}
+
+impl Values {
+    fn with(names: &[&str]) -> Values {
+        Values { names: RefCell::new(names.iter().map(|n| n.to_string()).collect()), stuck: Vec::new() }
+    }
+    fn left(&self) -> Vec<String> {
+        self.names.borrow().clone()
+    }
+}
+
+impl MarkerValues for Values {
+    fn exists(&self, name: &str) -> Result<bool, String> {
+        Ok(self.names.borrow().iter().any(|n| n == name))
+    }
+    fn delete(&self, name: &str) -> Result<(), String> {
+        if self.stuck.iter().any(|n| n == name) {
+            return Err(format!("{name}: accesso negato"));
+        }
+        self.names.borrow_mut().retain(|n| n != name);
+        Ok(())
+    }
+}
+
+#[test]
+fn marker_names_are_the_new_one_first_then_the_old_one() {
+    assert_eq!(MARKER_NAME, "Xiox_StateFlags0099");
+    assert_eq!(LEGACY_MARKER_NAME, "PulisciPC_StateFlags0099");
+    assert_eq!(MARKER_NAMES, [MARKER_NAME, LEGACY_MARKER_NAME]);
+}
+
+#[test]
+fn a_marker_with_either_name_is_recognised_as_ours() {
+    assert_eq!(any_marker(&Values::with(&[])), Ok(false));
+    assert_eq!(any_marker(&Values::with(&["Altro"])), Ok(false));
+    assert_eq!(any_marker(&Values::with(&["Xiox_StateFlags0099"])), Ok(true));
+    assert_eq!(any_marker(&Values::with(&["PulisciPC_StateFlags0099"])), Ok(true));
+}
+
+#[test]
+fn both_marker_names_are_removed_and_nothing_else() {
+    let v = Values::with(&["Xiox_StateFlags0099", "PulisciPC_StateFlags0099", "StateFlags0099"]);
+    assert_eq!(remove_markers(&v), Ok(()));
+    assert_eq!(v.left(), ["StateFlags0099"]);
+    // Anche se non c'è niente.
+    assert_eq!(remove_markers(&v), Ok(()));
+    // Un errore sul nome nuovo non salta il vecchio, e si riporta.
+    let mut v = Values::with(&["Xiox_StateFlags0099", "PulisciPC_StateFlags0099"]);
+    v.stuck = vec!["Xiox_StateFlags0099".into()];
+    assert_eq!(remove_markers(&v), Err("Xiox_StateFlags0099: accesso negato".to_string()));
+    assert_eq!(v.left(), ["Xiox_StateFlags0099"]);
 }

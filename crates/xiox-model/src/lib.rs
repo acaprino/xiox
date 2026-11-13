@@ -8,6 +8,8 @@
 //! JSON shape (Tauri <-> React): structs are camelCase, enums are kebab-case strings
 //! (unit variants) or `{ "type": "...", ... }` (data variants). `src/types.ts` mirrors this.
 
+pub mod legacy;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

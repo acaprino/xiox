@@ -16,7 +16,7 @@
 //!   quelli mostrati. Le chiavi FTP passano da [`crate::rules::RuleRegistry`]
 //!   (`reg_allowed`, apertura senza seguire collegamenti, backup `.reg`
 //!   fail-closed). Il backup contiene le password FTP cifrate con DPAPI: va in
-//!   `%LOCALAPPDATA%\PulisciPC\backup` (fuori da `Documenti`, spesso
+//!   `%LOCALAPPDATA%\Xiox\backup` (fuori da `Documenti`, spesso
 //!   sincronizzata con OneDrive), con l'ACL solo per l'utente, SYSTEM e gli
 //!   amministratori (`regbackup::private_backup_dir`).
 //! - Account: se il processo (elevato) non gira come l'utente della sessione
@@ -111,7 +111,7 @@ pub fn items() -> Vec<NativeItem> {
              condivise e Desktop remoto, e gli account FTP salvati da Esplora file. Le credenziali generiche (app, \
              Git, browser) e gli account Microsoft non si toccano. Pulizia elimina solo ciò che ha mostrato l'ultima \
              Analisi. Le credenziali eliminate non hanno copia; le chiavi degli account FTP si salvano prima in un \
-             file .reg (con le password FTP cifrate) in AppData\\Local\\PulisciPC\\backup, leggibile solo da te e \
+             file .reg (con le password FTP cifrate) in AppData\\Local\\Xiox\\backup, leggibile solo da te e \
              dagli amministratori.",
         warning: Some(WARNING),
         warning_extra: None,
@@ -133,7 +133,7 @@ fn real_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
 }
 
 /// Il registro vero con il backup degli account FTP (password cifrate) nella
-/// cartella privata `%LOCALAPPDATA%\PulisciPC\backup`, mai in `Documenti`.
+/// cartella privata `%LOCALAPPDATA%\Xiox\backup`, mai in `Documenti`.
 struct PrivateRegistry;
 
 impl RuleRegistry for PrivateRegistry {

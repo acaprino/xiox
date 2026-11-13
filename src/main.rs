@@ -690,7 +690,7 @@ impl App {
                     p.circle_filled(c + Vec2::new(6.0, -6.0), 4.0, GREEN);
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("PulisciPC").color(Color32::WHITE).size(18.0).strong());
+                        ui.label(RichText::new("Xiox").color(Color32::WHITE).size(18.0).strong());
                         ui.label(RichText::new("Pulizia leggera").color(Color32::from_gray(150)).size(12.0));
                     });
                 });
@@ -762,7 +762,7 @@ impl App {
         let mut close = false;
         let resp = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("PulisciPC").size(18.0).strong());
+            ui.label(RichText::new("Xiox").size(18.0).strong());
             ui.add_space(6.0);
             ui.label(format!("Versione {}", env!("CARGO_PKG_VERSION")));
             ui.label(winapp2);
@@ -1184,7 +1184,7 @@ impl App {
                 ui.set_width(400.0);
                 ui.label(RichText::new("Salvare un backup del registro?").size(18.0).strong());
                 ui.add_space(6.0);
-                ui.label("Consigliato: prima delle modifiche viene salvata una copia (.reg) nella cartella Documenti\\PulisciPC.");
+                ui.label("Consigliato: prima delle modifiche viene salvata una copia (.reg) nella cartella Documenti\\Xiox.");
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Sì, salva e ripara", true).clicked() {
@@ -1332,7 +1332,7 @@ impl App {
             egui::Modal::new(egui::Id::new("svc_confirm")).show(ui.ctx(), |ui| {
                 ui.set_width(400.0);
                 let (title, body) = match action {
-                    0 => ("Ripristinare i servizi?", "Tutti i servizi cambiati da PulisciPC tornano come erano prima."),
+                    0 => ("Ripristinare i servizi?", "Tutti i servizi cambiati da Xiox tornano come erano prima."),
                     services::START_MANUAL => ("Impostare su Manuale?", "I servizi si fermano subito e Windows li avvierà solo quando servono."),
                     _ => ("Disattivare i servizi?", "I servizi si fermano subito e non partiranno più. Potrai sempre usare «Ripristina originali»."),
                 };
@@ -1532,7 +1532,7 @@ fn native_checkbox(ui: &mut Ui, item: &native::NativeItem, admin: bool, sel: &mu
     }
     if item.id == browserdb::COOKIES_ID {
         ui.add_space(2.0);
-        let hint = "Apre Documenti\\PulisciPC\\cookie_da_conservare.txt nel Blocco note (lo crea se manca). \
+        let hint = "Apre Documenti\\Xiox\\cookie_da_conservare.txt nel Blocco note (lo crea se manca). \
                     Un dominio per riga: i suoi cookie restano.";
         if secondary(ui, "Modifica lista cookie", true).on_hover_text(hint).clicked() {
             open_keep_list();
@@ -1843,7 +1843,7 @@ fn main() -> eframe::Result<()> {
         i += 1;
     }
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("PulisciPC")
+        .with_title("Xiox")
         .with_inner_size([1100.0, 700.0])
         .with_min_inner_size([900.0, 560.0]);
     if screenshot.is_some() {
@@ -1856,7 +1856,7 @@ fn main() -> eframe::Result<()> {
         wipe::remove_leftovers_in_background();
     }
     eframe::run_native(
-        "PulisciPC",
+        "Xiox",
         options,
         Box::new(move |cc| {
             style(&cc.egui_ctx);

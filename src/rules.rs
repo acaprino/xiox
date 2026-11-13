@@ -322,10 +322,13 @@ pub fn after_update(outcome: UpdateOutcome, reload: impl FnOnce() -> RuleSet, no
     }
 }
 
-/// Cartelle dell'app da proteggere con tutto il contenuto: `%ProgramData%\PulisciPC`
-/// (le regole) e `Documenti\PulisciPC` (backup del registro e dei servizi):
-/// sia `%USERPROFILE%\Documents\PulisciPC`, quella di `sys::data_dir`, sia
-/// `<documents>\PulisciPC` dell'`Env` (Documenti spostati, per esempio in OneDrive).
+/// Cartelle dell'app da proteggere con tutto il contenuto: `%ProgramData%\Xiox`
+/// (le regole) e `Documenti\Xiox` (backup del registro e dei servizi):
+/// sia `%USERPROFILE%\Documents\Xiox`, quella di `sys::data_dir`, sia
+/// `<documents>\Xiox` dell'`Env` (Documenti spostati, per esempio in OneDrive).
+/// Si proteggono anche le cartelle con il nome di prima (`PulisciPC`): finché una
+/// vecchia installazione non è stata rinominata (o se la rinomina non è riuscita)
+/// ci stanno ancora i backup dell'utente.
 pub fn own_folders(env: &Env) -> Vec<PathBuf> {
     let app_data = updater::data_dir().parent().map(Path::to_path_buf).unwrap_or_else(updater::data_dir);
     own_folders_with(&app_data, std::env::var("USERPROFILE").ok().as_deref(), env)
@@ -334,11 +337,23 @@ pub fn own_folders(env: &Env) -> Vec<PathBuf> {
 /// [`own_folders`] con le cartelle passate da fuori (nei test, finte).
 pub fn own_folders_with(app_data: &Path, profile: Option<&str>, env: &Env) -> Vec<PathBuf> {
     let mut out = vec![app_data.to_path_buf()];
+    // Stessa cartella dati con l'altro nome (`Xiox` <-> `PulisciPC`), accanto alla prima.
+    let known_name = app_data.file_name().is_some_and(|n| {
+        n.eq_ignore_ascii_case(xiox_model::legacy::APP_DIR) || n.eq_ignore_ascii_case(xiox_model::legacy::LEGACY_APP_DIR)
+    });
+    if let (true, Some(parent)) = (known_name, app_data.parent()) {
+        out.push(parent.join(xiox_model::legacy::APP_DIR));
+        out.push(parent.join(xiox_model::legacy::LEGACY_APP_DIR));
+    }
+    let mut under = |base: &Path| {
+        out.push(base.join(xiox_model::legacy::APP_DIR));
+        out.push(base.join(xiox_model::legacy::LEGACY_APP_DIR));
+    };
     if let Some(p) = profile.filter(|p| !p.trim().is_empty()) {
-        out.push(Path::new(p).join("Documents").join("PulisciPC"));
+        under(&Path::new(p).join("Documents"));
     }
     if let Some(docs) = env.get("documents") {
-        out.push(Path::new(docs).join("PulisciPC"));
+        under(Path::new(docs));
     }
     out.sort();
     out.dedup();
@@ -349,7 +364,7 @@ pub fn own_folders_with(app_data: &Path, profile: Option<&str>, env: &Env) -> Ve
 /// (analisi e pulizia) le rifiuta con tutto il contenuto.
 pub fn protect_own_folders(env: &mut Env, dirs: &[PathBuf]) {
     for (i, d) in dirs.iter().enumerate() {
-        env.0.insert(format!("{PROTECT_TREE_PREFIX}pulisci{i}"), d.to_string_lossy().into_owned());
+        env.0.insert(format!("{PROTECT_TREE_PREFIX}xiox{i}"), d.to_string_lossy().into_owned());
     }
 }
 
@@ -868,7 +883,7 @@ impl RuleRegistry for RealRegistry {
 }
 
 /// Backup sul registro vero (come [`RealRegistry`]) ma nella cartella `dest`
-/// invece che in `Documenti\PulisciPC`, con la cartella di lavoro adatta al
+/// invece che in `Documenti\Xiox`, con la cartella di lavoro adatta al
 /// processo (`regbackup::work_dir`). Per i backup con segreti (`netcreds`).
 pub fn real_backup_in(dest: &Path, stem: &str, items: &[RegItem]) -> Result<Backup, String> {
     backup_to(dest, stem, &regbackup::work_dir, &win::RealBackend, items)
@@ -1648,13 +1663,37 @@ mod tests {
         assert!(ids(&rs).contains(&"winapp2:Cargo Reg".to_string()), "{:?}", ids(&rs));
     }
 
+    /// Valore di `XIOX_<nome>`; se manca, quello del vecchio nome `PULISCI_<nome>`.
+    fn first_env(get: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+        get(&format!("XIOX_{name}")).or_else(|| get(&format!("PULISCI_{name}")))
+    }
+
+    /// Il Winapp2 per le prove sul file vero: `XIOX_WINAPP2`, altrimenti `PULISCI_WINAPP2`.
+    fn winapp2_from_env() -> Option<String> {
+        first_env(&|n| std::env::var(n).ok().filter(|v| !v.is_empty()), "WINAPP2")
+    }
+
+    #[test]
+    fn winapp2_env_var_reads_the_new_name_first_then_the_old_one() {
+        let both = |n: &str| match n {
+            "XIOX_WINAPP2" => Some("nuovo".to_string()),
+            "PULISCI_WINAPP2" => Some("vecchio".to_string()),
+            _ => None,
+        };
+        assert_eq!(first_env(&both, "WINAPP2").as_deref(), Some("nuovo"));
+        let only_old = |n: &str| (n == "PULISCI_WINAPP2").then(|| "vecchio".to_string());
+        assert_eq!(first_env(&only_old, "WINAPP2").as_deref(), Some("vecchio"));
+        assert_eq!(first_env(&|_| None, "WINAPP2"), None);
+    }
+
     /// Misura sul Winapp2 vero (sola lettura): quali voci nasconde la regola 9
     /// con tutti gli inglobati presenti e ogni `Detect` considerato vero.
-    /// `PULISCI_WINAPP2=<percorso> cargo test -p xiox-desktop real_winapp2_rule_9 -- --ignored --nocapture`
+    /// `XIOX_WINAPP2=<percorso> cargo test -p xiox-desktop real_winapp2_rule_9 -- --ignored --nocapture`
+    /// (anche il vecchio nome `PULISCI_WINAPP2` vale, se `XIOX_WINAPP2` non c'è).
     #[test]
     #[ignore]
     fn real_winapp2_rule_9_keeps_broad_entries() {
-        let path = std::env::var("PULISCI_WINAPP2").expect("PULISCI_WINAPP2 non impostata");
+        let path = winapp2_from_env().expect("XIOX_WINAPP2 non impostata");
         let text = fs::read_to_string(path).unwrap();
         let env = Env(HashMap::from([
             ("userprofile".to_string(), r"C:\Users\u".to_string()),
@@ -2044,7 +2083,7 @@ mod tests {
         assert!(!reg_exists(&RegItem::Value {
             root: RegRoot::Hklm,
             path: r"Software\Microsoft\Windows NT\CurrentVersion".into(),
-            value: "pulisci-pc-no-such-value".into(),
+            value: "xiox-no-such-value".into(),
         }));
     }
 
@@ -2181,7 +2220,7 @@ mod tests {
     fn start_reloads_with_the_same_env_after_an_update() {
         let t = tempfile::tempdir().unwrap();
         let env = fake_env(t.path());
-        let own = t.path().join(r"ProgramData\PulisciPC");
+        let own = t.path().join(r"ProgramData\Xiox");
         let seen: Arc<std::sync::Mutex<Vec<Env>>> = Arc::default();
         let seen_in = Arc::clone(&seen);
         let (tx, rx) = channel();
@@ -2214,7 +2253,7 @@ mod tests {
     fn closing_does_not_wait_for_the_update() {
         let t = tempfile::tempdir().unwrap();
         let env = fake_env(t.path());
-        let dir = t.path().join(r"ProgramData\PulisciPC\winapp2");
+        let dir = t.path().join(r"ProgramData\Xiox\winapp2");
         let (tx, rx) = channel();
         let begun = Instant::now();
         let update: UpdateSpawner = Box::new(|dir, done| {
@@ -2251,14 +2290,19 @@ mod tests {
         let profile = t.path().join("profile");
         let mut base = fake_env(t.path());
         base.0.insert("documents".into(), profile.join("Documents").to_string_lossy().into_owned());
-        let app_data = t.path().join(r"ProgramData\PulisciPC");
-        let backups = profile.join(r"Documents\PulisciPC");
+        let app_data = t.path().join(r"ProgramData\Xiox");
+        let backups = profile.join(r"Documents\Xiox");
+        // Le cartelle con il nome di prima (rinomina non ancora fatta o non riuscita) sono protette uguale.
+        let old_app_data = t.path().join(r"ProgramData\PulisciPC");
+        let old_backups = profile.join(r"Documents\PulisciPC");
         let files = [
             app_data.join(r"winapp2\Winapp2.ini"),
             app_data.join(r"winapp2\etag.txt"),
-            app_data.join(r"winapp2\tmp\pulisci-curl-1\body.bin"),
+            app_data.join(r"winapp2\tmp\xiox-curl-1\body.bin"),
             backups.join("backup_regole_20261110_120000.reg"),
             backups.join("servizi_originali.txt"),
+            old_app_data.join(r"winapp2\Winapp2.ini"),
+            old_backups.join("backup_registro_20261001_090000.reg"),
         ];
         for f in &files {
             write(f, "dati");
@@ -2268,6 +2312,8 @@ mod tests {
             files_rule(&app_data.join("winapp2"), &["*.*"]),
             files_rule(&app_data.join(r"winapp2\tmp"), &["*"]),
             files_rule(&backups, &["*.reg", "*.txt"]),
+            files_rule(&old_app_data.join("winapp2"), &["*.*"]),
+            files_rule(&old_backups, &["*.reg", "*.txt"]),
         ]);
         o.actions.push(Action::Files {
             path: app_data.join("winapp2").to_string_lossy().into_owned(),
@@ -2282,13 +2328,21 @@ mod tests {
         let mut env = base.clone();
         let own = own_folders_with(&app_data, Some(&profile.to_string_lossy()), &env);
         assert!(own.contains(&app_data) && own.contains(&backups), "{own:?}");
+        assert!(own.contains(&old_app_data) && own.contains(&old_backups), "{own:?}");
         protect_own_folders(&mut env, &own);
         let found = ctl_run(&o, &env);
         assert_eq!((found.count, found.dirs_to_remove.len()), (0, 0), "{found:?}");
         // Anche un `RuleFound` costruito a mano con quei file non li cancella.
         let forged = RuleFound {
             files: files.iter().map(|f| (f.clone(), 4)).collect(),
-            dirs_to_remove: vec![app_data.join(r"winapp2\tmp"), app_data.join("winapp2"), app_data.clone(), backups.clone()],
+            dirs_to_remove: vec![
+                app_data.join(r"winapp2\tmp"),
+                app_data.join("winapp2"),
+                app_data.clone(),
+                backups.clone(),
+                old_app_data.clone(),
+                old_backups.clone(),
+            ],
             count: files.len() as u64,
             ..Default::default()
         };
@@ -2304,7 +2358,7 @@ mod tests {
     #[test]
     fn real_registry_opens_keys_without_following_links() {
         assert!(win::key_exists(RegRoot::Hklm, r"Software\Microsoft\Windows NT\CurrentVersion"));
-        assert!(!win::key_exists(RegRoot::Hkcu, r"Software\pulisci-pc-no-such-key"));
+        assert!(!win::key_exists(RegRoot::Hkcu, r"Software\xiox-no-such-key"));
     }
 
     // ---------- prova del registro vero da amministratore (ignorata) ----------
@@ -2388,7 +2442,7 @@ mod tests {
 
     /// Prova sul registro vero, da un terminale da amministratore:
     /// `cargo test -p xiox-desktop real_registry_round_trip_as_admin -- --ignored --nocapture`.
-    /// Usa solo chiavi create dal test (`PulisciPC_Verify_<pid>_<nanos>`) e le
+    /// Usa solo chiavi create dal test (`Xiox_Verify_<pid>_<nanos>`) e le
     /// toglie all'uscita, anche dopo un panico. Prova: backup con `reg.exe` nella
     /// cartella solo per amministratori, cancellazione vera di chiavi e valori,
     /// `HKCU\Software\Classes` (collegamento), vista a 32 bit di HKLM, due backup
@@ -2402,7 +2456,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let marker = format!("PulisciPC_Verify_{}_{nanos}", std::process::id());
+        let marker = format!("Xiox_Verify_{}_{nanos}", std::process::id());
         let env = Env::default();
         let key_a = format!(r"Software\{marker}_A");
         let key_b = format!(r"Software\{marker}_B");
@@ -2437,7 +2491,7 @@ mod tests {
         eprintln!("(a) {done:?}");
         assert_eq!((done.removed, done.failed), (1, 0), "(a) {:?}", done.notes);
         let bk = done.backup.clone().expect("(a) nessun backup");
-        assert!(bk.starts_with(sys::data_dir()), "(a) backup fuori da Documenti\\PulisciPC: {}", bk.display());
+        assert!(bk.starts_with(sys::data_dir()), "(a) backup fuori da Documenti\\Xiox: {}", bk.display());
         assert!(backup_text(&bk).is_some_and(|t| t.contains(&format!("{marker}_A"))), "(a) backup senza la chiave");
         assert!(!key_exists_now(RegRoot::Hkcu, &key_a), "(a) la chiave c'è ancora");
 

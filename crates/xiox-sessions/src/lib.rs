@@ -231,7 +231,7 @@ fn copy_and_bin(src: &Path, copy: &Path, trash: &dyn Trash) -> Result<(), String
 }
 
 fn scratch_dir() -> PathBuf {
-    std::env::temp_dir().join("PulisciPC")
+    std::env::temp_dir().join("Xiox")
 }
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ impl RuleRegistry for FakeReg {
         let present = self.present.lock().unwrap();
         let flags: Vec<bool> = items.iter().map(|i| present.iter().any(|p| p.eq_ignore_ascii_case(&key_path(i)))).collect();
         self.backed_up.lock().unwrap().extend(items.iter().zip(&flags).filter(|(_, f)| **f).map(|(i, _)| key_path(i)));
-        Ok(Backup { path: Some(PathBuf::from(r"C:\Users\x\AppData\Local\PulisciPC\backup\backup_password_ftp_1.reg")), present: flags })
+        Ok(Backup { path: Some(PathBuf::from(r"C:\Users\x\AppData\Local\Xiox\backup\backup_password_ftp_1.reg")), present: flags })
     }
     fn delete(&self, item: &RegItem) -> Result<bool, String> {
         let path = key_path(item);
@@ -466,7 +466,7 @@ fn ftp_keys_are_backed_up_then_deleted() {
     // Solo ciò che l'analisi ha trovato: la chiave nata dopo resta.
     assert_eq!(*reg.present.lock().unwrap(), vec![ftp_key("altro.example.com")]);
     let note = cleaned.notes.iter().find(|n| n.contains("backup_password_ftp_1.reg")).expect("nota del backup");
-    assert!(note.contains(r"AppData\Local\PulisciPC\backup") && !note.contains("Documents"), "{note}");
+    assert!(note.contains(r"AppData\Local\Xiox\backup") && !note.contains("Documents"), "{note}");
     assert!(note.contains("password FTP cifrate") && note.contains("eliminalo quando tutto funziona"), "{note}");
 }
 
@@ -609,7 +609,7 @@ fn item_is_off_with_the_warning_and_no_admin() {
     assert!(i.warning_extra.is_none() && i.running.is_empty());
     let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap());
     assert!(!text.to_lowercase().contains("bleachbit") && !text.contains("AGG -"), "{text}");
-    assert!(i.description.contains(".reg") && i.description.contains(r"AppData\Local\PulisciPC\backup"), "{}", i.description);
+    assert!(i.description.contains(".reg") && i.description.contains(r"AppData\Local\Xiox\backup"), "{}", i.description);
     assert!(!i.description.contains("Documenti"), "{}", i.description);
     assert!(crate::native::all().iter().any(|n| n.id == ID));
 }

@@ -1,5 +1,5 @@
-//! UI-less glue between the devclean crates and PulisciPC: settings, the developer scan,
-//! the clean plan and the removal of archived agent sessions. Ported from devclean's Tauri
+//! UI-less glue between the engine crates and Xiox: settings, the developer scan,
+//! the clean plan and the removal of archived agent sessions. Ported from the old devclean Tauri
 //! shell (`src-tauri/src/lib.rs`) without Tauri and without any external disk-size tool: folder
 //! sizes come from the NTFS MFT (`xiox-disktree`) when the app runs as administrator, otherwise
 //! from the walker.
@@ -24,7 +24,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const APP_DIR: &str = "PulisciPC";
+use xiox_model::legacy::app_dir_in;
 const AGENTS: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi];
 
 // ───────────────────────────────── settings ─────────────────────────────────
@@ -91,15 +91,28 @@ fn default_settings_for(home: Option<&Path>) -> Settings {
     }
 }
 
-/// `%APPDATA%\PulisciPC\settings.json`.
+/// `%APPDATA%\Xiox\settings.json`. An existing `%APPDATA%\PulisciPC` (the folder before the
+/// rename) is moved to `Xiox` first, or stays in use if it cannot be moved
+/// ([`xiox_model::legacy::migrate_legacy_dir`]).
 pub fn settings_path() -> PathBuf {
-    env_dir("APPDATA", &["AppData", "Roaming"]).join(APP_DIR).join("settings.json")
+    settings_path_in(&env_dir("APPDATA", &["AppData", "Roaming"]))
 }
 
-/// `%LOCALAPPDATA%\PulisciPC\mukade`: mukade's session listing cache. Nothing else is written
-/// there, and mukade never writes beside the executable or in the harnesses' stores.
+/// [`settings_path`] under the given `%APPDATA%`.
+pub fn settings_path_in(appdata: &Path) -> PathBuf {
+    app_dir_in(appdata).join("settings.json")
+}
+
+/// `%LOCALAPPDATA%\Xiox\mukade`: mukade's session listing cache. Nothing else is written
+/// there, and mukade never writes beside the executable or in the harnesses' stores. Same
+/// legacy-folder rule as [`settings_path`].
 pub fn cache_dir() -> PathBuf {
-    env_dir("LOCALAPPDATA", &["AppData", "Local"]).join(APP_DIR).join("mukade")
+    cache_dir_in(&env_dir("LOCALAPPDATA", &["AppData", "Local"]))
+}
+
+/// [`cache_dir`] under the given `%LOCALAPPDATA%`.
+pub fn cache_dir_in(local_appdata: &Path) -> PathBuf {
+    app_dir_in(local_appdata).join("mukade")
 }
 
 /// Missing or unreadable file: the defaults.

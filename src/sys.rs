@@ -160,10 +160,17 @@ pub fn env_or(name: &str, fallback: &str) -> String {
 
 pub use xiox_model::fmt_size;
 
-/// Folder where the app keeps its backups (Documents\PulisciPC).
+/// Folder where the app keeps its backups (Documents\Xiox). A `Documents\PulisciPC` left by an
+/// older version is renamed to `Xiox` first, or keeps being used if it cannot be renamed
+/// ([`xiox_model::legacy::migrate_legacy_dir`]): the user's backups never go out of sight.
 pub fn data_dir() -> std::path::PathBuf {
     let base = std::env::var("USERPROFILE").map(|p| Path::new(&p).join("Documents")).unwrap_or_else(|_| ".".into());
-    let d = base.join("PulisciPC");
+    data_dir_in(&base)
+}
+
+/// [`data_dir`] under the given Documents folder.
+pub fn data_dir_in(documents: &Path) -> std::path::PathBuf {
+    let d = xiox_model::legacy::app_dir_in(documents);
     let _ = std::fs::create_dir_all(&d);
     d
 }
@@ -193,6 +200,34 @@ fn civil(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// I backup di prima stanno in `Documents\PulisciPC`: dopo l'aggiornamento si ritrovano in
+    /// `Documents\Xiox`; se la cartella non si può rinominare si continua con quella vecchia.
+    #[test]
+    fn backups_folder_follows_the_rename_and_never_loses_the_old_backups() {
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join("PulisciPC");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("backup_registro_20261001_090000.reg"), "x").unwrap();
+        let d = data_dir_in(t.path());
+        assert_eq!(d, t.path().join("Xiox"));
+        assert!(d.join("backup_registro_20261001_090000.reg").is_file());
+        assert!(!old.exists());
+
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join("PulisciPC");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("servizi_originali.txt"), "x").unwrap();
+        std::fs::write(t.path().join("Xiox"), "occupato da un file").unwrap();
+        assert_eq!(data_dir_in(t.path()), old);
+        assert!(old.join("servizi_originali.txt").is_file());
+
+        // Prima installazione: si crea la cartella con il nome nuovo.
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(data_dir_in(t.path()), t.path().join("Xiox"));
+        assert!(t.path().join("Xiox").is_dir());
+        assert!(!t.path().join("PulisciPC").exists());
+    }
 
     #[test]
     fn same_user_any_case() {

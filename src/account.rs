@@ -2,7 +2,7 @@
 //!
 //! Il manifest di release chiede `requireAdministrator`: un utente standard
 //! che approva UAC con le credenziali di un altro amministratore fa girare
-//! PulisciPC come quell'account, e allora `HKCU`, Gestione credenziali e le
+//! Xiox come quell'account, e allora `HKCU`, Gestione credenziali e le
 //! cartelle del profilo sono **sue**, non di chi sta davanti al PC. Le voci
 //! che toccano dati dell'utente (`envpath` per il PATH utente, `netcreds`)
 //! chiedono [`current`] e, se non è [`Account::Same`], non toccano nulla di

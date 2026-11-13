@@ -233,7 +233,7 @@ impl Guard {
             return Some("cartella di sistema di Windows o profilo predefinito");
         }
         if self.own_trees.iter().any(|d| covers_subtree(comps, d)) {
-            return Some("cartella dei dati di PulisciPC");
+            return Some("cartella dei dati di Xiox");
         }
         if comps.iter().any(|c| c.starts_with("ntuser.") || c.starts_with("usrclass.dat")) {
             return Some("registro dell'utente (NTUSER.DAT, UsrClass.dat)");
@@ -960,15 +960,15 @@ mod tests {
     fn protect_tree_keys_protect_the_folder_with_its_content() {
         use crate::model::PROTECT_TREE_PREFIX;
         let inside = [
-            r"C:\ProgramData\PulisciPC",
-            r"C:\ProgramData\PulisciPC\winapp2",
-            r"C:\ProgramData\PulisciPC\winapp2\Winapp2.ini",
-            r"C:\ProgramData\PulisciPC\winapp2\tmp\*.*",
-            r"C:\ProgramData\PulisciPC\*",
-            r"c:/programdata/PULISCIPC/Winapp2/etag.txt",
-            r"\\?\C:\ProgramData\PulisciPC\winapp2\etag.txt",
-            r"C:\Users\u\Documents\PulisciPC\backup_regole_1.reg",
-            r"C:\Users\u\Documents\PulisciPC\sub\x.reg",
+            r"C:\ProgramData\Xiox",
+            r"C:\ProgramData\Xiox\winapp2",
+            r"C:\ProgramData\Xiox\winapp2\Winapp2.ini",
+            r"C:\ProgramData\Xiox\winapp2\tmp\*.*",
+            r"C:\ProgramData\Xiox\*",
+            r"c:/programdata/XIOX/Winapp2/etag.txt",
+            r"\\?\C:\ProgramData\Xiox\winapp2\etag.txt",
+            r"C:\Users\u\Documents\Xiox\backup_regole_1.reg",
+            r"C:\Users\u\Documents\Xiox\sub\x.reg",
         ];
         // Senza le chiavi `protect-tree:` il contenuto è permesso (le cartelle
         // madri sono protette solo prese intere).
@@ -976,14 +976,14 @@ mod tests {
             assert!(protected(Path::new(p), &env()).is_none(), "{p}");
         }
         let mut e = env();
-        e.0.insert(format!("{PROTECT_TREE_PREFIX}dati"), r"C:\ProgramData\PulisciPC".into());
-        e.0.insert(format!("{PROTECT_TREE_PREFIX}backup"), r"C:\Users\u\Documents\PulisciPC\".into());
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}dati"), r"C:\ProgramData\Xiox".into());
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}backup"), r"C:\Users\u\Documents\Xiox\".into());
         for p in inside {
             assert!(protected(Path::new(p), &e).is_some(), "doveva essere protetto: {p}");
             assert!(protected_dir_removal(Path::new(p), &e).is_some(), "doveva essere protetto: {p}");
         }
         for p in [
-            r"C:\ProgramData\PulisciPCx\cache\a.tmp",
+            r"C:\ProgramData\Xioxx\cache\a.tmp",
             r"C:\ProgramData\Other\cache\a.tmp",
             r"C:\Users\u\Documents\My Games\x.log",
         ] {
@@ -992,7 +992,7 @@ mod tests {
         // Un valore vuoto o relativo non protegge niente e non rompe il resto.
         let mut e = env();
         e.0.insert(format!("{PROTECT_TREE_PREFIX}vuota"), "  ".into());
-        e.0.insert(format!("{PROTECT_TREE_PREFIX}relativa"), r"PulisciPC".into());
+        e.0.insert(format!("{PROTECT_TREE_PREFIX}relativa"), r"Xiox".into());
         assert!(protected(Path::new(r"C:\ProgramData\Other\a.tmp"), &e).is_none());
     }
 

@@ -104,7 +104,7 @@ fn with_ticker<R>(progress: &Progress, tick: &(dyn Fn(Tick) + Sync), work: impl 
 fn pool(workers: usize) -> Result<rayon::ThreadPool, String> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers.max(1))
-        .thread_name(|i| format!("pulisci-worker-{i}"))
+        .thread_name(|i| format!("xiox-worker-{i}"))
         .build()
         .map_err(|e| format!("could not start the worker threads: {e}"))
 }

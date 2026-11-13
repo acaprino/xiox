@@ -67,7 +67,7 @@ const WARNING: &str = "Toglie dal PATH le cartelle che non esistono più e i dop
                        (un SDK o uno strumento installato dopo, o che si ricrea quando si aggiorna) o su un disco la \
                        cui lettera ora è di un altro disco esce dal PATH: strumenti e build potrebbero non trovare i \
                        programmi. Pulizia toglie solo le voci mostrate dall'ultima Analisi. Backup .reg in \
-                       Documenti\\PulisciPC.";
+                       Documenti\\Xiox.";
 
 /// Nota delle voci del PATH di sistema quando il processo non è elevato.
 pub const ADMIN_ONLY: &str = "solo con diritti di amministratore: non verrà modificato";

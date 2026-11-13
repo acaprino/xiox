@@ -369,7 +369,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
 }
 
 /// Backup `.reg` delle chiavi che le riparazioni toccano, in
-/// `Documenti\PulisciPC\backup_registro_<stamp>.reg` (`_2`, `_3`… se il nome
+/// `Documenti\Xiox\backup_registro_<stamp>.reg` (`_2`, `_3`… se il nome
 /// c'è già), con l'esportazione sicura di [`regbackup`]. `Ok(None)` se nessuna
 /// chiave esiste più. `Err` se anche una sola chiave esistente non si salva:
 /// allora non si ripara nulla (vedi [`fix_all`]).

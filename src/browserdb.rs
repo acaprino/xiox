@@ -42,7 +42,7 @@ pub const KEEP_PREFIX: &str = "keep:";
 
 /// Contenuto della lista creata al primo uso: solo commenti.
 pub const KEEP_LIST_TEMPLATE: &str = "\
-# Cookie da conservare (PulisciPC)
+# Cookie da conservare (Xiox)
 #
 # Un dominio per riga. Un dominio conserva anche i suoi sottodomini:
 # google.com conserva accounts.google.com, ma non notgoogle.com.
@@ -529,14 +529,16 @@ pub fn is_kept(host: &str, keep: &[String]) -> bool {
     keep.iter().any(|d| h == *d || (h.len() > d.len() && h.ends_with(d.as_str()) && h.as_bytes()[h.len() - d.len() - 1] == b'.'))
 }
 
-/// `<documenti>\PulisciPC\cookie_da_conservare.txt`.
+/// `<documenti>\Xiox\cookie_da_conservare.txt`. Una cartella `<documenti>\PulisciPC` di una
+/// versione precedente si rinomina in `Xiox` (se non si riesce resta in uso quella vecchia:
+/// la lista dell'utente non va mai persa, vedi [`xiox_model::legacy::migrate_legacy_dir`]).
 pub fn keep_list_in(documents: &Path) -> PathBuf {
-    documents.join("PulisciPC").join("cookie_da_conservare.txt")
+    xiox_model::legacy::app_dir_in(documents).join("cookie_da_conservare.txt")
 }
 
-const NOT_SAFE: &str = "lista dei cookie non sicura (la cartella PulisciPC o il file è un collegamento o una giunzione)";
+const NOT_SAFE: &str = "lista dei cookie non sicura (la cartella Xiox o il file è un collegamento o una giunzione)";
 
-/// `Ok` se né `PulisciPC` né il file della lista sono reparse point
+/// `Ok` se né `Xiox` né il file della lista sono reparse point
 /// (giunzioni, collegamenti, segnaposto di OneDrive): ciò che manca va bene,
 /// ciò che c'è deve essere una cartella vera e un file vero.
 fn check_keep_list(path: &Path) -> Result<(), String> {
@@ -636,7 +638,7 @@ pub fn keep_list_summary(list: &Result<KeepList, String>) -> String {
 }
 
 /// Crea la lista se manca e la apre con `open` (nell'app: il Blocco note di
-/// sistema). Niente se `PulisciPC` o il file sono collegamenti o giunzioni.
+/// sistema). Niente se `Xiox` o il file sono collegamenti o giunzioni.
 pub fn open_keep_list_in(documents: &Path, open: &dyn Fn(&Path) -> Result<(), String>) -> Result<(), String> {
     let path = keep_list_in(documents);
     check_keep_list(&path)?;
@@ -1413,7 +1415,7 @@ fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> 
     let name = path.file_name().ok_or_else(|| io::Error::other("nome mancante"))?;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut tmp_name = name.to_os_string();
-    tmp_name.push(format!(".pulisci-pc.{}-{nanos}.tmp", std::process::id()));
+    tmp_name.push(format!(".xiox.{}-{nanos}.tmp", std::process::id()));
     let tmp = path.with_file_name(tmp_name);
     let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let res = (|| {
@@ -1441,7 +1443,7 @@ pub fn items() -> Vec<NativeItem> {
             group: GROUP,
             label: "Cookie (con lista da conservare)",
             description: "Elimina i cookie di Chrome, Edge, Firefox e degli altri browser, tranne quelli dei domini \
-                 scritti in Documenti\\PulisciPC\\cookie_da_conservare.txt (un dominio per riga, vale anche per i \
+                 scritti in Documenti\\Xiox\\cookie_da_conservare.txt (un dominio per riga, vale anche per i \
                  sottodomini). Il profilo di un browser aperto si salta.",
             warning: Some(
                 "si esce dai siti, e in Thunderbird anche dalla posta via web: verranno eliminati tutti i cookie \
@@ -1512,7 +1514,7 @@ pub fn items() -> Vec<NativeItem> {
     ]
 }
 
-/// La lista vera: `Documenti\PulisciPC\cookie_da_conservare.txt`, dalla
+/// La lista vera: `Documenti\Xiox\cookie_da_conservare.txt`, dalla
 /// cartella nota Documenti (mai dalle variabili del processo).
 fn keep_list_path() -> Option<PathBuf> {
     crate::sysclean::documents_dir().map(|d| keep_list_in(&d))

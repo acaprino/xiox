@@ -222,11 +222,35 @@ fn keep_list_ignores_comments_blank_lines_case_and_leading_dot() {
     assert!(!is_kept("google.com.evil.net", &["google.com".to_string()]));
 }
 
+/// Chi aveva già la lista in `Documenti\PulisciPC` la ritrova in `Documenti\Xiox` (cartella rinominata), oppure
+/// dov'era se la rinomina non riesce: i cookie scelti dall'utente non si perdono di vista.
+#[test]
+fn keep_list_of_the_old_folder_is_found_after_the_rename() {
+    let t = tempfile::tempdir().unwrap();
+    let old = t.path().join("PulisciPC");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(old.join("cookie_da_conservare.txt"), "google.com\n").unwrap();
+    let path = keep_list_in(t.path());
+    assert_eq!(path, t.path().join(r"Xiox\cookie_da_conservare.txt"));
+    assert!(!old.exists());
+    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com".to_string()]);
+
+    // Nome nuovo occupato da un file: resta in uso la cartella vecchia, con la lista dentro.
+    let t = tempfile::tempdir().unwrap();
+    let old = t.path().join("PulisciPC");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(old.join("cookie_da_conservare.txt"), "google.com\n").unwrap();
+    fs::write(t.path().join("Xiox"), "x").unwrap();
+    let path = keep_list_in(t.path());
+    assert_eq!(path, old.join("cookie_da_conservare.txt"));
+    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com".to_string()]);
+}
+
 #[test]
 fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     let t = tempfile::tempdir().unwrap();
     let path = keep_list_in(t.path());
-    assert_eq!(path, t.path().join(r"PulisciPC\cookie_da_conservare.txt"));
+    assert_eq!(path, t.path().join(r"Xiox\cookie_da_conservare.txt"));
     // Assente.
     assert_eq!(read_keep_list(&path), Ok(KeepList::default()));
     assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
@@ -321,7 +345,7 @@ fn keep_list_behind_a_junction_is_refused() {
     let elsewhere = t.path().join("altrove");
     fs::create_dir_all(&docs).unwrap();
     fs::create_dir_all(&elsewhere).unwrap();
-    junction(&docs.join("PulisciPC"), &elsewhere);
+    junction(&docs.join("Xiox"), &elsewhere);
     let path = keep_list_in(&docs);
     let launched = std::cell::Cell::new(0);
     let launch = |_: &Path| {
@@ -884,7 +908,7 @@ fn rewrite_failure_leaves_the_original_and_no_temporary() {
     assert_eq!(fs::read_to_string(&prefs).unwrap(), PREFS_JSON);
     assert_eq!(tmps(&chrome), 0);
     // Un temporaneo rimasto da un'interruzione non blocca la voce.
-    fs::write(chrome.join("Preferences.pulisci-pc.tmp"), b"vecchio").unwrap();
+    fs::write(chrome.join("Preferences.xiox.tmp"), b"vecchio").unwrap();
     let done = clean_download_dir(&profiles(&env), &found, &none, &go());
     assert_eq!((done.removed, done.failed), (1, 0), "{:?}", done.notes);
     assert_eq!(tmps(&chrome), 1, "solo quello vecchio");

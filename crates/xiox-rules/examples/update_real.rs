@@ -1,5 +1,5 @@
 //! Prova da amministratore dell'aggiornamento di Winapp2 contro la rete e la cartella vere
-//! (`%ProgramData%\PulisciPC\winapp2`): è il primo avvio del prodotto, senza interfaccia.
+//! (`%ProgramData%\Xiox\winapp2`): è il primo avvio del prodotto, senza interfaccia.
 //! Serve un terminale elevato. Scrive solo nella cartella delle regole dell'app.
 //!
 //!     cargo run -p xiox-rules --release --example update_real -- [file di resoconto]

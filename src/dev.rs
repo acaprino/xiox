@@ -934,7 +934,7 @@ pub fn report_view(ui: &mut Ui, r: &CleanReport, label: &dyn Fn(&Path) -> String
 pub fn save_report_text(r: &CleanReport) -> Option<(String, bool)> {
     let path = rfd::FileDialog::new()
         .set_title("Salva il resoconto")
-        .set_file_name("Resoconto PulisciPC.txt")
+        .set_file_name("Resoconto Xiox.txt")
         .add_filter("Testo", &["txt"])
         .save_file()?;
     Some(match std::fs::write(&path, r.to_text()) {

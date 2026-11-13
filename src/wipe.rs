@@ -6,7 +6,8 @@
 //! Solo su un disco fisso NTFS con testine (HDD): su un SSD non serve
 //! (Windows usa TRIM) e si rifiuta, come quando il tipo non si determina o lo
 //! spazio libero è sotto [`MIN_FREE`]. I file di zeri vanno in una cartella
-//! nascosta `<volume>\PulisciPC_wipe_<pid>_<nanos>` e ci si ferma quando
+//! nascosta `<volume>\Xiox_wipe_<pid>_<nanos>` (`PulisciPC_wipe_…` è il nome di
+//! prima e si riconosce ancora) e ci si ferma quando
 //! restano [`RESERVE`] liberi (riserva per Windows, il file di paging e le
 //! altre app: CCleaner invece riempie il disco). La cartella si cancella
 //! sempre: alla fine, su errore, su annullamento e anche su panico (guard con
@@ -56,7 +57,9 @@ pub const ALIGN: u64 = 1 << 20;
 /// Dimensione massima di un file di riempimento.
 pub const FILE_SIZE: u64 = 1 << 30;
 /// Prefisso della cartella di lavoro nella radice del volume.
-pub const DIR_PREFIX: &str = "PulisciPC_wipe_";
+pub const DIR_PREFIX: &str = "Xiox_wipe_";
+/// Prefisso di prima del cambio di nome: le cartelle rimaste con questo nome si riconoscono e si tolgono lo stesso.
+pub const LEGACY_DIR_PREFIX: &str = "PulisciPC_wipe_";
 /// Voci lette al più in una cartella di lavoro rimasta.
 const MAX_ENTRIES: usize = 100_000;
 
@@ -162,9 +165,16 @@ pub fn wipe_dir_name(pid: u32, nanos: u128) -> String {
     format!("{DIR_PREFIX}{pid}_{nanos}")
 }
 
-/// `PulisciPC_wipe_<cifre>_<cifre>` e nient'altro (maiuscole comprese).
+/// Il prefisso (nuovo o vecchio) con cui comincia il nome di una cartella di lavoro.
+fn wipe_prefix(name: &str) -> Option<&'static str> {
+    [DIR_PREFIX, LEGACY_DIR_PREFIX].into_iter().find(|p| name.starts_with(p))
+}
+
+/// `Xiox_wipe_<cifre>_<cifre>` (o il vecchio `PulisciPC_wipe_<cifre>_<cifre>`) e
+/// nient'altro (maiuscole comprese).
 pub fn is_wipe_dir_name(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix(DIR_PREFIX) else { return false };
+    let Some(prefix) = wipe_prefix(name) else { return false };
+    let rest = &name[prefix.len()..];
     let mut parts = rest.split('_');
     let digits = |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
     digits(parts.next()) && digits(parts.next()) && parts.next().is_none()
@@ -230,7 +240,7 @@ fn wipe_dir_pid(name: &str) -> Option<u32> {
     if !is_wipe_dir_name(name) {
         return None;
     }
-    name[DIR_PREFIX.len()..].split('_').next()?.parse().ok()
+    name[wipe_prefix(name)?.len()..].split('_').next()?.parse().ok()
 }
 
 /// Esito di [`cleanup_leftovers`].
@@ -313,7 +323,7 @@ pub fn analyze_wipe(vol: &dyn Volume) -> NativeFound {
             for name in names.into_iter().filter(|n| is_wipe_dir_name(n)) {
                 notes.push(format!(
                     "Trovata una cartella rimasta da una pulizia interrotta: {root}{name}. Verrà tolta (con Pulizia \
-                     o al prossimo avvio di PulisciPC)"
+                     o al prossimo avvio di Xiox)"
                 ));
                 leftovers.push(format!("{LEFTOVER_ITEM}{name}"));
             }
@@ -468,7 +478,7 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
     if let Err(e) = removal {
         out.failed += 1;
         out.note(format!(
-            "La cartella {root}{name} non si è cancellata ({e}): si riprova al prossimo avvio di PulisciPC o alla \
+            "La cartella {root}{name} non si è cancellata ({e}): si riprova al prossimo avvio di Xiox o alla \
              prossima pulizia di questa voce"
         ));
     }

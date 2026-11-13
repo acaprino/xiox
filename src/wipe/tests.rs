@@ -163,17 +163,17 @@ fn clean(vol: &FakeVol) -> NativeCleaned {
 
 #[test]
 fn wipe_names_are_strict() {
-    assert_eq!(wipe_dir_name(42, 7), "PulisciPC_wipe_42_7");
-    assert!(is_wipe_dir_name("PulisciPC_wipe_42_7"));
+    assert_eq!(wipe_dir_name(42, 7), "Xiox_wipe_42_7");
+    assert!(is_wipe_dir_name("Xiox_wipe_42_7"));
     for bad in [
-        "PulisciPC_wipe_",
-        "PulisciPC_wipe_42",
-        "PulisciPC_wipe_42_",
-        "PulisciPC_wipe__7",
-        "PulisciPC_wipe_a_7",
-        "PulisciPC_wipe_42_7_8",
-        r"PulisciPC_wipe_42_7\x",
-        "pulisciPC_wipe_42_7",
+        "Xiox_wipe_",
+        "Xiox_wipe_42",
+        "Xiox_wipe_42_",
+        "Xiox_wipe__7",
+        "Xiox_wipe_a_7",
+        "Xiox_wipe_42_7_8",
+        r"Xiox_wipe_42_7\x",
+        "xiox_wipe_42_7",
         "Documenti",
     ] {
         assert!(!is_wipe_dir_name(bad), "{bad}");
@@ -275,9 +275,9 @@ fn hdd_analysis_shows_kind_and_free_space() {
 
 fn with_leftovers(free: u64) -> FakeVol {
     let vol = FakeVol::hdd(free);
-    vol.dirs.borrow_mut().insert("PulisciPC_wipe_123_456".into(), vec![3 * GIB, GIB]);
+    vol.dirs.borrow_mut().insert("Xiox_wipe_123_456".into(), vec![3 * GIB, GIB]);
     vol.dirs.borrow_mut().insert("Documenti".into(), vec![5]);
-    vol.dirs.borrow_mut().insert("PulisciPC_wipe_altro".into(), vec![5]);
+    vol.dirs.borrow_mut().insert("Xiox_wipe_altro".into(), vec![5]);
     vol
 }
 
@@ -288,10 +288,10 @@ fn analysis_only_reports_a_leftover_and_never_removes_it() {
     assert!(vol.removed.borrow().is_empty(), "l'analisi è di sola lettura");
     assert_eq!(vol.free.get(), 10 * GIB);
     assert_eq!(vol.dirs.borrow().len(), 3);
-    assert_eq!(found.items, vec![r"C:\".to_string(), "leftover:PulisciPC_wipe_123_456".to_string()]);
+    assert_eq!(found.items, vec![r"C:\".to_string(), "leftover:Xiox_wipe_123_456".to_string()]);
     assert_eq!(found.count, 2);
     assert!(
-        found.detail.iter().any(|d| d.contains("Trovata una cartella rimasta") && d.contains("PulisciPC_wipe_123_456")
+        found.detail.iter().any(|d| d.contains("Trovata una cartella rimasta") && d.contains("Xiox_wipe_123_456")
             && d.contains("Verrà tolta")),
         "{:?}",
         found.detail
@@ -305,10 +305,10 @@ fn clean_removes_the_leftover_first_then_writes() {
     let found = analyze_wipe(&vol);
     let out = clean_wipe(&vol, &found, &vol.cancel);
     let removed = vol.removed.borrow().clone();
-    assert_eq!(removed[0], "PulisciPC_wipe_123_456", "prima l'avanzo");
+    assert_eq!(removed[0], "Xiox_wipe_123_456", "prima l'avanzo");
     assert_eq!(removed.len(), 2, "poi la cartella di lavoro");
     assert!(vol.dirs.borrow().contains_key("Documenti"));
-    assert!(vol.dirs.borrow().contains_key("PulisciPC_wipe_altro"));
+    assert!(vol.dirs.borrow().contains_key("Xiox_wipe_altro"));
     assert_eq!(vol.free.get(), 14 * GIB);
     // Spazio ritrovato: conta per la scrittura (14 GB meno riserva e margine).
     assert_eq!(vol.created.borrow().len(), 1);
@@ -325,9 +325,9 @@ fn leftover_on_an_unsuitable_disk_is_removed_but_nothing_is_written() {
     // Avanzo che riempie il disco: sotto 2 GB liberi non si scrive, ma l'avanzo si toglie.
     let vol = with_leftovers(GIB);
     let found = analyze_wipe(&vol);
-    assert_eq!(found.items, vec!["leftover:PulisciPC_wipe_123_456".to_string()]);
+    assert_eq!(found.items, vec!["leftover:Xiox_wipe_123_456".to_string()]);
     let out = clean_wipe(&vol, &found, &vol.cancel);
-    assert_eq!(*vol.removed.borrow(), vec!["PulisciPC_wipe_123_456".to_string()]);
+    assert_eq!(*vol.removed.borrow(), vec!["Xiox_wipe_123_456".to_string()]);
     assert!(vol.created.borrow().is_empty());
     assert_eq!(vol.writes.get(), 0);
     assert_eq!(out.freed, 4 * GIB);
@@ -337,14 +337,54 @@ fn leftover_on_an_unsuitable_disk_is_removed_but_nothing_is_written() {
 #[test]
 fn startup_cleanup_skips_the_folders_of_this_process() {
     let vol = with_leftovers(10 * GIB);
-    vol.dirs.borrow_mut().insert("PulisciPC_wipe_77_1".into(), vec![GIB]);
+    vol.dirs.borrow_mut().insert("Xiox_wipe_77_1".into(), vec![GIB]);
     let left = cleanup_leftovers(&vol, Some(77));
-    assert_eq!(*vol.removed.borrow(), vec!["PulisciPC_wipe_123_456".to_string()]);
-    assert!(vol.dirs.borrow().contains_key("PulisciPC_wipe_77_1"));
+    assert_eq!(*vol.removed.borrow(), vec!["Xiox_wipe_123_456".to_string()]);
+    assert!(vol.dirs.borrow().contains_key("Xiox_wipe_77_1"));
     assert_eq!(left.freed, 4 * GIB);
     assert_eq!(left.failed, 0);
+    assert_eq!(wipe_dir_pid("Xiox_wipe_77_1"), Some(77));
+    assert_eq!(wipe_dir_pid("Xiox_wipe_x"), None);
+}
+
+/// Le cartelle di lavoro lasciate dalla versione con il vecchio nome (`PulisciPC_wipe_*`) si
+/// riconoscono e si tolgono come le nuove; i nomi quasi uguali no.
+#[test]
+fn leftovers_with_the_old_name_are_still_recognised_and_removed() {
+    assert!(is_wipe_dir_name("PulisciPC_wipe_42_7"));
     assert_eq!(wipe_dir_pid("PulisciPC_wipe_77_1"), Some(77));
-    assert_eq!(wipe_dir_pid("PulisciPC_wipe_x"), None);
+    for bad in [
+        "PulisciPC_wipe_",
+        "PulisciPC_wipe_42",
+        "PulisciPC_wipe__7",
+        "PulisciPC_wipe_42_7_8",
+        r"PulisciPC_wipe_42_7\x",
+        "pulisciPC_wipe_42_7",
+        "PulisciPC_wipe_altro",
+    ] {
+        assert!(!is_wipe_dir_name(bad), "{bad}");
+    }
+    // Il nome nuovo è quello che si scrive.
+    assert!(wipe_dir_name(1, 2).starts_with("Xiox_wipe_"));
+
+    let vol = FakeVol::hdd(10 * GIB);
+    vol.dirs.borrow_mut().insert("PulisciPC_wipe_123_456".into(), vec![3 * GIB, GIB]);
+    vol.dirs.borrow_mut().insert("Xiox_wipe_124_1".into(), vec![GIB]);
+    vol.dirs.borrow_mut().insert("Documenti".into(), vec![5]);
+    let found = analyze_wipe(&vol);
+    assert!(found.items.contains(&"leftover:PulisciPC_wipe_123_456".to_string()), "{:?}", found.items);
+    assert!(found.items.contains(&"leftover:Xiox_wipe_124_1".to_string()), "{:?}", found.items);
+    let left = cleanup_leftovers(&vol, None);
+    let mut removed = vol.removed.borrow().clone();
+    removed.sort();
+    assert_eq!(removed, vec!["PulisciPC_wipe_123_456".to_string(), "Xiox_wipe_124_1".to_string()]);
+    assert!(vol.dirs.borrow().contains_key("Documenti"));
+    assert_eq!(left.failed, 0);
+    // Il pid di una cartella vecchia si rispetta come quello di una nuova.
+    let vol = FakeVol::hdd(10 * GIB);
+    vol.dirs.borrow_mut().insert("PulisciPC_wipe_77_1".into(), vec![GIB]);
+    cleanup_leftovers(&vol, Some(77));
+    assert!(vol.removed.borrow().is_empty());
 }
 
 // ----- pulizia -----
@@ -525,12 +565,26 @@ fn junction(link: &Path, target: &Path) {
 #[test]
 fn real_listing_takes_only_true_wipe_folders() {
     let t = tempfile::tempdir().unwrap();
-    fs::create_dir(t.path().join("PulisciPC_wipe_1_2")).unwrap();
-    fs::create_dir(t.path().join("PulisciPC_wipe_x")).unwrap();
+    fs::create_dir(t.path().join("Xiox_wipe_1_2")).unwrap();
+    fs::create_dir(t.path().join("Xiox_wipe_x")).unwrap();
     fs::create_dir(t.path().join("Altro")).unwrap();
-    tiny(&t.path().join("PulisciPC_wipe_5_6"));
-    junction(&t.path().join("PulisciPC_wipe_3_4"), &t.path().join("Altro"));
-    assert_eq!(list_wipe_dirs_at(t.path()).unwrap(), vec!["PulisciPC_wipe_1_2".to_string()]);
+    tiny(&t.path().join("Xiox_wipe_5_6"));
+    junction(&t.path().join("Xiox_wipe_3_4"), &t.path().join("Altro"));
+    assert_eq!(list_wipe_dirs_at(t.path()).unwrap(), vec!["Xiox_wipe_1_2".to_string()]);
+}
+
+#[test]
+fn real_listing_and_removal_accept_the_old_folder_name_too() {
+    let t = tempfile::tempdir().unwrap();
+    let guard = Guard::new(&Env::default());
+    tiny(&t.path().join("PulisciPC_wipe_9_9").join("fill_00001.bin"));
+    tiny(&t.path().join("Xiox_wipe_8_8").join("fill_00001.bin"));
+    let mut listed = list_wipe_dirs_at(t.path()).unwrap();
+    listed.sort();
+    assert_eq!(listed, vec!["PulisciPC_wipe_9_9".to_string(), "Xiox_wipe_8_8".to_string()]);
+    assert_eq!(remove_wipe_dir_at(t.path(), "PulisciPC_wipe_9_9", &guard), Ok(4));
+    assert!(!t.path().join("PulisciPC_wipe_9_9").exists());
+    assert!(t.path().join("Xiox_wipe_8_8").exists());
 }
 
 #[test]
@@ -539,18 +593,18 @@ fn real_removal_deletes_only_fill_files_and_never_follows_links() {
     let guard = Guard::new(&Env::default());
 
     // Cartella con soli file di riempimento: via tutto.
-    let d = t.path().join("PulisciPC_wipe_1_2");
+    let d = t.path().join("Xiox_wipe_1_2");
     tiny(&d.join("fill_00001.bin"));
     tiny(&d.join("fill_00002.bin"));
-    assert_eq!(remove_wipe_dir_at(t.path(), "PulisciPC_wipe_1_2", &guard), Ok(8));
+    assert_eq!(remove_wipe_dir_at(t.path(), "Xiox_wipe_1_2", &guard), Ok(8));
     assert!(!d.exists());
 
     // Un file estraneo resta, e con lui la cartella.
-    let d = t.path().join("PulisciPC_wipe_3_4");
+    let d = t.path().join("Xiox_wipe_3_4");
     tiny(&d.join("fill_00001.bin"));
     tiny(&d.join("nota.txt"));
     fs::create_dir(d.join("sotto")).unwrap();
-    let r = remove_wipe_dir_at(t.path(), "PulisciPC_wipe_3_4", &guard);
+    let r = remove_wipe_dir_at(t.path(), "Xiox_wipe_3_4", &guard);
     let e = r.unwrap_err();
     assert!(e.contains("nota.txt") && e.contains("sotto"), "{e}");
     assert!(!d.join("fill_00001.bin").exists());
@@ -560,14 +614,14 @@ fn real_removal_deletes_only_fill_files_and_never_follows_links() {
     // Una giunzione con il nome giusto non si segue.
     let target = t.path().join("Bersaglio");
     tiny(&target.join("fill_00001.bin"));
-    junction(&t.path().join("PulisciPC_wipe_5_6"), &target);
-    assert!(remove_wipe_dir_at(t.path(), "PulisciPC_wipe_5_6", &guard).is_err());
+    junction(&t.path().join("Xiox_wipe_5_6"), &target);
+    assert!(remove_wipe_dir_at(t.path(), "Xiox_wipe_5_6", &guard).is_err());
     assert!(target.join("fill_00001.bin").exists());
 
     // Nomi che non sono dei nostri: rifiutati prima di guardare il disco.
     tiny(&t.path().join("Documenti").join("fill_00001.bin"));
     assert!(remove_wipe_dir_at(t.path(), "Documenti", &guard).is_err());
-    assert!(remove_wipe_dir_at(t.path(), r"PulisciPC_wipe_1_2\..\Documenti", &guard).is_err());
+    assert!(remove_wipe_dir_at(t.path(), r"Xiox_wipe_1_2\..\Documenti", &guard).is_err());
     assert!(t.path().join("Documenti").join("fill_00001.bin").exists());
 }
 
