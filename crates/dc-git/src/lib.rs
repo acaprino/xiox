@@ -324,7 +324,9 @@ mod tests {
         }
     }
 
-    fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> String {
+    /// The command the tests run git with: author identity fixed, and never an inherited
+    /// repository selection (a test run from a git hook must not touch the hook's repository).
+    fn git_cmd(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Command {
         let mut c = Command::new("git");
         c.arg("-C")
             .arg(dir)
@@ -335,12 +337,28 @@ mod tests {
             .env("GIT_COMMITTER_NAME", "Test")
             .env("GIT_COMMITTER_EMAIL", "test@example.com")
             .env("GIT_TERMINAL_PROMPT", "0");
+        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"] {
+            c.env_remove(var);
+        }
         for (k, v) in envs {
             c.env(k, v);
         }
         #[cfg(windows)]
         c.creation_flags(CREATE_NO_WINDOW);
-        let out = c.output().expect("git must be installed to run these tests");
+        c
+    }
+
+    #[test]
+    fn the_test_git_never_inherits_a_repository_selection() {
+        let c = git_cmd(Path::new("."), &["status"], &[]);
+        for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"] {
+            let set = c.get_envs().find(|(k, _)| *k == std::ffi::OsStr::new(var));
+            assert!(matches!(set, Some((_, None))), "{var} must be removed from the child environment");
+        }
+    }
+
+    fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> String {
+        let out = git_cmd(dir, args, envs).output().expect("git must be installed to run these tests");
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",

@@ -200,6 +200,76 @@ pub fn untracked_files(root: &Path, ignored: bool) -> Option<Vec<PathBuf>> {
     )
 }
 
+/// `url` without the credentials of its authority (`https://user:token@host/a/b` becomes
+/// `https://host/a/b`). Anything that is not a `scheme://authority/...` URL (an scp-like
+/// `git@host:a/b`, a local path) is returned as it is: no secret travels in those.
+pub fn strip_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
+    let end = rest.find(['/', '\\', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    match authority.rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://{host}{tail}"),
+        None => url.to_string(),
+    }
+}
+
+/// `Some(true)` when `dir` has uncommitted changes or untracked files (what `git status` shows),
+/// `None` when git cannot read the folder (not a repository, `dubious ownership`, no git).
+pub fn working_tree_dirty(dir: &Path) -> Option<bool> {
+    let o = git(dir, &["status", "--porcelain=v1", "--untracked-files=normal"]).filter(|o| o.ok)?;
+    Some(o.stdout.iter().any(|b| !b.is_ascii_whitespace()))
+}
+
+/// The commits of `repo` that would be lost with it: HEAD, every local branch, every tag and
+/// every stash entry, sorted, without duplicates. `Some(empty)` for a repository without a commit,
+/// `None` when git cannot list them.
+pub fn work_tips(repo: &Path) -> Option<Vec<String>> {
+    let refs = git(repo, &["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/tags"]).filter(|o| o.ok)?;
+    let mut tips: Vec<String> = refs.text().lines().map(|l| l.trim().to_string()).collect();
+    if let Some(head) = git(repo, &["rev-parse", "--verify", "-q", "HEAD"]).filter(|o| o.ok) {
+        tips.push(head.text());
+    }
+    // `refs/stash` keeps only the newest entry; the older ones live in its reflog.
+    let stash = git(repo, &["stash", "list", "--format=%H"]).filter(|o| o.ok)?;
+    tips.extend(stash.text().lines().map(|l| l.trim().to_string()));
+    tips.retain(|t| !t.is_empty());
+    tips.sort();
+    tips.dedup();
+    Some(tips)
+}
+
+/// How many tips go on one command line (a Windows command line holds about 32 000 characters).
+const TIPS_PER_CALL: usize = 200;
+
+/// `Some(true)` when at least one of `tips` is not reachable from any ref (or HEAD) of `repo`:
+/// the commit is not in `repo` at all, or only as a dangling object (a deleted branch, a rebase).
+/// `Some(false)` when every tip is reachable (also when there is no tip). `None` when git cannot
+/// answer. `tips` come from another repository: that is the point.
+pub fn tips_missing_from_refs(repo: &Path, tips: &[String]) -> Option<bool> {
+    unreached(repo, tips, "--all")
+}
+
+/// `Some(true)` when at least one of `tips` (of `repo` itself) is not reachable from a
+/// remote-tracking branch: the commit exists nowhere but here, as far as `repo` knows.
+pub fn tips_not_pushed(repo: &Path, tips: &[String]) -> Option<bool> {
+    unreached(repo, tips, "--remotes")
+}
+
+/// `git rev-list -n1 --missing=print <tips> --not <scope>`: any output (a commit, or `?<sha>` for
+/// an object `repo` does not have) is a tip that `scope` does not reach.
+fn unreached(repo: &Path, tips: &[String], scope: &str) -> Option<bool> {
+    for chunk in tips.chunks(TIPS_PER_CALL) {
+        let mut args: Vec<&str> = vec!["rev-list", "-n1", "--missing=print"];
+        args.extend(chunk.iter().map(String::as_str));
+        args.extend(["--not", scope]);
+        let o = git(repo, &args).filter(|o| o.ok)?;
+        if !o.text().is_empty() {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 /// Local branches other than the main worktree's current one that are merged into it
 /// (`git branch --merged`) or checked out in a prunable worktree.
 pub fn stale_branches(repo: &Path) -> Vec<BranchInfo> {
@@ -515,5 +585,151 @@ mod tests {
         let e = t.sub("unborn");
         init(&e);
         assert_eq!(head_kept_elsewhere(&e), None);
+    }
+
+    // ── the copy checks of `xiox` ──
+
+    #[test]
+    fn credentials_are_cut_from_a_remote_url_and_nothing_else_is() {
+        assert_eq!(strip_credentials("https://user:tok3n@github.com/a/b.git"), "https://github.com/a/b.git");
+        assert_eq!(strip_credentials("https://tok3n@github.com/a/b"), "https://github.com/a/b");
+        assert_eq!(strip_credentials("ssh://git@host:22/a/b"), "ssh://host:22/a/b");
+        assert_eq!(strip_credentials("git@github.com:a/b.git"), "git@github.com:a/b.git");
+        assert_eq!(strip_credentials("https://github.com/a/b.git"), "https://github.com/a/b.git");
+        assert_eq!(strip_credentials(r"D:\repos\b"), r"D:\repos\b");
+        // An '@' after the host is part of the path, not a user.
+        assert_eq!(strip_credentials("https://host/a/b@c"), "https://host/a/b@c");
+        // The identity of a remote does not change.
+        let url = "https://user:tok3n@github.com/a/b.git";
+        assert_eq!(normalize_remote(url), normalize_remote(&strip_credentials(url)));
+    }
+
+    /// A project with one commit and a clone of it.
+    fn project_and_clone(t: &Tmp) -> (PathBuf, PathBuf) {
+        let p = t.sub("proj");
+        init(&p);
+        commit_file(&p, "a.txt", "a");
+        let c = t.0.join("copy");
+        g(&t.0, &["clone", "-q", &p.to_string_lossy(), &c.to_string_lossy()]);
+        (p, c)
+    }
+
+    #[test]
+    fn work_tips_are_head_branches_tags_and_every_stash_entry() {
+        let t = Tmp::new();
+        let (_p, c) = project_and_clone(&t);
+        let base = work_tips(&c).expect("tips");
+        assert_eq!(base, vec![g(&c, &["rev-parse", "HEAD"])], "a clean clone has one tip: HEAD (= main)");
+
+        g(&c, &["branch", "side"]);
+        g(&c, &["tag", "v1"]);
+        write(&c, "a.txt", "changed");
+        g(&c, &["stash", "push", "-q"]);
+        write(&c, "a.txt", "changed again");
+        g(&c, &["stash", "push", "-q"]);
+        let tips = work_tips(&c).expect("tips");
+        let stashes: Vec<String> = g(&c, &["stash", "list", "--format=%H"]).lines().map(str::to_string).collect();
+        assert_eq!(stashes.len(), 2);
+        for s in &stashes {
+            assert!(tips.contains(s), "stash {s} missing from {tips:?}");
+        }
+        assert!(tips.contains(&g(&c, &["rev-parse", "HEAD"])));
+        assert!(tips.windows(2).all(|w| w[0] < w[1]), "sorted, no duplicates: {tips:?}");
+    }
+
+    #[test]
+    fn work_tips_of_an_unborn_repository_is_empty_and_of_a_plain_folder_is_none() {
+        let t = Tmp::new();
+        let e = t.sub("unborn");
+        init(&e);
+        assert_eq!(work_tips(&e), Some(Vec::new()));
+        assert_eq!(work_tips(&t.sub("plain")), None);
+    }
+
+    #[test]
+    fn tips_missing_from_refs_sees_private_commits_stashes_tags_and_dangling_objects() {
+        let t = Tmp::new();
+        let (p, c) = project_and_clone(&t);
+        // A clean clone: every tip is in the project.
+        let tips = work_tips(&c).unwrap();
+        assert_eq!(tips_missing_from_refs(&p, &tips), Some(false));
+        // Nothing to check: nothing is missing.
+        assert_eq!(tips_missing_from_refs(&p, &[]), Some(false));
+
+        // A stash whose commits the project has never seen.
+        write(&c, "wip.txt", "wip");
+        g(&c, &["add", "wip.txt"]);
+        g(&c, &["stash", "push", "-q"]);
+        assert_eq!(tips_missing_from_refs(&p, &work_tips(&c).unwrap()), Some(true), "stash");
+        g(&c, &["stash", "drop", "-q"]);
+        assert_eq!(tips_missing_from_refs(&p, &work_tips(&c).unwrap()), Some(false));
+
+        // A tag on a commit no branch of the copy has any more.
+        commit_file(&c, "private.txt", "x");
+        g(&c, &["tag", "keep"]);
+        g(&c, &["reset", "-q", "--hard", "HEAD~1"]);
+        let tips = work_tips(&c).unwrap();
+        assert_eq!(tips_missing_from_refs(&p, &tips), Some(true), "tag");
+        g(&c, &["tag", "-d", "keep"]);
+
+        // A branch that is only in the copy.
+        g(&c, &["checkout", "-q", "-b", "mine"]);
+        commit_file(&c, "mine.txt", "x");
+        assert_eq!(tips_missing_from_refs(&p, &work_tips(&c).unwrap()), Some(true), "branch");
+
+        // The project has the object but no ref reaches it (a deleted branch): still unsaved work.
+        g(&p, &["checkout", "-q", "-b", "temp"]);
+        commit_file(&p, "temp.txt", "x");
+        let temp_tip = g(&p, &["rev-parse", "HEAD"]);
+        g(&p, &["checkout", "-q", "main"]);
+        g(&p, &["branch", "-D", "temp"]);
+        assert_eq!(tips_missing_from_refs(&p, &[temp_tip]), Some(true), "dangling object");
+
+        // git cannot answer in a folder that is not a repository.
+        assert_eq!(tips_missing_from_refs(&t.sub("plain"), &[g(&c, &["rev-parse", "HEAD"])]), None);
+    }
+
+    #[test]
+    fn tips_missing_from_refs_copes_with_thousands_of_tips() {
+        let t = Tmp::new();
+        let (p, c) = project_and_clone(&t);
+        let sha = g(&c, &["rev-parse", "HEAD"]);
+        let many = vec![sha; 3000];
+        assert_eq!(tips_missing_from_refs(&p, &many), Some(false));
+    }
+
+    #[test]
+    fn tips_not_pushed_looks_at_the_remotes_of_the_repository_itself() {
+        let t = Tmp::new();
+        let (repo, _bare) = repo_with_remote_for_tests(&t);
+        assert_eq!(tips_not_pushed(&repo, &work_tips(&repo).unwrap()), Some(false));
+        commit_file(&repo, "local.txt", "x");
+        assert_eq!(tips_not_pushed(&repo, &work_tips(&repo).unwrap()), Some(true));
+        // No remote at all: everything is unpushed.
+        let lone = t.sub("lone");
+        init(&lone);
+        commit_file(&lone, "a.txt", "a");
+        assert_eq!(tips_not_pushed(&lone, &work_tips(&lone).unwrap()), Some(true));
+    }
+
+    fn repo_with_remote_for_tests(t: &Tmp) -> (PathBuf, PathBuf) {
+        let bare = t.sub("remote.git");
+        g(&bare, &["init", "-q", "--bare", "-b", "main"]);
+        let repo = t.sub("work");
+        init(&repo);
+        commit_file(&repo, "a.txt", "a");
+        g(&repo, &["remote", "add", "origin", &bare.to_string_lossy()]);
+        g(&repo, &["push", "-q", "-u", "origin", "main"]);
+        (repo, bare)
+    }
+
+    #[test]
+    fn working_tree_dirty_tells_clean_dirty_and_unreadable() {
+        let t = Tmp::new();
+        let (_p, c) = project_and_clone(&t);
+        assert_eq!(working_tree_dirty(&c), Some(false));
+        write(&c, "new.txt", "x");
+        assert_eq!(working_tree_dirty(&c), Some(true));
+        assert_eq!(working_tree_dirty(&t.sub("plain")), None);
     }
 }
