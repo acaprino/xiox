@@ -20,6 +20,8 @@ mod tests;
 pub use clean::{
     CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, recycle_shortfall, select,
 };
+pub use dc_git::normalize_remote;
+pub use owned::key_within;
 pub use resolve::resolve_project;
 
 use dc_model::{Agent, ArtifactKind, Level};
@@ -237,6 +239,47 @@ pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error
     let (archived, _) = dc_app::load_archived_sessions(cache);
     let env = Env { sessions: &sessions, archived: &archived, search_roots: None, now_ms: dc_app::now_ms() };
     analyze_with(path, opts, &env)
+}
+
+/// [`analyze_project`] with `copies`/`named` searched only below `search_roots` (to depth 3)
+/// instead of the fixed drives and the home folder. Used by tests and by debug builds of `xiox`.
+/// Still reads the real sessions of this PC.
+pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf]) -> Result<ProjectScan, Error> {
+    let cache = Some(dc_app::cache_dir());
+    let (sessions, _) = dc_app::load_sessions(cache.clone());
+    let (archived, _) = dc_app::load_archived_sessions(cache);
+    let env = Env {
+        sessions: &sessions,
+        archived: &archived,
+        search_roots: Some(search_roots.to_vec()),
+        now_ms: dc_app::now_ms(),
+    };
+    analyze_with(path, opts, &env)
+}
+
+/// [`analyze_project_in`] without reading any session of this PC (no `sessions` items, no live
+/// session blocks, nothing written to the cache). For tests that run on fake trees.
+pub fn analyze_project_without_sessions(
+    path: &Path,
+    opts: &Options,
+    search_roots: &[PathBuf],
+) -> Result<ProjectScan, Error> {
+    let env = Env { sessions: &[], archived: &[], search_roots: Some(search_roots.to_vec()), now_ms: dc_app::now_ms() };
+    analyze_with(path, opts, &env)
+}
+
+/// True when the process runs with an elevated token (an administrator that approved UAC).
+/// Same check as the window app's `sys::is_admin`.
+pub fn is_elevated() -> bool {
+    #[cfg(windows)]
+    {
+        // SAFETY: no arguments, no pointers; returns a BOOL.
+        unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 /// [`analyze_project`] with everything outside the project tree injected.

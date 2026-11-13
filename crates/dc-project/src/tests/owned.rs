@@ -415,3 +415,22 @@ fn build_inside_a_worktree_nested_under_the_root_is_listed_once_with_the_live_se
     // The engine credits a session inside the root to the root too (component-aware "inside").
     assert_eq!(item(&scan, &root_build).blocked, vec![Block::LiveSession]);
 }
+
+#[test]
+fn analyze_project_without_sessions_searches_only_the_given_roots_and_lists_no_session() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("work").join("proj"));
+    let target = rust_build(&root, 2 * MB);
+    let other = base.join("other");
+    let copy = base.join("other").join("proj-scratch");
+    fs::create_dir_all(&copy).unwrap();
+    let opts = Options { drives: true, measure: false, admin: false };
+    let scan = analyze_project_without_sessions(&root, &opts, &[other]).unwrap();
+    assert_eq!(item(&scan, &target).category, Category::Builds);
+    assert!(of(&scan, Category::Sessions).is_empty());
+    assert_eq!(scan.search, SearchMode::BoundedWalk);
+    // The folder with the project's name, found only below the injected root.
+    assert_eq!(item(&scan, &copy).category, Category::Named);
+    // Elevation is a plain query that never fails.
+    let _ = is_elevated();
+}

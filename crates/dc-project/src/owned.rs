@@ -63,7 +63,7 @@ pub(crate) fn sort_items(items: &mut [Item]) {
 // ───────────────────────────────── helpers ─────────────────────────────────
 
 /// Component-aware "`child` is `parent` or inside it", on `path_key` strings.
-pub(crate) fn key_within(child: &str, parent: &str) -> bool {
+pub fn key_within(child: &str, parent: &str) -> bool {
     if parent.is_empty() {
         return false;
     }
