@@ -239,3 +239,86 @@ Guida per chi lo usa: `docs/xiox-observe.md` (in inglese).
   `structuredContent`).
 - Non è stato misurato il carico su un progetto reale grande: i tetti sono verificati dai test, non da
   una misura sul campo.
+
+### Terza deviazione: nessun timer in modalità MCP
+
+Il documento chiedeva un osservatore che ricontrolla a intervalli. In modalità `--mcp` non c'è nessun
+timer: un controllo gira solo quando arriva `tools/call`, e `--interval` è accettato ma ignorato.
+Conseguenza dichiarata (guida e `--help`): ciò che viene creato e tolto fra due chiamate non si vede
+mai, e nulla viene notato finché l'agente non chiama. È una conseguenza della scelta di non avere
+thread di sfondo in un server che vive dentro l'harness; la modalità predefinita (righe JSON) ha il
+timer.
+
+### Revisione finale dell'intero ramo: correzioni
+
+La revisione dell'intero ramo (nessun difetto critico) ha dato quattro punti importanti, un punto
+obbligatorio e alcuni minori; tutti sono stati corretti con test scritti prima. Decisioni prese:
+
+- **Mai la ricerca da amministratore** (I1). `observe` passa sempre `admin: false`
+  (`observe_options`), anche da un terminale elevato: prima ogni controllo, `report` e chiamata MCP
+  leggeva l'intera MFT di ogni disco NTFS (circa 300 MB di picco per controllo per osservatore),
+  contro «nessuna camminata completa dei dischi a intervalli» e «più osservatori insieme». Linea di
+  base e controlli usano la stessa ricerca; il campo `search` non vale più `mft-index`.
+- **Misura parziale come limite inferiore** (I2). `measure_bytes` ora dà `Measured { bytes, complete }`:
+  oltre i tetti (200.000 voci o 10 s) restituisce quanto contato con `complete: false`, `None` solo se
+  la radice non si legge. Il totale parziale entra nella crescita e nei totali (una `target` enorme e
+  nuova fa scattare `attention`); la voce porta `bytesPartial: true` (camelCase, sempre presente,
+  `false` quando la misura è intera o manca). Scelte: *back-off*: una voce la cui ultima misura ha
+  toccato i tetti si rimisura al più ogni 10 minuti (`PARTIAL_BACK_OFF_MS`, a tempo e non «ogni N
+  controlli» perché in MCP i controlli sono le chiamate); *budget*: ogni controllo misura al più 30 s
+  in totale (`MEASURE_BUDGET`, controllato prima di ogni cartella: si può sforare di una misura, 10 s),
+  nell'ordine «mai misurate prima, poi la misura più vecchia»; il resto passa al controllo seguente;
+  il budget si legge dall'orologio dell'osservatore (`now_ms`), così i test lo guidano senza
+  attese; la linea di base non ha budget (ogni cartella resta limitata dai tetti). Resta vero che di
+  una cartella parziale la crescita oltre ciò che la camminata raggiunge non si vede: è un limite
+  inferiore, dichiarato.
+- **La prima chiamata MCP non lavora due volte** (I3). La chiamata che ha dovuto aspettare la linea
+  di base (o che l'ha rifatta perché la prima era fallita) la riporta così com'è, senza un secondo
+  `check`. Scelta più prudente della lettera della richiesta: se il risultato della linea di base era
+  già pronto quando la chiamata è arrivata (l'agente chiama molto dopo l'avvio), la chiamata fa il
+  controllo, altrimenti ciò che è nato nel frattempo resterebbe invisibile fino alla chiamata dopo.
+- **Testo MCP compatto** (I4). `structuredContent` resta il resoconto COMPLETO; il testo `content`
+  diventa una vista compatta: progetto, `startedAtMs`/`checkedAtMs`/`stale`, totali, crescita,
+  `attention`, `cleanCommand` (e se è troncato), solo le voci NUOVE (al più 50, una riga ciascuna:
+  categoria, livello, byte, percorso o titolo della sessione, motivi di blocco) e un'ultima riga con
+  quante altre voci esistono e dove sta l'elenco completo. Con 300 sessioni archiviate il testo sta
+  sotto 8 KB e nomina comunque il worktree nuovo. Descrizione dello strumento, `instructions` e guida
+  dicono con chiarezza che un client che inoltra al modello solo `content` vede la vista compatta.
+- **Gara nel test del binario** (M1). Il test attende, con un limite, lo stato finale (il worktree
+  elencato come worktree) accettando la sequenza copia, poi worktree; il test MCP che dormiva 400 ms
+  ora attende la condizione («il risultato della linea di base è in canale») con un sondaggio limitato.
+- **Controllo degradato** (minore). Un controllo con un'altra radice del progetto, che non è più un
+  repository, o senza worktree dove ce n'erano (e git, interrogato di nuovo, fallisce o ne elenca)
+  è un controllo FALLITO (evento `error`, resoconto `stale: true`), mai passato a `update`: una
+  scadenza di git non produce più «tutti rimossi, poi tutti nuovi». La domanda a git è una funzione
+  nuova di `xiox-project` (`linked_worktree_count`); il comportamento di `analyze` e `clean` non cambia.
+  Costo dichiarato: un progetto che smette davvero di essere un repository dà errore a ogni controllo
+  finché non si riavvia l'osservatore.
+- **Altri minori**: il messaggio del panic del lavoratore della linea di base MCP dice «the first
+  analysis stopped on an internal error; the next call retries it»; la coda di stdin è limitata (16
+  righe) e le righe `report` già in coda condividono un solo controllo (ognuna ha comunque il suo
+  evento `report`); un test strutturale legge i sorgenti di `observe.rs`, `mcp.rs` e di
+  `xiox-observer` e prova che non nominano `clean`, `remove`, `delete`, `trash`, `fs::write`,
+  `File::create`, `OpenOptions`, `is_elevated` (con la lista dei pochi usi legittimi: il
+  `cleanCommand` solo stampato, `remove` di mappe in memoria e il campo `removed` di `changed`).
+- **Documentazione**: le dimensioni dell'osservatore sono la lunghezza apparente e possono differire da
+  `xiox analyze --json`; `cleanCommand` è citato per il parser di argomenti di Windows, non per
+  PowerShell; un solo percorso non Unicode blocca ogni `report` finché è elencato; in MCP le richieste
+  si trattano una alla volta; la guida non cita più `mft-index` come modo possibile.
+
+I «Limiti noti» di sopra sulle dimensioni oltre il tetto (`bytes: null`, voce ferma) e sul resoconto MCP
+che viaggia due volte sono superati da questa sezione; la ricerca da amministratore non esiste più
+nell'osservatore.
+
+Non fatto (elenco «può aspettare» della revisione): salto dei reparse point sui file, radice `Some(0)`
+dei link, `is_link` duplicato, dipendenze solo di prova, voce nuova dentro una cartella `builds`
+rimisurata, O(n²) di crescita e `holds_blocked`, sovrapposizione di `by_category`, `Closed` trattato
+due volte, copia di `report(false)` in `check`, codice di uscita 101 del panic, ripiego dell'hook se
+non parte alcun thread, messaggio dell'hook perso se il thread tiene stderr, interruttore di prova che
+sostituisce l'hook globale, claim dell'uscita 1 per radice non codificabile che poggia solo sul codice.
+
+Prove dopo la revisione: suite completa del workspace (`cargo test -j 1 --workspace --exclude
+mukade`): **1123 superati, 0 falliti, 20 ignorati** (prima: 1097, 0, 20). Totali dei crate toccati:
+`xiox-observer` 39 test (erano 31), `xiox-cli` 104 di unità (erano 87) e 27 sul binario,
+`xiox-project` 108 (erano 107). Build di rilascio: `xiox.exe` 3.220.480 byte, `xiox-ui.exe`
+12.262.400 byte (invariato).

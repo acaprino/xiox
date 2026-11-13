@@ -40,7 +40,9 @@ report carries that command ready to run.
 - **It is light.** One analysis at a time per process. A check is the same bounded analysis that
   `xiox analyze` does (`git worktree list`, a bounded search by name and by repository
   identity), with sizes measured only for what is new and for the build folders that were there
-  at the start. It never walks whole disks at intervals.
+  at the start, under caps (see [Limits](#limits)). It never walks whole disks at intervals, and
+  it never reads the file-system index of the NTFS drives (the search `xiox analyze` uses from an
+  elevated terminal): every check uses the same bounded search, whoever started the process.
 - **It is read-only.** It has no path to the code that removes things.
 - **Output is English only.** Field names, event names, errors.
 
@@ -156,7 +158,8 @@ items is shown), and an `attention` event for each threshold that is now exceede
       },
       "new": true,
       "firstSeenMs": 1794601822706,
-      "measuredAtMs": 1794601822706
+      "measuredAtMs": 1794601822706,
+      "bytesPartial": false
     }
   ],
   "removed": [],
@@ -245,7 +248,7 @@ milliseconds.
 | `error` | A check failed (the reason starts with `check failed:`), or a stdin line was unknown or too long. The process goes on. | `message`. |
 
 An **item** has the fields of an item of `xiox analyze --json` (`key`, `category`, `path`,
-`bytes`, `level`, `blocked`, `why`, `target`; see [`xiox-cli.md`](xiox-cli.md#json)) plus three
+`bytes`, `level`, `blocked`, `why`, `target`; see [`xiox-cli.md`](xiox-cli.md#json)) plus four
 that only the observer knows:
 
 | Field | Meaning |
@@ -253,9 +256,12 @@ that only the observer knows:
 | `new` | `true` when the item was not in the first snapshot. |
 | `firstSeenMs` | When the observer first saw it. For an item of the first snapshot: when the process started. |
 | `measuredAtMs` | When `bytes` was last measured, or `null` if it never was. |
+| `bytesPartial` | `true` when `bytes` is a **lower bound**: the last measure of the folder hit the cap (200,000 entries or 10 seconds) before its end, so the folder is at least that big. Always present; `false` for a size that is whole, and for an item with no size. |
 
-`bytes` is `null` while the item has never been measured: it has no folder to measure, or the
-measuring hit a limit or could not read it (see [Limits](#limits)).
+`bytes` is `null` while the item has never been measured: it has no folder to measure, the
+measuring could not read it, or the check ran out of its measuring time before it got to it
+(see [Limits](#limits)). A folder over the caps is **not** `null`: it has the part that was
+walked, with `bytesPartial: true`.
 
 A `changed` event can list an item that an earlier event already listed: when a check finds the
 same folder (same `key`) in **another category** than before (for example a worktree that git was
@@ -317,7 +323,8 @@ existed at the start, both `new: false`, the third is new.
       },
       "new": false,
       "firstSeenMs": 1794601865194,
-      "measuredAtMs": 1794601871137
+      "measuredAtMs": 1794601871137,
+      "bytesPartial": false
     },
     {
       "key": "c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp-feature",
@@ -337,7 +344,8 @@ existed at the start, both `new: false`, the third is new.
       },
       "new": false,
       "firstSeenMs": 1794601865194,
-      "measuredAtMs": 1794601865194
+      "measuredAtMs": 1794601865194,
+      "bytesPartial": false
     },
     {
       "key": "c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp-spike1",
@@ -357,7 +365,8 @@ existed at the start, both `new: false`, the third is new.
       },
       "new": true,
       "firstSeenMs": 1794601871137,
-      "measuredAtMs": 1794601871137
+      "measuredAtMs": 1794601871137,
+      "bytesPartial": false
     }
   ],
   "notes": [
@@ -402,9 +411,9 @@ The `report` event is the same object with `"event"` and `"time"` after `"schema
 
 | Field | Meaning |
 |---|---|
-| `items` | Every item of the latest check, with `new`, `firstSeenMs`, `measuredAtMs`. |
+| `items` | Every item of the latest check, with `new`, `firstSeenMs`, `measuredAtMs`, `bytesPartial`. |
 | `totals` | `byCategory`: measured bytes per category (a category with nothing measured is absent; the categories overlap: a build folder inside a worktree is in both, so do not add them up); `items`: how many; `recommendedBytes`: measured bytes of the items `xiox clean` would take as recommended. An item inside another item is counted once. |
-| `growthBytes` | Growth since the start, in measured bytes: for a new item all its bytes, for an item of the snapshot what it grew by (shrinking counts 0). An item that was never measured counts 0. An item inside another that already counts is not counted twice. |
+| `growthBytes` | Growth since the start, in measured bytes: for a new item all its bytes, for an item of the snapshot what it grew by (shrinking counts 0). An item that was never measured counts 0. A size with `bytesPartial: true` counts as it is (a lower bound), so the growth of such a folder is a lower bound too. An item inside another that already counts is not counted twice. |
 | `attention` | The thresholds that are exceeded right now: `growth`, `worktrees`. |
 | `stale` | `true` when the fresh check failed and this is the last good picture. |
 | `cleanCommand`, `cleanCommandTruncated` | See below. |
@@ -449,7 +458,10 @@ report would. The observer decides nothing from them: whoever reads the event de
 to show it to a person, pass it to an agent, or ignore it.
 
 Growth is computed from **measured bytes only**. A new item whose size is not known yet counts 0
-and is measured again at every check, so it is counted as soon as it can be measured.
+and is measured at the next check that has time for it (see [Limits](#limits)), so it is counted
+as soon as it can be measured. A folder over the measuring caps counts with the part that was
+walked (a lower bound, `bytesPartial: true`): a huge new `target` raises the `growth` attention
+with what the measure saw of it, instead of staying invisible.
 
 ## MCP mode
 
@@ -462,7 +474,14 @@ asks for another one, the server answers `2025-06-18`). One JSON-RPC message per
 - **One tool, `project_leftovers`, read-only.** It takes no arguments and is marked read-only
   (`readOnlyHint: true`, `destructiveHint: false`). There is no tool that removes anything.
 - **No background timer.** In MCP mode nothing runs between calls: a check is made when the tool
-  is called, so `--interval` does not apply. The server ends when stdin closes.
+  is called. `--interval` is accepted but **ignored** in this mode. The consequence: anything
+  created and removed between two calls is never seen (a worktree an agent makes, uses and
+  removes within one task never shows up), and nothing is noticed until the agent calls. The
+  server ends when stdin closes.
+- **One request at a time.** Requests are handled in the order they arrive, one after the other.
+  While a `tools/call` runs (a check can take a while), a `ping` or a `notifications/cancelled`
+  that arrives is not answered until it ends; a call that the client cancelled still gets its
+  reply.
 - **`instructions`.** The `initialize` reply tells the agent to call `project_leftovers` before
   it declares its work finished and again after it creates a worktree or a copy of the
   repository, that `new: true` means "appeared since this server started", and to show the
@@ -498,7 +517,7 @@ The reply to `initialize`:
       "name": "xiox",
       "version": "0.1.0"
     },
-    "instructions": "Xiox watches one project on this PC for the leftovers that agent work creates: build folders, git worktrees, copies of the repository, folders named like the project, logs and archived agent sessions. Call the project_leftovers tool before you declare your work finished, and again after you create a git worktree or a copy of the repository. Items with new: true appeared since this server started. The tool only reports and never removes anything; to clean up, show the cleanCommand of the report to the person instead of running it yourself."
+    "instructions": "Xiox watches one project on this PC for the leftovers that agent work creates: build folders, git worktrees, copies of the repository, folders named like the project, logs and archived agent sessions. Call the project_leftovers tool before you declare your work finished, and again after you create a git worktree or a copy of the repository. Items with new: true appeared since this server started. The tool only reports and never removes anything; to clean up, show the cleanCommand of the report to the person instead of running it yourself. The text of a result is a compact view (totals, growth, attention, the new items); the full listing is in structuredContent."
   }
 }
 ```
@@ -513,7 +532,7 @@ The reply to `tools/list`:
     "tools": [
       {
         "name": "project_leftovers",
-        "description": "Lists what this project has left on this PC since this server started: build folders, linked worktrees, copies of the repository, folders named like the project, log files and archived agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the new recommended items. Runs a fresh check on every call. Read-only: it only reports and never removes anything.",
+        "description": "Lists what this project has left on this PC since this server started: build folders, linked worktrees, copies of the repository, folders named like the project, log files and archived agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the new recommended items. Runs a fresh check on every call (the call that receives the first analysis reports it as it is). The result has two parts: a compact text (totals, growth, attention, stale, cleanCommand and only the NEW items, at most 50, one line each) and the full report with every item as structuredContent; a client that forwards only the text to the model sees the compact view. Read-only: it only reports and never removes anything.",
         "inputSchema": {
           "type": "object",
           "properties": {},
@@ -531,10 +550,40 @@ The reply to `tools/list`:
 }
 ```
 
-The reply to `tools/call` carries the [report](#the-report-and-cleancommand) twice, as the
-text of the content (one line of JSON, for clients that only show text) and as
-`structuredContent` (an object); here both are replaced by a placeholder, the report is the one
-shown [above](#the-report-and-cleancommand):
+The reply to `tools/call` has two parts. `structuredContent` is the **full** [report](#the-report-and-cleancommand)
+(an object, every item). The `content` text is a **compact** view of it, so that the reply does not
+grow with the history of the project (every archived agent session is an item, with its title):
+clients warn above about 10,000 tokens and cap near 25,000, and the text used to carry the whole
+report a second time. **A client that forwards only `content` to the model shows the model the
+compact view; one that forwards `structuredContent` shows it everything.** The text has:
+
+- the project (name, root, whether it is a git repository);
+- `startedAtMs`, `checkedAtMs` and `stale`;
+- the totals (items, measured bytes per category, recommended bytes) and `growthBytes`;
+- `attention`: the thresholds that are exceeded, or `none`;
+- `cleanCommand` (or `none`), and `cleanCommandTruncated: true` when it had to be cut;
+- **only the new items**, at most **50**, one line each: category, level, bytes (`at least N bytes`
+  when `bytesPartial`, `size unknown` when not measured), the path (or, for an archived session,
+  the agent and the title), and `blocked: <reasons>` when it cannot be removed;
+- a last line with how many other items exist (the ones that were there at the start, and the new
+  ones beyond the 50) and where the full listing is.
+
+For example (the second call of the session above, after two worktree items appeared):
+
+```text
+Project: sampleapp (C:\Users\alice\AppData\Local\Temp\w\sampleapp), git repository
+startedAtMs: 1794605548393, checkedAtMs: 1794605557715, stale: false
+Totals: 3 items, builds 5242880 bytes, worktrees 2097298 bytes; recommended 0 bytes
+growthBytes: 2097298 (since the server started)
+attention: none
+cleanCommand: none
+New items: 2
+- builds | caution | 2097152 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1\target
+- worktrees | caution | 2097298 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1 | blocked: uncommitted changes
+Other items not listed here: 1. The full listing of every item is in structuredContent.
+```
+
+The reply, with the text and the report replaced by placeholders:
 
 ```json
 {
@@ -544,16 +593,20 @@ shown [above](#the-report-and-cleancommand):
     "content": [
       {
         "type": "text",
-        "text": "<the report below, as one line of JSON>"
+        "text": "<the compact text above>"
       }
     ],
-    "structuredContent": "<the same report as an object>",
+    "structuredContent": "<the full report as an object>",
     "isError": false
   }
 }
 ```
 
-**What a call does.** Every `tools/call` runs a fresh check first and then answers.
+**What a call does.** Every `tools/call` runs a fresh check first and then answers, with one
+exception: the call that **receives the first analysis** (it had to wait for it) answers with
+that analysis as it is, without a second one (the analysis it just got is as fresh as a check
+would make it, and a second would measure every build folder again and could pass the client's
+tool timeout). A call that finds the first analysis already done does check.
 
 - If the check fails, the answer is the last good report with `"stale": true` (the cause is on
   stderr); it is not an error result.
@@ -622,26 +675,46 @@ and nothing else on stdout.
 
 ## Limits
 
-- **Where copies and name-matched folders are searched.** As in `xiox analyze` (see its
-  [Limits](xiox-cli.md#limits)): not elevated, the project's parent folder, each fixed drive to
-  three levels and your home folder to three levels; started from an elevated terminal, NTFS
-  drives are searched by name through the file-system index. The observer never asks for
-  elevation. The `search` field of a report says which mode was used (`bounded-walk`,
-  `mft-index`, `parent-only`), and `notes` says when the walk may have missed deeper folders
-  (`walk-may-miss-deep-folders`). `--no-drives` limits the search to the project's parent folder.
+- **Where copies and name-matched folders are searched.** As in `xiox analyze` run **without**
+  elevation (see its [Limits](xiox-cli.md#limits)): the project's parent folder, each fixed drive
+  to three levels and your home folder to three levels. This is true even when the observer is
+  started from an elevated terminal: it never uses the NTFS file-system index (reading the whole
+  index of every drive, at every check and in every observer that runs next to it, is exactly
+  what a process that checks at intervals must not do); the baseline and every later check use
+  the same search. The observer never asks for elevation. The `search` field of a report says
+  which mode was used (`bounded-walk` or `parent-only`; `mft-index` does not occur), and `notes`
+  says when the walk may have missed deeper folders (`walk-may-miss-deep-folders`).
+  `--no-drives` limits the search to the project's parent folder.
 - **Sizes are measured with caps.** Each folder is measured by walking it, for at most
-  200,000 entries and 10 seconds. Over either, or when the folder cannot be read, the measure
-  gives nothing: an item never measured has `bytes: null` and counts 0 in the growth, but an
-  item measured before **keeps its last measured `bytes`** and its old `measuredAtMs`. So a build
-  folder that outgrows the caps after the start stops growing in the report, silently: `growthBytes`
-  can understate it, and a stale `measuredAtMs` is the hint. Links and junctions are not followed. A subfolder that
-  cannot be read is skipped, so the size can be under-counted. The measurer is the same at the
-  start and at every check, so growth is never the difference between two different measurers.
+  200,000 entries and 10 seconds. Past either cap the walk stops and keeps **what it counted so
+  far as a lower bound**: `bytes` is that total and `bytesPartial` is `true`. Such a folder is
+  counted in the totals and in the growth as it is, so a huge `target` or `node_modules` is
+  not blind (a new one still raises the `growth` attention), but its size is **at least** that, not
+  exact, and growth beyond what the walk reaches is not seen. If the root cannot be read at all
+  the size is `null` (an item measured before keeps its last `bytes`, `bytesPartial` and
+  `measuredAtMs`). Links and junctions are not followed. A subfolder that cannot be read is
+  skipped, so the size can be under-counted. The measurer is the same at the start and at every
+  check.
+- **A folder over the caps is not walked at every check.** Once a measure hit a cap, that folder
+  is measured again only after **10 minutes** (not at every check: walking 200,000 entries for
+  10 seconds while agents compile would cost a full walk per interval, and N such folders N of
+  them). Until then it keeps its last lower bound and its `measuredAtMs`.
+- **A check has a measuring budget of 30 seconds.** The folders to measure are taken in order
+  (the ones never measured first, then the oldest measure first) and measuring stops when the
+  30 seconds are over; what is left is measured at the next check. So a project with many large
+  folders gets its sizes over several checks, never one long check (the budget is checked
+  before each folder, so a check can run up to 10 seconds past it). The first analysis, the
+  baseline, is not bounded by the budget (each folder still is by the caps).
 - **Only new items and build folders are measured again.** An item of the first snapshot that
   is not a build folder keeps the size it had at the start (its `measuredAtMs` says when); only
-  the `builds` items of the snapshot are measured at every check, because their growth is what is
-  watched. A folder that could not be measured at the start takes its first later measurement as
-  its starting size.
+  the `builds` items of the snapshot are measured at every check (subject to the two rules
+  above), because their growth is what is watched. A folder that could not be measured at the
+  start takes its first later measurement as its starting size.
+- **Sizes are apparent sizes.** The observer sums the length of the files it walks. A file that
+  is a reparse point (a OneDrive placeholder, a deduplicated file) counts 0, and sizes on disk
+  differ from that, so the numbers can differ from the `bytes` of `xiox analyze --json`, which
+  uses the effective size the engine measures. Compare growth with growth, not with the sizes
+  of an analysis.
 - **Checks, not events.** There is no real-time watching of files. A worktree created and
   removed between two checks is never seen. Between checks nothing happens.
 - **An item is identified by its path.** If the same folder is listed in another category by a
@@ -653,9 +726,30 @@ and nothing else on stdout.
   agent, session or harness created it, and it does not read sessions for that. Two agents
   working in the same project are seen together.
 - **One analysis at a time.** A `report` line or a tool call that arrives while a check is
-  running is answered when that check ends.
-- **Large reports.** The report lists every item; the MCP result carries it twice (text and
-  structured). A project with many items gives a large reply.
+  running is answered when that check ends. In default mode the reader of stdin queues at most
+  16 lines (a program that writes faster than the observer answers waits on its pipe), and
+  `report` lines that are already waiting when one is answered share its check; each still gets
+  its own `report` event.
+- **Large reports.** The report lists every item, and every archived agent session is an item
+  (with its title): a project with a long history has hundreds. The `report` event and the MCP
+  `structuredContent` carry all of them; the MCP `content` text is the compact view (see
+  [MCP mode](#mcp-mode)).
+- **`cleanCommand` is quoted for the Windows argument parser, not for PowerShell.** Pasted into
+  `cmd.exe` or run by a program it is read as written. In PowerShell a `$` or a backtick inside a
+  path is expanded before `xiox` sees it, so a path that has one must be edited by hand.
+- **One path that is not valid Unicode blocks the report.** If a listed folder has a name that
+  JSON cannot carry (invalid UTF-8), every `report` of the default mode becomes an `error`
+  event and every MCP call returns `isError: true`, for as long as that folder is listed (see
+  [Events](#events-json-lines)); `changed` and `attention` events that do not name it are not
+  affected.
+- **A check that looks wrong is not a change.** When git fails in the middle of a check (a
+  timeout, say) the analysis can come back without the worktrees, or without the repository. The
+  observer compares each check with the last good one: another project root, a project that is
+  no longer a repository, or no worktrees at all where there were some (and git, asked again,
+  fails or still lists them) make the check **fail** (`check failed: the analysis looks
+  incomplete (...)`), keeping the last good picture, instead of reporting every worktree as
+  removed and then as new. The cost: a project that really stops being a repository is an
+  error at every check until the observer is restarted.
 - **A caller that vanishes without closing the pipes** is noticed at the next write to stdout or
   at the end of stdin (Windows closes both when a process dies, so the usual orphan case is
   covered).
@@ -688,8 +782,10 @@ cause: fix the path in the client configuration and restart the server.
 `--json is not valid for observe (it always prints JSON lines)`. The usage text follows.
 
 **`error` events with `check failed: ...`.** A check could not analyse the project (for example
-the folder was moved or deleted). The observer stays up and tries again; reports are
-marked `stale: true` until a check succeeds. The same text goes to stderr.
+the folder was moved or deleted), or its analysis looked incomplete (`the analysis looks
+incomplete (...); the last good report is kept`: git failed during the check, see
+[Limits](#limits)). The observer stays up and tries again; reports are marked `stale: true`
+until a check succeeds. The same text goes to stderr.
 
 **The first analysis fails.** Default mode: the reason is on stderr, stdout is empty, exit code
 1. MCP mode: the server stays up and each call tries again, synchronously (see
@@ -699,7 +795,9 @@ marked `stale: true` until a check succeeds. The same text goes to stderr.
 for a person (the `Observing ...` line, `error: ...` lines, the cause of a failed check) goes
 to stderr. If you capture both streams into one, separate them. A panic does not write to
 stdout either: it prints `error: xiox observe stopped on an internal error: ...` on stderr and
-ends the process with a non-zero code.
+ends the process with a non-zero code. (In MCP mode a panic of the thread that takes the first
+analysis does not end the server: stderr says `the first analysis stopped on an internal error;
+the next call retries it`, and the next call takes the analysis again.)
 
 **MCP: the client says the tool is still running or times out at start.** `initialize` is
 answered at once; only `tools/call` waits (at most 30 seconds) for the first analysis, and then
