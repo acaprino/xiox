@@ -158,7 +158,7 @@ pub fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
 }
 
-pub use dc_model::fmt_size;
+pub use xiox_model::fmt_size;
 
 /// Folder where the app keeps its backups (Documents\PulisciPC).
 pub fn data_dir() -> std::path::PathBuf {

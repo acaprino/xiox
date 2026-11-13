@@ -562,120 +562,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "dc-app"
-version = "0.1.0"
-dependencies = [
- "dc-cleaner",
- "dc-disktree",
- "dc-engine",
- "dc-git",
- "dc-model",
- "dc-mukade",
- "dc-scanner",
- "dc-sessions",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "dc-cleaner"
-version = "0.1.0"
-dependencies = [
- "dc-model",
- "dc-scanner",
- "rayon",
- "tempfile",
- "trash",
- "windows-sys 0.61.2",
- "winreg",
-]
-
-[[package]]
-name = "dc-disktree"
-version = "0.1.0"
-dependencies = [
- "dc-cleaner",
- "dc-model",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "dc-engine"
-version = "0.1.0"
-dependencies = [
- "dc-model",
-]
-
-[[package]]
-name = "dc-git"
-version = "0.1.0"
-dependencies = [
- "dc-model",
-]
-
-[[package]]
-name = "dc-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "dc-mukade"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dc-model",
- "mukade",
- "rusqlite",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "dc-project"
-version = "0.1.0"
-dependencies = [
- "dc-app",
- "dc-cleaner",
- "dc-disktree",
- "dc-engine",
- "dc-git",
- "dc-model",
- "dc-mukade",
- "dc-scanner",
- "dc-sessions",
- "serde",
- "serde_json",
- "tempfile",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "dc-scanner"
-version = "0.1.0"
-dependencies = [
- "dc-model",
- "filesize",
- "rayon",
- "tempfile",
-]
-
-[[package]]
-name = "dc-sessions"
-version = "0.1.0"
-dependencies = [
- "dc-model",
- "dc-mukade",
- "serde_json",
- "tempfile",
- "trash",
-]
-
-[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2071,16 +1957,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pc-rules"
-version = "0.1.0"
-dependencies = [
- "roxmltree",
- "tempfile",
- "windows-sys 0.61.2",
- "winreg",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2209,29 +2085,6 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
-
-[[package]]
-name = "pulisci-pc"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dc-app",
- "dc-cleaner",
- "dc-model",
- "dc-mukade",
- "dc-sessions",
- "eframe",
- "embed-resource",
- "idna",
- "image",
- "pc-rules",
- "rfd",
- "rusqlite",
- "serde_json",
- "tempfile",
- "windows-sys 0.61.2",
- "winreg",
-]
 
 [[package]]
 name = "pxfm"
@@ -3568,14 +3421,161 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 
 [[package]]
+name = "xiox-app"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "xiox-cleaner",
+ "xiox-disktree",
+ "xiox-engine",
+ "xiox-git",
+ "xiox-model",
+ "xiox-mukade",
+ "xiox-scanner",
+ "xiox-sessions",
+]
+
+[[package]]
+name = "xiox-cleaner"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "tempfile",
+ "trash",
+ "windows-sys 0.61.2",
+ "winreg",
+ "xiox-model",
+ "xiox-scanner",
+]
+
+[[package]]
 name = "xiox-cli"
 version = "0.1.0"
 dependencies = [
- "dc-model",
- "dc-project",
  "embed-resource",
  "serde_json",
  "tempfile",
+ "xiox-model",
+ "xiox-project",
+]
+
+[[package]]
+name = "xiox-desktop"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "embed-resource",
+ "idna",
+ "image",
+ "rfd",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winreg",
+ "xiox-app",
+ "xiox-cleaner",
+ "xiox-model",
+ "xiox-mukade",
+ "xiox-rules",
+ "xiox-sessions",
+]
+
+[[package]]
+name = "xiox-disktree"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
+ "xiox-cleaner",
+ "xiox-model",
+]
+
+[[package]]
+name = "xiox-engine"
+version = "0.1.0"
+dependencies = [
+ "xiox-model",
+]
+
+[[package]]
+name = "xiox-git"
+version = "0.1.0"
+dependencies = [
+ "xiox-model",
+]
+
+[[package]]
+name = "xiox-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "xiox-mukade"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mukade",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "xiox-model",
+]
+
+[[package]]
+name = "xiox-project"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "xiox-app",
+ "xiox-cleaner",
+ "xiox-disktree",
+ "xiox-engine",
+ "xiox-git",
+ "xiox-model",
+ "xiox-mukade",
+ "xiox-scanner",
+ "xiox-sessions",
+]
+
+[[package]]
+name = "xiox-rules"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winreg",
+]
+
+[[package]]
+name = "xiox-scanner"
+version = "0.1.0"
+dependencies = [
+ "filesize",
+ "rayon",
+ "tempfile",
+ "xiox-model",
+]
+
+[[package]]
+name = "xiox-sessions"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "trash",
+ "xiox-model",
+ "xiox-mukade",
 ]
 
 [[package]]

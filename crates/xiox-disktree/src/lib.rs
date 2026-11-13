@@ -1,0 +1,653 @@
+//! Directory-size index built from the NTFS Master File Table.
+//!
+//! [`volume_index`] reads the MFT of one volume once (administrator rights needed) and folds
+//! it into per-folder totals; [`DiskIndex`] implements `xiox_model::DirIndex` on top of them.
+//! File names are never kept, only folders have one: that keeps the peak memory of a whole
+//! system volume low.
+
+mod mft;
+
+use xiox_model::{DirIndex, IndexedDir, SizeInfo, is_system_dir, name_matches, normalize_path, path_key};
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// "No node / no entry".
+const NONE: u32 = u32::MAX;
+
+/// Shared with the thread that reads the volumes.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// MFT records read so far, all volumes together.
+    pub records: AtomicU64,
+    /// Set it to stop reading: the volume being read is abandoned.
+    pub cancel: AtomicBool,
+}
+
+/// One MFT entry, as [`DiskIndex::from_nodes`] takes it.
+///
+/// `parent` is an index into the same `Vec<Node>`; `nodes[0]` is the volume root. `name` is
+/// `Some` only for folders. `size`/`alloc` count for files only (a folder's own are ignored).
+#[derive(Clone, Debug, Default)]
+pub struct Node {
+    pub parent: u32,
+    pub is_dir: bool,
+    pub reparse: bool,
+    pub name: Option<Box<str>>,
+    pub size: u64,
+    pub alloc: u64,
+}
+
+/// One folder of the index, with the totals of everything below it.
+#[derive(Debug)]
+struct Entry {
+    /// Parent entry; `NONE` for a volume root.
+    parent: u32,
+    /// Own name as on disk; a volume root holds its path (`C:\`).
+    name: Box<str>,
+    logical: u64,
+    alloc: u64,
+    files: u64,
+    reparse: bool,
+}
+
+/// Folder sizes of one or more NTFS volumes.
+///
+/// `by_key`: `path_key` of every folder -> entry. `by_name`: lowercase folder name -> entries.
+/// The original-case path is rebuilt from the parent chain when asked for, instead of being
+/// stored next to the key.
+#[derive(Debug, Default)]
+pub struct DiskIndex {
+    entries: Vec<Entry>,
+    by_key: HashMap<Box<str>, u32>,
+    by_name: HashMap<Box<str>, Vec<u32>>,
+}
+
+impl DiskIndex {
+    /// Build the index of one volume. Folders that cannot be reached from `nodes[0]`
+    /// (unknown parent, parent that is not a folder, cycles, no name) are left out, and so
+    /// are the files inside them.
+    pub fn from_nodes(volume_root: &str, mut nodes: Vec<Node>) -> DiskIndex {
+        const UNSEEN: u32 = u32::MAX;
+        const BUSY: u32 = u32::MAX - 1;
+        const ORPHAN: u32 = u32::MAX - 2;
+        let n = nodes.len();
+        let mut ix = DiskIndex::default();
+        if n == 0 {
+            return ix;
+        }
+
+        // Depth of every reachable folder (memoised climb, no per-file walk).
+        let mut depth = vec![UNSEEN; n];
+        depth[0] = 0;
+        let mut chain: Vec<usize> = Vec::new();
+        for i in 1..n {
+            if !nodes[i].is_dir || depth[i] != UNSEEN {
+                continue;
+            }
+            chain.clear();
+            let mut cur = i;
+            let found = loop {
+                match depth[cur] {
+                    UNSEEN => {
+                        depth[cur] = BUSY;
+                        chain.push(cur);
+                        let p = nodes[cur].parent as usize;
+                        if nodes[cur].name.is_none() || p >= n || (p != 0 && !nodes[p].is_dir) {
+                            break ORPHAN;
+                        }
+                        cur = p;
+                    }
+                    BUSY => break ORPHAN,
+                    d => break d,
+                }
+            };
+            let mut d = found;
+            for &c in chain.iter().rev() {
+                if d != ORPHAN {
+                    d += 1;
+                }
+                depth[c] = d;
+            }
+        }
+
+        // Entries for reachable folders, in node order; `depth` becomes node -> entry.
+        let mut root = normalize_path(Path::new(volume_root)).to_string_lossy().into_owned();
+        if !root.ends_with('\\') {
+            root.push('\\');
+        }
+        let mut entry_depth: Vec<u32> = Vec::new();
+        let mut slot = depth;
+        for i in 0..n {
+            let d = slot[i];
+            let is_folder = i == 0 || nodes[i].is_dir;
+            if !is_folder || d >= ORPHAN {
+                slot[i] = NONE;
+                continue;
+            }
+            slot[i] = ix.entries.len() as u32;
+            entry_depth.push(d);
+            let node = &mut nodes[i];
+            ix.entries.push(Entry {
+                parent: NONE,
+                name: if i == 0 { root.clone().into_boxed_str() } else { node.name.take().unwrap_or_default() },
+                logical: 0,
+                alloc: 0,
+                files: 0,
+                reparse: node.reparse,
+            });
+        }
+        for i in 1..n {
+            let s = slot[i];
+            if s != NONE {
+                ix.entries[s as usize].parent = slot[nodes[i].parent as usize];
+            }
+        }
+
+        // Direct sums: every file to the folder that holds it.
+        for node in nodes.iter().skip(1).filter(|f| !f.is_dir) {
+            let p = node.parent as usize;
+            if p < n && slot[p] != NONE {
+                let e = &mut ix.entries[slot[p] as usize];
+                e.logical = e.logical.saturating_add(node.size);
+                e.alloc = e.alloc.saturating_add(node.alloc);
+                e.files += 1;
+            }
+        }
+        drop(slot);
+        drop(nodes);
+
+        // Children into parents, deepest folders first.
+        let mut order: Vec<u32> = (0..ix.entries.len() as u32).collect();
+        order.sort_unstable_by_key(|&s| Reverse(entry_depth[s as usize]));
+        drop(entry_depth);
+        for &s in &order {
+            let e = &ix.entries[s as usize];
+            let (p, logical, alloc, files) = (e.parent, e.logical, e.alloc, e.files);
+            if p != NONE {
+                let pe = &mut ix.entries[p as usize];
+                pe.logical = pe.logical.saturating_add(logical);
+                pe.alloc = pe.alloc.saturating_add(alloc);
+                pe.files = pe.files.saturating_add(files);
+            }
+        }
+
+        // Keys, parents before children: path_key(parent) + "\" + lowercase name.
+        let mut keys: Vec<String> = vec![String::new(); ix.entries.len()];
+        ix.by_key.reserve(ix.entries.len());
+        for &s in order.iter().rev() {
+            let e = &ix.entries[s as usize];
+            if e.parent == NONE {
+                keys[s as usize] = path_key(Path::new(&*e.name));
+                continue;
+            }
+            let lower = e.name.to_lowercase();
+            let pk = &keys[e.parent as usize];
+            let mut k = String::with_capacity(pk.len() + 1 + lower.len());
+            k.push_str(pk);
+            if !k.ends_with('\\') {
+                k.push('\\');
+            }
+            k.push_str(&lower);
+            keys[s as usize] = k;
+            match ix.by_name.get_mut(lower.as_str()) {
+                Some(v) => v.push(s),
+                None => {
+                    ix.by_name.insert(lower.into_boxed_str(), vec![s]);
+                }
+            }
+        }
+        drop(order);
+        for (s, k) in keys.into_iter().enumerate() {
+            ix.by_key.insert(k.into_boxed_str(), s as u32);
+        }
+        ix
+    }
+
+    /// Add the folders of another volume.
+    pub fn merge(&mut self, other: DiskIndex) {
+        let off = self.entries.len() as u32;
+        self.entries.extend(other.entries.into_iter().map(|mut e| {
+            if e.parent != NONE {
+                e.parent += off;
+            }
+            e
+        }));
+        for (k, i) in other.by_key {
+            self.by_key.insert(k, i + off);
+        }
+        for (k, v) in other.by_name {
+            self.by_name.entry(k).or_default().extend(v.into_iter().map(|i| i + off));
+        }
+    }
+
+    /// Number of folders in the index.
+    pub fn dir_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn size_info(&self, i: u32) -> SizeInfo {
+        let e = &self.entries[i as usize];
+        SizeInfo { logical_bytes: e.logical, allocated_bytes: Some(e.alloc), file_count: e.files }
+    }
+
+    /// Is an ancestor of entry `i`, strictly below the nearest search root of `root_ids`, a
+    /// system folder ([`is_system_dir`]) the scanner would never enter? Checked on the parent
+    /// chain, before a path is built, so the many matches of common names (`cache`, `bin`,
+    /// `logs`) under `Windows`, `Program Files` or `AppData` cost no allocation. With no search
+    /// root on the chain the answer is `false` (the root filter drops the match anyway).
+    fn under_system_dir(&self, i: u32, root_ids: &HashSet<u32>) -> bool {
+        let mut cur = self.entries[i as usize].parent;
+        while cur != NONE && !root_ids.contains(&cur) {
+            let e = &self.entries[cur as usize];
+            if e.parent == NONE {
+                return false; // volume root, not a search root
+            }
+            let parent_is_root = self.entries[e.parent as usize].parent == NONE;
+            if is_system_dir(&e.name, parent_is_root) {
+                return true;
+            }
+            cur = e.parent;
+        }
+        false
+    }
+
+    fn path_of(&self, i: u32) -> PathBuf {
+        let mut parts: Vec<&str> = Vec::new();
+        let mut cur = i;
+        loop {
+            let e = &self.entries[cur as usize];
+            parts.push(&e.name);
+            if e.parent == NONE {
+                break;
+            }
+            cur = e.parent;
+        }
+        let mut s = String::new();
+        for p in parts.iter().rev() {
+            if !s.is_empty() && !s.ends_with('\\') {
+                s.push('\\');
+            }
+            s.push_str(p);
+        }
+        PathBuf::from(s)
+    }
+}
+
+impl DirIndex for DiskIndex {
+    fn backend_name(&self) -> &'static str {
+        "mft"
+    }
+
+    /// Totals of an indexed folder. `None` for a reparse-point folder (junction, mount point,
+    /// directory symlink): the MFT has nothing under it, so the caller has to walk it.
+    ///
+    /// Hard links: a file is counted once, under the folder of the one name the MFT reader
+    /// kept (best namespace, first seen). A `node_modules` made of hard links into a shared
+    /// store (pnpm) may therefore look much smaller here than its files add up to, when the
+    /// kept names are those in the store.
+    fn size_of(&self, dir: &Path) -> Option<SizeInfo> {
+        let &i = self.by_key.get(path_key(dir).as_str())?;
+        (!self.entries[i as usize].reparse).then(|| self.size_info(i))
+    }
+
+    /// Folders whose name matches one of `names` (case-insensitive; a `prefix*` or `*suffix`
+    /// pattern goes through every distinct folder name once), at or below one of `roots`.
+    /// Reparse-point folders (links, junctions) are skipped. Results in index order.
+    fn find_dirs_named(&self, names: &[&str], roots: &[PathBuf]) -> Vec<IndexedDir> {
+        let root_keys: Vec<String> = roots.iter().map(|r| path_key(r)).collect();
+        let mut seen: HashSet<u32> = HashSet::new();
+        let mut hits: Vec<u32> = Vec::new();
+        let (patterns, plain): (Vec<&str>, Vec<&str>) = names.iter().partition(|n| n.contains('*'));
+        for n in plain {
+            if let Some(v) = self.by_name.get(n.to_lowercase().as_str()) {
+                hits.extend(v.iter().copied().filter(|i| seen.insert(*i)));
+            }
+        }
+        if !patterns.is_empty() {
+            for (name, v) in &self.by_name {
+                if patterns.iter().any(|p| name_matches(p, name)) {
+                    hits.extend(v.iter().copied().filter(|i| seen.insert(*i)));
+                }
+            }
+        }
+        hits.sort_unstable();
+        let root_ids: HashSet<u32> = root_keys.iter().filter_map(|k| self.by_key.get(k.as_str()).copied()).collect();
+        hits.into_iter()
+            .filter(|&i| !self.entries[i as usize].reparse && !self.under_system_dir(i, &root_ids))
+            .filter_map(|i| {
+                let path = self.path_of(i);
+                let key = path_key(&path);
+                root_keys
+                    .iter()
+                    .any(|r| is_at_or_under(&key, r))
+                    .then(|| IndexedDir { path, size: self.size_info(i) })
+            })
+            .collect()
+    }
+}
+
+/// Both arguments are `path_key`s.
+fn is_at_or_under(key: &str, root: &str) -> bool {
+    if key == root {
+        return true;
+    }
+    match key.strip_prefix(root) {
+        Some(rest) => root.ends_with('\\') || rest.starts_with('\\'),
+        None => false,
+    }
+}
+
+/// `GetDriveTypeW` values (Win32 `DRIVE_REMOVABLE` = 2, `DRIVE_FIXED` = 3, in windows-sys
+/// under `Win32_System_WindowsProgramming`), here so that [`classify`] is the same on every
+/// platform.
+pub const DRIVE_REMOVABLE: u32 = 2;
+pub const DRIVE_FIXED: u32 = 3;
+
+/// A fixed (internal) drive, searched whole for projects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FixedDrive {
+    /// Upper case.
+    pub letter: char,
+    /// NTFS: read through its MFT; anything else (ReFS, exFAT, FAT32) is walked.
+    pub ntfs: bool,
+}
+
+impl FixedDrive {
+    /// `X:\`.
+    pub fn root(&self) -> PathBuf {
+        PathBuf::from(format!("{}:\\", self.letter))
+    }
+}
+
+/// A drive of type `drive_type` (`GetDriveTypeW`) with file system `fs_name`
+/// (`GetVolumeInformationW`): `Some` only for a fixed drive. Removable, network, optical and
+/// RAM drives are never searched whole.
+#[cfg_attr(not(windows), allow(dead_code))] // only `fixed_drives` on Windows calls it
+fn classify(letter: char, drive_type: u32, fs_name: &str) -> Option<FixedDrive> {
+    let letter = letter.to_ascii_uppercase();
+    (letter.is_ascii_alphabetic() && drive_type == DRIVE_FIXED)
+        .then(|| FixedDrive { letter, ntfs: fs_name.trim().eq_ignore_ascii_case("NTFS") })
+}
+
+/// The fixed drives of this PC, in letter order. A drive whose file system cannot be read
+/// counts as not NTFS (it is walked). Empty outside Windows.
+#[cfg(windows)]
+pub fn fixed_drives() -> Vec<FixedDrive> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW};
+    use windows_sys::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX, SetErrorMode};
+
+    /// Puts the previous error mode back, also on unwind.
+    struct RestoreMode(u32);
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            // SAFETY: plain value argument.
+            unsafe { SetErrorMode(self.0) };
+        }
+    }
+    // A fixed drive with no media (a card reader slot) must not pop up "insert a disk".
+    // SAFETY: plain value argument; returns the previous mode.
+    let prev = unsafe { SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX) };
+    // SAFETY: as above; keeps the flags the process already had.
+    unsafe { SetErrorMode(prev | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX) };
+    let _restore = RestoreMode(prev);
+    // SAFETY: no arguments.
+    let mask = unsafe { GetLogicalDrives() };
+    let mut out = Vec::new();
+    for i in 0..26u32 {
+        if mask & (1 << i) == 0 {
+            continue;
+        }
+        let letter = (b'A' + i as u8) as char;
+        let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain([0]).collect();
+        // SAFETY: `root` is a NUL-terminated wide string that outlives the call.
+        let ty = unsafe { GetDriveTypeW(root.as_ptr()) };
+        if ty != DRIVE_FIXED {
+            continue;
+        }
+        let mut fs = [0u16; 64];
+        // SAFETY: `root` is NUL-terminated; `fs` is a writable buffer of the length passed;
+        // the other out-pointers are null, which the API allows.
+        let ok = unsafe {
+            GetVolumeInformationW(
+                root.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                fs.as_mut_ptr(),
+                fs.len() as u32,
+            )
+        };
+        let name = if ok != 0 {
+            let n = fs.iter().position(|&c| c == 0).unwrap_or(fs.len());
+            String::from_utf16_lossy(&fs[..n])
+        } else {
+            String::new()
+        };
+        out.extend(classify(letter, ty, &name));
+    }
+    out
+}
+
+/// The fixed drives of this PC: none outside Windows.
+#[cfg(not(windows))]
+pub fn fixed_drives() -> Vec<FixedDrive> {
+    Vec::new()
+}
+
+/// Index of the whole volume `letter` (e.g. `'C'`), read from its MFT. Needs administrator
+/// rights and an NTFS volume.
+pub fn volume_index(letter: char, progress: &Progress) -> Result<DiskIndex, String> {
+    let letter = letter.to_ascii_uppercase();
+    if !letter.is_ascii_alphabetic() {
+        return Err(format!("unità non valida: {letter}"));
+    }
+    let nodes = mft::read_volume(letter, progress)?;
+    Ok(DiskIndex::from_nodes(&format!("{letter}:\\"), nodes))
+}
+
+fn drive_letter(p: &Path) -> Option<char> {
+    let s = normalize_path(p).to_string_lossy().into_owned();
+    let b = s.as_bytes();
+    (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()).then(|| (b[0] as char).to_ascii_uppercase())
+}
+
+/// One index for the volumes holding `roots`, each volume read once.
+///
+/// `admin == false` -> `(None, [])`: the caller scans normally. A volume that cannot be read
+/// (missing, not NTFS, access denied) gets a warning and is skipped; its roots are not in
+/// the index (`size_of(root)` is `None`), so the caller has to scan them normally. Roots
+/// without a drive letter (network paths) are skipped the same way.
+pub fn build_for_roots(roots: &[PathBuf], admin: bool, progress: &Progress) -> (Option<DiskIndex>, Vec<String>) {
+    let mut warnings = Vec::new();
+    if !admin {
+        return (None, warnings);
+    }
+    let mut letters: Vec<char> = Vec::new();
+    for r in roots {
+        match drive_letter(r) {
+            Some(l) if !letters.contains(&l) => letters.push(l),
+            Some(_) => {}
+            None => warnings.push(format!(
+                "{} non disponibile per la lettura veloce: uso la scansione normale.",
+                normalize_path(r).display()
+            )),
+        }
+    }
+    letters.sort_unstable();
+    let mut index: Option<DiskIndex> = None;
+    for l in letters {
+        match volume_index(l, progress) {
+            Ok(ix) => match index.as_mut() {
+                Some(all) => all.merge(ix),
+                None => index = Some(ix),
+            },
+            Err(_) if progress.cancel.load(Ordering::Relaxed) => return (None, warnings),
+            Err(_) => warnings.push(format!("Unità {l}: non disponibile per la lettura veloce: uso la scansione normale.")),
+        }
+    }
+    (index, warnings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xiox_model::DirIndex;
+    use std::path::{Path, PathBuf};
+
+    fn dir(parent: u32, name: &str) -> Node {
+        Node { parent, is_dir: true, reparse: false, name: Some(name.into()), size: 0, alloc: 0 }
+    }
+    fn file(parent: u32, size: u64, alloc: u64) -> Node {
+        Node { parent, is_dir: false, reparse: false, name: None, size, alloc }
+    }
+
+    // 0 C:\  1 Projects  2 app  3 target  4 f(100/4096) in target  5 f(100/4096) in target
+    // 6 f(10/0) in app  7 link (dir, reparse) in Projects named "target"
+    fn nodes() -> Vec<Node> {
+        vec![
+            dir(0, ""),
+            dir(0, "Projects"),
+            dir(1, "app"),
+            dir(2, "target"),
+            file(3, 100, 4096),
+            file(3, 100, 4096),
+            file(2, 10, 0),
+            Node { reparse: true, ..dir(1, "target") },
+        ]
+    }
+    fn sample() -> DiskIndex {
+        DiskIndex::from_nodes(r"C:\", nodes())
+    }
+
+    #[test]
+    fn sizes_add_up_through_folders() {
+        let ix = sample();
+        let t = ix.size_of(Path::new(r"C:\Projects\app\target")).unwrap();
+        assert_eq!((t.logical_bytes, t.allocated_bytes, t.file_count), (200, Some(8192), 2));
+        let a = ix.size_of(Path::new(r"C:\Projects\app")).unwrap();
+        assert_eq!((a.logical_bytes, a.allocated_bytes, a.file_count), (210, Some(8192), 3));
+    }
+
+    #[test]
+    fn finds_dirs_by_name_under_roots_case_insensitive_without_links() {
+        let hits = sample().find_dirs_named(&["TARGET"], &[PathBuf::from(r"C:\Projects")]);
+        assert_eq!(
+            hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+            vec![PathBuf::from(r"C:\Projects\app\target")]
+        );
+        assert!(sample().find_dirs_named(&["target"], &[PathBuf::from(r"C:\Other")]).is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_both_volumes() {
+        let mut ix = sample();
+        ix.merge(DiskIndex::from_nodes(r"D:\", nodes()));
+        let c = ix.size_of(Path::new(r"C:\Projects\app")).unwrap();
+        let d = ix.size_of(Path::new(r"d:\projects\APP\")).unwrap();
+        assert_eq!((c.logical_bytes, d.logical_bytes), (210, 210));
+        let hits = ix.find_dirs_named(&["target"], &[PathBuf::from(r"D:\")]);
+        assert_eq!(
+            hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+            vec![PathBuf::from(r"D:\Projects\app\target")]
+        );
+    }
+
+    #[test]
+    fn missing_drive_gives_warning_and_no_index() {
+        let (ix, w) = build_for_roots(&[PathBuf::from(r"Q:\nowhere")], true, &Progress::default());
+        assert!(ix.is_none());
+        assert!(w.iter().any(|m| m.contains("Q:")));
+    }
+
+    #[test]
+    fn size_of_reparse_folder_is_none() {
+        let ix = sample();
+        assert!(ix.size_of(Path::new(r"C:\Projects\target")).is_none());
+        assert!(ix.size_of(Path::new(r"C:\Projects\app\target")).is_some());
+    }
+
+    #[test]
+    fn huge_sizes_saturate_instead_of_overflowing() {
+        let mut n = nodes();
+        n.push(file(3, u64::MAX, u64::MAX));
+        n.push(file(2, u64::MAX - 1, 1)); // in app
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let t = ix.size_of(Path::new(r"C:\Projects\app\target")).unwrap();
+        assert_eq!((t.logical_bytes, t.allocated_bytes, t.file_count), (u64::MAX, Some(u64::MAX), 3));
+        let root = ix.size_of(Path::new(r"C:\")).unwrap();
+        assert_eq!((root.logical_bytes, root.allocated_bytes, root.file_count), (u64::MAX, Some(u64::MAX), 5));
+    }
+
+    #[test]
+    fn classify_keeps_fixed_drives_only() {
+        assert_eq!(classify('C', DRIVE_FIXED, "NTFS"), Some(FixedDrive { letter: 'C', ntfs: true }));
+        assert_eq!(classify('E', DRIVE_REMOVABLE, "FAT32"), None);
+        assert_eq!(classify('E', DRIVE_REMOVABLE, "NTFS"), None);
+        assert_eq!(classify('D', DRIVE_FIXED, "ReFS"), Some(FixedDrive { letter: 'D', ntfs: false }));
+        assert_eq!(classify('f', DRIVE_FIXED, "ntfs"), Some(FixedDrive { letter: 'F', ntfs: true }));
+        assert_eq!(classify('G', DRIVE_FIXED, ""), Some(FixedDrive { letter: 'G', ntfs: false }));
+        assert_eq!(classify('Z', 4, "NTFS"), None, "network drive");
+        assert_eq!(FixedDrive { letter: 'C', ntfs: true }.root(), PathBuf::from(r"C:\"));
+    }
+
+    #[test]
+    fn finds_dirs_by_prefix_and_suffix_pattern() {
+        let mut n = nodes();
+        n.push(dir(2, "checkpoint-500")); // 8
+        n.push(dir(2, "Checkpoint-")); // 9: nothing after the prefix
+        n.push(dir(2, "pkg.egg-info")); // 10
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let mut hits: Vec<PathBuf> = ix
+            .find_dirs_named(&["CHECKPOINT-*", "*.egg-info", "target"], &[PathBuf::from(r"C:\Projects")])
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        hits.sort();
+        assert_eq!(
+            hits,
+            vec![
+                PathBuf::from(r"C:\Projects\app\checkpoint-500"),
+                PathBuf::from(r"C:\Projects\app\pkg.egg-info"),
+                PathBuf::from(r"C:\Projects\app\target"),
+            ]
+        );
+    }
+
+    #[test]
+    fn matches_under_system_dirs_are_not_returned() {
+        let mut n = nodes();
+        n.push(dir(0, "Windows")); // 8
+        n.push(dir(8, "Logs")); // 9: C:\Windows\Logs
+        n.push(dir(0, "Users")); // 10
+        n.push(dir(10, "x")); // 11
+        n.push(dir(11, "AppData")); // 12
+        n.push(dir(12, "Local")); // 13
+        n.push(dir(13, "logs")); // 14: C:\Users\x\AppData\Local\logs
+        n.push(dir(11, "site")); // 15
+        n.push(dir(15, "windows")); // 16: a Flutter-like windows\ deeper down
+        n.push(dir(16, "logs")); // 17: C:\Users\x\site\windows\logs, kept
+        n.push(dir(0, "Program Files (x86)")); // 18
+        n.push(dir(18, "logs")); // 19
+        n.push(dir(1, "logs")); // 20: C:\Projects\logs, kept
+        let ix = DiskIndex::from_nodes(r"C:\", n);
+        let mut hits: Vec<PathBuf> =
+            ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\")]).into_iter().map(|h| h.path).collect();
+        hits.sort();
+        assert_eq!(hits, vec![PathBuf::from(r"C:\Projects\logs"), PathBuf::from(r"C:\Users\x\site\windows\logs")]);
+        // A search root inside a system folder: only what is below the root is checked.
+        let inside = ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\Users\x\AppData\Local")]);
+        assert_eq!(inside.into_iter().map(|h| h.path).collect::<Vec<_>>(), vec![PathBuf::from(r"C:\Users\x\AppData\Local\logs")]);
+        let users = ix.find_dirs_named(&["logs"], &[PathBuf::from(r"C:\Users")]);
+        assert_eq!(users.into_iter().map(|h| h.path).collect::<Vec<_>>(), vec![PathBuf::from(r"C:\Users\x\site\windows\logs")]);
+    }
+
+    #[test]
+    fn not_admin_gives_no_index() {
+        let (ix, w) = build_for_roots(&[PathBuf::from(r"C:\Windows")], false, &Progress::default());
+        assert!(ix.is_none() && w.is_empty());
+    }
+}

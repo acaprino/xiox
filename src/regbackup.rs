@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pc_rules::RegRoot;
+use xiox_rules::RegRoot;
 
 /// Esportazione di una chiave `root\path` nel file `out` (formato di
 /// `reg export`, UTF-16), sostituibile nei test.
@@ -166,14 +166,14 @@ pub fn reg_exe_export(root: RegRoot, path: &str, out: &Path) -> Result<(), Strin
 /// rifiuta collegamenti nel percorso e verifica l'ACL). Se non si riesce
 /// il backup fallisce: niente esportazioni in una cartella dell'utente.
 pub fn admin_work_dir() -> Result<PathBuf, String> {
-    let app = pc_rules::updater::data_dir();
+    let app = xiox_rules::updater::data_dir();
     let base = app.parent().ok_or("cartella dati senza padre")?.join("tmp");
-    pc_rules::updater::secure_dir(&base).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+    xiox_rules::updater::secure_dir(&base).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
     let dir = base.join(random_name());
     if dir.exists() {
         return Err("cartella di lavoro già esistente".into());
     }
-    pc_rules::updater::secure_dir(&dir).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+    xiox_rules::updater::secure_dir(&dir).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
     Ok(dir)
 }
 

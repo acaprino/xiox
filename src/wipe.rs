@@ -32,7 +32,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pc_rules::Guard;
+use xiox_rules::Guard;
 
 use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 use crate::sys::fmt_size;
@@ -285,7 +285,7 @@ pub fn cleanup_leftovers(vol: &dyn Volume, skip_pid: Option<u32>) -> Leftovers {
 /// Mai quelle del processo stesso. L'esito va solo sullo standard error.
 pub fn remove_leftovers_in_background() {
     std::thread::spawn(|| {
-        let guard = Guard::new(&pc_rules::Env::for_rules());
+        let guard = Guard::new(&xiox_rules::Env::for_rules());
         let Some(vol) = win::RealVolume::system(&guard) else { return };
         // Nessuna cartella: niente da fare (il caso normale).
         if !vol.leftover_dirs().is_ok_and(|d| d.iter().any(|n| is_wipe_dir_name(n))) {
@@ -530,7 +530,7 @@ pub fn remove_wipe_dir_at(root: &Path, name: &str, guard: &Guard) -> Result<u64,
         let p = e.path();
         let fill = e.file_name().to_str().is_some_and(is_fill_name);
         match fs::symlink_metadata(&p) {
-            Ok(m) if fill && m.is_file() && !is_reparse(&m) => match pc_rules::delete_checked_with(&p, guard) {
+            Ok(m) if fill && m.is_file() && !is_reparse(&m) => match xiox_rules::delete_checked_with(&p, guard) {
                 Ok(b) => freed += b,
                 Err(err) => problems.push(err),
             },
@@ -540,7 +540,7 @@ pub fn remove_wipe_dir_at(root: &Path, name: &str, guard: &Guard) -> Result<u64,
     if !problems.is_empty() {
         return Err(problems.join("; "));
     }
-    pc_rules::delete_checked_with(&dir, guard)?;
+    xiox_rules::delete_checked_with(&dir, guard)?;
     Ok(freed)
 }
 
@@ -555,7 +555,7 @@ mod win {
     use std::path::{Path, PathBuf};
     use std::ptr::{null, null_mut};
 
-    use pc_rules::Guard;
+    use xiox_rules::Guard;
     use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FileBasicInfo, GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileInformationByHandleEx,

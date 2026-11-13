@@ -3,8 +3,8 @@
 
 use crate::args::{self, Command};
 use crate::{json, render};
-use dc_model::RemoveMode;
-use dc_project::{Category, Chosen, CleanOutcome, CleanRequest, Error, Options, ProjectScan};
+use xiox_model::RemoveMode;
+use xiox_project::{Category, Chosen, CleanOutcome, CleanRequest, Error, Options, ProjectScan};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -61,9 +61,9 @@ fn test_switches() -> Option<TestSwitches> {
 /// The analysis of the real PC (or of the test switches' fake world in debug builds).
 pub fn scan_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
     match test_switches() {
-        Some(t) if t.no_sessions => dc_project::analyze_project_without_sessions(path, opts, &t.search_roots),
-        Some(t) => dc_project::analyze_project_in(path, opts, &t.search_roots),
-        None => dc_project::analyze_project(path, opts),
+        Some(t) if t.no_sessions => xiox_project::analyze_project_without_sessions(path, opts, &t.search_roots),
+        Some(t) => xiox_project::analyze_project_in(path, opts, &t.search_roots),
+        None => xiox_project::analyze_project(path, opts),
     }
 }
 
@@ -72,17 +72,17 @@ pub fn scan_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
 fn clean_project(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run: bool) -> CleanOutcome {
     match test_switches() {
         Some(t) if t.no_sessions => {
-            dc_project::clean_without_sessions(scan, chosen, mode, dry_run, &t.search_roots)
+            xiox_project::clean_without_sessions(scan, chosen, mode, dry_run, &t.search_roots)
         }
-        Some(t) => dc_project::clean_in(scan, chosen, mode, dry_run, &t.search_roots),
-        None => dc_project::clean(scan, chosen, mode, dry_run),
+        Some(t) => xiox_project::clean_in(scan, chosen, mode, dry_run, &t.search_roots),
+        None => xiox_project::clean(scan, chosen, mode, dry_run),
     }
 }
 
 /// Analyze the project (the current folder by default), telling the person on `err`.
 fn analyze_path(project: Option<PathBuf>, no_drives: bool, err: &mut dyn Write) -> Result<ProjectScan, i32> {
     let path = project.unwrap_or_else(|| PathBuf::from("."));
-    let opts = Options { drives: !no_drives, measure: true, admin: dc_project::is_elevated() };
+    let opts = Options { drives: !no_drives, measure: true, admin: xiox_project::is_elevated() };
     let _ = writeln!(err, "Analyzing {} ...", path.display());
     scan_project(&path, &opts).map_err(|e| {
         let _ = writeln!(err, "error: {e}");
@@ -250,7 +250,7 @@ fn clean(f: &CleanFlags, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         stdin_is_terminal: stdin.is_terminal(),
         stdin: &mut lock,
         remove: &clean_project,
-        shortfall: &dc_project::recycle_shortfall,
+        shortfall: &xiox_project::recycle_shortfall,
     };
     let mut sink = Sink { out, err, json: f.json };
     match clean_run(f, &mut sink, scan, &mut deps) {
@@ -286,7 +286,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
     // 2. Select. A refusal removes nothing.
     let mode = if f.permanent { RemoveMode::Permanent } else { RemoveMode::Recycle };
     let request = CleanRequest { categories: f.categories.clone(), include: f.include.clone(), mode };
-    let chosen = match dc_project::select(&scan, &request) {
+    let chosen = match xiox_project::select(&scan, &request) {
         Ok(c) => c,
         Err(e) => {
             s.fail(&format!("error: {e}"));
@@ -351,7 +351,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dc_project::Chosen;
+    use xiox_project::Chosen;
 
     #[test]
     fn only_y_and_yes_in_any_case_confirm() {
@@ -406,7 +406,7 @@ mod tests {
     // ── clean_run with fakes: no analysis, no removal, no terminal ──
 
     use crate::testdata::{GB, build, scan};
-    use dc_project::Outcome;
+    use xiox_project::Outcome;
     use std::cell::Cell;
 
     /// A stdout that takes `ok` writes and then fails, as a closed handle or a full disk does.

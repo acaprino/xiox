@@ -5,7 +5,7 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
-use pc_rules::Env;
+use xiox_rules::Env;
 
 const GIB: u64 = 1 << 30;
 const MIB: u64 = 1 << 20;

@@ -33,7 +33,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pc_rules::{RegItem, RegRoot};
+use xiox_rules::{RegItem, RegRoot};
 use windows_sys::Win32::Security::Credentials::CRED_TYPE_DOMAIN_PASSWORD;
 
 use crate::account::Account;
@@ -304,7 +304,7 @@ pub fn clean(
                 if !valid_server_name(server) {
                     out.failed += 1;
                     out.note(format!("Account FTP non ammesso, lasciato: {}", server.replace(SEP, " ")));
-                } else if let Err(why) = pc_rules::reg_allowed(RegRoot::Hkcu, &path, None) {
+                } else if let Err(why) = xiox_rules::reg_allowed(RegRoot::Hkcu, &path, None) {
                     out.failed += 1;
                     out.note(format!("Account FTP {server} non toccato ({why})"));
                 } else {

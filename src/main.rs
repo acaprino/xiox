@@ -108,11 +108,11 @@ struct App {
     cleaned: Vec<Option<cleaner::Cleaned>>,
     clean_view: CleanView,
     /// «Annulla» della pulizia o dell'analisi in corso: lo stesso clic ferma le categorie
-    /// (`dc_cleaner::Cancel`) e le voci native e dinamiche (`AtomicBool`).
-    clean_cancel: Option<(dc_cleaner::Cancel, Arc<AtomicBool>)>,
+    /// (`xiox_cleaner::Cancel`) e le voci native e dinamiche (`AtomicBool`).
+    clean_cancel: Option<(xiox_cleaner::Cancel, Arc<AtomicBool>)>,
     clean_started: Instant,
     /// Resoconto della pulizia, costruito quando tutte le voci hanno finito.
-    clean_report: Option<dc_model::CleanReport>,
+    clean_report: Option<xiox_model::CleanReport>,
     /// Voci scelte all'avvio dell'ultima analisi o pulizia.
     clean_chosen: Chosen,
     /// Come è finita l'ultima analisi o pulizia (`None` = in corso o mai partita).
@@ -128,7 +128,7 @@ struct App {
     /// Aperto finché il thread delle regole (caricamento e aggiornamento di Winapp2) vive.
     rules_rx: Option<Receiver<rules::RulesMsg>>,
     /// Esito dell'aggiornamento di Winapp2 di questo avvio (`None` = in corso o non partito).
-    winapp2_update: Option<pc_rules::updater::UpdateOutcome>,
+    winapp2_update: Option<xiox_rules::updater::UpdateOutcome>,
     /// Finestra Informazioni aperta.
     about_open: bool,
     rule_sel: HashSet<String>,
@@ -243,9 +243,9 @@ impl App {
         let update = rules::should_update(fake_profile).then(rules::real_update);
         let ctx = ctx.clone();
         rules::start(
-            pc_rules::updater::data_dir(),
+            xiox_rules::updater::data_dir(),
             rules::own_folders,
-            move || if from_process { pc_rules::Env::from_process() } else { pc_rules::Env::for_rules() },
+            move || if from_process { xiox_rules::Env::from_process() } else { xiox_rules::Env::for_rules() },
             rules::load,
             update,
             move |m| {
@@ -256,7 +256,7 @@ impl App {
     }
 
     /// Opzioni dinamiche spuntate (cleaner e opzione clonati per il job).
-    fn chosen_rules(&self) -> Vec<(pc_rules::Cleaner, pc_rules::Opt)> {
+    fn chosen_rules(&self) -> Vec<(xiox_rules::Cleaner, xiox_rules::Opt)> {
         let Some(rs) = &self.rules else { return vec![] };
         rs.cleaners
             .iter()
@@ -304,7 +304,7 @@ impl App {
         self.clean_report = None;
         self.clean_saved = None;
         self.clean_started = Instant::now();
-        let files_cancel = dc_cleaner::Cancel::default();
+        let files_cancel = xiox_cleaner::Cancel::default();
         let cancel = Arc::new(AtomicBool::new(false));
         self.clean_cancel = Some((files_cancel.clone(), cancel.clone()));
         let only_old = self.only_old;
@@ -327,7 +327,7 @@ impl App {
                 let f = cleaner::analyze(i, only_old);
                 if also_clean {
                     // L'avanzamento dentro la categoria affina la barra.
-                    let tick = |t: dc_cleaner::Tick| {
+                    let tick = |t: xiox_cleaner::Tick| {
                         if t.total_items > 0 {
                             let part = t.done_items as f32 / t.total_items as f32;
                             let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), (k as f32 + part) / total));
@@ -343,8 +343,8 @@ impl App {
             // Voci native e opzioni dinamiche: in sequenza, un solo Guard per tutta
             // la pulizia; i processi si rileggono prima dell'analisi e della pulizia
             // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
-            let env = env.unwrap_or_else(pc_rules::Env::for_rules);
-            let guard = pc_rules::Guard::new(&env);
+            let env = env.unwrap_or_else(xiox_rules::Env::for_rules);
+            let guard = xiox_rules::Guard::new(&env);
             let processes = rules::processes;
             let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
             let nprogress = |k: usize, text: String| {
@@ -1452,7 +1452,7 @@ fn rules_panel(ui: &mut Ui, rs: &rules::RuleSet, natives: Natives, status: (Stri
     let hit = |text: &str| text.to_lowercase().contains(&needle);
     for (section, idx) in &rs.sections {
         let whole = needle.is_empty() || hit(section);
-        let items: Vec<&pc_rules::Cleaner> = idx
+        let items: Vec<&xiox_rules::Cleaner> = idx
             .iter()
             .map(|&i| &rs.cleaners[i])
             .filter(|c| whole || hit(&c.label) || c.options.iter().any(|o| hit(&o.label)))
@@ -1586,7 +1586,7 @@ fn note_cell(ui: &mut Ui, lines: &[String]) {
 
 /// Casella di un'opzione dinamica: disattivata se non supportata (spiegazione al
 /// passaggio del mouse) o se un suo processo è attivo ("Chiudi … per pulire").
-fn rule_checkbox(ui: &mut Ui, c: &pc_rules::Cleaner, o: &pc_rules::Opt, label: &str, sel: &mut HashSet<String>, processes: &[String], busy: bool) {
+fn rule_checkbox(ui: &mut Ui, c: &xiox_rules::Cleaner, o: &xiox_rules::Opt, label: &str, sel: &mut HashSet<String>, processes: &[String], busy: bool) {
     let key = rules::key(c, o);
     if let Some(why) = rules::blocked(c, o, processes) {
         let mut off = false;
@@ -1655,8 +1655,8 @@ fn clean_report(
     chosen: &Chosen,
     elapsed_ms: u64,
     end: CleanEnd,
-) -> dc_model::CleanReport {
-    let mut r = dc_model::CleanReport { elapsed_ms, cancelled: end != CleanEnd::Done, ..Default::default() };
+) -> xiox_model::CleanReport {
+    let mut r = xiox_model::CleanReport { elapsed_ms, cancelled: end != CleanEnd::Done, ..Default::default() };
     if end == CleanEnd::Died {
         r.failed.push((PathBuf::from("Pulizia"), CLEAN_DIED.to_string()));
     }
@@ -2001,7 +2001,7 @@ mod tests {
         let (tx, rx) = channel();
         app.clean_job = Some(rx);
         app.clean_view = CleanView::Cleaned;
-        app.clean_cancel = Some((dc_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
+        app.clean_cancel = Some((xiox_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
         app.clean_chosen = Chosen { cats: vec![1, 3], others: vec![("native:dns".into(), "Cache DNS".into())] };
         let c = cleaner::Cleaned { freed: 100, removed: 2, ..Default::default() };
         tx.send(CleanMsg::Cleaned(1, cleaner::Found::default(), c)).unwrap();
@@ -2040,7 +2040,7 @@ mod tests {
 
         let (tx, rx) = channel();
         app.clean_job = Some(rx);
-        let cancel = dc_cleaner::Cancel::default();
+        let cancel = xiox_cleaner::Cancel::default();
         cancel.cancel();
         app.clean_cancel = Some((cancel, Arc::new(AtomicBool::new(false))));
         tx.send(CleanMsg::Done).unwrap();

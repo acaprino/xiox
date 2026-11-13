@@ -1,0 +1,18 @@
+[package]
+name = "xiox-mukade"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+xiox-model = { path = "../xiox-model" }
+# Session reader library by the same author (MIT), vendored in the repo and compiled into the app.
+mukade = { path = "../../vendor/mukade" }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# Same pinned version as vendor/mukade: two versions cannot coexist (libsqlite3-sys).
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,7 +1,7 @@
 //! Temporary-file cleaner. Locations and ages come from MECHANICS.md section 1.
 
 use crate::sys;
-use dc_cleaner::{remove_files_parallel, worker_count, Cancel, Tick};
+use xiox_cleaner::{remove_files_parallel, worker_count, Cancel, Tick};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -231,7 +231,7 @@ fn remove_empty_dirs(dir: &Path, is_root: bool) -> u64 {
 }
 
 /// Cleans what `analyze(index, …)` found: the files with the worker pool
-/// (`dc_cleaner::remove_files_parallel`, read-only files included), then the
+/// (`xiox_cleaner::remove_files_parallel`, read-only files included), then the
 /// emptied folders of the recursive targets. The Recycle Bin is emptied with
 /// `sys::empty_recycle_bin`. «Annulla» stops before the next file.
 pub fn clean(index: usize, found: &Found, tick: &(dyn Fn(Tick) + Sync), cancel: &Cancel) -> Cleaned {
@@ -291,7 +291,7 @@ mod tests {
     /// (`System32\wbem\Logs`, il valore di registro di WER) resta fuori.
     #[test]
     fn phase3_additions_pass_the_rules_guard() {
-        use pc_rules::{Env, Guard};
+        use xiox_rules::{Env, Guard};
         use std::collections::HashMap;
         use std::path::Path;
         let env = Env(HashMap::from([
@@ -343,10 +343,10 @@ mod tests {
         let locked_path = found.files[42].0.clone();
         let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(&locked_path).unwrap();
         let ticks = std::sync::atomic::AtomicUsize::new(0);
-        let tick = |_: dc_cleaner::Tick| {
+        let tick = |_: xiox_cleaner::Tick| {
             ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         };
-        let c = super::clean_files(&found, &[t.path().to_path_buf()], &tick, &dc_cleaner::Cancel::default());
+        let c = super::clean_files(&found, &[t.path().to_path_buf()], &tick, &xiox_cleaner::Cancel::default());
         drop(locked);
         assert_eq!(c.removed, 499);
         assert_eq!(c.failed, 1);
@@ -368,7 +368,7 @@ mod tests {
         let p = t.path().join("a.tmp");
         std::fs::write(&p, b"x").unwrap();
         let found = super::Found { files: vec![(p.clone(), 1)], bytes: 1, count: 1, skipped_dirs: 0 };
-        let cancel = dc_cleaner::Cancel::default();
+        let cancel = xiox_cleaner::Cancel::default();
         cancel.cancel();
         let empty = t.path().join("vuota");
         std::fs::create_dir(&empty).unwrap();
@@ -386,7 +386,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let empty = t.path().join("vuota");
         std::fs::create_dir(&empty).unwrap();
-        let cancel = dc_cleaner::Cancel::default();
+        let cancel = xiox_cleaner::Cancel::default();
         cancel.cancel();
         let c = super::clean_files(&super::Found::default(), &[t.path().to_path_buf()], &|_| {}, &cancel);
         assert!(!c.cancelled);

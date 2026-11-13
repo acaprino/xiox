@@ -18,10 +18,10 @@ impl Root {
             Root::Hklm => "HKLM",
         }
     }
-    fn rule_root(self) -> pc_rules::RegRoot {
+    fn rule_root(self) -> xiox_rules::RegRoot {
         match self {
-            Root::Hkcu => pc_rules::RegRoot::Hkcu,
-            Root::Hklm => pc_rules::RegRoot::Hklm,
+            Root::Hkcu => xiox_rules::RegRoot::Hkcu,
+            Root::Hklm => xiox_rules::RegRoot::Hklm,
         }
     }
     fn key(self) -> RegKey {
@@ -502,7 +502,7 @@ mod backup_tests {
     }
 
     /// Esportazione finta: scrive un `.reg` UTF-16 come `reg.exe`.
-    fn fake_export(root: pc_rules::RegRoot, path: &str, out: &Path) -> Result<(), String> {
+    fn fake_export(root: xiox_rules::RegRoot, path: &str, out: &Path) -> Result<(), String> {
         let text = format!(
             "Windows Registry Editor Version 5.00\r\n\r\n[{}\\{path}]\r\n\"x\"=\"1\"\r\n",
             crate::regbackup::root_name(root)
@@ -571,7 +571,7 @@ mod backup_tests {
         let work = work_in(&work_root);
         let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
         let b = issue(Root::Hkcu, r"Software\FakeApp\B", None);
-        let export = |root: pc_rules::RegRoot, path: &str, out: &Path| {
+        let export = |root: xiox_rules::RegRoot, path: &str, out: &Path| {
             if path.ends_with('B') { Err("accesso negato".to_string()) } else { fake_export(root, path, out) }
         };
         let r = backup_to(&dest, "b", &work, &all_exist, &export, &[&a, &b]);
@@ -586,7 +586,7 @@ mod backup_tests {
         let (dest, _) = dirs(t.path());
         let no_work = || Err::<PathBuf, String>("cartella di lavoro non protetta".into());
         let exported = Cell::new(0);
-        let export = |root: pc_rules::RegRoot, path: &str, out: &Path| {
+        let export = |root: xiox_rules::RegRoot, path: &str, out: &Path| {
             exported.set(exported.get() + 1);
             fake_export(root, path, out)
         };

@@ -699,8 +699,8 @@ fn real_listing_measures_a_temp_tree() {
 #[test]
 #[ignore]
 fn live_winold_analysis_read_only() {
-    let env = pc_rules::Env::for_rules();
-    let guard = pc_rules::Guard::new(&env);
+    let env = xiox_rules::Env::for_rules();
+    let guard = xiox_rules::Guard::new(&env);
     let cancel = AtomicBool::new(false);
     let ctx = NativeCtx { env: &env, cancel: &cancel, guard: &guard };
     let item = items().into_iter().next().unwrap();

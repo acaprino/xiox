@@ -1,8 +1,8 @@
 //! Human output of `analyze` and `clean`. Every text is English and built from structured fields: the
 //! engine's own strings (`Artifact::note`, `ArchivedSession::blocked`, warnings) are never used.
 
-use dc_model::{Agent, Level, RemoveMode};
-use dc_project::{
+use xiox_model::{Agent, Level, RemoveMode};
+use xiox_project::{
     Block, Category, Chosen, CleanOutcome, Item, Note, Outcome, ProjectScan, SearchMode, Target, Why, key_within,
     normalize_remote,
 };
@@ -30,13 +30,13 @@ pub fn fmt_size(bytes: u64) -> String {
     format!("{:.1} GB", mb / 1024.0)
 }
 
-/// True when the guard of the cleaner (`dc_cleaner::guard`) refuses the folder for being
+/// True when the guard of the cleaner (`xiox_cleaner::guard`) refuses the folder for being
 /// directly under a drive root or share root: fewer than two folders below it.
 pub fn is_top_level(path: &Path) -> bool {
     path.components().filter(|c| matches!(c, Component::Normal(_))).count() < 2
 }
 
-/// English reason of a block: the one wording of `dc_project`, also used in its errors.
+/// English reason of a block: the one wording of `xiox_project`, also used in its errors.
 pub fn block_reason(b: Block) -> &'static str {
     b.reason()
 }
@@ -132,7 +132,7 @@ fn path_text(item: &Item) -> String {
     }
 }
 
-/// The guard of `clean` (`dc_cleaner::guard`) refuses any path directly under a drive or share
+/// The guard of `clean` (`xiox_cleaner::guard`) refuses any path directly under a drive or share
 /// root, whatever the kind of item: it is shown, never offered.
 fn too_shallow(item: &Item) -> bool {
     item.path.as_deref().is_some_and(is_top_level)
@@ -406,7 +406,7 @@ fn label_of(key: &str, path: &Option<std::path::PathBuf>) -> String {
 const STATUS_W: usize = 12;
 
 /// What happened, item by item and in total. Every text is English (the reasons come from
-/// `dc_project` already in English).
+/// `xiox_project` already in English).
 pub fn render_outcome(o: &CleanOutcome) -> String {
     let mut out = String::new();
     for (key, path, _category, outcome) in &o.items {
@@ -589,7 +589,7 @@ mod tests {
     fn unmeasured_items_show_a_dash_and_nested_items_count_once() {
         let mut inner = build();
         inner.path = Some("D:\\Projects\\mukade-chunked\\target".into());
-        inner.key = dc_model::path_key(inner.path.as_ref().unwrap());
+        inner.key = xiox_model::path_key(inner.path.as_ref().unwrap());
         inner.bytes = Some(100 * MB);
         let mut unmeasured = named_top_level();
         unmeasured.bytes = None;
@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn notes_and_search_line_follow_the_structured_fields() {
         let mut s = full_scan();
-        s.search = dc_project::SearchMode::ParentOnly;
+        s.search = xiox_project::SearchMode::ParentOnly;
         s.project.is_repo = false;
         s.project.origin = None;
         s.notes = vec![Note::NameTooShort, Note::EngineWarning];
@@ -613,7 +613,7 @@ mod tests {
         assert!(out.contains("note: "), "{out}");
         assert!(out.contains("too short"), "{out}");
         let mut s = full_scan();
-        s.search = dc_project::SearchMode::MftIndex;
+        s.search = xiox_project::SearchMode::MftIndex;
         assert!(line_with(&render_scan(&s), "Search   ").contains("MFT index"));
     }
 
@@ -710,7 +710,7 @@ mod tests {
         unchecked.why = Why::SameRepository { shared_root_commit: true, same_origin: true, has_own_work: None };
         let mut checked = copy_with_work();
         checked.blocked.clear();
-        checked.key = dc_model::path_key(std::path::Path::new("D:\\Projects\\old\\other-copy"));
+        checked.key = xiox_model::path_key(std::path::Path::new("D:\\Projects\\old\\other-copy"));
         checked.path = Some(std::path::PathBuf::from("D:\\Projects\\old\\other-copy"));
         checked.why = Why::SameRepository { shared_root_commit: true, same_origin: true, has_own_work: Some(false) };
         let s = scan(vec![build(), unchecked, checked, named_top_level()]);
@@ -767,7 +767,7 @@ mod tests {
     }
 
     fn entry(path: &str, category: Category, o: Outcome) -> (String, Option<std::path::PathBuf>, Category, Outcome) {
-        (dc_model::path_key(std::path::Path::new(path)), Some(std::path::PathBuf::from(path)), category, o)
+        (xiox_model::path_key(std::path::Path::new(path)), Some(std::path::PathBuf::from(path)), category, o)
     }
 
     #[test]

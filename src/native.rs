@@ -10,7 +10,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pc_rules::{Env, Guard};
+use xiox_rules::{Env, Guard};
 
 /// Note tenute per una voce nel resoconto.
 const MAX_NOTES: usize = 20;

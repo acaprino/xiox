@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use pc_rules::{Env, Guard};
+use xiox_rules::{Env, Guard};
 
 use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 
@@ -609,7 +609,7 @@ fn notes_push_skipped(found: &mut NativeFound) {
 /// Cancella i `.lnk` trovati dall'analisi, ciascuno solo se: sta in una delle
 /// [`shortcut_dirs`] (il Desktop solo al primo livello), finisce in `.lnk`, è
 /// ancora non valido. La cancellazione passa sempre da
-/// `pc_rules::delete_checked_with` con il `Guard` della pulizia.
+/// `xiox_rules::delete_checked_with` con il `Guard` della pulizia.
 pub fn clean_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, found: &NativeFound, cancel: &AtomicBool) -> NativeCleaned {
     let mut out = NativeCleaned::default();
     let (dirs, _) = shortcut_dirs(env, &sc.common_dirs());
@@ -638,7 +638,7 @@ pub fn clean_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, found: &Nat
             out.note(format!("{item}: non più da togliere (destinazione tornata o non giudicabile), lasciato"));
             continue;
         }
-        match pc_rules::delete_checked_with(&lnk, guard) {
+        match xiox_rules::delete_checked_with(&lnk, guard) {
             Ok(bytes) => {
                 out.removed += 1;
                 out.freed += bytes;

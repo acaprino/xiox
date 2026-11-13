@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::AtomicBool;
 
-use pc_rules::{CollectCtl, Env, Guard, RegItem, RegRoot};
+use xiox_rules::{CollectCtl, Env, Guard, RegItem, RegRoot};
 use windows_sys::core::{GUID, HRESULT, PCWSTR};
 use windows_sys::Win32::Foundation::{FreeLibrary, RPC_E_CHANGED_MODE, S_OK};
 use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
@@ -712,7 +712,7 @@ fn hkcu_key_info(path: &str) -> Option<(usize, usize)> {
 #[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
 fn live_windows_extra_registry_analysis() {
     let env = Env::for_rules();
-    let (all, warnings) = pc_rules::embedded(&env);
+    let (all, warnings) = xiox_rules::embedded(&env);
     for w in &warnings {
         println!("avviso embedded: {w}");
     }
@@ -722,7 +722,7 @@ fn live_windows_extra_registry_analysis() {
     let mut found_reg: Vec<RegItem> = Vec::new();
     for id in ["windows_extra", "safari"] {
         let cleaner = all.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("cleaner {id} assente"));
-        let present = pc_rules::present(cleaner, &env, &crate::rules::reg_exists);
+        let present = xiox_rules::present(cleaner, &env, &crate::rules::reg_exists);
         println!("== {id} «{}» (gruppo {}, presente su questo PC: {present})", cleaner.label, cleaner.group);
         for opt in &cleaner.options {
             let f = crate::rules::analyze_option(opt, &env, &crate::rules::reg_exists, &ctl);

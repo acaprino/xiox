@@ -1,6 +1,6 @@
 //! Command line of `xiox`: a small hand-written parser, no dependency.
 
-use dc_project::Category;
+use xiox_project::Category;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

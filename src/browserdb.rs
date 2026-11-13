@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use pc_rules::Env;
+use xiox_rules::Env;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 

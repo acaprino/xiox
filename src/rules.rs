@@ -1,10 +1,10 @@
 //! Categorie dinamiche di Pulizia file: i cleaner inglobati (CleanerML,
 //! gruppi "Windows", "Browser" e "Sviluppo e AI", vedi
-//! `pc_rules::embedded`) e le voci di Winapp2 ("Applicazioni").
+//! `xiox_rules::embedded`) e le voci di Winapp2 ("Applicazioni").
 //!
 //! Nessuna UI qui: `main.rs` mostra le caselle e lancia il job; questo modulo
 //! carica le regole, raccoglie ciò che un'opzione toglierebbe e lo cancella
-//! seguendo il contratto di `pc_rules` (vedi `crates/pc-rules/src/lib.rs`):
+//! seguendo il contratto di `xiox_rules` (vedi `crates/xiox-rules/src/lib.rs`):
 //! file e cartelle solo con `delete_checked_with` e un solo `Guard` per
 //! pulizia; registro ricontrollato con `reg_allowed`, backup `.reg` prima,
 //! chiavi aperte senza seguire i collegamenti.
@@ -13,9 +13,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pc_rules::model::PROTECT_TREE_PREFIX;
-use pc_rules::updater::UpdateOutcome;
-use pc_rules::{
+use xiox_rules::model::PROTECT_TREE_PREFIX;
+use xiox_rules::updater::UpdateOutcome;
+use xiox_rules::{
     collect_ctl, present, within, reg_allowed, running, updater, winapp2, Action, Cleaner,
     CollectCtl, Env, Guard, Opt, Origin, RegItem, RegRoot,
 };
@@ -133,7 +133,7 @@ pub fn load_with(
     read_winapp2: &ReadWinapp2,
     reg_exists: &dyn Fn(&RegItem) -> bool,
 ) -> RuleSet {
-    let (all, mut warnings) = pc_rules::embedded(env);
+    let (all, mut warnings) = xiox_rules::embedded(env);
     let mut cleaners: Vec<Cleaner> = all.into_iter().filter(|c| present(c, env, reg_exists)).collect();
     let mut winapp: Vec<Cleaner> = Vec::new();
     let (status, version) = match read_winapp2(dir) {
@@ -253,7 +253,7 @@ pub fn status_line(rs: &RuleSet, outcome: Option<&UpdateOutcome>) -> (String, Op
     }
 }
 
-/// Parti dei motivi di `pc_rules::updater` che non sono in italiano: tabella
+/// Parti dei motivi di `xiox_rules::updater` che non sono in italiano: tabella
 /// chiusa (i motivi sono già in italiano, tranne queste).
 const REASON_IT: &[(&str, &str)] = &[("header senza riga di stato", "risposta del server senza riga di stato")];
 
@@ -356,7 +356,7 @@ pub fn protect_own_folders(env: &mut Env, dirs: &[PathBuf]) {
 /// Regola 9: una voce di Winapp2 si nasconde solo se è **tutta** coperta da
 /// cleaner inglobati presenti: ha almeno un'azione su file, nessuna azione di
 /// registro (un inglobato non le copre), e ogni azione su file coincide con,
-/// o sta dentro, un'azione su file di un inglobato ([`pc_rules::within`], a
+/// o sta dentro, un'azione su file di un inglobato ([`xiox_rules::within`], a
 /// senso unico: un antenato non basta).
 pub fn covered_by_embedded(entry: &Cleaner, embedded: &[Cleaner], env: &Env) -> bool {
     let actions: Vec<&Action> = entry.options.iter().flat_map(|o| &o.actions).collect();
@@ -433,7 +433,7 @@ pub fn native_blocked(item: &NativeItem, processes: &[String]) -> Option<String>
 }
 
 /// I nomi di `wanted` che sono fra i `processes` attivi, confrontati senza
-/// maiuscole e con `.exe` facoltativo (come `pc_rules::running`).
+/// maiuscole e con `.exe` facoltativo (come `xiox_rules::running`).
 pub fn running_among<'a>(wanted: &[&'a str], processes: &[String]) -> Vec<&'a str> {
     let norm = |s: &str| {
         let s = s.trim().to_lowercase();
@@ -677,7 +677,7 @@ fn rule_bases(opt: &Opt, env: &Env) -> Vec<Vec<String>> {
             Action::Files { path, .. } => Some(path),
             _ => None,
         })
-        .flat_map(|p| pc_rules::expand(p, env))
+        .flat_map(|p| xiox_rules::expand(p, env))
         .map(|p| {
             comps(&p)
                 .into_iter()
@@ -776,7 +776,7 @@ pub fn run_options(
 
 /// L'unica via con cui questo modulo cancella file e cartelle.
 fn delete_path(path: &Path, guard: &Guard) -> Result<(), String> {
-    pc_rules::delete_checked_with(path, guard).map(|_| ())
+    xiox_rules::delete_checked_with(path, guard).map(|_| ())
 }
 
 fn reg_parts(item: &RegItem) -> (RegRoot, &str, Option<&str>) {
@@ -926,7 +926,7 @@ mod win {
     use std::path::Path;
     use std::sync::OnceLock;
 
-    use pc_rules::{RegItem, RegRoot};
+    use xiox_rules::{RegItem, RegRoot};
     use windows_sys::Win32::Foundation::{
         CloseHandle, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
     };
@@ -1168,8 +1168,8 @@ mod win {
     /// `Ok(false)` se non c'era più.
     pub fn delete(item: &RegItem) -> Result<bool, String> {
         let (root, path, value) = reg_parts(item);
-        // Contratto di pc-rules: si ricontrolla subito prima di cancellare.
-        pc_rules::reg_allowed(root, path, value).map_err(|why| format!("{} ({why})", reg_text(item)))?;
+        // Contratto di xiox-rules: si ricontrolla subito prima di cancellare.
+        xiox_rules::reg_allowed(root, path, value).map_err(|why| format!("{} ({why})", reg_text(item)))?;
         match value {
             Some(v) => {
                 let Some(key) = open_chain(root, path, KEY_SET_VALUE)? else {
@@ -1252,7 +1252,7 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pc_rules::{Action, Origin, RegRoot, Search};
+    use xiox_rules::{Action, Origin, RegRoot, Search};
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Mutex;
@@ -1650,7 +1650,7 @@ mod tests {
 
     /// Misura sul Winapp2 vero (sola lettura): quali voci nasconde la regola 9
     /// con tutti gli inglobati presenti e ogni `Detect` considerato vero.
-    /// `PULISCI_WINAPP2=<percorso> cargo test -p pulisci-pc real_winapp2_rule_9 -- --ignored --nocapture`
+    /// `PULISCI_WINAPP2=<percorso> cargo test -p xiox-desktop real_winapp2_rule_9 -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn real_winapp2_rule_9_keeps_broad_entries() {
@@ -1679,7 +1679,7 @@ mod tests {
             e.detect = vec![winapp2::Detect::RegKey { root: RegRoot::Hkcu, path: "Software".into() }];
         }
         let (entries, _) = winapp2::to_cleaners_with(&w, &env, &|_, _| true);
-        let (embedded, _) = pc_rules::embedded(&env);
+        let (embedded, _) = xiox_rules::embedded(&env);
         let hidden: Vec<&str> = entries
             .iter()
             .filter(|c| covered_by_embedded(c, &embedded, &env))
@@ -2050,7 +2050,7 @@ mod tests {
 
     // ---------- aggiornamento di Winapp2 e cartelle dell'app (Task 8) ----------
 
-    use pc_rules::updater::{Fetch, Fetched, Protect, UpdateOutcome};
+    use xiox_rules::updater::{Fetch, Fetched, Protect, UpdateOutcome};
     use std::cell::RefCell;
     use std::sync::mpsc::channel;
     use std::sync::Arc;
@@ -2218,7 +2218,7 @@ mod tests {
         let (tx, rx) = channel();
         let begun = Instant::now();
         let update: UpdateSpawner = Box::new(|dir, done| {
-            pc_rules::updater::spawn_update_with(
+            xiox_rules::updater::spawn_update_with(
                 dir,
                 Arc::new(SlowFetch(Duration::from_secs(5))),
                 Arc::new(NoAcl),
@@ -2387,7 +2387,7 @@ mod tests {
     }
 
     /// Prova sul registro vero, da un terminale da amministratore:
-    /// `cargo test -p pulisci-pc real_registry_round_trip_as_admin -- --ignored --nocapture`.
+    /// `cargo test -p xiox-desktop real_registry_round_trip_as_admin -- --ignored --nocapture`.
     /// Usa solo chiavi create dal test (`PulisciPC_Verify_<pid>_<nanos>`) e le
     /// toglie all'uscita, anche dopo un panico. Prova: backup con `reg.exe` nella
     /// cartella solo per amministratori, cancellazione vera di chiavi e valori,

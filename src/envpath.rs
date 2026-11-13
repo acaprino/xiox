@@ -9,7 +9,7 @@
 //!   dell'utente, `CreateEnvironmentBlock`, che deve coincidere con quello del
 //!   processo); una variabile sconosciuta, incerta o non definita lì = voce
 //!   tenuta. Nel PATH di sistema si espandono solo le variabili che Windows
-//!   definisce da sé ([`SYSTEM_VARS`]). Mai `pc_rules::Env::for_rules`, che
+//!   definisce da sé ([`SYSTEM_VARS`]). Mai `xiox_rules::Env::for_rules`, che
 //!   sostituisce i valori con quelli «sicuri» per cancellare.
 //! - **Cosa si propone**: un doppione (stesso percorso risolto, senza
 //!   maiuscole ASCII e senza `\` finali; si tiene la prima; le voci fra
@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pc_rules::RegRoot;
+use xiox_rules::RegRoot;
 
 use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 use crate::regbackup;
@@ -812,7 +812,7 @@ mod win {
     use std::path::{Path, PathBuf};
     use std::ptr::{null, null_mut};
 
-    use pc_rules::RegRoot;
+    use xiox_rules::RegRoot;
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows_sys::Win32::System::Registry::{

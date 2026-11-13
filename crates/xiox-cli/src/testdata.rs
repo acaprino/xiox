@@ -1,7 +1,7 @@
 //! Hand-built scans for the unit tests of `render` and `json`.
 
-use dc_model::{Agent, ArtifactKind, Level};
-use dc_project::{
+use xiox_model::{Agent, ArtifactKind, Level};
+use xiox_project::{
     Block, Category, Item, Note, Project, ProjectScan, SCHEMA, SearchMode, StaleBranch, Target, Why,
 };
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, bl
         _ => Target::Dir { kind: ArtifactKind::Catalog },
     };
     Item {
-        key: dc_model::path_key(&p),
+        key: xiox_model::path_key(&p),
         category,
         path: Some(p),
         bytes,

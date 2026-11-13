@@ -1,6 +1,6 @@
 //! `--json`: the scan (`analyze`) or the scan and the outcome (`clean`) as one JSON object (schema 1).
 
-use dc_project::{CleanOutcome, ProjectScan};
+use xiox_project::{CleanOutcome, ProjectScan};
 
 /// The `ProjectScan` serialization: `{"schema":1,"project":…,"items":[…],…}`. Field names are
 /// camelCase, enum values kebab-case; every text in it is English.
@@ -53,8 +53,8 @@ pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Resul
 mod tests {
     use super::*;
     use crate::testdata::*;
-    use dc_model::{Level, RemoveMode};
-    use dc_project::{Category, Outcome};
+    use xiox_model::{Level, RemoveMode};
+    use xiox_project::{Category, Outcome};
     use std::path::PathBuf;
 
     fn outcome_of_one(path: Option<PathBuf>, o: Outcome) -> CleanOutcome {
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn outcome_json_wraps_scan_and_outcome_with_named_fields() {
-        let scan = scan(vec![item(Category::Builds, "D:\\p\\target", Some(7), Level::Recommended, vec![], dc_project::Why::NameOnly)]);
+        let scan = scan(vec![item(Category::Builds, "D:\\p\\target", Some(7), Level::Recommended, vec![], xiox_project::Why::NameOnly)]);
         let o = outcome_of_one(Some(PathBuf::from("D:\\p\\target")), Outcome::Removed { bytes_freed: 7 });
         let v = outcome_json(&scan, Some(&o)).unwrap();
         assert_eq!(v["schema"], 1);

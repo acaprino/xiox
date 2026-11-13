@@ -1,0 +1,24 @@
+[package]
+name = "xiox-project"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+xiox-model = { path = "../xiox-model" }
+xiox-git = { path = "../xiox-git" }
+xiox-engine = { path = "../xiox-engine" }
+xiox-scanner = { path = "../xiox-scanner" }
+xiox-app = { path = "../xiox-app" }
+xiox-mukade = { path = "../xiox-mukade" }
+xiox-cleaner = { path = "../xiox-cleaner" }
+xiox-sessions = { path = "../xiox-sessions" }
+xiox-disktree = { path = "../xiox-disktree" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

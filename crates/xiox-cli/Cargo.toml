@@ -9,8 +9,8 @@ name = "xiox"
 path = "src/main.rs"
 
 [dependencies]
-dc-model = { path = "../dc-model" }
-dc-project = { path = "../dc-project" }
+xiox-model = { path = "../xiox-model" }
+xiox-project = { path = "../xiox-project" }
 serde_json = "1"
 
 [build-dependencies]

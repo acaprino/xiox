@@ -1,0 +1,19 @@
+[package]
+name = "xiox-app"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+xiox-model = { path = "../xiox-model" }
+xiox-scanner = { path = "../xiox-scanner" }
+xiox-git = { path = "../xiox-git" }
+xiox-cleaner = { path = "../xiox-cleaner" }
+xiox-engine = { path = "../xiox-engine" }
+xiox-mukade = { path = "../xiox-mukade" }
+xiox-disktree = { path = "../xiox-disktree" }
+xiox-sessions = { path = "../xiox-sessions" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

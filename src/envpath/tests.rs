@@ -540,8 +540,8 @@ fn clean_without_a_preview_writes_nothing() {
     // E la voce dice di fare prima l'analisi (`run_natives`).
     let item = items()[0];
     assert!(item.needs_preview);
-    let env = pc_rules::Env::default();
-    let guard = pc_rules::Guard::new(&env);
+    let env = xiox_rules::Env::default();
+    let guard = xiox_rules::Guard::new(&env);
     let cancel = no_cancel();
     let ctx = NativeCtx { env: &env, cancel: &cancel, guard: &guard };
     let mut got = Vec::new();

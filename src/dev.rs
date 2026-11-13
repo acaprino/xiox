@@ -2,18 +2,18 @@
 //!
 //! Analisi e pulizia girano in un thread e parlano alla UI con [`DevMsg`] su `mpsc`, come
 //! `start_clean`/`poll` in `main.rs`: la UI non si blocca mai. L'ultima analisi ([`DevScan`])
-//! è anche l'elenco di ciò che si può cancellare: `dc_app` rifiuta tutto il resto.
+//! è anche l'elenco di ciò che si può cancellare: `xiox_app` rifiuta tutto il resto.
 //! I dati dell'analisi si liberano con [`DevState::release`] (uscendo dalla voce) o rianalizzando.
 
 use crate::sys;
 use crate::theme::*;
-use dc_app::{Cancel, DevScan, Tick, ANALYSIS_FAILED};
-use dc_model::{
+use xiox_app::{Cancel, DevScan, Tick, ANALYSIS_FAILED};
+use xiox_model::{
     path_key, Agent, Artifact, CleanPlan, CleanReport, ItemOutcome, Level, PlanAction, PlanItem, ProjectReport, ProjectStatus,
     RemoveMode, Selection, Settings,
 };
-use dc_mukade::ArchivedSession;
-use dc_sessions::{SystemCli, SystemTrash};
+use xiox_mukade::ArchivedSession;
+use xiox_sessions::{SystemCli, SystemTrash};
 use eframe::egui::collapsing_header::{paint_default_icon, CollapsingState};
 use eframe::egui::{self, Align, Color32, Layout, Margin, RichText, Stroke, Ui, Vec2};
 use std::collections::{HashMap, HashSet};
@@ -184,15 +184,15 @@ impl Demo {
     }
 }
 
-/// Progetti e worktree non si puliscono da un'analisi più vecchia di `dc_app::MAX_SCAN_AGE_MS`.
-const STALE_SCAN: &str = dc_app::STALE_ANALYSIS;
+/// Progetti e worktree non si puliscono da un'analisi più vecchia di `xiox_app::MAX_SCAN_AGE_MS`.
+const STALE_SCAN: &str = xiox_app::STALE_ANALYSIS;
 /// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
 const CLEANUP_DIED: &str = "Un errore interno ha fermato la pulizia: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
 
 impl DevState {
     /// `analyze`: avvia l'analisi la prima volta che la voce viene mostrata (`--analyze`).
     pub fn new(section: Section, analyze: bool) -> Self {
-        Self::with_settings(dc_app::load_settings(), section, analyze)
+        Self::with_settings(xiox_app::load_settings(), section, analyze)
     }
 
     fn with_settings(settings: Settings, section: Section, analyze: bool) -> Self {
@@ -229,7 +229,7 @@ impl DevState {
     /// `--only-root <dir>`: si cerca solo in `dir`, niente sessioni né altri dischi, e le
     /// impostazioni non si salvano.
     pub fn only_root(dir: PathBuf, section: Section, analyze: bool) -> Self {
-        let mut st = Self::with_settings(only_root_settings(dc_app::default_settings(), dir), section, analyze);
+        let mut st = Self::with_settings(only_root_settings(xiox_app::default_settings(), dir), section, analyze);
         st.persist = false;
         st
     }
@@ -368,7 +368,7 @@ impl DevState {
                 let _ = tx.send(DevMsg::Step(t.to_string(), p));
                 ctx.request_repaint();
             };
-            let scan = dc_app::run_scan(&settings, admin, &step);
+            let scan = xiox_app::run_scan(&settings, admin, &step);
             let _ = tx.send(DevMsg::Scanned(scan));
             ctx.request_repaint();
         });
@@ -388,7 +388,7 @@ impl DevState {
     }
 
     fn open_confirm(&mut self) {
-        self.open_confirm_at(dc_app::now_ms());
+        self.open_confirm_at(xiox_app::now_ms());
     }
 
     /// Cambia sezione; l'avviso legato al pulsante della sezione precedente sparisce.
@@ -409,14 +409,14 @@ impl DevState {
     }
 
     fn open_confirm_at(&mut self, now_ms: i64) {
-        self.open_confirm_with(now_ms, dc_app::recycle_shortfall);
+        self.open_confirm_with(now_ms, xiox_app::recycle_shortfall);
     }
 
     /// Costruisce il piano dalla selezione della sezione visibile (lo stesso che verrà
     /// eseguito) e apre la conferma. Le righe scelte nelle altre sezioni non ci entrano.
     /// Progetti e worktree: un'analisi vecchia (`DevScan::is_stale` a `now_ms`) non apre nulla
     /// e lo dice nella striscia gialla; le sessioni si ricontrollano comunque prima di cancellarle.
-    /// `shortfall`: i Cestini che non bastano per il piano (`dc_app::recycle_shortfall`).
+    /// `shortfall`: i Cestini che non bastano per il piano (`xiox_app::recycle_shortfall`).
     fn open_confirm_with(&mut self, now_ms: i64, shortfall: impl Fn(&CleanPlan) -> Vec<(char, u64, u64)>) {
         let Some(scan) = self.scan.clone() else { return };
         let mode = self.settings.remove_mode;
@@ -440,7 +440,7 @@ impl DevState {
         let mut cautions = Vec::new();
         let mut short = Vec::new();
         if !sel.artifacts.is_empty() || !sel.worktrees.is_empty() {
-            match dc_app::build_plan(&scan, &sel, mode) {
+            match xiox_app::build_plan(&scan, &sel, mode) {
                 Ok(p) => {
                     for it in &p.items {
                         rows.push((plan_label(&scan, it), sys::fmt_size(it.expected_bytes)));
@@ -536,8 +536,8 @@ impl DevState {
             guarded(&mut out, |out| {
                 if let Some(plan) = &plan {
                     step("Eliminazione di cartelle e worktree…", 0.1);
-                    match dc_app::execute_plan(&scan, plan, &tick, &cancel) {
-                        Ok(res) => merge_report(&mut out.report, dc_app::report(&scan, plan, &res)),
+                    match xiox_app::execute_plan(&scan, plan, &tick, &cancel) {
+                        Ok(res) => merge_report(&mut out.report, xiox_app::report(&scan, plan, &res)),
                         Err(e) => out.errors.push(e),
                     }
                 }
@@ -551,7 +551,7 @@ impl DevState {
                     };
                     // L'analisi può avere ore: si cancella solo ciò che è ANCORA archiviato e libero.
                     step("Controllo delle sessioni archiviate…", 0.5);
-                    match dc_app::revalidate_archived(&scan, &sessions, &dc_app::fresh_archived) {
+                    match xiox_app::revalidate_archived(&scan, &sessions, &xiox_app::fresh_archived) {
                         Ok(checked) => {
                             for o in checked.skipped {
                                 add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
@@ -559,7 +559,7 @@ impl DevState {
                             if !checked.keep.is_empty() {
                                 step("Cancellazione delle sessioni archiviate…", 0.6);
                                 let cli = SystemCli::locate();
-                                match dc_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
+                                match xiox_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
                                     Ok(done) => {
                                         for o in done {
                                             add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
@@ -593,7 +593,7 @@ impl DevState {
 
     fn save(&mut self) {
         if self.persist {
-            self.settings_err = dc_app::save_settings(&self.settings).err();
+            self.settings_err = xiox_app::save_settings(&self.settings).err();
         }
     }
 
@@ -1081,7 +1081,7 @@ fn confirm_dialog(state: &mut DevState, ctx: &egui::Context) {
         go = true;
     }
     if go {
-        if let Some(c) = state.confirm.take().and_then(|c| state.accept_confirm(c, dc_app::now_ms())) {
+        if let Some(c) = state.confirm.take().and_then(|c| state.accept_confirm(c, xiox_app::now_ms())) {
             state.start_clean(ctx, c);
         }
     } else if close {
@@ -1100,7 +1100,7 @@ fn shown_mode(c: &Confirm) -> RemoveMode {
 
 /// «Definitiva» dopo l'avviso sul Cestino: lo stesso piano, rifatto in modo definitivo.
 fn make_permanent(c: &mut Confirm) -> Result<(), String> {
-    let plan = dc_app::build_plan(&c.scan, &c.sel, RemoveMode::Permanent)?;
+    let plan = xiox_app::build_plan(&c.scan, &c.sel, RemoveMode::Permanent)?;
     c.plan = Some(plan);
     c.mode = RemoveMode::Permanent;
     c.shortfall.clear();
@@ -1429,7 +1429,7 @@ fn notice_strip(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
 }
 
-/// Richieste rifiutate da `dc_app` (per esempio «Piano rifiutato: …»): per intero, mai troncate.
+/// Richieste rifiutate da `xiox_app` (per esempio «Piano rifiutato: …»): per intero, mai troncate.
 fn error_strip(ui: &mut Ui, errors: &[String]) {
     egui::Frame::new().fill(WARN_BG).corner_radius(6).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -1443,7 +1443,7 @@ fn error_strip(ui: &mut Ui, errors: &[String]) {
 
 // ---------- pure helpers ----------
 
-/// Lo stato e i blocchi che `dc_engine::build_plan` lascia passare: non in uso, non bloccato.
+/// Lo stato e i blocchi che `xiox_engine::build_plan` lascia passare: non in uso, non bloccato.
 /// Perché le caselle di un progetto che [`status_allows`] ferma sono spente.
 fn locked_why(r: &ProjectReport) -> String {
     match r.status {
@@ -1460,17 +1460,17 @@ fn status_allows(r: &ProjectReport) -> bool {
         && r.blocked_by.is_empty()
 }
 
-/// Quello che `dc_engine::build_plan` accetta E da cui ricava almeno un elemento
-/// (`dc_app::plans_something`, la stessa regola): un worktree con modifiche non salvate, o di
+/// Quello che `xiox_engine::build_plan` accetta E da cui ricava almeno un elemento
+/// (`xiox_app::plans_something`, la stessa regola): un worktree con modifiche non salvate, o di
 /// stato git ignoto, senza artefatti darebbe un piano vuoto.
 fn selectable(r: &ProjectReport) -> bool {
-    status_allows(r) && dc_app::plans_something(r)
+    status_allows(r) && xiox_app::plans_something(r)
 }
 
 /// Perché una riga che lo stato lascerebbe passare non ha nulla da togliere; `None` altrimenti
 /// (allora il `reason` del report dice già tutto).
 fn nothing_to_remove(r: &ProjectReport) -> Option<&'static str> {
-    if !status_allows(r) || dc_app::plans_something(r) {
+    if !status_allows(r) || xiox_app::plans_something(r) {
         return None;
     }
     Some(match (r.is_agent_worktree, r.git.dirty) {
@@ -1542,13 +1542,13 @@ struct Action {
 }
 
 impl Action {
-    /// La scelta per `dc_app::build_plan`: le cartelle come sono; ogni worktree d'agente intero,
-    /// o le sue cartelle consigliate (la regola di `dc_app::selection_for_projects`).
+    /// La scelta per `xiox_app::build_plan`: le cartelle come sono; ogni worktree d'agente intero,
+    /// o le sue cartelle consigliate (la regola di `xiox_app::selection_for_projects`).
     fn selection(&self, scan: &DevScan) -> Selection {
         let mut sel = if self.worktrees.is_empty() {
             Selection::default()
         } else {
-            dc_app::selection_for_projects(scan, &self.worktrees)
+            xiox_app::selection_for_projects(scan, &self.worktrees)
         };
         sel.artifacts.extend(self.artifacts.iter().cloned());
         sel
@@ -1836,8 +1836,8 @@ fn only_root_settings(mut s: Settings, dir: PathBuf) -> Settings {
 /// lì dentro) e solo i report la cui cartella sta sotto `root`, confrontata per componenti
 /// (`albero-x` non sta sotto `albero`) e con la chiave di percorso del progetto.
 fn keep_only_under(scan: &mut DevScan, root: &Path) {
-    let root = PathBuf::from(dc_model::path_key(root));
-    let inside = |r: &ProjectReport| PathBuf::from(dc_model::path_key(&r.root)).starts_with(&root);
+    let root = PathBuf::from(xiox_model::path_key(root));
+    let inside = |r: &ProjectReport| PathBuf::from(xiox_model::path_key(&r.root)).starts_with(&root);
     scan.archived.clear();
     scan.projects.retain(inside);
     scan.worktrees.retain(inside);
@@ -1982,7 +1982,7 @@ fn fmt_elapsed(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dc_model::{Artifact, ArtifactKind, BlockReason, GitState, SizeInfo};
+    use xiox_model::{Artifact, ArtifactKind, BlockReason, GitState, SizeInfo};
     use std::path::PathBuf;
 
     fn report(id: &str, status: ProjectStatus, preselected: bool, bytes: u64) -> ProjectReport {
@@ -1999,14 +1999,14 @@ mod tests {
             blocked_by: vec![],
             reason: String::new(),
             artifacts: vec![Artifact {
-                id: dc_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target"))),
+                id: xiox_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target"))),
                 path: PathBuf::from(format!(r"D:\p\{id}\target")),
                 kind: ArtifactKind::RustTarget,
                 label: "Build Rust (target)".into(),
                 size: SizeInfo { logical_bytes: bytes, allocated_bytes: None, file_count: 1 },
                 verified: true,
-                class: dc_model::Class::Build,
-                level: dc_model::Level::Recommended,
+                class: xiox_model::Class::Build,
+                level: xiox_model::Level::Recommended,
                 note: String::new(),
                 ambiguous: false,
                 preselected,
@@ -2020,7 +2020,7 @@ mod tests {
 
     /// L'id della cartella `target` del progetto `id` di [`report`].
     fn tid(id: &str) -> String {
-        dc_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target")))
+        xiox_model::path_key(&PathBuf::from(format!(r"D:\p\{id}\target")))
     }
 
     fn ids(list: &[&str]) -> HashSet<String> {
@@ -2082,7 +2082,7 @@ mod tests {
         let mut clean = dirty.clone();
         clean.id = "c".into();
         clean.git.dirty = Some(false);
-        // Lo stesso giudizio di dc_engine::build_plan: piano vuoto per i primi due.
+        // Lo stesso giudizio di xiox_engine::build_plan: piano vuoto per i primi due.
         for (r, want) in [(&dirty, false), (&unknown, false), (&clean, true)] {
             let plan = dc_engine_plan_len(r);
             assert_eq!(selectable(r), want, "{}", r.id);
@@ -2105,8 +2105,8 @@ mod tests {
 
     fn dc_engine_plan_len(r: &ProjectReport) -> usize {
         let scan = DevScan { worktrees: vec![r.clone()], ..Default::default() };
-        let sel = dc_app::selection_for_projects(&scan, &[r.id.clone()]);
-        dc_app::build_plan(&scan, &sel, RemoveMode::Recycle).unwrap().items.len()
+        let sel = xiox_app::selection_for_projects(&scan, &[r.id.clone()]);
+        xiox_app::build_plan(&scan, &sel, RemoveMode::Recycle).unwrap().items.len()
     }
 
     #[test]
@@ -2159,7 +2159,7 @@ mod tests {
             projects: vec![report("a", ProjectStatus::Inactive, true, 100), report("b", ProjectStatus::Blocked, false, 50)],
             worktrees: vec![wt],
             archived: vec![session("1", None, false, 0), session("2", None, true, 4)],
-            scanned_at_ms: dc_app::now_ms(),
+            scanned_at_ms: xiox_app::now_ms(),
             ..Default::default()
         }
     }
@@ -2170,7 +2170,7 @@ mod tests {
         let mut st = state();
         st.set_scan(DevScan { scanned_at_ms: at, ..three_sections() });
         st.sel_worktrees = vec![true];
-        let late = at + dc_app::MAX_SCAN_AGE_MS + 1;
+        let late = at + xiox_app::MAX_SCAN_AGE_MS + 1;
         for section in [Section::Projects, Section::Worktrees] {
             st.section = section;
             st.open_confirm_at(late);
@@ -2181,7 +2181,7 @@ mod tests {
 
         // Entro la mezz'ora la conferma si apre e l'avviso sparisce.
         st.section = Section::Projects;
-        st.open_confirm_at(at + dc_app::MAX_SCAN_AGE_MS);
+        st.open_confirm_at(at + xiox_app::MAX_SCAN_AGE_MS);
         assert!(st.confirm.take().is_some());
         assert!(st.notice.is_none());
 
@@ -2472,7 +2472,7 @@ mod tests {
     }
 
     fn state() -> DevState {
-        DevState::with_settings(dc_app::default_settings(), Section::Projects, false)
+        DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
     }
 
     #[test]
@@ -2623,7 +2623,7 @@ mod tests {
         r.artifacts.push(mk(
             "node_modules",
             "Dipendenze Node (node_modules)",
-            dc_model::Class::Dependency,
+            xiox_model::Class::Dependency,
             Level::Optional,
             "Si riscarica con npm install (o pnpm, yarn, bun install)",
             50,
@@ -2631,7 +2631,7 @@ mod tests {
         r.artifacts.push(mk(
             "dist",
             "Build JavaScript (dist)",
-            dc_model::Class::Build,
+            xiox_model::Class::Build,
             Level::Caution,
             "Potrebbe contenere sorgenti: git non la ignora",
             20,
@@ -2694,7 +2694,7 @@ mod tests {
 
     fn levels_state() -> DevState {
         let mut st = state();
-        st.set_scan(DevScan { projects: vec![levels_project()], scanned_at_ms: dc_app::now_ms(), ..Default::default() });
+        st.set_scan(DevScan { projects: vec![levels_project()], scanned_at_ms: xiox_app::now_ms(), ..Default::default() });
         st
     }
 
@@ -2702,7 +2702,7 @@ mod tests {
     fn a_caution_folder_needs_the_warnings_read() {
         let mut st = levels_state();
         // Solo target: niente avvisi, «Pulisci» subito.
-        st.open_confirm_with(dc_app::now_ms(), |_| vec![]);
+        st.open_confirm_with(xiox_app::now_ms(), |_| vec![]);
         let c = st.confirm.take().unwrap();
         assert!(c.cautions.is_empty());
         assert!(confirm_ready(&c));
@@ -2710,7 +2710,7 @@ mod tests {
 
         // Con dist: elencata con il suo avviso, «Pulisci» spento finché non si legge.
         st.sel_artifacts.insert(tid("web").replace("target", "dist"));
-        st.open_confirm_with(dc_app::now_ms(), |_| vec![]);
+        st.open_confirm_with(xiox_app::now_ms(), |_| vec![]);
         let mut c = st.confirm.take().unwrap();
         assert_eq!(c.plan.as_ref().unwrap().items.len(), 2);
         assert_eq!(c.cautions, vec![("web · Build JavaScript (dist)".to_string(), "Potrebbe contenere sorgenti: git non la ignora".to_string())]);
@@ -2725,7 +2725,7 @@ mod tests {
     fn a_small_recycle_bin_offers_permanent_deletion() {
         let mut st = levels_state();
         st.settings.remove_mode = RemoveMode::Recycle;
-        st.open_confirm_with(dc_app::now_ms(), |p| vec![('D', p.expected_bytes, 0)]);
+        st.open_confirm_with(xiox_app::now_ms(), |p| vec![('D', p.expected_bytes, 0)]);
         let mut c = st.confirm.take().unwrap();
         assert_eq!(c.shortfall, vec![('D', 100, 0)]);
         assert_eq!(
@@ -2827,7 +2827,7 @@ mod tests {
             worktrees: vec![wt_in, wt_out],
             other_worktrees: vec![report_at("oi", r"D:\t\albero\o1"), report_at("oo", r"D:\altrove\o2")],
             archived: vec![session("1", None, true, 4), session("2", None, true, 5)],
-            scanned_at_ms: dc_app::now_ms(),
+            scanned_at_ms: xiox_app::now_ms(),
             ..Default::default()
         }
     }
@@ -2875,7 +2875,7 @@ mod tests {
     #[test]
     fn only_root_keeps_everything_in_memory() {
         let dir = PathBuf::from(r"Z:\albero\finto");
-        let s = only_root_settings(dc_app::default_settings(), dir.clone());
+        let s = only_root_settings(xiox_app::default_settings(), dir.clone());
         assert!(!s.session_projects && s.scan_roots && !s.all_drives);
         assert_eq!(s.roots, vec![dir.clone()]);
         let mut st = DevState::only_root(dir, Section::Projects, false);

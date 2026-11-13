@@ -5,9 +5,9 @@
 fn main() {
     let release = std::env::var("PROFILE").as_deref() == Ok("release");
     let (rc, manifest) = if release {
-        ("PulisciPC.rc", "PulisciPC.manifest")
+        ("xiox-ui.rc", "xiox-ui.manifest")
     } else {
-        ("PulisciPC.dev.rc", "PulisciPC.dev.manifest")
+        ("xiox-ui.dev.rc", "xiox-ui.dev.manifest")
     };
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={rc}");
