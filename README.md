@@ -18,7 +18,7 @@ A Windows cleaner for people who code, with a command line that agents can drive
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-engine-FFB21E?style=flat-square&labelColor=0B0416" alt="Rust engine">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-3F6FB5?style=flat-square&labelColor=0B0416" alt="Windows 10 and 11">
-  <img src="https://img.shields.io/badge/tests-991%20passing-8FD6FF?style=flat-square&labelColor=0B0416" alt="991 tests passing">
+  <img src="https://img.shields.io/badge/tests-1097%20passing-8FD6FF?style=flat-square&labelColor=0B0416" alt="1097 tests passing">
   <img src="https://img.shields.io/badge/CLI-never%20asks%20for%20admin-9CC4F5?style=flat-square&labelColor=0B0416" alt="The CLI never asks for administrator rights">
 </p>
 
@@ -178,4 +178,4 @@ Early, in daily use by its author. Contributions are not open yet. License: not 
 
 ---
 
-<p align="center"><sub>Design notes live in <a href="docs/superpowers">docs/superpowers</a>. The logo and the interface take their cut corners and amber type from the options menu of the video game <em>Oni</em>; the logo is generated, see <a href="docs/assets/branding/xiox-logo-generation.md">how</a>.</sub></p>
+<p align="center"><sub>Design notes live in <a href="docs/superpowers">docs/superpowers</a>. The logo and the interface take their cut corners and amber type from the options menu of the video game <em>Oni</em>; the logo is described <a href="docs/assets/branding/xiox-logo-generation.md">here</a>.</sub></p>
