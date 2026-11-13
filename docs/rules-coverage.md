@@ -1,0 +1,249 @@
+# Copertura delle voci di pulizia di Windows in Xiox (Fase 3)
+
+Stato: inventario e tabella di copertura per la Fase 3 della spec `docs/superpowers/specs/2026-11-10-dev-mode-design.md` (sezione «Copertura nativa»). Decisione dell'utente: **tutto l'elenco**, anche le voci per programmi non installati su questo PC.
+
+## 1. Premessa
+
+L'elenco delle voci è ricostruito dalle fonti qui sotto, non riletto da un'installazione. I nomi italiani delle voci sono tradotti da me dai nomi inglesi: quelli esatti sono da verificare (tranne i 14 già citati nella spec).
+
+**Fonti** (sigla usata nella colonna `Fonte`):
+
+| Sigla | Fonte | Cosa dà | Limiti |
+|---|---|---|---|
+| WA | Winapp2, tabella dei `LangSecRef`: https://github.com/MoscaDotTo/Winapp2/blob/master/CONTRIBUTING.md | 3001 Internet Explorer (deprecata), 3005 Microsoft Edge legacy (deprecata), 3006 Edge Chromium, 3021 Applicazioni, 3022 Internet, 3023 Multimedia, 3024 Utilità, 3025 Windows, 3026 Firefox, 3027 Opera, 3028 Safari, 3029 Google Chrome, 3030 Thunderbird, 3031 Windows Store, 3033 Vivaldi, 3034 Brave, 3035 Opera GX, 3036 Spotify, 3037 Avast Secure Browser, 3038 AVG Secure Browser, 3039 Arc, 3040 iTunes, 3042 WhatsApp, 3043 Norton Private Browser, 3044 Avira Secure Browser (3041 non valido) | Elenca le sezioni, non le voci |
+| W | `C:\ProgramData\Xiox\winapp2\Winapp2.ini` (`Version: 260915`, 4068 voci) letto in sola lettura | Le voci Winapp2 citate in questa tabella esistono tutte nel file (nome tra backtick) | — |
+| S | Le stringhe italiane già citate dalla spec (righe 154-156: Appunti, Cache DNS, Frammenti file di chkdsk, Documenti recenti, Esegui (nel Menu Start), Collegamenti nel menu Start, Collegamenti sul Desktop, Cronologia assistenza utente, Cache MUI, Cache Web di Windows, Password salvate, Compatta database, Cookie con «Cookie da conservare», Pulisci spazio libero) | Nomi italiani di quelle 14 voci | Non riverificabili |
+
+**Cosa non si è potuto verificare.** (1) Le voci aggiunte negli ultimi anni oltre a quelle in tabella (Cache Web di Windows, Utilizzo dati di rete, Edge Chromium, Ottimizzazione recapito): ce ne possono essere altre. (2) I default su una versione installata. (3) Il gruppo esatto di alcune voci nuove. (4) L'elenco delle voci di Brave, Vivaldi, Opera GX e degli altri browser Chromium (3033-3044): l'ho supposto uguale a quello di Chrome perché sono tutti Chromium. Ogni cella che dipende da questo dice «da verificare».
+
+**Vincoli di Xiox che cambiano la copertura** (letti nel codice, non supposti):
+- `crates/xiox-rules/src/guard.rs:115-141`: le regole esterne (Winapp2 e CleanerML) non toccano mai il contenuto di `System32`, `SysWOW64`, `WinSxS`, `Vault`, `Credentials`, `Crypto`, né il Cestino nella radice dei dischi. Quindi le voci Winapp2 che puntano lì vengono scartate (per esempio `%WinDir%\System32\winevt\logs` di `Windows Event Logs *`).
+- `crates/xiox-rules/src/regguard.rs`: solo `HKCU\Software` e `HKLM\Software`. `HKU\…` non è una radice supportata: `Windows Recent Documents *` di Winapp2 tocca solo `HKU\.DEFAULT` e i profili di sistema, quindi **non** pulisce i documenti recenti dell'utente.
+- Tutte le voci Winapp2 partono spente (`winapp2.rs`, test `everything_is_off_by_default`).
+- Un XML nuovo in `cleaners/` va anche aggiunto all'elenco `include_str!` di `crates/xiox-rules/src/embedded.rs`.
+- `rusqlite =0.40.2` con `bundled` è già nel build (`crates/xiox-mukade/Cargo.toml:14`): la compattazione SQLite e i cookie da conservare non aggiungono dipendenze.
+
+## 2. Scheda Windows
+
+`Default`: stato predefinito della voce (acceso o spento) nell'elenco di partenza; «No (dedotto)» = default non noto, supposto spento. Le proposte `Codice nativo nuovo` (N1…N12) sono descritte una volta sola in 2.6. Le voci `Nuovo XML` vanno tutte in un solo file nuovo, `cleaners/windows_extra.xml` (id `windows_extra`), un'`<option>` per voce: il nome dell'opzione è nella colonna `Come`.
+
+**Stato** (annotazione nella colonna `Copertura Xiox`; nella tabella 2.6 nell'ultima colonna): `fatto 7f081d7` = Task 1 del piano 3a (XML nuovi e ritocchi alle categorie native), `fatto 451b8f3+1e8fff1+423c92a` = Task 2 (voci native N1-N4 e correzioni della revisione), `tolto: da verificare` = voce lasciata fuori perché chiave o percorso non sono verificati, `non coperto` = parte che la guardia o il tipo di voce escludono, `rinviato 3b` = voce prevista per la Fase 3b e non ancora fatta (oggi nessuna). Fase 3b: `fatto a50be27+1b75a16+9065d20` = N5, `fatto 115f583+593fcb1` = N6, `fatto 7315f94+9065d20+593fcb1` = N7, `fatto 41cbcb7+9065d20` = N8 (merge della voce + correzioni delle revisioni); «parziale» = la voce copre solo una parte della funzione, detto nella voce stessa; «da verificare dal vivo» = i percorsi Win32 veri (registro, processi, scrittura su disco) non sono mai stati eseguiti su un PC, solo con i finti dei test. `fatto 6bc0f87+6572928` = Task 3 (database dei browser N9-N12 e correzioni della revisione); «da verificare» dopo lo stato = percorso, chiave o nome di eseguibile non confermato su un browser vero. Le voci N1-N4 e le opzioni di `windows_extra` e `safari` sono state provate anche dal vivo, in sola analisi (`src/live_checks.rs`, test `#[ignore]`).
+
+### 2.1 Internet Explorer (`LangSecRef` 3001)
+
+Internet Explorer 11 non si apre più su Windows 11, ma le sue cartelle (WinINet) restano e le usano ancora app e modalità IE di Edge. Winapp2 non ha più voci per IE (sezione deprecata, F8).
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| File temporanei di Internet | File: cache WinINet | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `ie_cache`: `%LocalAppData%\Microsoft\Windows\INetCache\IE` e `…\INetCache\Low\IE`, `walk.files`. Il percorso è lo standard di Windows 10/11: da verificare a campione. Fase 3a: inclusa (`INetCache\IE` esiste su questo PC, `Low\IE` no) | Basso: file in uso saltati | — |
+| Cronologia | File: cartella History di WinINet; registro `HKCU\Software\Microsoft\Internet Explorer\TabbedBrowsing\NewTabPage` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `ie_history`: `%LocalAppData%\Microsoft\Windows\History` (`walk.files`) + `winreg` sulla chiave `NewTabPage` | Basso. `WebCache\WebCacheV01.dat` resta (sempre aperto da un processo di sistema) | — |
+| Cookie | File: `INetCookies` (rispetta «Cookie da conservare») | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `ie_cookies`: `%LocalAppData%\Microsoft\Windows\INetCookies` (`walk.files`), **senza** lista da conservare | Medio: disconnette dai siti nelle app che usano WinINet. Spenta di default qui (come tutti i cookie, spec riga 163) | — |
+| URL digitati di recente | Registro: `HKCU\Software\Microsoft\Internet Explorer\TypedURLs`, `TypedURLsTime`, `Explorer Bars\{C4EE31F3-…}\FilesNamedMRU`, `…\ContainingTextMRU` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `ie_typed_urls`: 4 azioni `winreg` con queste chiavi | Basso | — |
+| File Index.dat | File: `index.dat` | Sì | Non fattibile | — | Da Windows 8 `index.dat` non esiste più; il sostituto `WebCacheV01.dat` è sempre aperto da `taskhostw`/`dllhost` | — |
+| Ultimo percorso di download | Registro: valori `HKCU\Software\Microsoft\Internet Explorer\Download Directory` e `…\Main\Save Directory` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `ie_last_download`: 2 azioni `winreg` con `name=` | Basso | — |
+| Cronologia moduli con completamento automatico | Registro IntelliForms | No (dedotto) | Nuovo XML · **Stato:** tolto: da verificare | opzione `ie_autocomplete`: `winreg` su `HKCU\Software\Microsoft\Internet Explorer\IntelliForms\Storage1` — chiave **da verificare**. **Fase 3a: non inclusa** in `windows_extra.xml` (chiave non verificata: non si forza) | Medio: con IE questa pulizia cancella anche le password salvate | — |
+| Password salvate | Credenziali «Web» nel Vault di Windows | No (dedotto) | Non fattibile | — | Il Vault è protetto dalla guardia (`guard.rs:126`) e si svuota solo con l'API WinRT `PasswordVault`, che vale per tutte le app: rischio alto, valore basso | — |
+
+### 2.2 Microsoft Edge
+
+Due sezioni diverse: Edge legacy (EdgeHTML, 3005) ed Edge Chromium (3006).
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Edge legacy: Cache Internet, Cronologia Internet, Cookie, Cronologia download, Ultimo percorso di download, Sessione, Schede messe da parte, URL digitati di recente, Informazioni moduli salvate, Password salvate (10 voci) | File e registro del pacchetto `Microsoft.MicrosoftEdge_8wekyb3d8bbwe` (chiavi `AppContainer\Storage\microsoft.microsoftedge_…`) | Sì per Cache, Cronologia, Cookie, Cronologia download, Ultimo percorso, URL digitati; No per Sessione, Schede messe da parte, Moduli, Password | Non fattibile | — | Il programma non esiste più: Edge legacy è stato tolto da Windows 10 nel 2021 e non c'è in Windows 11. Basterebbe un XML da 10 righe se servisse un PC Windows 10 vecchio | — |
+| Edge Chromium: Cache Internet | File: `%LocalAppData%\Microsoft\Edge*\User Data\*\Cache…` | Sì (come Chrome; da verificare) | Winapp2 | `Microsoft Edge Caches *` | Basso | W |
+| Edge Chromium: Cronologia Internet | File: database `History` e affini | Sì (da verificare) | Winapp2 | `Microsoft Edge Web Browsing History *` (cancella `History*`, `Top Sites*`, `Visited Links*`, `shortcuts*`…) | Medio: il file `History` contiene anche la cronologia download; browser aperto = file saltati | W |
+| Edge Chromium: Cookie | File: `Network\Cookies` | Sì (da verificare) | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (lista con domini IDN in punycode; lista non valida = nessun cookie eliminato); da verificare: gli eseguibili di Avast, AVG, Avira, Norton e Arc (se il nome è sbagliato resta il controllo del file di blocco del profilo) | N9 (cookie con lista da conservare); senza lista c'è già `Microsoft Edge Web Browsing Cookies *` | Medio: disconnette dai siti | S, W |
+| Edge Chromium: Cronologia download | File | Sì (da verificare) | Winapp2 | `Microsoft Edge Download History *` (`DownloadMetadata`, `shared_proto_db`) | Parziale: la tabella `downloads` resta dentro `History` | W |
+| Edge Chromium: Ultimo percorso di download | JSON: file `Preferences` | Sì (da verificare) | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928: si toglie solo `savefile.default_directory` (ultima cartella di «Salva con nome»); `download.default_directory` (cartella scelta nelle impostazioni) **lasciata di proposito**; da verificare sul browser vero che sia la chiave giusta, e `selectfile.last_directory` | N12 | Medio: un `Preferences` rovinato azzera le impostazioni del browser | — |
+| Edge Chromium: Sessione | File: `Sessions`, `Extension State` | **No** | Winapp2 | `Microsoft Edge Web Browsing Session *` | Medio: si perdono le schede aperte | W |
+| Edge Chromium: Informazioni moduli salvate | File: `Web Data` | No (da verificare) | Winapp2 | `Microsoft Edge Autofill Data & Search Engine Preferences *` | Medio: `Web Data` contiene anche i motori di ricerca | W |
+| Edge Chromium: Password salvate | File: `Login Data` | No (da verificare) | Winapp2 | `Microsoft Edge Saved Usernames & Passwords *` | **Alto**: password perse se non sincronizzate. Spenta, con avviso | S, W |
+| Edge Chromium: Compatta database | SQLite: `VACUUM` dei database del profilo | No (da verificare) | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (solo se `integrity_check` = `ok` e c'è il doppio dello spazio libero); Edge, Brave, Vivaldi, Opera: percorsi da Winapp2, varianti Beta/Dev/Canary e Opera recente da verificare | N10 | Basso se il browser è chiuso | S |
+
+### 2.3 Esplora risorse (`LangSecRef` 3002)
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Documenti recenti | Registro `HKCU\…\Explorer\RecentDocs` + collegamenti in `Recent` | No | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `recent_docs`: `%AppData%\Microsoft\Windows\Recent` `*.lnk` (`search="glob"`, solo primo livello) + `winreg` su `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs`. `Windows Recent Documents *` di Winapp2 non basta: tocca solo `HKU\…`, radice non supportata | Basso: si svuota «Recenti» di Esplora e di Start | S, W |
+| Esegui (nel menu Start) | Registro `HKCU\…\Explorer\RunMRU` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `run_mru`: `winreg` sulla chiave (nessuna voce Winapp2 la tocca) | Basso | S |
+| Completamento automatico Assistente ricerca | Registro `HKCU\Software\Microsoft\Search Assistant\ACMru` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `search_assistant`: `winreg` sulla chiave. La ricerca di Esplora moderna (`WordWheelQuery`) è già in `Windows Search *` | Basso; la chiave esiste solo su Windows vecchi | — |
+| Altri MRU di Esplora | Registro: `Explorer\ComDlg32`, `FindComputerMRU`, `PrnPortsMRU`, `Map Network Drive MRU`, `ComputerDescriptions`, valore `HKLM\Software\Microsoft\Direct3D\MostRecentApplication\Name` | No | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `explorer_mrus`: 6 azioni `winreg` con queste chiavi. Non uso `Windows Shell - Folder/Dialog Box View Settings *`: cancella anche `BagMRU`/`Bags` (le viste delle cartelle) | Basso | W |
+| Cache miniature | File: `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` e `ThumbCacheToDelete\thm*.tmp` | Sì | Nativa esistente · **Stato:** fatto 7f081d7 (ritocco) | «Cache delle miniature» (`src/cleaner.rs:48`). `ThumbCacheToDelete\thm*.tmp` aggiunto in Fase 3a | Basso. Differenza: Xiox la tiene spenta | — |
+| Jump list della barra delle applicazioni | File: `Recent\AutomaticDestinations`, `CustomDestinations` | Sì | Winapp2 | `Windows Taskbar *` | Medio: si perdono anche gli elementi **aggiunti** alle jump list | W |
+| Password di rete | Registro `HKCU\Software\Microsoft\Ftp\Accounts` + credenziali di Windows | No | Codice nativo nuovo · **Stato:** fatto 41cbcb7+9065d20; da verificare dal vivo (archivio credenziali e chiavi FTP veri) | N8 | **Alto**: si perdono le password delle unità di rete | — |
+
+### 2.4 Sistema (`LangSecRef` 3003)
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Svuota Cestino | Non-file: `SHEmptyRecycleBinW` | Sì | Nativa esistente | «Cestino» (`cleaner.rs:42`) | Basso. Non c'è l'opzione «solo file più vecchi di 24 ore» | — |
+| File temporanei | File: `%TEMP%`, `%WinDir%\Temp`, opzione 24/48 ore | Sì | Nativa esistente | «File temporanei dell'utente» + «File temporanei di Windows» (`cleaner.rs:43-44`, 24 ore). Le cartelle Temp dei profili di servizio sono in `Windows Temporary Files *`, ma stanno in parte sotto `System32` e la guardia le scarta | Basso | — |
+| Appunti | Non-file: contenuto degli Appunti | Sì | Codice nativo nuovo · **Stato:** fatto 451b8f3+1e8fff1+423c92a | N1 | Basso: si perde quello che si è copiato | S |
+| Dump di memoria | File: `%WinDir%\memory.dmp`, `Minidump\*.dmp`, `LiveKernelReports\*.dmp`, `%LocalAppData%\CrashDumps\*.dmp` | Sì | Nativa esistente | «Dump di memoria» (`cleaner.rs:45`): 4 percorsi | Basso | — |
+| Frammenti file di chkdsk | File: `%SystemDrive%\File*.chk` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `chkdsk`: `%SystemDrive%\FILE*.CHK` e `%SystemDrive%\FOUND.*\FILE*.CHK` (`search="glob"`). Il file standard è `File*.chk` nella radice; le cartelle `FOUND.nnn` sono dove chkdsk li mette di solito | Basso | S |
+| File di log di Windows | File: `wbem\Logs\*.log;*.lo_`, `%WinDir%\*.log;*.bak;*log.txt`, `Dr Watson\*.log` | Sì | Nativa esistente · **Stato:** fatto 7f081d7 (`*.bak`, `*log.txt`); `System32\wbem\Logs` **non coperto** | «File di log di Windows» (`cleaner.rs:46`). Fase 3a: aggiunti `%WinDir%\*.bak` e `*log.txt`; `System32\wbem\Logs` **non coperto** (la guardia di `xiox-rules` rifiuta `System32` e la regola del Task 1 è di aggiungere solo ciò che accetterebbe) | Basso | — |
+| Segnalazione errori di Windows | File: `WER\ReportArchive`, `ReportQueue`, `%LocalAppData%\ElevatedDiagnostics`; registro `Windows Error Reporting\Debug\StoreLocation` | No | Nativa esistente · **Stato:** fatto 7f081d7 (`ElevatedDiagnostics`); valore `StoreLocation` **non coperto** | «Segnalazione errori di Windows» (`cleaner.rs:47`). Fase 3a: aggiunta `%LocalAppData%\ElevatedDiagnostics`; il valore di registro `StoreLocation` **non coperto** (`targets()` tocca solo file) | Basso. Xiox la tiene **accesa** | — |
+| Cache DNS | Non-file: cache del resolver | No | Codice nativo nuovo · **Stato:** fatto 451b8f3+1e8fff1+423c92a | N2 | Basso | S |
+| Cache dei caratteri | File: `System32\FNTCACHE.DAT`, `%LocalAppData%\GDIPFONTCACHEV1.DAT`, `ServiceProfiles\LocalService\AppData\Local\FontCache*.dat` | No (dedotto) | Winapp2 | `Windows Font Cache *` (`ServiceProfiles\LocalService\…\FontCache*.dat`). `FNTCACHE.DAT` sta in `System32`: escluso | Basso; file aperti dal servizio Cache dei caratteri → saltati finché gira | W |
+| Collegamenti nel menu Start | File `.lnk` **non validi** (destinazione inesistente) nel menu Start (`F_STARTMENU`) | No | Codice nativo nuovo · **Stato:** fatto 451b8f3+1e8fff1+423c92a | N4 | Medio: una destinazione su disco di rete o USB staccato sembra mancante | S |
+| Collegamenti sul Desktop | File `.lnk` non validi sul Desktop (`F_DESKTOP`) | No | Codice nativo nuovo · **Stato:** fatto 451b8f3+1e8fff1+423c92a | N4 | Medio, come sopra | S |
+| Cache Web di Windows | File: `%UserProfile%\AppData\LocalLow\Microsoft\CryptnetUrlCache` | Da verificare | Winapp2 | `Windows Cryptographic Services *` (`…\CryptnetUrlCache\Content`) | Basso: Windows riscarica i certificati | S, W |
+
+### 2.5 Avanzate (`LangSecRef` 3004)
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Registri eventi di Windows | Non-file: canali del Visualizzatore eventi | No | Codice nativo nuovo · **Stato:** fatto 451b8f3+1e8fff1+423c92a | N3. `Windows Event Logs *` di Winapp2 cancella i file `.evtx` in `System32\winevt\logs`: la guardia li scarta (ed è il modo sbagliato, i file sono aperti dal servizio) | Alto per la diagnosi: si perde la storia degli errori | — |
+| Vecchi dati Prefetch | File: `%WinDir%\Prefetch\*.pf` vecchi | No (dedotto) | Nativa esistente | «Vecchi dati Prefetch» (`cleaner.rs:49`, 14 giorni stimati) | Basso | — |
+| Cache ordine menu | Registro `HKCU\…\Explorer\MenuOrder` | No (dedotto) | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `menu_order`: `winreg` sulla chiave | Basso | — |
+| Cache notifiche area di sistema | Registro: valori `IconStreams`, `PastIconsStream` in `HKCU\…\Explorer\TrayNotify` e `HKCU\Software\Classes\Local Settings\…\TrayNotify` | No (dedotto) | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `tray_notify`: 4 azioni `winreg` con `name=` | Basso: le icone nascoste/visibili tornano come all'inizio; Explorer riscrive i valori alla chiusura | — |
+| Cache dimensione/posizione finestre | Registro `HKCU\…\Explorer\StreamMRU`, `…\Explorer\Streams` | No (dedotto) | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `window_cache`: 2 azioni `winreg` | Basso | — |
+| Percorso ambiente | Non-file: la variabile `PATH` | No (dedotto) | Codice nativo nuovo · **Stato:** fatto a50be27+1b75a16+9065d20; da verificare dal vivo (scrittura del PATH e `WM_SETTINGCHANGE` sul PC vero) | N5: toglie dal PATH le cartelle che non esistono e i doppioni, solo ciò che ha mostrato l'ultima Analisi, dopo il backup `.reg`. | **Alto**: un PATH sbagliato rompe strumenti e build | — |
+| Cronologia assistenza utente | Registro `HKCU\…\Explorer\UserAssist\{GUID}\Count` (4 GUID) | No (dedotto) | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `user_assist`: 4 azioni `winreg` con i GUID | Basso: si azzera «più usati» del menu Start | S |
+| File di log di IIS | File: `%SystemDirectory%\LogFiles`, `%SystemDrive%\inetpub\logs\LogFiles` | No (dedotto) | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `iis_logs`: `%SystemDrive%\inetpub\logs\LogFiles` (`walk.files`). `System32\LogFiles` è escluso dalla guardia | Basso | — |
+| Programmi di disinstallazione degli hotfix | File: `$NtUninstallKB…$` | No (dedotto) | Non fattibile | — | Esistono solo su Windows XP ; da Windows Vista gli aggiornamenti stanno in `WinSxS`, intoccabile | — |
+| Vecchia installazione di Windows | File: `C:\Windows.old` | No | Codice nativo nuovo · **Stato:** fatto 7315f94+9065d20+593fcb1; da verificare dal vivo (`cleanmgr /sagerun:99` e registro veri) | N7 | **Alto**: non si torna più alla versione di Windows precedente | — |
+| Cartelle personalizzate | La lista «Includi» delle opzioni di pulizia | No (dedotto) | Non fattibile | — | Non è una posizione di Windows ma una funzione di personalizzazione (cartelle scelte dall'utente). Vedi punto aperto 3 | — |
+| Pulisci spazio libero | Non-file: spazio libero del disco e della MFT; opzione «Wipe Cluster Tips» | No | Codice nativo nuovo · **Stato:** fatto 115f583+593fcb1, **parziale**: solo lo spazio libero del disco di sistema, niente fase MFT né altri volumi, copie shadow non toccate; da verificare dal vivo (scrittura senza cache e riconoscimento HDD/SSD su dischi veri) | N6 | **Alto**: ore di lavoro, disco pieno per un momento, usura degli SSD (su SSD non serve: TRIM) | , S |
+| Utilizzo dati di rete (ex «Windows Subsystems») | File: database SRU `%WinDir%\System32\sru` | Da verificare | Non fattibile | — | Il file sta in `System32` (escluso dalla guardia) ed è aperto dal servizio Criteri di diagnostica; servirebbe fermarlo. `Windows Subsystems *` di Winapp2 lo ha, ma viene scartato | W |
+| Ottimizzazione recapito | File: cache di Delivery Optimization | Da verificare (gruppo da verificare) | Nativa esistente | «File di Ottimizzazione recapito» (`cleaner.rs:50`) | Basso | — |
+| Cache MUI | Registro `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache` | Da verificare (anche il gruppo: forse è la voce del Registro `R_MUICACHE`) | Nativa esistente | Scheda Registro, «Cache MUI» (`src/registry.rs:80`), che toglie solo le voci di programmi mancanti; per svuotarla tutta c'è `Windows Subsystems *` (RegKey `…\Shell\MuiCache`) | Basso | S, W |
+
+### 2.6 Proposte di codice nativo nuovo
+
+| Id | Voce | Proposta tecnica | Cosa si può rompere | Admin | Default Xiox |
+|---|---|---|---|---|---|
+| N1 | Appunti | `OpenClipboard(null)` → `EmptyClipboard()` → `CloseClipboard()` (windows-sys `Win32_System_DataExchange`). Riprova 3 volte se un'altra app tiene aperti gli Appunti. Anteprima: «Appunti con contenuto» se `CountClipboardFormats() > 0`. La cronologia di Win+V non si tocca | Si perde il contenuto copiato | No | Acceso · **Stato:** fatto 451b8f3+1e8fff1+423c92a |
+| N2 | Cache DNS | `DnsFlushResolverCache()` da `dnsapi.dll` (export non documentato: caricare con `GetProcAddress`, se manca usare `ipconfig /flushdns`). Nessuna anteprima di dimensione: la voce mostra «1 operazione» | Niente di permanente: la cache si riempie da sola | Da verificare (si pensa di no) | Spento · **Stato:** fatto 451b8f3+1e8fff1+423c92a |
+| N3 | Registri eventi | `EvtOpenChannelEnum`/`EvtNextChannelPath` + `EvtClearLog` (wevtapi, `Win32_System_EventLog`) per ogni canale con eventi; prima, a scelta, `EvtExportLog` in `Documents\Xiox\eventi\`. Anteprima: numero di canali e dimensione da `EvtGetLogInfo` | Si perde la storia per la diagnosi; il registro Sicurezza scrive l'evento 1102 | Sì | Spento · **Stato:** fatto 451b8f3+1e8fff1+423c92a |
+| N4 | Collegamenti non validi (Start, Desktop) | Elencare i `.lnk` in `%AppData%\Microsoft\Windows\Start Menu`, `%ProgramData%\Microsoft\Windows\Start Menu`, Desktop dell'utente e pubblico; leggere la destinazione con `IShellLinkW::GetPath` (COM, `SLGP_RAWPATH`); proporre solo se la destinazione è su un disco **fisso presente** e manca con errore NotFound (stessa trappola di `handoff.md`: non usare `Path::exists`). Mai le destinazioni di rete, USB o le shell (`shell:`, URL) | Collegamenti a dischi staccati o in app pacchettizzate creduti rotti | Sì per `%ProgramData%` e Desktop pubblico | Spento · **Stato:** fatto 451b8f3+1e8fff1+423c92a |
+| N5 | Percorso ambiente | Leggere `PATH` da `HKCU\Environment` e `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`; espandere `%var%` solo per il controllo; togliere le voci la cui cartella manca (NotFound, disco presente) e i doppioni; riscrivere con lo **stesso tipo** (`REG_EXPAND_SZ`) dopo il backup `.reg` di `regbackup.rs`; inviare `WM_SETTINGCHANGE` "Environment" | PATH di sistema rovinato; cartelle che compaiono più tardi (dischi esterni, SDK non ancora installati) | Sì per HKLM | Spento. Nota: è fuori da `Software`, quindi fuori dal `regguard` delle regole esterne: codice dedicato · **Stato:** fatto a50be27+1b75a16+9065d20; da verificare dal vivo (scrittura del PATH e `WM_SETTINGCHANGE` sul PC vero) |
+| N6 | Pulisci spazio libero | Per ogni volume scelto: cartella temporanea nel volume, scrivere file di zeri senza cache (`FILE_FLAG_NO_BUFFERING` + `FILE_FLAG_WRITE_THROUGH`) finché lo spazio è finito, poi tanti file piccoli per la MFT; cancellare tutto in ogni caso (anche su errore o annullamento). Rifiutare i volumi SSD (`IOCTL_STORAGE_QUERY_PROPERTY`, `IncursSeekPenalty = false`) | Disco pieno per minuti/ore (altre app falliscono a scrivere); usura degli SSD | No per le cartelle utente, sì nella radice di C: | Spento, con avviso e conferma · **Stato:** fatto 115f583+593fcb1, **parziale**: solo lo spazio libero del disco di sistema, niente fase MFT né altri volumi, copie shadow non toccate; da verificare dal vivo (scrittura senza cache e riconoscimento HDD/SSD su dischi veri). Fatto: solo HDD NTFS, riserva di 1 GB più un blocco, cartelle rimaste tolte all'avvio e con Pulizia, voce eseguita per ultima nel job |
+| N7 | Vecchia installazione di Windows | Usare il gestore di Pulizia disco: impostare `StateFlags0099=2` sotto `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\Previous Installations` e lanciare `cleanmgr /sagerun:99`; mai cancellare `Windows.old` a mano (permessi di TrustedInstaller). Anteprima: dimensione di `C:\Windows.old` | Niente più ritorno alla versione precedente | Sì | Spento · **Stato:** fatto 7315f94+9065d20+593fcb1; da verificare dal vivo (`cleanmgr /sagerun:99` e registro veri). L'Analisi segnala i file personali in `Windows.old\Users` e le copie `Windows.old.000`… |
+| N8 | Password di rete | `CredEnumerateW` + `CredDeleteW` per le credenziali di tipo `CRED_TYPE_DOMAIN_PASSWORD` (unità di rete, Desktop remoto) e valori in `HKCU\Software\Microsoft\Ftp\Accounts`; l'anteprima elenca i nomi di destinazione, mai le password | Password perse, accessi a NAS/server da rifare | No | Spento. Vedi punto aperto 2 · **Stato:** fatto 41cbcb7+9065d20; da verificare dal vivo (archivio credenziali e chiavi FTP veri) |
+| N9 | Cookie con lista da conservare (tutti i browser) | Con `rusqlite` sul file `Cookies` (Chromium, tabella `cookies`, colonna `host_key`) e `cookies.sqlite` (Gecko, `moz_cookies.host`): `DELETE … WHERE` host non in lista. Lista in `Documents\Xiox\cookie_da_conservare.txt`, con i domini dell'account Microsoft/Google proposti al primo avvio. Solo a browser chiuso (`<running>` sul processo) | File bloccato o rovinato se il browser è aperto: si controlla prima e si salta | No | Spento (spec riga 163) · **Stato:** fatto 6bc0f87+6572928; da verificare: gli eseguibili di Avast, AVG, Avira, Norton e Arc (se il nome è sbagliato resta il controllo del file di blocco del profilo) |
+| N10 | Compatta database | `VACUUM` con `rusqlite` sui database SQLite del profilo (Chromium: `History`, `Cookies`, `Web Data`, `Favicons`, `Top Sites`…; Gecko: `places.sqlite`, `cookies.sqlite`, `formhistory.sqlite`…), solo a browser chiuso, solo se `PRAGMA integrity_check` dà `ok`. Anteprima: spazio recuperabile = `freelist_count × page_size` | Database rovinato se scritto mentre il browser è aperto | No | Spento · **Stato:** fatto 6bc0f87+6572928 |
+| N11 | Cronologia e cronologia download di Firefox/Thunderbird | `places.sqlite` contiene anche i segnalibri, quindi non si cancella il file: `DELETE FROM moz_historyvisits`, poi `moz_places` senza segnalibri (`foreign_count = 0`); per i download `moz_annos` con `anno_attribute_id` dei download. A browser chiuso. Winapp2 non ha voci per questo | Segnalibri persi se la query è sbagliata: test su copia del profilo | No | Cronologia accesa, download accesi, solo dopo test · **Stato:** fatto 6bc0f87+6572928, ma **spenta** (decisione del Task 3: tutte le voci dei database partono spente) |
+| N12 | Ultimo percorso di download (Chromium, Firefox) | Chromium: togliere `savefile.default_directory` e `download.default_directory` da `Preferences` (JSON) a browser chiuso — chiavi **da verificare** sul browser vero. Firefox/Thunderbird: togliere `browser.download.lastDir` da `prefs.js` | `Preferences` scritto male = impostazioni del browser azzerate | No | Spento finché non è verificato · **Stato:** fatto 6bc0f87+6572928: solo `savefile.default_directory`, `download.default_directory` lasciata di proposito; chiavi da verificare sul browser vero |
+
+## 3. Scheda Applicazioni
+
+### 3.1 Browser
+
+Edge Chromium è nella scheda Windows (2.2). Un browser aperto tiene bloccati i suoi file: le voci sotto vanno marcate `<running>` sul processo del browser, come fa CleanerML (spec riga 143).
+
+**Famiglia Chromium.** Google Chrome (3029) e i browser Chromium che Winapp2 elenca: Opera (3027), Opera GX (3035), Brave (3034), Vivaldi (3033), Avast Secure Browser (3037), AVG Secure Browser (3038), Arc (3039), Norton Private Browser (3043; in Winapp2 si chiama «Norton Secure Browser», corrispondenza da verificare), Avira Secure Browser (3044). Le voci Winapp2 hanno lo stesso schema per tutti: `<prefisso> <voce> *`, con prefisso `Google Chrome`, `Opera`, `Opera GX`, `Brave`, `Vivaldi`, `Avast Secure Browser`, `AVG Secure Browser`, `Arc`, `Norton Secure Browser`, `Avira Secure Browser`. Ho controllato nel file che tutte le 8 voci usate qui sotto esistano per tutti i 10 prefissi. Per gli 8 browser diversi da Chrome e Opera l'elenco delle voci e i default non sono noti: li suppongo uguali a Chrome (da verificare).
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Cache Internet | File: `Cache`, `Code Cache`, `GPUCache`… del profilo | Sì | Winapp2 | `<prefisso> Caches *` (per esempio `Google Chrome Caches *`, `Brave Caches *`) | Basso | W |
+| Cronologia Internet | File: `History`, `Top Sites`, `Visited Links`, `Shortcuts`, `Network Action Predictor` | Sì | Winapp2 | `<prefisso> Web Browsing History *` | Medio: Winapp2 cancella il file `History` intero, quindi va via anche la cronologia download | W |
+| Cronologia download | Righe `downloads` dentro `History` + `DownloadMetadata` | Sì | Winapp2 | `<prefisso> Download History *` (`DownloadMetadata`, `shared_proto_db`). Copertura **parziale**: le righe in `History` restano; per toglierle sole serve un `DELETE FROM downloads` (estensione di N10, opzionale) | Basso | W |
+| Ultimo percorso di download | JSON: file `Preferences` | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928: si toglie solo `savefile.default_directory` (ultima cartella di «Salva con nome»); `download.default_directory` (cartella scelta nelle impostazioni) **lasciata di proposito**; da verificare sul browser vero che sia la chiave giusta, e `selectfile.last_directory` | N12 | Medio (vedi N12) | — |
+| Cookie | SQLite: `Network\Cookies` | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (lista con domini IDN in punycode; lista non valida = nessun cookie eliminato); da verificare: gli eseguibili di Avast, AVG, Avira, Norton e Arc (se il nome è sbagliato resta il controllo del file di blocco del profilo) | N9 (con «Cookie da conservare»). Senza lista basta `<prefisso> Web Browsing Cookies *`: lo si usa finché N9 non c'è | Medio: disconnette da tutti i siti | S, W |
+| Informazioni moduli salvate | SQLite: `Web Data` (compilazione automatica) | No | Winapp2 | `<prefisso> Autofill Data & Search Engine Preferences *` | Medio: `Web Data` contiene anche i motori di ricerca personalizzati e (Chrome) le carte salvate | W |
+| Password salvate | SQLite: `Login Data` | No | Winapp2 | `<prefisso> Saved Usernames & Passwords *` | **Alto**: password perse se non sincronizzate. Spenta, con avviso | S, W |
+| Sessione | File: `Sessions`, `Extension State` | No | Winapp2 | `<prefisso> Web Browsing Session *` | Medio: si perdono le schede aperte | W |
+| Compatta database | SQLite: `VACUUM` | No | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (solo se `integrity_check` = `ok` e c'è il doppio dello spazio libero); Edge, Brave, Vivaldi, Opera: percorsi da Winapp2, varianti Beta/Dev/Canary e Opera recente da verificare | N10 | Basso a browser chiuso | S |
+| Opera: URL digitati di recente | Righe `keyword_search_terms`/`typed_count` in `History` | Sì | Winapp2 | `Opera Web Browsing History *` / `Opera GX Web Browsing History *` (cancella `History` intero: copre, con lo stesso effetto collaterale della cronologia) | Medio | W |
+| Opera: Icone dei siti web | File: `Favicons` | Sì | Winapp2 | `Opera Bookmark Favicons *` / `Opera GX Bookmark Favicons *` | Basso | W |
+
+**Famiglia Gecko.** Firefox (3026) e Thunderbird (3030) hanno le stesse 10 voci. Prefissi Winapp2: `Mozilla Firefox` e `Thunderbird`.
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Cache Internet | File: `%LocalAppData%\Mozilla\Firefox\Profiles\*\cache2` e simili | Sì | Winapp2 | `Mozilla Firefox Caches *`, `Thunderbird Caches *` | Basso | W |
+| Cronologia Internet | SQLite: tabelle di `places.sqlite` (che contiene anche i **segnalibri**) | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (spenta, come tutte le voci dei database; segnalibri e parole chiave intatti, altrimenti `ROLLBACK`); da verificare su un `places.sqlite` vero | N11. Winapp2 non ha una voce di cronologia per i browser Gecko (controllato: nessuna voce tocca `places.sqlite`) | Alto se fatto male: segnalibri persi | W |
+| Cronologia download | SQLite: annotazioni dei download in `places.sqlite` | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (spenta, come tutte le voci dei database; segnalibri e parole chiave intatti, altrimenti `ROLLBACK`); da verificare su un `places.sqlite` vero | N11 | Come sopra | — |
+| Cookie | SQLite: `cookies.sqlite` | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (lista con domini IDN in punycode; lista non valida = nessun cookie eliminato); da verificare su un `cookies.sqlite` vero | N9; senza lista c'è `Mozilla Firefox Web Browsing Cookies *` / `Thunderbird Web Browsing Cookies *` | Medio: disconnette dai siti; in Thunderbird anche da alcuni account di posta via web | S, W |
+| Informazioni moduli salvate | SQLite: `formhistory.sqlite` | No | Winapp2 | `Mozilla Firefox Autocomplete History *` (`formhistory*`), `Thunderbird Autocomplete History *` | Basso | W |
+| Ultimo percorso di download | `prefs.js`: `browser.download.lastDir` | Sì | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928: `browser.download.lastDir` tolto da `prefs.js`; da verificare: la cartella per sito in `content-prefs.sqlite` (`…lastDir.savePerSite`) e un `user.js` che la rimette non si toccano | N12 | Medio: `prefs.js` scritto male = impostazioni perse; Firefox lo riscrive alla chiusura, quindi solo a browser chiuso | — |
+| Password salvate | File: `logins.json`, `key4.db` | No (dedotto) | Winapp2 | `Mozilla Firefox Saved Usernames & Passwords *`, `Thunderbird Saved Usernames & Passwords *` | **Alto**: `key4.db` contiene anche i certificati client; in Thunderbird si perdono le password **degli account di posta**. Spenta, con avviso | S, W |
+| Sessione | File: `sessionstore.jsonlz4`, `sessionstore-backups` | No | Winapp2 | `Mozilla Firefox Web Browsing Session *` + `Mozilla Firefox Web Browsing Session Backups *` (e le due di Thunderbird) | Medio: si perdono le schede aperte | W |
+| Preferenze dei siti | SQLite: `permissions.sqlite`, `content-prefs.sqlite` | No | Winapp2 | `Mozilla Firefox Website Permissions *`, `Thunderbird Website Permissions *` | Basso: i permessi (fotocamera, notifiche, zoom) vanno richiesti di nuovo | W |
+| Compatta database | SQLite: `VACUUM` | No | Codice nativo nuovo · **Stato:** fatto 6bc0f87+6572928 (solo se `integrity_check` = `ok` e c'è il doppio dello spazio libero) | N10 | Basso a browser chiuso | S |
+
+**Safari per Windows** (3028). Apple non lo aggiorna dal 2012 (versione 5.1.7); il programma si rileva da `%ProgramFiles%\Safari\Safari.exe`. Winapp2 non ha voci Safari (controllato).
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Cache Internet | File: `%LocalAppData%\Apple Computer\Safari\Cache.db` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | `cleaners/safari.xml` (id `safari`), opzione `cache`: il percorso indicato | Basso | — |
+| Cronologia Internet | File: `%AppData%\Apple Computer\Safari\History.plist`, `LastSession.plist`, `TopSites.plist`, `Downloads.plist`, `%LocalAppData%\Apple Computer\Safari\History\*`, `…\Webpage Previews` | Sì | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `history`: i 6 percorsi indicati | Basso | — |
+| Cookie | File dei cookie di Safari | Sì | Nuovo XML · **Stato:** tolto: da verificare | opzione `cookies`: `%AppData%\Apple Computer\Safari\Cookies\Cookies.binarycookies` — percorso **da verificare**. **Fase 3a: non inclusa** in `safari.xml` (percorso non verificato: non si forza) | Basso; nessuna lista da conservare (formato binario Apple) | — |
+| Informazioni moduli salvate | File: `%AppData%\Apple Computer\Safari\Form Values.plist` | No | Nuovo XML · **Stato:** fatto 7f081d7 | opzione `forms`: il percorso indicato | Basso | — |
+| Password salvate | Portachiavi Apple | No (dedotto) | Non fattibile | — | Formato del portachiavi Apple non documentato, browser abbandonato | — |
+
+### 3.2 Altre sezioni
+
+Qui c'è una casella per programma (Applicazioni, Internet, Multimedia, Utilità, Windows). Winapp2 copre le stesse sezioni con molte voci. I conteggi sono sul file W: «voci» = sezioni `[… *]`, `FileKey`/`RegKey` = righe di regola reali. La guardia può scartarne una parte: il numero di regole davvero attive su questo PC lo dà il rapporto di `xiox-rules` all'avvio, non questa tabella.
+
+| Voce (italiano) | Cosa tocca | Default | Copertura Xiox | Come | Rischio/avvisi | Fonte |
+|---|---|---|---|---|---|---|
+| Sezione Applicazioni (3021) | File e registro: MRU, temporanei, log dei programmi | Per voce | Winapp2 | 491 voci, 1570 `FileKey`, 949 `RegKey`. Esempi: `Microsoft Office *`, `LibreOffice *`, `Notepad++ *`, `Microsoft OneDrive *`, `GIMP *` | Basso-medio: alcune voci toccano file non rigenerabili (es. `Notepad++ - Backups & Unsaved Files *`, `Microsoft Office Unsaved Files *`): restano spente come tutte le voci Winapp2 | WA, W |
+| Sezione Internet (3022) | File e registro di client di chat, posta, download | Per voce | Winapp2 | 271 voci, 780 `FileKey`, 150 `RegKey`. Esempi: `Discord *`, `Telegram Desktop *`, `Zoom *`, `WhatsApp *` (sezione propria 3042), `Windows Mail *` | Basso | WA, W |
+| Sezione Multimedia (3023) | File e registro di lettori, editor, convertitori | Per voce | Winapp2 | 451 voci, 1457 `FileKey`, 741 `RegKey`. Esempi: `VLC Media Player *`, `Spotify *` (sezione propria 3036), `Apple iTunes *` (sezione 3040), `Audacity *`, `4K Video Downloader *` | Medio per `Spotify - Downloaded Songs *` (brani scaricati) | WA, W |
+| Sezione Utilità (3024) | File e registro di archiviatori, antivirus, strumenti di sistema | Per voce (`Windows Defender` spenta) | Winapp2 | 944 voci, 2619 `FileKey`, 1319 `RegKey`. Esempi: `7-Zip *`, `WinRAR *`, `Malwarebytes *`, `NVIDIA App *`, `BOINC Manager *` | Basso | , WA, W |
+| Sezione Windows (3025) | File e registro delle app di Windows (Paint, Blocco note, Store…) | Per voce | Winapp2 | 74 voci, 536 `FileKey`, 140 `RegKey`. Esempi: `.NET Framework *`, `Windows Notepad *`, `Windows Photos *`, `Windows Snipping Tool *`, `Microsoft Store *`. Le voci che fanno da doppione alla scheda Windows sono già nella sezione 2 | Medio per `Windows Activity History *` (ha `Warning=`) e `Windows Credential Manager Saved Credentials *` (`Vault`, scartata dalla guardia) | WA, W |
+| Sezione Windows Store (3031) | File delle app UWP | Per voce (accesa) | Winapp2 | Winapp2 non usa più 3031: le app del Microsoft Store sono voci normali nelle sezioni 3021-3025 (es. `Universal Windows Platform *`, `Microsoft Store *`, `Windows Calculator *`, `Windows Camera *`, `Microsoft Sticky Notes *`). | Basso | WA, W |
+| Sezione Adobe | File e registro dei programmi Adobe | Per voce | Winapp2 | `Section=Adobe`: 31 voci, 422 `FileKey`, 109 `RegKey`. Esempi: `Adobe Acrobat Reader *`, `Adobe Photoshop *`, `Adobe Illustrator *`, `Adobe Audition *`, `Adobe Dreamweaver *` | Basso | WA, W |
+| Sezione Giochi | File di launcher e giochi (log, cache, installer) | Per voce | Winapp2 | `Section=Games`: 521 voci, 1326 `FileKey`, 19 `RegKey`. Esempi: `Steam *`, `Epic Games Launcher *`, `Minecraft *`, `Battle.net *`, `EA App *` | Medio per `Steam Installers *` e `Ubisoft Connect Installers *` (hanno `Warning=`: installer da riscaricare) | WA, W |
+| Altre sezioni Winapp2 | File di PowerToys e di altri browser | — | Winapp2 | `Section=Microsoft PowerToys` 30 voci (es. `Microsoft PowerToys *`, `Microsoft PowerToys Hosts File Editor *`), `Section=Command Palette` 1 voce, 50 sezioni di altri browser con 962 voci (le sezioni browser sono 64 con 1254 voci; le 14 di 3.1 e 2.2 ne hanno 292; es. `Yandex Caches *`, `Maxthon Caches *`, `LibreWolf Caches *`, `Waterfox Caches *`, `Zen Caches *`) | Come le righe dei browser in 3.1 | W |
+| Strumenti di IA | File di ChatGPT, Claude e altre app di IA | Da verificare | CleanerML inglobato | `ai_claude_code`, `ai_codex`, `ai_gemini_cli`, `ai_opencode` + Winapp2 `Anthropic Claude *`, `Microsoft Copilot *`. Per ChatGPT desktop Winapp2 non ha voci: eventuale `Nuovo XML` | Medio: le cartelle degli agenti contengono credenziali, già escluse dalla guardia (`guard.rs:137-141`) | W |
+
+## 4. Riepilogo con numeri
+
+### 4.1 Righe per valore di copertura
+
+Una riga = una voce, salvo due casi: la riga «Edge legacy» raccoglie 10 voci, e ogni riga della famiglia Chromium vale per 10 browser (ogni riga Gecko per 2).
+
+| Copertura | Scheda Windows (52 righe) | Browser (26 righe) | Altre sezioni (10 righe) | Totale (88) |
+|---|---|---|---|---|
+| Nativa esistente | 9 | 0 | 0 | 9 |
+| Winapp2 | 9 | 13 | 9 | 31 |
+| CleanerML inglobato | 0 | 0 | 1 | 1 |
+| Nuovo XML | 16 | 4 | 0 | 20 |
+| Codice nativo nuovo | 12 | 8 | 0 | 20 |
+| Non fattibile | 6 | 1 | 0 | 7 |
+
+Le 20 righe «Codice nativo nuovo» si riducono a **12 funzioni** (N1-N12, sezione 2.6), perché la stessa funzione serve più browser. Le 20 righe «Nuovo XML» sono **2 file**: `cleaners/windows_extra.xml` (16 opzioni) e `cleaners/safari.xml` (4 opzioni). Fase 3a: ne sono entrate 18 (15 + 3); restano fuori «Cronologia moduli con completamento automatico» di IE e i cookie di Safari, perché chiave e percorso sono da verificare. Le 7 «Non fattibile»: Index.dat, password di IE, Edge legacy (10 voci), programmi di disinstallazione degli hotfix, cartelle personalizzate, utilizzo dati di rete, password di Safari.
+
+Ritocchi alle categorie native già esistenti emersi dal confronto con l'elenco delle voci (piccoli, non contati come righe nuove): «Cache delle miniature» + `ThumbCacheToDelete\thm*.tmp`; «File di log di Windows» + `%WinDir%\*.bak`, `%WinDir%\*log.txt`, `System32\wbem\Logs\*.log;*.lo_`; «Segnalazione errori di Windows» + `%LocalAppData%\ElevatedDiagnostics` e il valore `HKCU\Software\Microsoft\Windows\Windows Error Reporting\Debug\StoreLocation`. Stato dopo la Fase 3a: fatti (7f081d7) miniature, `*.bak`, `*log.txt`, `ElevatedDiagnostics`; non coperti `System32\wbem\Logs` (guardia) e il valore `StoreLocation` (non è un file).
+
+### 4.2 Lavoro vero della Fase 3, in ordine di rischio
+
+| Ordine | Lavoro | Rischio | Stima |
+|---|---|---|---|
+| 1 | N6 Pulisci spazio libero | Alto (disco pieno, SSD) | 6 h |
+| 2 | N5 Percorso ambiente (PATH) | Alto (rompe strumenti) | 3 h |
+| 3 | N11 Cronologia e download di Firefox/Thunderbird (`places.sqlite`) | Alto (segnalibri) | 4 h |
+| 4 | N8 Password di rete | Alto (credenziali) | 2 h |
+| 5 | N7 Vecchia installazione di Windows (via `cleanmgr /sagerun`) | Alto (niente ritorno indietro) | 2 h |
+| 6 | N3 Registri eventi | Alto per la diagnosi, basso per il sistema | 2 h |
+| 7 | N9 Cookie con lista da conservare | Medio | 4 h |
+| 8 | N12 Ultimo percorso di download (`Preferences`, `prefs.js`) | Medio | 2 h |
+| 9 | N4 Collegamenti non validi (Start, Desktop) | Medio | 3 h |
+| 10 | N10 Compatta database | Basso a browser chiuso | 2 h |
+| 11 | `cleaners/windows_extra.xml` (16 opzioni: IE, MRU, Esplora, chkdsk, IIS) | Basso (registro con backup `.reg`) | 2,5 h |
+| 12 | Ritocchi alle categorie native (4.1) | Basso | 1 h |
+| 13 | `cleaners/safari.xml` | Basso | 0,5 h |
+| 14 | N1 Appunti | Basso | 0,5 h |
+| 15 | N2 Cache DNS | Basso | 0,5 h |
+| — | **Totale** | — | **35 h** |
+
+La spec stimava 6-8 ore (riga 173): il conto è più alto perché Winapp2 copre meno del previsto (cronologia Gecko, cookie con lista, compattazione, voci di registro di Esplora e IE che il file Winapp2 usato non ha più). Senza N6, N5, N7 e N8 (punto aperto 4) si scende a **22 h**.
+
+### 4.3 Task proposti per il piano (raggruppati per file)
+
+1. **Regole nuove e ritocchi** — `cleaners/windows_extra.xml`, `cleaners/safari.xml`, `crates/xiox-rules/src/embedded.rs` (due righe `include_str!`), `src/cleaner.rs` (ritocchi di 4.1). Verifica: l'anteprima trova le chiavi `RunMRU`, `UserAssist`, `TypedURLs` su questo PC; i test di `xiox-rules` passano con i due XML. **4 h.**
+2. **Azioni di sistema non-file** — nuovo `src/sysclean.rs` con N1 Appunti, N2 DNS, N3 registri eventi, N4 collegamenti non validi; feature di `windows-sys` in `Cargo.toml` (`Win32_System_DataExchange`, `Win32_System_EventLog`, `Win32_System_Com`, `Win32_Security_Credentials` se entra N8); righe nuove in `CATEGORIES` di `src/cleaner.rs` con un `Kind` nuovo per le azioni che non sono file. **6 h.**
+3. **Database dei browser** — nuovo `src/browserdb.rs` con N9, N10, N11, N12 (`rusqlite =0.40.2` `bundled`, la stessa versione di `crates/xiox-mukade/Cargo.toml:14`, aggiunta al `Cargo.toml` radice), lista `Documents\Xiox\cookie_da_conservare.txt`, controllo del processo del browser prima di aprire i file, test su copie di profili finti in `tempfile`. **12 h.**
+4. **Voci pericolose** (solo se il punto aperto 4 le conferma) — N5 PATH con backup `.reg` (`src/regbackup.rs`), N7 Windows.old, N8 password di rete, ognuna spenta, con conferma esplicita e messaggio di avviso. **7 h.**
+5. **Pulisci spazio libero** (rimandabile) — nuovo `src/wipe.rs`, N6 con rilevamento SSD, annullamento e pulizia garantita dei file di riempimento. **6 h.**
+
+## 5. Punti aperti per l'utente
+
+1. **Default e nomi italiani**: restano «da verificare» i default su una versione installata, i nomi italiani (salvo 14) e le voci aggiunte negli ultimi anni che non ho trovato.
+2. **Credenziali**: fare N8 (password di rete, tocca Gestione credenziali di Windows)? Le password dei browser invece passano da Winapp2 e restano spente con avviso.
+3. **«Cartelle personalizzate»** (Includi/Escludi scelti dall'utente) non è una voce di Windows: la segno «Non fattibile» come voce. Vuoi una funzione di Xiox per aggiungere cartelle proprie (sarebbe lavoro in più, fuori da questa tabella)?
+4. **Budget**: 35 h contro le 6-8 della spec. Proposta: in v1 i task 1-3 (22 h), poi N6, N5, N7, N8 solo se servono.

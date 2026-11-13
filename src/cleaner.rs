@@ -1,4 +1,4 @@
-//! Temporary-file cleaner. Locations and ages come from MECHANICS.md section 1.
+//! Temporary-file cleaner: Windows temp folders, Prefetch, memory dumps, logs, thumbnail cache.
 
 use crate::sys;
 use xiox_cleaner::{remove_files_parallel, worker_count, Cancel, Tick};
@@ -6,7 +6,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-/// Option "only delete files in Windows Temp folders older than 24 hours" (string 0x141ab7df8).
+/// Option "only delete files in Windows Temp folders older than 24 hours".
 pub const TEMP_MIN_AGE_HOURS: u64 = 24;
 /// Age for "old" Prefetch data: estimated, not found in the code.
 pub const PREFETCH_MIN_AGE_DAYS: u64 = 14;

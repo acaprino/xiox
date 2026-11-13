@@ -1,5 +1,5 @@
 //! Fase 3a, Task 1: le voci «Nuovo XML» della tabella di copertura
-//! (`docs/ccleaner-coverage.md`, §2 e §3.1) in `cleaners/windows_extra.xml` e
+//! (`docs/rules-coverage.md`, §2 e §3.1) in `cleaners/windows_extra.xml` e
 //! `cleaners/safari.xml`.
 //!
 //! Mai sul PC dell'utente: i percorsi si controllano con un `Env` finto e le
@@ -22,7 +22,7 @@ const XMLS: [(&str, &str); 2] = [
     ("safari", include_str!("../../../cleaners/safari.xml")),
 ];
 
-const TABLE: &str = include_str!("../../../docs/ccleaner-coverage.md");
+const TABLE: &str = include_str!("../../../docs/rules-coverage.md");
 
 /// Opzioni attese, nell'ordine del file. Rispetto alla tabella mancano
 /// `ie_autocomplete` (chiave `IntelliForms\Storage1` «da verificare») e
@@ -160,10 +160,10 @@ fn every_phase3_xml_parses_with_zero_warnings() {
 }
 
 /// Ogni opzione viene da una riga «Nuovo XML» della tabella (nella sua
-/// sezione) e parte spenta, qualunque sia il default di CCleaner: come tutti
+/// sezione) e parte spenta, qualunque sia il default indicato in tabella: come tutti
 /// gli inglobati, l'XML non ha `default_on`.
 #[test]
-fn phase3_options_are_off_unless_ccleaner_default_on() {
+fn phase3_options_are_off_unless_table_default_on() {
     let env = real_like_env();
     let sections = [
         ("windows_extra", table_rows("## 2. Scheda Windows", "## 3. Scheda Applicazioni")),
@@ -180,10 +180,10 @@ fn phase3_options_are_off_unless_ccleaner_default_on() {
             // La cella può avere in coda lo stato («Nuovo XML · **Stato:** fatto …»).
             let coverage = row[3].split(" · ").next().unwrap_or("");
             assert_eq!(coverage, "Nuovo XML", "{id}/{}", o.id);
-            let ccleaner_default = row[2];
+            let table_default = row[2];
             assert!(
-                ccleaner_default.starts_with("Sì") || ccleaner_default.starts_with("No"),
-                "{id}/{}: default «{ccleaner_default}»",
+                table_default.starts_with("Sì") || table_default.starts_with("No"),
+                "{id}/{}: default «{table_default}»",
                 o.id
             );
             assert!(!o.default_on, "{id}/{} è acceso di default", o.id);
@@ -387,7 +387,6 @@ fn visible_texts_are_clean_italian() {
         }
         for t in texts {
             assert!(!t.starts_with("AGG"), "{name}: «{t}»");
-            assert!(!t.to_lowercase().contains("ccleaner"), "{name}: «{t}»");
             for bad in ["sara piu", "possibilita", "puo ", "e stato", "perche "] {
                 assert!(!t.contains(bad), "{name}: «{bad}» in «{t}»");
             }

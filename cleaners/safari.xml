@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- CleanerML: Safari per Windows (ultima versione 5.1.7, 2012)
-     (docs/ccleaner-coverage.md, sezione 3.1, righe «Nuovo XML»).
+     (docs/rules-coverage.md, sezione 3.1, righe «Nuovo XML»).
      Ogni opzione va selezionata esplicitamente.
      Non inclusi: i cookie (percorso Cookies.binarycookies da verificare) e
      le password salvate (portachiavi Apple). -->

@@ -1,4 +1,4 @@
-//! N8 «Password di rete» (`docs/ccleaner-coverage.md` §2.6): le credenziali
+//! N8 «Password di rete» (`docs/rules-coverage.md` §2.6): le credenziali
 //! di Windows di tipo dominio (unità di rete, cartelle condivise, Desktop
 //! remoto) e gli account FTP salvati da Esplora file
 //! (`HKCU\Software\Microsoft\Ftp\Accounts`).

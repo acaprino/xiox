@@ -1,5 +1,5 @@
 //! Azioni di sistema che non sono «cancella file o chiavi» (tabella di
-//! copertura, `docs/ccleaner-coverage.md` §2.6 N1-N4): Appunti, cache DNS,
+//! copertura, `docs/rules-coverage.md` §2.6 N1-N4): Appunti, cache DNS,
 //! registri eventi, collegamenti non validi del menu Start e del Desktop.
 //!
 //! Ogni accesso al sistema passa da un trait ([`Clipboard`], [`Dns`],

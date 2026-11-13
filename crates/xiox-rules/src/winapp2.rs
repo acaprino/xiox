@@ -473,7 +473,7 @@ pub fn to_cleaners_with(
     (out, report)
 }
 
-/// Gruppo in italiano: prima `LangSecRef` (le sezioni di CCleaner, vedi
+/// Gruppo in italiano: prima `LangSecRef` (le sezioni definite dalla tabella di
 /// CONTRIBUTING.md di Winapp2), poi `Section` (`Games` → `Giochi`,
 /// `<X> Web Browser` → `Browser: <X>`, il resto com'è), altrimenti
 /// `Applicazioni`.
@@ -1019,7 +1019,7 @@ mod tests {
 
         let beta = by("winapp2:Beta Temp");
         assert_eq!(beta.label, "Beta Temp");
-        // LangSecRef=3026 è la sezione Firefox di CCleaner.
+        // LangSecRef=3026 è la sezione Firefox.
         assert_eq!(beta.group, "Browser: Firefox");
         assert_eq!(beta.origin, Origin::Winapp2);
         match &beta.options[0].actions[0] {

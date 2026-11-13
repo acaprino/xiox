@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- CleanerML: voci della scheda Windows non coperte da altre regole
-     (docs/ccleaner-coverage.md, sezione 2, righe «Nuovo XML»).
+     (docs/rules-coverage.md, sezione 2, righe «Nuovo XML»).
      Ogni opzione va selezionata esplicitamente. Nessun <running>: vale per
      tutto il cleaner ed Esplora risorse è sempre aperto; i file in uso si
      saltano.

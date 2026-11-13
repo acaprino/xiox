@@ -1,4 +1,4 @@
-//! N5 «Percorso ambiente» (`docs/ccleaner-coverage.md` §2.6): toglie dalla
+//! N5 «Percorso ambiente» (`docs/rules-coverage.md` §2.6): toglie dalla
 //! variabile `Path` dell'utente (`HKCU\Environment`) e di sistema
 //! (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`) le
 //! cartelle che mancano davvero e i doppioni.

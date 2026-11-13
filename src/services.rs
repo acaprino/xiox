@@ -1,4 +1,4 @@
-//! Windows services: list, memory use, disable / manual / restore. See MECHANICS.md section 3.
+//! Windows services: list, memory use, disable / manual / restore.
 
 use crate::sys;
 use std::collections::HashMap;

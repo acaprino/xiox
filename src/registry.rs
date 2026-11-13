@@ -1,4 +1,4 @@
-//! Registry scanner. Categories and keys from MECHANICS.md section 2.
+//! Registry scanner: lists broken or leftover registry entries by category, backs up the keys and repairs them.
 
 use crate::{regbackup, sys};
 use std::path::{Path, PathBuf};

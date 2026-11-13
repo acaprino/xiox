@@ -1,4 +1,4 @@
-//! N7 «Vecchia installazione di Windows» (`docs/ccleaner-coverage.md` §2.6):
+//! N7 «Vecchia installazione di Windows» (`docs/rules-coverage.md` §2.6):
 //! la cartella `%SystemDrive%\Windows.old` che un aggiornamento di Windows
 //! lascia per poter tornare alla versione di prima.
 //!

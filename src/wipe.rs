@@ -1,5 +1,5 @@
 //! N6 «Pulisci spazio libero» (tabella di copertura,
-//! `docs/ccleaner-coverage.md` §2.6): sovrascrive con zeri lo spazio libero
+//! `docs/rules-coverage.md` §2.6): sovrascrive con zeri lo spazio libero
 //! del volume di sistema perché i file già cancellati non si possano
 //! recuperare.
 //!
@@ -9,7 +9,7 @@
 //! nascosta `<volume>\Xiox_wipe_<pid>_<nanos>` (`PulisciPC_wipe_…` è il nome di
 //! prima e si riconosce ancora) e ci si ferma quando
 //! restano [`RESERVE`] liberi (riserva per Windows, il file di paging e le
-//! altre app: CCleaner invece riempie il disco). La cartella si cancella
+//! altre app). La cartella si cancella
 //! sempre: alla fine, su errore, su annullamento e anche su panico (guard con
 //! `Drop`). In più ogni file di riempimento è aperto con
 //! `FILE_FLAG_DELETE_ON_CLOSE`: se il processo muore, Windows lo cancella da
