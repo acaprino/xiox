@@ -926,3 +926,27 @@ fn clean_without_sessions_removes_a_chosen_build_and_reads_no_session() {
     let none = clean_without_sessions(&scan, &Chosen::default(), RemoveMode::Permanent, false, &roots);
     assert!(none.items.is_empty() && !none.partial());
 }
+
+#[test]
+fn not_removed_counts_skipped_and_failed_but_not_the_overlap_with_a_removed_folder() {
+    let item = |k: &str, o: Outcome| (k.to_string(), Some(PathBuf::from(k)), Category::Builds, o);
+    let out = CleanOutcome {
+        schema: SCHEMA,
+        mode: RemoveMode::Permanent,
+        dry_run: false,
+        items: vec![
+            item("a", Outcome::Removed { bytes_freed: 1 }),
+            item("a\\inner",Outcome::Skipped { reason: format!("{}a", crate::clean::ALREADY_REMOVED) }),
+            item("b", Outcome::Skipped { reason: "no longer there".into() }),
+            item("c", Outcome::Failed { error: "x".into() }),
+        ],
+        bytes_freed: 1,
+        recycled_bytes: 0,
+        elapsed_ms: 0,
+    };
+    assert_eq!(out.not_removed(), 2);
+    assert!(out.partial());
+    let only_overlap = CleanOutcome { items: out.items[..2].to_vec(), ..out };
+    assert_eq!(only_overlap.not_removed(), 0);
+    assert!(!only_overlap.partial());
+}

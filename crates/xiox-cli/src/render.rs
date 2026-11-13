@@ -427,17 +427,8 @@ pub fn render_outcome(o: &CleanOutcome) -> String {
     } else {
         out.push_str(&format!("Freed {}\n", fmt_size(o.bytes_freed)));
     }
-    if o.partial() {
-        // The same rule as `partial()`: an item that went with the chosen folder holding it is fine.
-        let n = o
-            .items
-            .iter()
-            .filter(|(.., x)| match x {
-                Outcome::Removed { .. } => false,
-                Outcome::Skipped { reason } => !reason.starts_with("already removed with "),
-                Outcome::Failed { .. } => true,
-            })
-            .count();
+    let n = o.not_removed();
+    if n > 0 {
         out.push_str(&format!(
             "Not everything was removed: {n} item{} skipped or failed.\n",
             if n == 1 { "" } else { "s" }
@@ -791,5 +782,11 @@ mod tests {
         );
         let out = render_outcome(&overlap);
         assert!(out.contains("already removed with") && !out.contains("Not everything"), "{out}");
+
+        // The count of "skipped or failed" leaves the overlap out and keeps the real ones.
+        let mut mixed = overlap;
+        mixed.items.push(entry("D:\\p\\x",Category::Builds, Outcome::Skipped { reason: "no longer there".into() }));
+        let out = render_outcome(&mixed);
+        assert!(out.contains("Not everything was removed: 1 item skipped or failed."), "{out}");
     }
 }

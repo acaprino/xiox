@@ -172,15 +172,23 @@ pub struct CleanOutcome {
 }
 
 impl CleanOutcome {
-    /// At least one item was skipped or failed. An item `Skipped` only because the chosen item
+    /// How many items were skipped or failed. An item `Skipped` only because the chosen item
     /// that holds it was removed (`already removed with …`) is the ordinary overlap, not a
-    /// partial result: what was asked is gone.
+    /// partial result: what was asked is gone, so it is not counted.
+    pub fn not_removed(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|(.., o)| match o {
+                Outcome::Removed { .. } => false,
+                Outcome::Skipped { reason } => !reason.starts_with(ALREADY_REMOVED),
+                Outcome::Failed { .. } => true,
+            })
+            .count()
+    }
+
+    /// At least one item was skipped or failed (see [`CleanOutcome::not_removed`]).
     pub fn partial(&self) -> bool {
-        self.items.iter().any(|(.., o)| match o {
-            Outcome::Removed { .. } => false,
-            Outcome::Skipped { reason } => !reason.starts_with(ALREADY_REMOVED),
-            Outcome::Failed { .. } => true,
-        })
+        self.not_removed() > 0
     }
 }
 

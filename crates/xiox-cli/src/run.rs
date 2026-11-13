@@ -159,6 +159,12 @@ impl Sink<'_> {
         let _ = writeln!(self.err, "{text}");
     }
 
+    /// The text for the person on stderr, whatever the mode.
+    fn note(&mut self, text: &str) {
+        let _ = self.err.write_all(text.as_bytes());
+        let _ = self.err.flush();
+    }
+
     /// End of a run that has a result: with `--json` the one object on stdout (`outcome` is
     /// `None` when nothing was run). Returns the exit code.
     fn conclude(&mut self, scan: &ProjectScan, outcome: Option<&CleanOutcome>, code: i32) -> i32 {
@@ -168,17 +174,23 @@ impl Sink<'_> {
         match json::outcome_json(scan, outcome) {
             Ok(v) => match write_result(self.out, self.err, &format!("{v}\n")) {
                 Ok(()) => code,
-                Err(c) => c,
+                Err(_) => write_failed_code(outcome),
             },
             Err(e) => {
                 self.fail(&format!("error: cannot write the result as JSON: {e}"));
-                if let Some(o) = outcome {
-                    // Something may have been removed: say what, in plain text.
-                    let _ = self.err.write_all(render::render_outcome(o).as_bytes());
-                }
-                EXIT_ERROR
+                write_failed_code(outcome)
             }
         }
+    }
+}
+
+/// Exit code when the result could not be written. Nothing was removed (no outcome, or a dry
+/// run): an error. Something was removed: 3 when part of it was not, so that a script still
+/// learns the run was partial, else an error (the removal itself went well, the report did not).
+fn write_failed_code(outcome: Option<&CleanOutcome>) -> i32 {
+    match outcome {
+        Some(o) if !o.dry_run && o.partial() => EXIT_PARTIAL,
+        _ => EXIT_ERROR,
     }
 }
 
@@ -203,20 +215,43 @@ fn confirm(err: &mut dyn Write, input: &mut dyn BufRead, chosen: &Chosen) -> boo
     input.read_line(&mut line).is_ok() && is_yes(&line)
 }
 
+/// What `clean_run` takes from outside (tests pass fakes): the answer to the question, the
+/// removal and the Recycle Bin check.
+struct Deps<'a> {
+    stdin_is_terminal: bool,
+    stdin: &'a mut dyn BufRead,
+    remove: &'a dyn Fn(&ProjectScan, &Chosen, RemoveMode, bool) -> CleanOutcome,
+    shortfall: &'a dyn Fn(&ProjectScan, &Chosen, RemoveMode) -> Vec<(char, u64, u64)>,
+}
+
 fn clean(f: &CleanFlags, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let scan = match analyze_path(f.project.clone(), f.no_drives, err) {
+        Ok(scan) => scan,
+        Err(code) => return code,
+    };
+    let stdin = std::io::stdin();
+    let mut lock = stdin.lock();
+    let mut deps = Deps {
+        stdin_is_terminal: stdin.is_terminal(),
+        stdin: &mut lock,
+        remove: &clean_project,
+        shortfall: &dc_project::recycle_shortfall,
+    };
     let mut sink = Sink { out, err, json: f.json };
-    match clean_run(f, &mut sink) {
+    match clean_run(f, &mut sink, scan, &mut deps) {
         Ok(code) | Err(code) => code,
     }
 }
 
-/// The steps of `clean`, in order; `Err` is a failure to write the result (already reported).
-fn clean_run(f: &CleanFlags, s: &mut Sink) -> Result<i32, i32> {
-    // 1. Analyze.
-    let scan = match analyze_path(f.project.clone(), f.no_drives, s.err) {
-        Ok(scan) => scan,
-        Err(code) => return Ok(code),
-    };
+/// The steps of `clean` after the analysis, in order; `Err` is a failure to write something
+/// before anything was removed (already reported).
+///
+/// Streams: with `--json` every text goes to stderr and stdout carries the one object. Without
+/// it, a run that will ask the question (no `--yes`, no `--dry-run`) writes the summary, the
+/// question and `Cancelled.` to stderr, so a redirected stdout never hides what is about to be
+/// removed; every other text (listing, `Nothing to clean.`, summary of a `--yes` or `--dry-run`
+/// run, the outcome) goes to stdout. Errors always go to stderr.
+fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -> Result<i32, i32> {
     // A path JSON cannot carry must stop the run before anything is removed, not after.
     if f.json {
         if let Err(e) = json::scan_json(&scan) {
@@ -224,6 +259,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink) -> Result<i32, i32> {
             return Ok(EXIT_ERROR);
         }
     }
+    // 1. Nothing named: the listing, as `analyze` prints it.
     if f.categories.is_empty() && f.include.is_empty() {
         if !f.json {
             s.say(&render::render_scan(&scan))?;
@@ -248,8 +284,14 @@ fn clean_run(f: &CleanFlags, s: &mut Sink) -> Result<i32, i32> {
     }
 
     // 3. Summary, and the Recycle Bin check.
-    let shortfall = dc_project::recycle_shortfall(&scan, &chosen, mode);
-    s.say(&render::render_summary(&scan, &chosen, mode, &shortfall))?;
+    let asks = !f.yes && !f.dry_run && !f.json;
+    let shortfall = (deps.shortfall)(&scan, &chosen, mode);
+    let summary = render::render_summary(&scan, &chosen, mode, &shortfall);
+    if asks {
+        s.note(&summary);
+    } else {
+        s.say(&summary)?;
+    }
     if !shortfall.is_empty() {
         s.fail("error: not enough room in the Recycle Bin: nothing was removed");
         return Ok(EXIT_ERROR);
@@ -257,7 +299,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink) -> Result<i32, i32> {
 
     // 4. Dry run: every check, no removal.
     if f.dry_run {
-        let outcome = clean_project(&scan, &chosen, mode, true);
+        let outcome = (deps.remove)(&scan, &chosen, mode, true);
         s.say("Dry run: nothing was removed.\n")?;
         s.say(&render::render_outcome(&outcome))?;
         return Ok(s.conclude(&scan, Some(&outcome), EXIT_OK));
@@ -269,21 +311,25 @@ fn clean_run(f: &CleanFlags, s: &mut Sink) -> Result<i32, i32> {
             s.fail("error: --json needs --yes to remove anything");
             return Ok(EXIT_USAGE);
         }
-        let stdin = std::io::stdin();
-        if !stdin.is_terminal() {
+        if !deps.stdin_is_terminal {
             s.fail("error: not a terminal: pass --yes to remove without asking");
             return Ok(EXIT_USAGE);
         }
-        if !confirm(s.err, &mut stdin.lock(), &chosen) {
-            s.say("Cancelled.\n")?;
-            return Ok(s.conclude(&scan, None, EXIT_OK));
+        if !confirm(s.err, deps.stdin, &chosen) {
+            s.note("Cancelled.\n");
+            return Ok(EXIT_OK);
         }
     }
 
-    // 6. Remove, and say what happened.
-    let outcome = clean_project(&scan, &chosen, mode, false);
+    // 6. Remove, and say what happened. From here on something may be gone: a report that
+    // cannot be written to stdout goes to stderr, and the exit code still tells partial from not.
+    let outcome = (deps.remove)(&scan, &chosen, mode, false);
+    let report = render::render_outcome(&outcome);
+    if s.say(&report).is_err() {
+        s.note(&report);
+        return Ok(write_failed_code(Some(&outcome)));
+    }
     let code = if outcome.partial() { EXIT_PARTIAL } else { EXIT_OK };
-    s.say(&render::render_outcome(&outcome))?;
     Ok(s.conclude(&scan, Some(&outcome), code))
 }
 
@@ -316,5 +362,206 @@ mod tests {
         assert_eq!(String::from_utf8(err).unwrap(), "Remove 1 item (512 B)? [y/N] ");
         // End of input is a no, never a yes.
         assert!(!confirm(&mut Vec::new(), &mut "".as_bytes(), &chosen(1, 1)));
+    }
+
+    // ── clean_run with fakes: no analysis, no removal, no terminal ──
+
+    use crate::testdata::{GB, build, scan};
+    use dc_project::Outcome;
+    use std::cell::Cell;
+
+    /// A stdout that takes `ok` writes and then fails, as a closed handle or a full disk does.
+    struct FlakyOut {
+        ok: usize,
+    }
+    impl Write for FlakyOut {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.ok == 0 {
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.ok -= 1;
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn flags(yes: bool, dry_run: bool, json: bool, permanent: bool) -> CleanFlags {
+        CleanFlags {
+            project: None,
+            categories: vec![Category::Builds],
+            include: Vec::new(),
+            permanent,
+            yes,
+            dry_run,
+            json,
+            no_drives: true,
+        }
+    }
+
+    struct Ran {
+        code: i32,
+        out: String,
+        err: String,
+        removals: usize,
+        dry_removals: usize,
+    }
+
+    /// Run `clean_run` on a one-build scan. `answer`: `Some(text)` is a terminal that types it,
+    /// `None` is a stdin that is not a terminal. `partial`: the removal leaves the item behind.
+    fn run_clean(
+        f: &CleanFlags,
+        answer: Option<&str>,
+        shortfall: Vec<(char, u64, u64)>,
+        partial: bool,
+        out: &mut dyn Write,
+    ) -> Ran {
+        let removals = Cell::new(0);
+        let dry = Cell::new(0);
+        let remove = |s: &ProjectScan, c: &Chosen, mode: RemoveMode, dry_run: bool| {
+            if dry_run {
+                dry.set(dry.get() + 1);
+            } else {
+                removals.set(removals.get() + 1);
+            }
+            let items = c
+                .keys
+                .iter()
+                .map(|k| {
+                    let it = s.items.iter().find(|i| i.key == *k).unwrap();
+                    let o = if partial {
+                        Outcome::Failed { error: "in use".into() }
+                    } else {
+                        Outcome::Removed { bytes_freed: it.bytes.unwrap_or(0) }
+                    };
+                    (k.clone(), it.path.clone(), it.category, o)
+                })
+                .collect();
+            CleanOutcome {
+                schema: 1,
+                mode,
+                dry_run,
+                items,
+                bytes_freed: if partial { 0 } else { c.bytes },
+                recycled_bytes: 0,
+                elapsed_ms: 1,
+            }
+        };
+        let room = |_: &ProjectScan, _: &Chosen, _: RemoveMode| shortfall.clone();
+        let mut input = answer.unwrap_or("").as_bytes();
+        let mut deps = Deps { stdin_is_terminal: answer.is_some(), stdin: &mut input, remove: &remove, shortfall: &room };
+        let mut err = Vec::new();
+        let code = {
+            let mut sink = Sink { out, err: &mut err, json: f.json };
+            match clean_run(f, &mut sink, scan(vec![build()]), &mut deps) {
+                Ok(c) | Err(c) => c,
+            }
+        };
+        Ran {
+            code,
+            out: String::new(),
+            err: String::from_utf8(err).unwrap(),
+            removals: removals.get(),
+            dry_removals: dry.get(),
+        }
+    }
+
+    fn run_to_vec(f: &CleanFlags, answer: Option<&str>, shortfall: Vec<(char, u64, u64)>, partial: bool) -> Ran {
+        let mut out = Vec::new();
+        let mut r = run_clean(f, answer, shortfall, partial, &mut out);
+        r.out = String::from_utf8(out).unwrap();
+        r
+    }
+
+    const SUMMARY: &str = "Total 6.0 GB in 1 item, permanently.";
+
+    #[test]
+    fn when_the_question_is_asked_the_summary_and_the_question_are_on_stderr_and_stdout_stays_clean() {
+        // `n`: cancelled, nothing removed, nothing on stdout (a redirect cannot hide the summary).
+        let r = run_to_vec(&flags(false, false, false, true), Some("n\n"), vec![], false);
+        assert_eq!(r.code, EXIT_OK);
+        assert_eq!(r.removals, 0);
+        assert_eq!(r.out, "");
+        assert!(r.err.contains(SUMMARY), "{}", r.err);
+        assert!(r.err.find(SUMMARY) < r.err.find("Remove 1 item (6.0 GB)? [y/N] "), "{}", r.err);
+        assert!(r.err.contains("Cancelled."), "{}", r.err);
+
+        // `y`: removed; the outcome (not the summary) is on stdout.
+        let r = run_to_vec(&flags(false, false, false, true), Some("Y\n"), vec![], false);
+        assert_eq!((r.code, r.removals), (EXIT_OK, 1));
+        assert!(r.err.contains(SUMMARY) && r.err.contains("[y/N]"), "{}", r.err);
+        assert!(r.out.contains("removed") && r.out.contains("Freed 6.0 GB"), "{}", r.out);
+        assert!(!r.out.contains("Total 6.0 GB"), "{}", r.out);
+
+        // No terminal: the summary is still shown (on stderr), then the refusal; exit 2, nothing removed.
+        let r = run_to_vec(&flags(false, false, false, true), None, vec![], false);
+        assert_eq!((r.code, r.removals), (EXIT_USAGE, 0));
+        assert_eq!(r.out, "");
+        assert!(r.err.contains(SUMMARY) && r.err.contains("not a terminal: pass --yes"), "{}", r.err);
+    }
+
+    #[test]
+    fn without_a_question_the_summary_stays_on_stdout() {
+        let r = run_to_vec(&flags(true, false, false, true), None, vec![], false);
+        assert_eq!((r.code, r.removals), (EXIT_OK, 1));
+        assert!(r.out.contains(SUMMARY) && r.out.contains("Freed 6.0 GB"), "{}", r.out);
+        let r = run_to_vec(&flags(false, true, false, true), None, vec![], false);
+        assert_eq!((r.code, r.removals, r.dry_removals), (EXIT_OK, 0, 1));
+        assert!(r.out.contains(SUMMARY) && r.out.contains("Dry run: nothing was removed."), "{}", r.out);
+    }
+
+    #[test]
+    fn a_partial_removal_exits_3_and_an_eof_or_a_wrong_answer_removes_nothing() {
+        let r = run_to_vec(&flags(true, false, false, true), None, vec![], true);
+        assert_eq!(r.code, EXIT_PARTIAL);
+        assert!(r.out.contains("failed") && r.out.contains("in use"), "{}", r.out);
+        // A terminal that hits end of input, a typo and an empty line are all a no.
+        for answer in ["", "yep\n", "\n"] {
+            let r = run_to_vec(&flags(false, false, false, true), Some(answer), vec![], false);
+            assert_eq!((r.code, r.removals), (EXIT_OK, 0), "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn a_recycle_bin_that_is_too_small_exits_1_and_removes_nothing() {
+        let short = vec![('D', 6 * GB, 1024)];
+        for f in [flags(true, false, false, false), flags(false, false, false, false)] {
+            let r = run_to_vec(&f, Some("y\n"), short.clone(), false);
+            assert_eq!((r.code, r.removals), (EXIT_ERROR, 0));
+            let all = format!("{}{}", r.out, r.err);
+            assert!(all.contains("Recycle Bin on D: is too small (6.0 GB to move, 1 KB free)"), "{all}");
+        }
+    }
+
+    #[test]
+    fn a_report_that_cannot_be_written_after_the_removal_reaches_stderr_and_the_exit_code_stays_honest() {
+        // The removal went well, the report did not: an error, and the outcome is on stderr.
+        let r = run_clean(&flags(true, false, false, true), None, vec![], false, &mut FlakyOut { ok: 1 });
+        assert_eq!((r.code, r.removals), (EXIT_ERROR, 1));
+        assert!(r.err.contains("removed") && r.err.contains("Freed 6.0 GB"), "{}", r.err);
+        // Part of it was not removed: still 3, and the person sees which.
+        let r = run_clean(&flags(true, false, false, true), None, vec![], true, &mut FlakyOut { ok: 1 });
+        assert_eq!((r.code, r.removals), (EXIT_PARTIAL, 1));
+        assert!(r.err.contains("failed") && r.err.contains("in use"), "{}", r.err);
+        // With --json the outcome text is on stderr already; a failing stdout changes only the code.
+        let r = run_clean(&flags(true, false, true, true), None, vec![], true, &mut FlakyOut { ok: 0 });
+        assert_eq!((r.code, r.removals), (EXIT_PARTIAL, 1));
+        assert!(r.err.contains("failed"), "{}", r.err);
+        let r = run_clean(&flags(true, false, true, true), None, vec![], false, &mut FlakyOut { ok: 0 });
+        assert_eq!(r.code, EXIT_ERROR);
+    }
+
+    #[test]
+    fn a_failing_stdout_before_any_removal_is_an_error_and_removes_nothing() {
+        // `--yes`: the summary is the first thing written; if it fails nothing has been removed.
+        let r = run_clean(&flags(true, false, false, true), None, vec![], false, &mut FlakyOut { ok: 0 });
+        assert_eq!(r.code, EXIT_ERROR);
+        assert_eq!(r.removals, 0);
+    }
+
+    #[test]
+    fn write_failed_code_is_3_only_for_a_partial_removal() {
+        assert_eq!(write_failed_code(None), EXIT_ERROR);
     }
 }

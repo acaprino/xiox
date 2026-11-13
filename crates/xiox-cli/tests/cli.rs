@@ -213,8 +213,9 @@ fn clean_without_yes_and_without_a_terminal_exits_2_and_removes_nothing() {
     assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
     assert!(text(&out.stderr).contains("not a terminal: pass --yes to remove without asking"), "{}", text(&out.stderr));
     assert!(project.join("target").exists());
-    // The summary was shown before refusing.
-    assert!(text(&out.stdout).contains("permanently"), "{}", text(&out.stdout));
+    // The summary was shown before refusing, on stderr (where the question would be asked).
+    assert!(text(&out.stderr).contains("permanently"), "{}", text(&out.stderr));
+    assert!(out.stdout.is_empty(), "{}", text(&out.stdout));
 }
 
 #[test]
