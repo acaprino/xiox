@@ -273,3 +273,145 @@ fn items_are_ordered_by_category_then_size() {
     assert_eq!(json["items"][0]["why"]["labelEn"], "Rust build");
     assert!(json["scannedAtMs"].is_i64());
 }
+
+// ───────────────────────────── blocks and levels ─────────────────────────────
+
+/// One Claude agent with one session in `dir`, live or not, active now.
+fn sessions_in(dir: &std::path::Path, live: bool) -> Vec<dc_app::Preloaded> {
+    vec![dc_app::Preloaded {
+        agent: Agent::Claude,
+        loaded: Loaded {
+            items: vec![SessionRecord {
+                agent: Agent::Claude,
+                session_id: Some("live".into()),
+                project_path: dir.to_path_buf(),
+                last_activity_ms: dc_app::now_ms(),
+                archived: false,
+                live,
+            }],
+            warnings: Vec::new(),
+        },
+        worktrees: Vec::new(),
+    }]
+}
+
+#[test]
+fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    // No build folder: the engine has no report for this worktree, the session record decides.
+    let wt = worktree(&root, &base.join("proj-wt"), "feature");
+    let sessions = sessions_in(&wt.join("src"), true);
+    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+
+    let scan = analyze_with(&root, &Options::default(), &env).unwrap();
+    let w = item(&scan, &wt);
+    assert_eq!(w.blocked, vec![Block::LiveSession]);
+    assert_eq!(w.level, Level::Caution);
+
+    // The same session, not live: nothing blocks.
+    let sessions = sessions_in(&wt.join("src"), false);
+    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+    let scan = analyze_with(&root, &Options::default(), &env).unwrap();
+    let w = item(&scan, &wt);
+    assert!(w.blocked.is_empty(), "{:?}", w.blocked);
+    assert_eq!(w.level, Level::Recommended);
+}
+
+#[test]
+fn build_of_a_project_with_a_live_session_is_blocked_live_session_and_keeps_its_level() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let target = rust_build(&root, 2 * MB);
+    let sessions = sessions_in(&root, true);
+    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+
+    let scan = analyze_with(&root, &Options::default(), &env).unwrap();
+    let t = item(&scan, &target);
+    assert_eq!(t.blocked, vec![Block::LiveSession]);
+    assert_eq!(t.level, Level::Recommended);
+}
+
+#[test]
+fn build_of_an_unreachable_report_is_blocked_unreachable() {
+    // The engine never emits `Unreachable` today, so the report is built by hand.
+    let (_t, base) = tmp();
+    let root = base.join("proj");
+    let path = root.join("target");
+    let report = dc_model::ProjectReport {
+        id: path_key(&root),
+        root: root.clone(),
+        name: "proj".into(),
+        ecosystems: vec!["rust".into()],
+        agents: Vec::new(),
+        last_activity_ms: None,
+        last_activity_source: None,
+        inactive_days: None,
+        status: dc_model::ProjectStatus::Unreachable,
+        blocked_by: vec![dc_model::BlockReason::Unreachable],
+        reason: String::new(),
+        artifacts: vec![dc_model::Artifact {
+            id: path_key(&path),
+            path: path.clone(),
+            kind: ArtifactKind::RustTarget,
+            label: String::new(),
+            size: dc_model::SizeInfo { logical_bytes: 10, allocated_bytes: Some(4096), file_count: 1 },
+            verified: true,
+            class: dc_model::Class::Build,
+            level: Level::Recommended,
+            note: String::new(),
+            ambiguous: false,
+            preselected: false,
+        }],
+        reclaimable_bytes: 4096,
+        preselected: false,
+        is_agent_worktree: false,
+        git: Default::default(),
+    };
+    let project = Project { root, name: "proj".into(), is_repo: false, origin: None, worktrees: Vec::new() };
+
+    let items = crate::owned::builds(&project, &[report], &Options::default());
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].blocked, vec![Block::Unreachable]);
+    assert_eq!(items[0].level, Level::Recommended);
+    assert_eq!(items[0].bytes, Some(4096));
+}
+
+#[test]
+fn build_folder_tracked_by_git_is_caution() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let target = rust_build(&root, 2 * MB);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "commit the build folder"]);
+
+    let scan = analyze_with(&root, &Options::default(), &env()).unwrap();
+    let t = item(&scan, &target);
+    assert_eq!(t.category, Category::Builds);
+    assert_eq!(t.level, Level::Caution);
+    assert!(t.blocked.is_empty(), "{:?}", t.blocked);
+}
+
+#[test]
+fn build_inside_a_worktree_nested_under_the_root_is_listed_once_with_the_live_session_block() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    fs::write(root.join(".gitignore"), ".claude/\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "ignore .claude"]);
+    let wt = worktree(&root, &root.join(".claude").join("worktrees").join("agent-1"), "agent-1");
+    let wt_build = rust_build(&wt, 2 * MB);
+    let root_build = rust_build(&root, 2 * MB);
+    let sessions = sessions_in(&wt, true);
+    let env = Env { sessions: &sessions, archived: &[], search_roots: Some(Vec::new()), now_ms: dc_app::now_ms() };
+
+    let scan = analyze_with(&root, &Options::default(), &env).unwrap();
+    // The worktree's build folder is reachable from both scan roots but listed once.
+    let k = path_key(&wt_build);
+    assert_eq!(scan.items.iter().filter(|i| i.key == k).count(), 1, "{:#?}", scan.items);
+    assert_eq!(item(&scan, &wt_build).blocked, vec![Block::LiveSession]);
+    // Dirty too: the fixture writes an untracked Cargo.toml (and target/) in the worktree.
+    assert_eq!(item(&scan, &wt).blocked, vec![Block::DirtyGit, Block::LiveSession]);
+    // The engine credits a session inside the root to the root too (component-aware "inside").
+    assert_eq!(item(&scan, &root_build).blocked, vec![Block::LiveSession]);
+}

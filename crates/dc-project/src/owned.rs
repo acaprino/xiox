@@ -159,7 +159,7 @@ fn build_level(a: &Artifact) -> Level {
     }
 }
 
-fn builds(project: &Project, reports: &[ProjectReport], opts: &Options) -> Vec<Item> {
+pub(crate) fn builds(project: &Project, reports: &[ProjectReport], opts: &Options) -> Vec<Item> {
     let roots: Vec<String> = scan_roots(project).iter().map(|r| path_key(r)).collect();
     let mut out: Vec<Item> = Vec::new();
     for r in reports.iter().filter(|r| within_any(&r.root, &roots)) {
