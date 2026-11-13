@@ -1,4 +1,4 @@
-//! Database dei browser (proposte N9-N12 di `docs/ccleaner-coverage.md`):
+//! Database dei browser (proposte N9-N12 di `docs/rules-coverage.md`):
 //! cookie con la lista da conservare, compattazione dei database, cronologia
 //! di Firefox e Thunderbird, ultimo percorso di download.
 //!
@@ -151,12 +151,6 @@ const BROWSERS: &[BrowserDef] = &[
     BrowserDef { name: "Vivaldi", layout: Layout::UserData, processes: &["vivaldi.exe"], roots: &[local(r"Vivaldi\User Data", None)] },
     BrowserDef { name: "Opera", layout: Layout::Opera, processes: &["opera.exe"], roots: &[roaming(r"Opera Software\Opera Stable")] },
     BrowserDef { name: "Opera GX", layout: Layout::Opera, processes: &["opera.exe"], roots: &[roaming(r"Opera Software\Opera GX Stable")] },
-    BrowserDef {
-        name: "CCleaner Browser",
-        layout: Layout::UserData,
-        processes: &["ccleanerbrowser.exe"],
-        roots: &[local(r"CCleaner Browser\User Data", None)],
-    },
     BrowserDef {
         name: "Avast Secure Browser",
         layout: Layout::UserData,
