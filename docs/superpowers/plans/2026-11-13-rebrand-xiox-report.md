@@ -20,7 +20,7 @@ Piano seguito: `docs/superpowers/plans/2026-11-13-rebrand-xiox.md`. Stato: **com
 - Test nuovi (22): migrazione con cartelle temporanee in `xiox-model` (nuova esiste; solo vecchia -> rinomina con tutto il contenuto e seconda chiamata idempotente; rinomina che fallisce, sia con rename finto sia con un fallimento vero del sistema; né l'una né l'altra; nome nuovo occupato da un file), impostazioni e cache (`xiox-app`), cartella dati Winapp2 e catena fidata (`xiox-rules`), backup, lista cookie, cartelle di lavoro (`sys`, `regbackup`, `browserdb`), protezione di entrambe le cartelle (`rules`), residui `PulisciPC_wipe_*` e `pulisci-curl-*`, compagno del registro con entrambi i nomi, variabile d'ambiente.
 
 ### 3. Documentazione (commit di questo passo)
-- `README.md` (nomi degli eseguibili e dei crate), `docs/xiox-cli.md`, `THIRD_PARTY_NOTICES.md` (solo il nome del prodotto), `MECHANICS.md` (solo il titolo), `docs/ccleaner-coverage.md` e `docs/cleaners-verifica-*.md` (percorsi dei crate, colonna «Copertura Xiox»; le colonne delle fonti restano), `vendor/mukade/VENDORED.md` e `crates/xiox-disktree/VENDORED.md` (solo il nome del prodotto, il codice vendorizzato non è toccato).
+- `README.md` (nomi degli eseguibili e dei crate), `docs/xiox-cli.md`, `THIRD_PARTY_NOTICES.md` (solo il nome del prodotto), `docs/rules-coverage.md` e `docs/cleaners-verifica-*.md` (percorsi dei crate, colonna «Copertura Xiox»), `vendor/mukade/VENDORED.md` e `crates/xiox-disktree/VENDORED.md` (solo il nome del prodotto, il codice vendorizzato non è toccato).
 - `docs/superpowers/**`: le due spec e il piano del 2026-11-13 (CLI e osservatore) aggiornati ai nomi attuali; le spec e i piani datati 2026-11-10/11 non sono toccati a parte una riga di nota in testa sul cambio di nome; `docs/reference/devclean-*.md` hanno solo la nota in testa aggiornata.
 
 ## Verifica finale
@@ -43,7 +43,7 @@ Piano seguito: `docs/superpowers/plans/2026-11-13-rebrand-xiox.md`. Stato: **com
 | `src/winold.rs`, `src/winold/tests.rs` | `LEGACY_MARKER_NAME = "PulisciPC_StateFlags0099"` e i suoi test. |
 | `src/rules.rs` | Protezione delle cartelle `PulisciPC` (`own_folders_with`), test della protezione, lettura di `PULISCI_WINAPP2` come ripiego. |
 | `src/sys.rs`, `src/regbackup.rs`, `src/browserdb.rs`, `src/browserdb/tests.rs` | Documentazione e test della migrazione di Documenti, `Local\...\backup` e lista cookie. |
-| `src/dev.rs`, `src/main.rs`, `src/native.rs`, `src/wipe.rs` (etichetta), `crates/xiox-cli/src/render.rs`, `docs/ccleaner-coverage.md` (5 righe) | «Pulisci» è il verbo italiano dell'interfaccia («Pulisci», «Pulisci spazio libero», il nome della voce di CCleaner), non il marchio; in `render.rs` è nella lista di parole italiane che la CLI non deve stampare. |
+| `src/dev.rs`, `src/main.rs`, `src/native.rs`, `src/wipe.rs` (etichetta), `crates/xiox-cli/src/render.rs`, `docs/rules-coverage.md` (5 righe) | «Pulisci» è il verbo italiano dell'interfaccia («Pulisci», «Pulisci spazio libero», il nome di una voce), non il marchio; in `render.rs` è nella lista di parole italiane che la CLI non deve stampare. |
 | `docs/superpowers/plans/2026-11-10-*`, `2026-11-11-*`, `specs/2026-11-10-*` | Documenti storici datati: contenuto intatto, in testa solo la nota sul cambio di nome. |
 | `docs/superpowers/plans/2026-11-13-rebrand-xiox.md` | Il piano stesso (descrive i vecchi nomi). |
 | `docs/superpowers/plans/2026-11-13-project-cleanup-cli.md:410`, `specs/2026-11-13-project-cleanup-cli-design.md` | La parola italiana «Pulisci» nella lista di controllo della CLI; la nota sul vecchio `PulisciPC.exe`. |
@@ -56,7 +56,6 @@ Piano seguito: `docs/superpowers/plans/2026-11-13-rebrand-xiox.md`. Stato: **com
 - **`%TEMP%\PulisciPC` (copie temporanee di sessioni verso il Cestino):** diventa `%TEMP%\Xiox` senza riconoscere il vecchio, perché sono copie transitorie che il codice stesso toglie.
 - **Variabili di prova `PC_RULES_CLEANERS`/`PC_RULES_WINAPP2` e marcatore `.pulisci-demo`:** rinominati in `XIOX_RULES_*` e `.xiox-demo` senza ripiego. Sono usati solo da test `#[ignore]` e dal demo di debug (`--dev-demo`); il vecchio marcatore non autorizza più la cancellazione definitiva (direzione sicura).
 - **`vendor/mukade/VENDORED.md`:** il piano lascia `vendor/mukade` com'è perché è il prodotto Mukade; ho cambiato solo il nome del *nostro* prodotto in quel file di note scritto da noi, non il codice di mukade.
-- **`MECHANICS.md`:** cambiato solo il titolo (nome del nostro prodotto); il resto è l'analisi del programma originale e non è toccato.
 - **README:** la riga di roadmap «A **Xiox** desktop app: Tauri 2…» (app futura) non è stata toccata.
 
 ## Preoccupazioni

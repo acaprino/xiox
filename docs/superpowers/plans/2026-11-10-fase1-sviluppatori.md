@@ -4,18 +4,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** PulisciPC (`D:\Projects\KKK\ccleaner64\app`) ottiene una quarta voce "Sviluppatori" con tre sezioni (Progetti, Worktree, Sessioni archiviate), costruita sui crate di devclean, su mukade `dfde57e` e su una scansione MFT nostra al posto di WizTree.
+**Goal:** PulisciPC (la radice del workspace) ottiene una quarta voce "Sviluppatori" con tre sezioni (Progetti, Worktree, Sessioni archiviate), costruita sui crate di devclean, su mukade `dfde57e` e su una scansione MFT nostra al posto di WizTree.
 
-**Architecture:** `ccleaner64/app` diventa un workspace Cargo: il pacchetto `pulisci-pc` (UI egui) più `crates/dc-*` copiati da devclean, due crate nuovi (`dc-disktree` per la MFT, `dc-sessions` per cancellare le sessioni archiviate) e `dc-app`, la colla senza UI che prima stava in `devclean/src-tauri/src/lib.rs`. La UI chiama `dc-app` da un thread con `mpsc`, come fanno già Pulizia file e Registro.
+**Architecture:** La radice del progetto diventa un workspace Cargo: il pacchetto `pulisci-pc` (UI egui) più `crates/dc-*` copiati da devclean, due crate nuovi (`dc-disktree` per la MFT, `dc-sessions` per cancellare le sessioni archiviate) e `dc-app`, la colla senza UI che prima stava in `devclean/src-tauri/src/lib.rs`. La UI chiama `dc-app` da un thread con `mpsc`, come fanno già Pulizia file e Registro.
 
 **Tech Stack:** Rust stabile (edition 2021 per `pulisci-pc`, 2024 per i crate dc-*), eframe/egui 0.33, rusqlite `=0.40.2` bundled, rayon, trash 5.3, windows-sys, rfd 0.15.
 
-**Spec:** `D:\Projects\KKK\ccleaner64\app\docs\superpowers\specs\2026-11-10-dev-mode-design.md` (approvato 2026-11-10). Le Fasi 2 e 3 della spec hanno piani propri.
+**Spec:** `docs\superpowers\specs\2026-11-10-dev-mode-design.md` (approvato 2026-11-10). Le Fasi 2 e 3 della spec hanno piani propri.
 
 ## Global Constraints
 
 - Windows 11. Testo della UI in italiano.
-- **Layout di ccleaner64 intatto:** barra laterale 212 px colore `SIDEBAR`, voce selezionata `SIDEBAR_SEL` con barretta `ACCENT` 4 px, card bianche (`card()`), pulsanti `primary()`/`secondary()`, finestra 1100×700 (min 900×560), stesso `style()`. Nessun layout di devclean o wiztree64.
+- **Layout dell'app di base intatto:** barra laterale 212 px colore `SIDEBAR`, voce selezionata `SIDEBAR_SEL` con barretta `ACCENT` 4 px, card bianche (`card()`), pulsanti `primary()`/`secondary()`, finestra 1100×700 (min 900×560), stesso `style()`. Nessun layout di devclean o wiztree64.
 - mukade si prende **solo** dal commit `dfde57e` di `D:\Projects\mukade` (`git archive`, mai il working tree, che ha modifiche di un'altra sessione). Solo libreria, regole di `devclean/vendor/mukade/VENDORED.md`.
 - `rusqlite = { version = "=0.40.2", features = ["bundled"] }` uguale in `crates/dc-mukade` e `vendor/mukade`.
 - Nessun eseguibile esterno per la scansione disco. Alla fine `grep -ri wiztree` fuori da `docs/` e da `VENDORED.md` è vuoto.
@@ -49,12 +49,12 @@ Stima: 30-40 min.
 **Interfaces:**
 - Produces: workspace con membri `.`, `crates/*`; `vendor/mukade` entra come path dependency di `dc-mukade` (stesso schema di devclean).
 
-- [ ] **Step 1:** `git init` in `D:\Projects\KKK\ccleaner64\app`; `.gitignore` con `target/`, `shots/*.png` esclusi solo se generati dai test (tenere gli `shots/` attuali); commit iniziale del codice di oggi: `chore: stato di PulisciPC prima della modalità Sviluppatori`.
+- [ ] **Step 1:** `git init` nella radice del workspace; `.gitignore` con `target/`, `shots/*.png` esclusi solo se generati dai test (tenere gli `shots/` attuali); commit iniziale del codice di oggi: `chore: stato di PulisciPC prima della modalità Sviluppatori`.
 - [ ] **Step 2:** Copiare i sei crate dc-* (con i loro `tests.rs`) senza `target/`. In `crates/dc-engine`, `crates/dc-scanner` e altri: nessuna dipendenza da `dc-wiztree` (verificare con `grep -r dc_wiztree crates`: vuoto).
 - [ ] **Step 3:** Vendor di mukade:
   ```bash
-  cd /d/Projects/mukade && git archive dfde57e src catalog assets/intent-prompts README.md LICENSE | tar -x -C /d/Projects/KKK/ccleaner64/app/vendor/mukade
-  rm -rf /d/Projects/KKK/ccleaner64/app/vendor/mukade/src/bin
+  cd /d/Projects/mukade && git archive dfde57e src catalog assets/intent-prompts README.md LICENSE | tar -x -C <radice-workspace>/vendor/mukade
+  rm -rf <radice-workspace>/vendor/mukade/src/bin
   ```
   Copiare `Cargo.toml` e `VENDORED.md` da `devclean/vendor/mukade` (il manifest di mukade non cambia tra `97d827f` e `dfde57e`); in `VENDORED.md` sostituire il commit con `dfde57e` (2026-11-10), "Previously `97d827f`", e "devclean" con "PulisciPC".
 - [ ] **Step 4:** `Cargo.toml` radice: aggiungere `[workspace] resolver = "3"`, `members = [".", "crates/*"]`; tenere `[package]`, `[[bin]]` e `[profile.release]` di oggi (`opt-level = "s"`, `lto = true`, `strip = true`).
@@ -337,4 +337,4 @@ Stima: 45 min.
 - [ ] **Step 4:** RAM: Gestione attività / `Get-Process PulisciPC` → working set a riposo prima dell'analisi, dopo l'analisi, dopo aver cambiato voce. Expected: dopo aver cambiato voce torna vicino al valore iniziale (± 30 MB).
 - [ ] **Step 5:** Tempo dell'analisi da admin (MFT) e senza admin; confronto con i 60-64 s di devclean.
 - [ ] **Step 6:** `cargo build -p pulisci-pc --release`; dimensione dell'exe annotata.
-- [ ] **Step 7:** Aggiornare `D:\Projects\KKK\ccleaner64\app\docs\superpowers\specs\2026-11-10-dev-mode-design.md` sezione Verifica con i numeri misurati; commit `docs: verifica della Fase 1`.
+- [ ] **Step 7:** Aggiornare `docs\superpowers\specs\2026-11-10-dev-mode-design.md` sezione Verifica con i numeri misurati; commit `docs: verifica della Fase 1`.

@@ -1,23 +1,23 @@
 > Nota (2026-11-13): il prodotto ora si chiama **Xiox**. I nomi di questo documento (PulisciPC, `pulisci-pc`, `pc-rules`, i crate `dc-*`) sono quelli di allora; oggi sono `xiox-desktop` (binario `xiox-ui`), `xiox-rules` e `xiox-*` (`dc-app` -> `xiox-app`, ecc.). Il testo qui sotto non è stato aggiornato.
 
-# Fase 3a, copertura di CCleaner: nuovi XML, azioni di sistema e database dei browser. Piano di implementazione
+# Fase 3a, copertura delle regole: nuovi XML, azioni di sistema e database dei browser. Piano di implementazione
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** PulisciPC pulisce tutto ciò che CCleaner pulisce nativamente e che la tabella di copertura assegna a «Nuovo XML» o «Codice nativo nuovo», tranne le voci rinviate alla Fase 3b (PATH, Windows.old, password di rete, spazio libero).
+**Goal:** PulisciPC pulisce tutto ciò che la tabella di copertura assegna a «Nuovo XML» o «Codice nativo nuovo», tranne le voci rinviate alla Fase 3b (PATH, Windows.old, password di rete, spazio libero).
 
 **Architecture:** Due XML nuovi (`windows_extra.xml`, `safari.xml`) inglobati come i 59 esistenti. Un meccanismo nuovo di «voci native» (`src/native.rs`: struct con `analyze`/`clean`) per ciò che non è «cancella file o chiavi»: `src/sysclean.rs` (Appunti, DNS, registri eventi, collegamenti non validi) e `src/browserdb.rs` (cookie con lista, compattazione, cronologia Firefox, ultima cartella di download). `src/rules.rs` e `src/main.rs` le mostrano e le eseguono come le opzioni di Fase 2. Ogni accesso al sistema passa da un trait iniettabile: i test non toccano il PC.
 
 **Tech Stack:** Rust stabile, `windows-sys 0.61` (feature da aggiungere), `rusqlite =0.40.2` con `bundled` (la versione di `crates/dc-mukade/Cargo.toml:14`), `pc-rules` (Fase 2), `egui 0.33`.
 
-**Spec:** `docs/superpowers/specs/2026-11-10-dev-mode-design.md` (sezione «Copertura nativa di CCleaner») e **`docs/ccleaner-coverage.md`** (la tabella: ogni task rimanda alle sue righe e alle proposte N1-N12 della §2.6; leggerla per intero prima di partire).
+**Spec:** `docs/superpowers/specs/2026-11-10-dev-mode-design.md` (sezione «Copertura nativa») e **`docs/rules-coverage.md`** (la tabella: ogni task rimanda alle sue righe e alle proposte N1-N12 della §2.6; leggerla per intero prima di partire).
 
-**Decisioni prese al posto dell'utente (2026-11-11, modificabili):** (1) questo piano è la **v1 = task 1-3 della §4.3** (22 h); PATH (N5), Windows.old (N7), password di rete (N8), spazio libero (N6) vanno in un piano 3b solo se l'utente li vuole. (2) I default di PulisciPC già esistenti non cambiano (punto aperto 5). (3) L'exe di CCleaner non c'è: le celle «da verificare» della tabella restano tali e le voci con default incerto partono **spente**. (4) I nomi italiani sono quelli della tabella.
+**Decisioni prese al posto dell'utente (2026-11-11, modificabili):** (1) questo piano è la **v1 = task 1-3 della §4.3** (22 h); PATH (N5), Windows.old (N7), password di rete (N8), spazio libero (N6) vanno in un piano 3b solo se l'utente li vuole. (2) I default di PulisciPC già esistenti non cambiano (punto aperto 5). (3) Le celle «da verificare» della tabella restano tali e le voci con default incerto partono **spente**. (4) I nomi italiani sono quelli della tabella.
 
 ## Global Constraints
 
-- Windows 11, app sempre da amministratore (build di debug `asInvoker`); testo UI in italiano corretto, mai «BleachBit» né «AGG -»; **layout di ccleaner64 intatto** (barra, `card()`, `primary()`, `secondary()`, `src/theme.rs`).
-- La app propone, l'utente sceglie: nessuna voce preselezionata oltre al default di CCleaner/della tabella; tutto ciò che è distruttivo (registri eventi, cookie, cronologia, collegamenti) **spento** e con `warning` nella finestra di conferma.
+- Windows 11, app sempre da amministratore (build di debug `asInvoker`); testo UI in italiano corretto, mai «BleachBit» né «AGG -»; **layout dell'app di base intatto** (barra, `card()`, `primary()`, `secondary()`, `src/theme.rs`).
+- La app propone, l'utente sceglie: nessuna voce preselezionata oltre al default della tabella; tutto ciò che è distruttivo (registri eventi, cookie, cronologia, collegamenti) **spento** e con `warning` nella finestra di conferma.
 - File e cartelle si cancellano solo con `pc_rules::delete_checked_with`; chiavi di registro solo con `reg_allowed` + `REG_OPTION_OPEN_LINK` e backup `.reg` di `src/regbackup.rs`.
 - Test **mai sul PC dell'utente**: alberi finti in `tempfile::tempdir()`, trait finti per Appunti, DNS, registri eventi, COM, processi, registro. Database SQLite solo su file creati nel test.
 - Browser aperto = nessuna scrittura sui suoi file: ogni voce dei database ha `running` (processi del browser) e `rules::blocked` la disattiva.
@@ -45,12 +45,12 @@ Stima: 4 h.
 - Modify: `crates/pc-rules/src/embedded.rs` (elenco e conteggio 59 → 61; gruppo per cleaner), `src/cleaner.rs` (solo `targets()`: i ritocchi di §4.1 della tabella), `src/rules.rs` (raggruppamento per `cleaner.group`)
 
 **Interfaces:**
-- Consumes: le righe con copertura «Nuovo XML» di `docs/ccleaner-coverage.md` (§2 e §3.1; 16 opzioni per `windows_extra.xml`, 4 per `safari.xml`) e i ritocchi della §4.1; formato CleanerML già supportato da `pc_rules::cleanerml` (stessi attributi dei 59 esistenti: `delete` con `search`, `winreg`, `<running>`, `<warning>`, `<var>`).
+- Consumes: le righe con copertura «Nuovo XML» di `docs/rules-coverage.md` (§2 e §3.1; 16 opzioni per `windows_extra.xml`, 4 per `safari.xml`) e i ritocchi della §4.1; formato CleanerML già supportato da `pc_rules::cleanerml` (stessi attributi dei 59 esistenti: `delete` con `search`, `winreg`, `<running>`, `<warning>`, `<var>`).
 - Produces: `embedded()` restituisce 61 cleaner; `Cleaner.group` è `"Windows"` per `windows_extra` e `"Browser"` per `safari`, `"Sviluppo e AI"` per gli altri; in `src/rules.rs` i gruppi si mostrano nell'ordine `Windows`, `Browser`, `Sviluppo e AI`, `Applicazioni`.
 
 - [ ] **Step 1: Test che falliscono** (`crates/pc-rules/tests/phase3_xml.rs` e `embedded.rs`):
   - `every_phase3_xml_parses_with_zero_warnings` (due file, 20 opzioni in tutto)
-  - `phase3_options_are_off_unless_ccleaner_default_on` (legge il default dalla tabella: nell'XML `default_on` è sempre `false`, come tutti gli embedded: il test lo afferma)
+  - `phase3_options_are_off_unless_table_default_on` (legge il default dalla tabella: nell'XML `default_on` è sempre `false`, come tutti gli embedded: il test lo afferma)
   - `registry_options_stay_inside_hkcu_software` (nessuna `RegKey` esce da `Software`; `reg_allowed` accetta ogni azione del file)
   - `all_embedded_cleaners_parse` aggiornato a 61 e `xml_structure_unchanged` invariato per i primi 11.
 - [ ] **Step 2:** FAIL. **Step 3:** scrivere i due XML riga per riga dalla tabella (una `<option>` per riga, etichetta italiana della tabella, `<warning>` dove la colonna «Rischio» lo chiede, `<running>` dove serve), aggiungerli a `CLEANERS` con il gruppo, e applicare i ritocchi di §4.1 a `targets()` (miniature `ThumbCacheToDelete\thm*.tmp`, log `%WinDir%\*.bak`, `*log.txt`, `System32\wbem\Logs`: **solo se** `guard` le accetta: altrimenti si annota «non coperto» nella tabella e non si forza). **Step 4:** `cargo test -p pc-rules -j 2` e `cargo test -p pulisci-pc -j 2` verdi; screenshot con profilo finto (`--tab cleaner --screenshot`, variabili `USERPROFILE`/`LOCALAPPDATA`/`APPDATA`/`TEMP` verso una cartella temporanea): gruppo «Windows» con le voci presenti nel profilo finto.
@@ -130,10 +130,10 @@ Stima: 12 h.
 Stima: 1 h.
 
 **Files:**
-- Modify: `docs/ccleaner-coverage.md` (colonna «Stato» nelle tabelle: `fatto <commit>` / `rinviato 3b` / `da verificare`)
+- Modify: `docs/rules-coverage.md` (colonna «Stato» nelle tabelle: `fatto <commit>` / `rinviato 3b` / `da verificare`)
 
 - [ ] **Step 1:** `cargo test --workspace --exclude mukade -j 2` verde; annotare i numeri per crate nel ledger.
 - [ ] **Step 2:** `grep -rniE "bleachbit|AGG -" src crates cleaners` senza risultati fuori dai test che li escludono.
 - [ ] **Step 3:** Ogni riga «Nuovo XML» e «Codice nativo nuovo» della tabella ha lo stato; le quattro rinviate (N5-N8) dicono `rinviato 3b`; nessuna riga vuota.
 - [ ] **Step 4:** Screenshot finale con profilo finto (`--tab cleaner`): gruppi `Windows`, `Browser`, `Sviluppo e AI`, `Applicazioni`, stessa barra e stesse card.
-- [ ] **Step 5:** Commit `docs(fase3): stato di copertura di CCleaner aggiornato`.
+- [ ] **Step 5:** Commit `docs(fase3): stato di copertura aggiornato`.

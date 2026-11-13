@@ -6,7 +6,7 @@
 
 **Goal:** PulisciPC parte sempre come amministratore, propone ogni cartella dei progetti con un livello (Consigliato, Facoltativo, Attenzione) e la sua casella, riconosce i circa 45 ecosistemi del catalogo cercandoli su tutti i dischi fissi dalla MFT, cancella con worker paralleli e chiude ogni pulizia con un resoconto.
 
-**Architecture:** Si lavora sopra il codice della Fase 1 (`crates/dc-*`, `crates/dc-app`, `src/dev.rs`). Il modello (`dc-model`) riceve classi, livelli e selezione per cartella; `dc-scanner` riceve il catalogo come dati in `markers.rs`; `dc-engine` assegna livelli e preselezione; `dc-app` cerca su tutti i dischi e accetta piani per cartella; `dc-cleaner` cancella con un pool rayon e misura il Cestino; la UI resta quella di ccleaner64.
+**Architecture:** Si lavora sopra il codice della Fase 1 (`crates/dc-*`, `crates/dc-app`, `src/dev.rs`). Il modello (`dc-model`) riceve classi, livelli e selezione per cartella; `dc-scanner` riceve il catalogo come dati in `markers.rs`; `dc-engine` assegna livelli e preselezione; `dc-app` cerca su tutti i dischi e accetta piani per cartella; `dc-cleaner` cancella con un pool rayon e misura il Cestino; la UI resta quella dell'app di base.
 
 **Tech Stack:** Rust stabile, eframe/egui 0.33, rayon 1.12, trash 5.3, windows-sys 0.61, winreg 0.56, embed-resource 3 (nuovo, solo build).
 
@@ -14,7 +14,7 @@
 
 **Questo è il piano 1 di 4.** Gli altri, scritti a parte quando arriva il loro turno:
 - Piano 2, con la Fase 2 della spec principale: motore `pc-rules`, Winapp2, CleanerML inglobati, Parte B (cache globali), regola 2 "in uso".
-- Piano 3, con la Fase 3: copertura CCleaner, Parte C (emulatori e immagini Android), processi e programmi all'avvio.
+- Piano 3, con la Fase 3: copertura delle voci di pulizia, Parte C (emulatori e immagini Android), processi e programmi all'avvio.
 - Piano 4: Parte D (Docker, Podman, WSL, macchine virtuali).
 
 **Prerequisito:** la Fase 1 è chiusa da un'altra sessione (`docs/superpowers/plans/2026-11-10-fase1-sviluppatori.md`, Task 6 e 7). Non iniziare finché `git log` non mostra il commit `docs: verifica della Fase 1` e `git status --short` è vuoto. Questo piano modifica `src/dev.rs`, `src/main.rs` e `Cargo.toml`, che quella sessione sta scrivendo.
@@ -22,7 +22,7 @@
 ## Global Constraints
 
 - Windows 11, testo della UI in italiano corretto (accenti, niente prefissi "AGG -").
-- **UI di ccleaner64 di base** (decisione 8 della spec): barra laterale, `card()`, `primary()`, `secondary()`, colori di `src/theme.rs`. Nessuna schermata con uno stile proprio.
+- **UI dell'app di base** (decisione 8 della spec): barra laterale, `card()`, `primary()`, `secondary()`, colori di `src/theme.rs`. Nessuna schermata con uno stile proprio.
 - **L'app propone, l'utente sceglie** (decisione 6): ogni cartella ha la sua casella; il livello decide solo preselezione e avviso. Unica esclusione: file di credenziali e configurazione (non toccati da questo piano).
 - Livelli: **Consigliato** = classi C, B, L, preselezionato solo nei progetti inattivi; **Facoltativo** = D, mai preselezionato, avviso con il comando per riaverla; **Attenzione** = P, cartelle tracciate da git, identità non verificata, nomi † non ignorati da git: mai preselezionato, avviso da confermare.
 - `node_modules`, `.venv`, `venv` sono Dependency, quindi Facoltativo: non preselezionati nemmeno nei progetti inattivi (approvato dall'utente il 2026-11-10).
@@ -359,7 +359,7 @@ Layout (componenti di oggi, nessuno stile nuovo):
 
 - [ ] **Step 1:** Implementare.
 - [ ] **Step 2:** Albero finto (script in scratchpad, mai nei progetti dell'utente): un progetto Rust inattivo (`Cargo.toml`, `target/` con `CACHEDIR.TAG`, mtime 30 giorni fa), un progetto Node con `node_modules` e `dist/` non ignorata da git, un progetto Next.js con `.next/`.
-- [ ] **Step 3:** Verifica visiva: `cargo run -p pulisci-pc --release -- --tab dev --only-root <albero> --analyze --screenshot shots/dev-levels.png`. Expected: `target` spuntato e "Consigliato"; `node_modules` non spuntato e "Facoltativo" con "Si riscarica con npm install…"; `dist` non spuntato, "Attenzione", "Potrebbe contenere sorgenti…"; layout di ccleaner64.
+- [ ] **Step 3:** Verifica visiva: `cargo run -p pulisci-pc --release -- --tab dev --only-root <albero> --analyze --screenshot shots/dev-levels.png`. Expected: `target` spuntato e "Consigliato"; `node_modules` non spuntato e "Facoltativo" con "Si riscarica con npm install…"; `dist` non spuntato, "Attenzione", "Potrebbe contenere sorgenti…"; layout dell'app di base.
 - [ ] **Step 4:** Prova a mano sull'albero finto: spuntare `dist` → la conferma chiede "Ho letto gli avvisi"; pulizia Definitiva → resoconto con le categorie giuste; "Salva come testo…" scrive il file; una seconda pulizia con "Annulla" subito → resoconto con "Annullato".
 - [ ] **Step 5:** Commit `feat(ui): livelli, caselle per cartella, avanzamento e resoconto nella voce Sviluppatori`.
 
@@ -391,5 +391,5 @@ Stima: 1 ora, più l'attesa della conferma dell'utente.
 - [ ] **Step 5: Controlli prima di eliminare** `D:\Projects\KKK\devclean`, `D:\Projects\KKK\wiztree64`, `D:\Projects\KKK\WizTree`, `D:\Projects\KKK\_refs`:
   1. rinominarle aggiungendo `.old`; `cargo build --workspace` e `cargo test --workspace --exclude mukade` verdi;
   2. copiare in `docs/reference/` `devclean/docs/DESIGN.md` e `devclean/vendor/mukade/VENDORED.md`, e correggere i rimandi delle spec a quei percorsi; commit `docs: riferimenti di devclean dentro il repository`;
-  3. chiedere all'utente se `ccleaner64/app` ha una copia fuori da questo PC (oggi il git è solo locale).
-- [ ] **Step 6:** Solo dopo il sì esplicito dell'utente, eliminare le quattro cartelle `.old`. **Non** toccare `D:\Projects\KKK\ccleaner64` fuori da `app` (serve alla Fase 3), `D:\Projects\mukade` e `D:\Software\BleachBit`.
+  3. chiedere all'utente se questo progetto ha una copia fuori da questo PC (oggi il git è solo locale).
+- [ ] **Step 6:** Solo dopo il sì esplicito dell'utente, eliminare le quattro cartelle `.old`. **Non** toccare le cartelle fuori dal workspace (servono alla Fase 3), `D:\Projects\mukade` e `D:\Software\BleachBit`.

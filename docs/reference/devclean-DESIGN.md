@@ -2,7 +2,7 @@
 
 # devclean: design (v0, 2026-11-08)
 
-Cleaner in stile CCleaner/BleachBit per chi sviluppa con agenti AI (Claude Code, Codex, OpenCode, Pi) e compila Rust. Libera disco capendo **cosa è ancora in uso** leggendo le sessioni degli agenti, non solo guardando i nomi delle cartelle.
+Cleaner in stile BleachBit per chi sviluppa con agenti AI (Claude Code, Codex, OpenCode, Pi) e compila Rust. Libera disco capendo **cosa è ancora in uso** leggendo le sessioni degli agenti, non solo guardando i nomi delle cartelle.
 
 Stato: la richiesta dell'utente ("crea app tauri rust con react") ha chiuso le domande. Questo documento fissa quanto detto in conversazione; le voci marcate **[call mia]** sono scelte fatte da me, non concordate.
 

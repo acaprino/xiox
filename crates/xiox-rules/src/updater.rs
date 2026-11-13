@@ -49,6 +49,7 @@ use xiox_model::legacy::{APP_DIR, LEGACY_APP_DIR, app_dir_in};
 
 use crate::model::{KnownFolder, known_folder};
 
+// Upstream path of the rules file in the Winapp2 repository (third party, not ours).
 pub const WINAPP2_URL: &str =
     "https://raw.githubusercontent.com/MoscaDotTo/Winapp2/master/Non-CCleaner/Winapp2.ini";
 

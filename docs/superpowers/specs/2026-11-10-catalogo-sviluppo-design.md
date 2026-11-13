@@ -7,19 +7,19 @@ Estende `2026-11-10-dev-mode-design.md` (approvato). Dove questo documento non d
 
 ## Intento
 
-PulisciPC è un prodotto da vendere, usabile da tutti, rivale di CCleaner. CCleaner non pulisce le cache e i prodotti di compilazione degli strumenti di sviluppo; PulisciPC sì, ed è ciò che lo distingue. Oggi copre circa 20 voci (7 ecosistemi in `crates/dc-scanner/src/markers.rs`, 11 XML in `D:\Software\BleachBit\cleaners`). Questo documento porta la copertura a un catalogo generale per Windows, ricavato dall'inventario che l'utente ha incollato il 2026-11-10 (circa 150 voci, 20 sezioni, classi C/B/D/L/P).
+PulisciPC è un prodotto da vendere, usabile da tutti. Pulisce anche le cache e i prodotti di compilazione degli strumenti di sviluppo, ed è ciò che lo distingue. Oggi copre circa 20 voci (7 ecosistemi in `crates/dc-scanner/src/markers.rs`, 11 XML in `D:\Software\BleachBit\cleaners`). Questo documento porta la copertura a un catalogo generale per Windows, ricavato dall'inventario che l'utente ha incollato il 2026-11-10 (circa 150 voci, 20 sezioni, classi C/B/D/L/P).
 
 ## Decisioni dell'utente (2026-11-10)
 
 1. PulisciPC deve coprire le voci dell'inventario ("sì").
-2. Il catalogo è generale, per i clienti: **non** si tara, si misura o si prova sul PC dell'utente ("ma non devi farlo sul mio pc"; "è un progetto software da vendere e usabile da tutti"; "un rivale di ccleaner").
+2. Il catalogo è generale, per i clienti: **non** si tara, si misura o si prova sul PC dell'utente ("ma non devi farlo sul mio pc"; "è un progetto software da vendere e usabile da tutti").
 3. Le dipendenze che si riscaricano ma costano tempo o banda (modelli AI da GB, browser di Playwright, repository Maven, SDK Android) sono **pulibili**.
 4. "Il programma deve rilevare in automatico quali sono, tra quelli supportati, i programmi installati effettivamente nel PC", "e mostrare tutti e solo quelli". Niente domande al cliente su cartelle o strumenti.
 5. "Va sempre avviato come amministratore", "con lettura veloce MFT".
-6. "L'utente sceglie cosa eliminare o cosa no: l'app propone, l'utente seleziona, come in CCleaner." In particolare non vanno bene due esclusioni della bozza: i programmi installati che altri usano (toolchain di rustup, Python di uv, versioni di nvm, `.cargo\bin`) e Docker, WSL e macchine virtuali. Entrano anche quelli.
+6. "L'utente sceglie cosa eliminare o cosa no: l'app propone, l'utente seleziona." In particolare non vanno bene due esclusioni della bozza: i programmi installati che altri usano (toolchain di rustup, Python di uv, versioni di nvm, `.cargo\bin`) e Docker, WSL e macchine virtuali. Entrano anche quelli.
 7. "La pulizia deve essere veloce e multithreading, con worker che si dividono il lavoro, e dare un resoconto finale."
 
-8. "La UI deve essere quella di ccleaner64 di base": conferma la decisione 10 della spec principale. Tutte le parti nuove (livelli e avvisi, selezione per cartella, Parte D, avanzamento, resoconto finale) usano barra laterale, card, colori e componenti di `src/main.rs`; nessuna schermata con uno stile proprio.
+8. "La UI deve essere quella dell'app di base": conferma la decisione 10 della spec principale. Tutte le parti nuove (livelli e avvisi, selezione per cartella, Parte D, avanzamento, resoconto finale) usano barra laterale, card, colori e componenti di `src/main.rs`; nessuna schermata con uno stile proprio.
 
 ## Cosa cambia nella spec principale
 
@@ -74,7 +74,7 @@ Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, 
 
 ## Regole valide per tutte le parti
 
-1. **L'app propone, l'utente sceglie** (decisione 6). Ogni voce dell'inventario compare come opzione con la sua casella. Il livello decide solo la preselezione e l'avviso (*scelta mia*, come CCleaner):
+1. **L'app propone, l'utente sceglie** (decisione 6). Ogni voce dell'inventario compare come opzione con la sua casella. Il livello decide solo la preselezione e l'avviso (*scelta mia*):
    - **Consigliato**, preselezionato: C, B e L, si rigenerano senza scaricare nulla.
    - **Facoltativo**, non selezionato, avviso "si riscarica" con il comando per riaverla: D non in uso.
    - **Attenzione**, non selezionato, avviso rosso da confermare: P (dati unici), D in uso, nomi ambigui non ignorati da git, cartelle tracciate da git.
@@ -84,8 +84,8 @@ Esclusi sempre: marcatori sotto cartelle artefatto o `NEVER_ENTER`, `%WinDir%`, 
 3. **Percorsi.** Prima la variabile d'ambiente dello strumento (`CARGO_HOME`, `GRADLE_USER_HOME`, `NUGET_PACKAGES`, `GOCACHE`, `GOMODCACHE`, `HF_HOME`, `OLLAMA_MODELS`, `PLAYWRIGHT_BROWSERS_PATH`…); se non è definita, il percorso predefinito di Windows. Una variabile non definita **scarta** quel percorso, non lo usa alla lettera.
 4. **Verifica dei percorsi.** I percorsi delle tabelle vengono dall'inventario incollato e da quanto ne so. Prima di scrivere una voce, il builder controlla il percorso Windows sulla documentazione ufficiale dello strumento; se non lo trova documentato, la voce si toglie e si annota in fondo a questo file.
 5. **Visibilità.** Una categoria compare se e solo se le sue cartelle esistono (vedi Rilevamento automatico).
-6. **Selezione.** Come in CCleaner: ogni voce ha la sua casella, quella del gruppo seleziona o toglie tutte le sue voci, il totale selezionato si aggiorna subito.
-7. **Processi attivi.** Se lo strumento è in esecuzione (`<running>` di CleanerML), alla pulizia l'app chiede di chiuderlo o di saltare quella voce, come fa CCleaner con i browser. "Bloccata con X" nelle tabelle vuol dire questo. I file bloccati da altri processi si saltano e si contano nel riepilogo.
+6. **Selezione.** Ogni voce ha la sua casella, quella del gruppo seleziona o toglie tutte le sue voci, il totale selezionato si aggiorna subito.
+7. **Processi attivi.** Se lo strumento è in esecuzione (`<running>` di CleanerML), alla pulizia l'app chiede di chiuderlo o di saltare quella voce. "Bloccata con X" nelle tabelle vuol dire questo. I file bloccati da altri processi si saltano e si contano nel riepilogo.
 8. **Cestino.** *Scelta mia:* il flag Cestino/definitivo vale anche qui. Prima di pulire, se il totale supera lo spazio libero del Cestino su quell'unità (quota da registro, occupato da `SHQueryRecycleBin`), la UI lo dice e propone il definitivo per quella pulizia; non si lascia decidere a Windows.
 9. **Una regola sola per percorso.** *Scelta mia:* i livelli valgono anche per le regole Winapp2: una regola che tocca dati P o in uso (per esempio `LocalHistory` di JetBrains, `User\History`/`Local Storage` di VS Code) prende il livello Attenzione; una che tocca file 🔒 si scarta. Se una sezione Winapp2 copre lo stesso strumento di una categoria inglobata (stessi percorsi o sottopercorsi), la sezione Winapp2 si nasconde: vince la categoria inglobata.
 10. **Prove.** Mai sul PC dell'utente: i test usano un profilo finto in una cartella temporanea (variabili `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TEMP` e quelle degli strumenti puntate lì) e alberi di progetto costruiti dal test.
@@ -261,7 +261,7 @@ Decisione dell'utente (2026-11-10): "va implementato in una Fase 3". Oggi la sch
 
 - **Processi in esecuzione**: elenco con nome, RAM e CPU; "Termina" sul processo scelto. *Scelta mia:* i processi di sistema e quelli protetti (stessa idea di `PROTECTED` per i servizi) non si possono terminare; l'avviso dice che il lavoro non salvato si perde.
 - **Programmi all'avvio**: chiavi `Run` e `RunOnce` (`HKCU`, `HKLM`, `WOW6432Node`), cartelle Esecuzione automatica, attività pianificate all'accesso. Disattiva e riattiva, senza cancellare: *scelta mia*, si usa lo stesso meccanismo di Gestione attività (`StartupApproved`), così Windows e PulisciPC mostrano lo stesso stato, con backup e "Ripristina tutto" come per i servizi.
-- Fuori: la sospensione automatica dei programmi in background (come "Performance Optimizer" di CCleaner). È un prodotto a sé; se serve, documento suo.
+- Fuori: la sospensione automatica dei programmi in background. È un prodotto a sé; se serve, documento suo.
 
 ## Esecuzione della pulizia: worker e resoconto
 

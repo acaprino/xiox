@@ -22,8 +22,8 @@ agents (`--json`, stable exit codes).
 
 ## Install
 
-There is no installer. Build the release executable from the workspace root (the `ccleaner64\app`
-folder of the repository). You need a Rust toolchain (`cargo`):
+There is no installer. Build the release executable from the workspace root (the folder that holds the top-level
+`Cargo.toml`). You need a Rust toolchain (`cargo`):
 
 ```powershell
 cargo build --release -p xiox-cli
