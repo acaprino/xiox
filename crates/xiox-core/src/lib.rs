@@ -4,10 +4,12 @@
 pub mod account;
 pub mod browserdb;
 pub mod cleaner;
+pub mod dev;
 pub mod envpath;
 #[cfg(test)]
 mod live_checks;
 pub mod native;
+pub mod notify;
 pub mod netcreds;
 pub mod regbackup;
 pub mod registry;

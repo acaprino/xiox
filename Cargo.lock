@@ -3466,22 +3466,26 @@ dependencies = [
 name = "xiox-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "idna",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
  "winreg",
+ "xiox-app",
  "xiox-cleaner",
  "xiox-model",
+ "xiox-mukade",
  "xiox-rules",
+ "xiox-sessions",
 ]
 
 [[package]]
 name = "xiox-desktop"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "eframe",
  "embed-resource",
  "image",

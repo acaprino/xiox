@@ -4,6 +4,7 @@ mod dev;
 mod theme;
 
 use xiox_core::{browserdb, cleaner, native, registry, rules, services, sys, wipe};
+use xiox_core::notify::{Notifier, SectionId};
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
@@ -13,6 +14,15 @@ use std::sync::Arc;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 use theme::*;
+
+/// The egui window as a `Notifier`: a worker's wake-up is a repaint request.
+struct Repaint(egui::Context);
+
+impl Notifier for Repaint {
+    fn notify(&self, _: SectionId) {
+        self.0.request_repaint()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {

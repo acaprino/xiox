@@ -20,8 +20,6 @@ xiox-sessions = { path = "crates/xiox-sessions" }
 xiox-rules = { path = "crates/xiox-rules" }
 xiox-core = { path = "crates/xiox-core" }
 rfd = "0.15"
-# Same version and features as xiox-mukade (already in the build): local dates in the Sviluppatori tables.
-chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 

@@ -8,6 +8,12 @@ license = "MIT"
 xiox-cleaner = { path = "../xiox-cleaner" }
 xiox-model = { path = "../xiox-model" }
 xiox-rules = { path = "../xiox-rules" }
+xiox-app = { path = "../xiox-app" }
+xiox-mukade = { path = "../xiox-mukade" }
+xiox-sessions = { path = "../xiox-sessions" }
+serde = { version = "1", features = ["derive"] }
+# Same version and features as xiox-mukade (already in the build): local dates in the Sviluppatori tables.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 winreg = "0.56"
 # Same version and features as xiox-mukade (already in the build): browser databases (cookies, VACUUM, Firefox history).
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
