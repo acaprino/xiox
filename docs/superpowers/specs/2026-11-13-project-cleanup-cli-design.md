@@ -201,3 +201,64 @@ Clean with: xiox clean D:\Projects\mukade --builds --worktrees
 - Come ottenere l'elenco dei worktree e l'identità del repository (`dc-git` ha già
   `main_worktree` e `worktree_info`, privati).
 - Soglie e dettagli della camminata senza MFT.
+
+## Esito
+
+Costruito il 2026-11-13 (commit da `e95e931` a questo; 32 file, circa 6.900 righe):
+
+- `dc-git` (`project.rs`): `repo_main_root`, `list_worktrees`, `root_commits`, `origin_url`,
+  `normalize_remote`, `head_kept_elsewhere`, `untracked_files`, `stale_branches`.
+- `dc-project` (crate nuovo): `resolve_project`, builds/worktrees/sessioni (`owned.rs`), ricerca
+  di copie e cartelle per nome (`search.rs`: indice MFT da terminale elevato, altrimenti
+  camminata), log (`logs.rs`), selezione, riconvalida e rimozione (`clean.rs`), controllo del
+  Cestino. Piccole aggiunte in `dc-cleaner` (`guard` pubblico), `dc-app`, `dc-model`
+  (`ArtifactKind::ProjectFolder`).
+- `xiox-cli` (crate nuovo, `xiox.exe`): parser degli argomenti scritto a mano, uscita leggibile,
+  JSON schema 1, manifest `asInvoker` (non chiede mai l'elevazione).
+- Guida d'uso in inglese: `docs/xiox-cli.md`, con le uscite copiate da esecuzioni vere su un
+  progetto finto.
+
+Test: `cargo test -j 1 --workspace --exclude mukade` = 941 passati, 0 falliti, 20 ignorati
+(`dc-git` 34, `dc-project` 74, `xiox-cli` 34 unitari + 18 sul binario). Eseguibile release
+`target/release/xiox.exe`: 2.928.640 byte (2,8 MB).
+
+Scostamenti dalla spec, decisi in revisione:
+
+- Una copia con commit o modifiche che il progetto non ha è **bloccata** (`unsaved-work`) e non
+  si cancella nemmeno con `--include`: è il caso di fallimento della spec («una copia con lavoro
+  non salvato venisse cancellata»), che la tabella non copriva.
+- Un nome di progetto più corto di 4 caratteri svuota solo `named`: le copie si trovano comunque
+  per identità git.
+- Le cartelle direttamente sotto la radice di un disco sono rifiutate dal guard di `dc_cleaner`
+  per ogni tipo di voce: `analyze` le segna («cannot be removed: top-level folder»), il riepilogo
+  di `clean` le avvisa e `clean` le salta (uscita 3).
+- Flussi: quando `clean` sta per chiedere la conferma, riepilogo, domanda e `Cancelled.` vanno su
+  stderr, così un stdout rediretto non nasconde ciò che sta per sparire; altrimenti riepilogo e
+  resoconto vanno su stdout (con `--json` tutto il testo va su stderr).
+- Interruttori di prova `XIOX_SEARCH_ROOTS` e `XIOX_NO_SESSIONS=1`: letti solo dalle build debug
+  (`cfg!(debug_assertions)`), servono ai test sul binario per usare alberi finti e non leggere
+  mai le sessioni vere. Non sono una funzione per l'utente e la guida non li nomina.
+- Dopo la scelta, `clean` riesegue l'analisi leggera e rimuove la voce *fresca*; una voce
+  diventata più sospetta viene saltata. Risposta «no» alla domanda: uscita 0. Cestino troppo
+  piccolo: uscita 1, anche con `--dry-run` (la spec non lo diceva).
+
+Limiti noti e rinvii (dal registro `.superpowers/sdd/2026-11-13-project-cleanup-cli/progress.md`):
+
+- `has_own_work` sconosciuto (git non risponde) lascia la copia non bloccata: `--include` la
+  cancella. Se la riconvalida non riesce a interrogare git su una copia prima «senza lavoro
+  proprio», procede.
+- Con l'indice MFT (terminale elevato) le copie il cui nome non ricorda il progetto si trovano
+  solo accanto al progetto o su dischi non indicizzati; il percorso elevato è provato solo con un
+  indice finto, mai con il vero MFT.
+- `stale_branches` elenca anche i branch estratti in un worktree vivo (nell'esempio `feature` e
+  `wip`); sono solo informazione, nessun branch viene mai cancellato.
+- I log: `git ls-files --others --ignored` percorre anche `target` e `node_modules` (lento nei
+  progetti grandi, da misurare su un progetto vero); se git fallisce o scade, i log ignorati
+  spariscono senza una nota.
+- Il marcatore «top-level» replica solo la regola di profondità del guard (non le cartelle di
+  sistema, `\Users\<x>`, i nomi vietati) ed è solo nel testo, non nel JSON.
+- Non provati da test automatici: il Cestino vero e la domanda `y/N` su un terminale vero (solo
+  stdin non interattivo e finti). Se la scrittura su stdout fallisce dopo una rimozione, il
+  resoconto va su stderr; una pipe chiusa da sola non è un errore.
+- Minori di stile: due punti da `cargo fmt` (`dc-project/src/tests/clean.rs`, un test di
+  `render.rs`).
