@@ -137,37 +137,104 @@ impl Write for Tap<'_> {
     }
 }
 
+/// The longest stdin line either mode accepts (without its line end). A longer one is dropped
+/// (never kept in memory) and reported, so a caller cannot grow the process without bound.
+pub const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// One read of a capped line.
+pub(crate) enum LineRead {
+    /// End of input, nothing more to read.
+    Eof,
+    /// A line, without its `\n` (a `\r` before it is still there).
+    Line(Vec<u8>),
+    /// The line was longer than the cap: it has been read to its end and thrown away.
+    TooLong,
+}
+
+/// Reads one line of at most `max` bytes. The excess of a longer line is consumed and dropped as it
+/// arrives, so memory stays at `max` bytes whatever the caller sends.
+pub(crate) fn read_capped_line(r: &mut impl BufRead, max: usize) -> std::io::Result<LineRead> {
+    let mut line = Vec::new();
+    let mut too_long = false;
+    let mut any = false;
+    loop {
+        let chunk = match r.fill_buf() {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        any = true;
+        let end = chunk.iter().position(|&b| b == b'\n');
+        let piece = &chunk[..end.unwrap_or(chunk.len())];
+        if !too_long {
+            if line.len() + piece.len() > max {
+                too_long = true;
+                line = Vec::new();
+            } else {
+                line.extend_from_slice(piece);
+            }
+        }
+        let used = piece.len() + usize::from(end.is_some());
+        r.consume(used);
+        if end.is_some() {
+            break;
+        }
+    }
+    Ok(match (any, too_long) {
+        (false, _) => LineRead::Eof,
+        (true, true) => LineRead::TooLong,
+        (true, false) => LineRead::Line(line),
+    })
+}
+
+/// How a thread is started: replaceable so that a failed spawn can be tested.
+pub(crate) type Spawn = fn(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>;
+
+fn spawn_named(job: Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()> {
+    std::thread::Builder::new().name("xiox-observe-stdin".into()).spawn(job).map(|_| ())
+}
+
+/// `Instant::now() + interval` that cannot panic: an interval too large for an `Instant` waits
+/// for the longest accepted one instead.
+fn deadline_after(interval: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(interval)
+        .or_else(|| now.checked_add(Duration::from_secs(crate::args::MAX_INTERVAL_SECS)))
+        .unwrap_or(now)
+}
+
 /// What the stdin-reader thread tells the loop.
 enum Input {
     Line(String),
+    /// A line over `MAX_LINE_BYTES`, already dropped.
+    TooLong,
     Closed,
+    /// Reading stdin failed.
+    Failed(String),
 }
 
-fn spawn_reader(mut stdin: impl BufRead + Send + 'static) -> mpsc::Receiver<Input> {
+/// Starts the reader thread. `Err` is the sentence for the person when the thread cannot start.
+fn spawn_reader(mut stdin: impl BufRead + Send + 'static, spawn: Spawn) -> Result<mpsc::Receiver<Input>, String> {
     let (tx, rx) = mpsc::channel();
-    let spawned = std::thread::Builder::new().name("xiox-observe-stdin".into()).spawn({
-        let tx = tx.clone();
-        move || {
-            let mut buf = Vec::new();
-            loop {
-                buf.clear();
-                match stdin.read_until(b'\n', &mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        let line = String::from_utf8_lossy(&buf).trim().to_string();
-                        if tx.send(Input::Line(line)).is_err() {
-                            return;
-                        }
-                    }
-                }
+    let job = Box::new(move || {
+        loop {
+            let message = match read_capped_line(&mut stdin, MAX_LINE_BYTES) {
+                Ok(LineRead::Eof) => Input::Closed,
+                Ok(LineRead::Line(bytes)) => Input::Line(String::from_utf8_lossy(&bytes).trim().to_string()),
+                Ok(LineRead::TooLong) => Input::TooLong,
+                Err(e) => Input::Failed(e.to_string()),
+            };
+            let last = matches!(message, Input::Closed | Input::Failed(_));
+            if tx.send(message).is_err() || last {
+                return;
             }
-            let _ = tx.send(Input::Closed);
         }
     });
-    if spawned.is_err() {
-        let _ = tx.send(Input::Closed);
-    }
-    rx
+    spawn(job).map_err(|e| format!("cannot start the stdin reader thread: {e}"))?;
+    Ok(rx)
 }
 
 /// `{"schema":1,"event":"<kebab>","time":"<RFC 3339 UTC>", …event fields}` as one line. A `report`
@@ -246,8 +313,27 @@ pub fn observe(
     err: &mut dyn Write,
     deps: &Deps,
 ) -> i32 {
+    observe_with(cmd, stdin, out, err, deps, spawn_named)
+}
+
+pub(crate) fn observe_with(
+    cmd: ObserveArgs,
+    stdin: impl BufRead + Send + 'static,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    deps: &Deps,
+    spawn: Spawn,
+) -> i32 {
     let mut observer = match start(deps, cmd.params()) {
         Ok(o) => o,
+        Err(message) => {
+            let _ = writeln!(err, "error: {message}");
+            return EXIT_ERROR;
+        }
+    };
+    // Before the first line: if the reader cannot start there is nothing on stdout at all.
+    let input = match spawn_reader(stdin, spawn) {
+        Ok(rx) => rx,
         Err(message) => {
             let _ = writeln!(err, "error: {message}");
             return EXIT_ERROR;
@@ -277,8 +363,7 @@ pub fn observe(
         deps.interval.as_secs_f64().round()
     );
 
-    let input = spawn_reader(stdin);
-    let mut deadline = Instant::now() + deps.interval;
+    let mut deadline = deadline_after(deps.interval);
     // After a failed check the report is the last good one, marked stale.
     let mut last_check_failed = false;
     loop {
@@ -286,16 +371,25 @@ pub fn observe(
         let message = match input.recv_timeout(wait) {
             Ok(m) => Some(m),
             Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => return 0,
+            Err(RecvTimeoutError::Disconnected) => {
+                // The reader always says `Closed` or `Failed` before it ends: it died.
+                let _ = writeln!(emitter.err, "error: the stdin reader stopped unexpectedly");
+                return EXIT_ERROR;
+            }
         };
         let checked = match &message {
             None => true,
             Some(Input::Line(line)) => line == "report",
-            Some(Input::Closed) => return 0,
+            Some(Input::Closed | Input::Failed(_) | Input::TooLong) => false,
         };
         let result = match message {
             None => run_check(&mut observer, deps, &mut emitter, &mut last_check_failed),
             Some(Input::Closed) => return 0,
+            Some(Input::Failed(message)) => {
+                let _ = writeln!(emitter.err, "error: cannot read stdin: {message}");
+                return EXIT_ERROR;
+            }
+            Some(Input::TooLong) => emitter.error(format!("stdin line too long (over {MAX_LINE_BYTES} bytes): dropped")),
             Some(Input::Line(line)) => match line.as_str() {
                 "" => continue,
                 "stop" => return 0,
@@ -308,7 +402,7 @@ pub fn observe(
             return code;
         }
         if checked {
-            deadline = Instant::now() + deps.interval;
+            deadline = deadline_after(deps.interval);
         }
     }
 }
@@ -335,21 +429,20 @@ fn run_check(
     }
 }
 
+/// Fake worlds shared by the tests of both modes.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::Value;
+pub(crate) mod fakes {
+    use super::Deps;
     use std::cell::Cell;
-    use std::io::{Cursor, Read};
     use std::path::PathBuf;
     use std::rc::Rc;
-    use std::sync::mpsc;
+    use std::time::Duration;
     use xiox_model::{ArtifactKind, Level};
-    use xiox_project::{Category, Item, Project, SCHEMA, SearchMode, Target, Why};
+    use xiox_project::{Category, Item, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
 
-    const MB: u64 = 1024 * 1024;
+    pub(crate) const MB: u64 = 1024 * 1024;
 
-    fn project() -> Project {
+    pub(crate) fn project() -> Project {
         Project {
             root: PathBuf::from(r"D:\Projects\mukade"),
             name: "mukade".into(),
@@ -359,7 +452,7 @@ mod tests {
         }
     }
 
-    fn scan(items: Vec<Item>) -> ProjectScan {
+    pub(crate) fn scan(items: Vec<Item>) -> ProjectScan {
         ProjectScan {
             schema: SCHEMA,
             project: project(),
@@ -372,7 +465,7 @@ mod tests {
         }
     }
 
-    fn build() -> Item {
+    pub(crate) fn build() -> Item {
         let p = PathBuf::from(r"D:\Projects\mukade\target");
         Item {
             key: xiox_model::path_key(&p),
@@ -386,7 +479,7 @@ mod tests {
         }
     }
 
-    fn worktree(name: &str) -> Item {
+    pub(crate) fn worktree(name: &str) -> Item {
         let p = PathBuf::from(format!(r"D:\Projects\{name}"));
         Item {
             key: xiox_model::path_key(&p),
@@ -403,7 +496,7 @@ mod tests {
     /// Fake dependencies: `analyze` returns the script's results in order and then repeats the
     /// last one; `hook(n)` runs at the start of the `n`th call (0 = the initial analysis).
     /// Every measured folder is 10 MB. The clock advances one second per call.
-    fn deps(script: Vec<Result<ProjectScan, String>>, hook: impl Fn(usize) + 'static) -> Deps {
+    pub(crate) fn deps(script: Vec<Result<ProjectScan, String>>, hook: impl Fn(usize) + 'static) -> Deps {
         let calls = Cell::new(0usize);
         let clock = Rc::new(Cell::new(1_700_000_000_000i64));
         Deps {
@@ -422,10 +515,20 @@ mod tests {
         }
     }
 
-    fn with_interval(mut d: Deps, interval: Duration) -> Deps {
+    pub(crate) fn with_interval(mut d: Deps, interval: Duration) -> Deps {
         d.interval = interval;
         d
     }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fakes::*;
+    use super::*;
+    use serde_json::Value;
+    use std::io::{Cursor, Read};
+    use std::sync::mpsc;
 
     fn args() -> ObserveArgs {
         ObserveArgs {
@@ -725,5 +828,126 @@ mod tests {
         assert_eq!(check(&mut observer, &d).unwrap_err(), "nope");
         let d = deps(vec![Err("first".into())], |_| {});
         assert_eq!(start(&d, Params::default()).err().as_deref(), Some("first"));
+    }
+
+    // ---- robustness (review of task 2) ----
+
+    #[test]
+    fn a_huge_interval_does_not_panic() {
+        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(u64::MAX));
+        let r = run_with(Cursor::new(b"report
+stop
+".to_vec()), &d);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert_eq!(r.events(), ["started", "report"], "{}", r.stdout);
+        // The helper itself never overflows either.
+        let _ = deadline_after(Duration::MAX);
+    }
+
+    fn failing_spawn(_job: Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()> {
+        Err(std::io::Error::other("no threads left"))
+    }
+
+    #[test]
+    fn a_failed_reader_spawn_exits_1_with_one_error_line_and_nothing_on_stdout() {
+        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = observe_with(args(), Cursor::new(b"stop
+".to_vec()), &mut out, &mut err, &d, failing_spawn);
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(code, 1, "{err}");
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+        let errors: Vec<&str> = err.lines().filter(|l| l.starts_with("error:")).collect();
+        assert_eq!(errors.len(), 1, "{err}");
+        assert!(errors[0].contains("cannot start the stdin reader thread") && errors[0].contains("no threads left"), "{err}");
+    }
+
+    /// A stdin whose reads panic (the reader thread dies without saying anything) or fail.
+    struct BadStdin {
+        panic: bool,
+    }
+
+    impl Read for BadStdin {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            if self.panic {
+                panic!("reader boom");
+            }
+            Err(std::io::Error::other("bad pipe"))
+        }
+    }
+
+    #[test]
+    fn a_dead_reader_thread_is_reported_on_stderr_and_ends_the_loop_with_1() {
+        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let r = run_with(std::io::BufReader::new(BadStdin { panic: true }), &d);
+        assert_eq!(r.code, 1, "{}", r.stderr);
+        let errors: Vec<&str> = r.stderr.lines().filter(|l| l.starts_with("error:")).collect();
+        assert_eq!(errors.len(), 1, "{}", r.stderr);
+        assert!(errors[0].contains("stdin reader stopped"), "{}", r.stderr);
+        assert_eq!(r.events(), ["started"], "{}", r.stdout);
+    }
+
+    #[test]
+    fn a_stdin_read_error_is_reported_on_stderr_and_ends_the_loop_with_1() {
+        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let r = run_with(std::io::BufReader::new(BadStdin { panic: false }), &d);
+        assert_eq!(r.code, 1, "{}", r.stderr);
+        assert!(r.stderr.contains("error: cannot read stdin: bad pipe"), "{}", r.stderr);
+    }
+
+    #[test]
+    fn read_capped_line_splits_lines_drops_the_excess_and_keeps_the_cap_exact() {
+        let mut r = Cursor::new(b"abc\r\n\nxyzxyz\nfive5\nlast".to_vec());
+        let mut got = Vec::new();
+        loop {
+            match read_capped_line(&mut r, 5).unwrap() {
+                LineRead::Eof => break,
+                LineRead::Line(b) => got.push(Some(String::from_utf8(b).unwrap())),
+                LineRead::TooLong => got.push(None),
+            }
+        }
+        // `abc\r` is 4 bytes, `xyzxyz` is 6 (too long), `five5` is exactly 5 (kept).
+        assert_eq!(
+            got,
+            [Some("abc\r".into()), Some("".into()), None, Some("five5".into()), Some("last".into())]
+        );
+        // A too-long last line without a newline is dropped too, then end of input.
+        let mut r = Cursor::new(b"abcdefgh".to_vec());
+        assert!(matches!(read_capped_line(&mut r, 5).unwrap(), LineRead::TooLong));
+        assert!(matches!(read_capped_line(&mut r, 5).unwrap(), LineRead::Eof));
+    }
+
+    #[test]
+    fn read_capped_line_swallows_a_huge_line_in_small_pieces() {
+        // 20 MB without a newline through a 4 KiB buffer: the result is one TooLong, then the
+        // next line is read normally.
+        let huge = std::io::repeat(b'x').take(20 * 1024 * 1024).chain(Cursor::new(b"
+ok
+".to_vec()));
+        let mut r = std::io::BufReader::with_capacity(4096, huge);
+        assert!(matches!(read_capped_line(&mut r, MAX_LINE_BYTES).unwrap(), LineRead::TooLong));
+        match read_capped_line(&mut r, MAX_LINE_BYTES).unwrap() {
+            LineRead::Line(b) => assert_eq!(b, b"ok"),
+            _ => panic!("expected the next line"),
+        }
+    }
+
+    #[test]
+    fn an_overlong_stdin_line_is_dropped_with_an_error_event_and_the_loop_goes_on() {
+        let long = "x".repeat(MAX_LINE_BYTES + 1);
+        let r = run_text(&format!("{long}
+report
+stop
+"), vec![Ok(scan(vec![build()]))]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert_eq!(r.events(), ["started", "error", "report"], "{}", r.stdout);
+        let message = r.lines()[1]["message"].as_str().unwrap().to_string();
+        assert!(message.contains("too long") && message.len() < 300, "{message}");
+        // A line of exactly the cap is read (and is just an unknown command).
+        let edge = "y".repeat(MAX_LINE_BYTES);
+        let r = run_text(&format!("{edge}
+stop
+"), vec![Ok(scan(vec![build()]))]);
+        assert!(r.lines()[1]["message"].as_str().unwrap().contains("unknown command"), "{}", r.stdout);
     }
 }

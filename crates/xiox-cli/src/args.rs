@@ -76,7 +76,7 @@ Flags:
   --dry-run        clean: do everything except deleting, and say what would be freed
   --json           print a single JSON object (schema 1) on stdout; messages go to stderr
   --no-drives      search only next to the project, not on every fixed drive
-  --interval <s>   observe: seconds between checks (default 600, at least 60)
+  --interval <s>   observe: seconds between checks (default 600, from 60 to 2592000)
   --grow-threshold <size>
                    observe: growth since the start that raises `attention`
                    (default 2GB; units B, KB, MB, GB, TB, binary: 1.5GB, 500MiB)
@@ -100,6 +100,9 @@ enum Which {
 /// `observe` defaults and limits.
 const DEFAULT_INTERVAL_SECS: u64 = 600;
 const MIN_INTERVAL_SECS: u64 = 60;
+/// The longest accepted interval (30 days): a larger one is a mistake, and `Instant` arithmetic
+/// must never be handed a near-`u64::MAX` duration.
+pub const MAX_INTERVAL_SECS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_GROW_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_WORKTREE_THRESHOLD: usize = 3;
 
@@ -200,6 +203,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                     .map_err(|_| format!("--interval needs a whole number of seconds, not \"{value}\""))?;
                 if interval_secs < MIN_INTERVAL_SECS {
                     return Err(format!("--interval must be at least {MIN_INTERVAL_SECS} seconds, not {interval_secs}"));
+                }
+                if interval_secs > MAX_INTERVAL_SECS {
+                    return Err(format!("--interval must be at most {MAX_INTERVAL_SECS} seconds (30 days), not {interval_secs}"));
                 }
             }
             "--grow-threshold" => {
@@ -438,6 +444,21 @@ mod tests {
         assert!(p(&["observe", "--interval", "59"]).unwrap_err().contains("at least 60"));
         assert!(p(&["observe", "--interval"]).unwrap_err().contains("--interval"));
         assert!(p(&["observe", "--interval", "--mcp"]).unwrap_err().contains("--interval"));
+    }
+
+    #[test]
+    fn observe_interval_above_30_days_is_usage_error() {
+        assert!(matches!(
+            p(&["observe", "--interval", "2592000"]),
+            Ok(Command::Observe { interval_secs: 2_592_000, .. })
+        ));
+        for v in ["2592001", "18446744073709551615", "9999999999999"] {
+            let e = p(&["observe", "--interval", v]).unwrap_err();
+            assert!(e.contains("--interval") && e.contains("at most"), "{v}: {e}");
+        }
+        assert!(p(&["observe", "--interval=2592001"]).unwrap_err().contains("at most"));
+        // A number that does not even fit in u64 is a usage error too.
+        assert!(p(&["observe", "--interval", "18446744073709551616"]).unwrap_err().contains("--interval"));
     }
 
     #[test]
