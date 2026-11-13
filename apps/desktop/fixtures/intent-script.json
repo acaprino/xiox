@@ -260,15 +260,54 @@
    }
   },
   {
-   "note": "cancel returns to the analysis, not to the dialog",
+   "note": "cancel of a clean ends in the CANCELLED report (what was done, nothing selectable), not in the analysis nor in the dialog",
    "op": "intent",
    "section": "cleanup",
    "intent": {
     "kind": "cancel"
    },
    "expect": {
-    "state": "analyzed",
+    "state": "cancelled",
+    "report": true,
+    "dialog": false,
     "rev": 20
+   }
+  },
+  {
+   "note": "the cancelled report has no analysis to clean: openConfirm is refused",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "cancelled",
+    "dialog": false,
+    "report": true,
+    "rev": 21
+   }
+  },
+  {
+   "note": "closeDialog from the cancelled report releases the section: its empty state, not the analysis",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "idle",
+    "report": false,
+    "rev": 22
+   }
+  },
+  {
+   "note": "the analysis is gone: the next steps start from a new one",
+   "op": "go",
+   "section": "cleanup",
+   "state": "analyzed",
+   "expect": {
+    "state": "analyzed",
+    "rev": 23
    }
   },
   {
@@ -280,7 +319,7 @@
    },
    "expect": {
     "state": "analyzed",
-    "rev": 21
+    "rev": 24
    }
   },
   {
@@ -291,7 +330,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 22
+    "rev": 25
    }
   },
   {
@@ -303,7 +342,7 @@
    "expect": {
     "state": "cleaning",
     "fraction": 0,
-    "rev": 23
+    "rev": 26
    }
   },
   {
@@ -313,7 +352,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 0.3333333333333333,
-     "rev": 24
+     "rev": 27
     }
    ]
   },
@@ -324,7 +363,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 0.6666666666666666,
-     "rev": 25
+     "rev": 28
     }
    ]
   },
@@ -335,7 +374,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 1,
-     "rev": 26
+     "rev": 29
     }
    ]
   },
@@ -348,7 +387,7 @@
      "state": "report",
      "report": true,
      "fraction": null,
-     "rev": 27
+     "rev": 30
     }
    ]
   },
@@ -362,7 +401,7 @@
    },
    "expect": {
     "state": "report",
-    "rev": 28
+    "rev": 31
    }
   },
   {
@@ -373,20 +412,30 @@
    },
    "expect": {
     "state": "report",
-    "rev": 29
+    "rev": 32
    }
   },
   {
-   "note": "closeDialog from the report returns to the analysis",
+   "note": "closeDialog from the report releases the section: its empty state, not the analysis",
    "op": "intent",
    "section": "cleanup",
    "intent": {
     "kind": "closeDialog"
    },
    "expect": {
-    "state": "analyzed",
+    "state": "idle",
     "report": false,
-    "rev": 30
+    "rev": 33
+   }
+  },
+  {
+   "note": "the analysis is gone: the next steps start from a new one",
+   "op": "go",
+   "section": "cleanup",
+   "state": "analyzed",
+   "expect": {
+    "state": "analyzed",
+    "rev": 34
    }
   },
   {
@@ -594,14 +643,25 @@
    ]
   },
   {
+   "note": "closeDialog from the report releases the section: its empty state, not the analysis",
    "op": "intent",
    "section": "developers",
    "intent": {
     "kind": "closeDialog"
    },
    "expect": {
-    "state": "projects",
+    "state": "idle",
     "rev": 17
+   }
+  },
+  {
+   "note": "the analysis is gone: the next steps start from a new one",
+   "op": "go",
+   "section": "developers",
+   "state": "projects",
+   "expect": {
+    "state": "projects",
+    "rev": 18
    }
   },
   {
@@ -615,7 +675,7 @@
    "expect": {
     "state": "worktrees",
     "active": "worktrees",
-    "rev": 18
+    "rev": 19
    }
   },
   {
@@ -631,7 +691,7 @@
     "checks": {
      "w:3": "off"
     },
-    "rev": 19
+    "rev": 20
    }
   },
   {
@@ -646,7 +706,7 @@
     "checks": {
      "w:1": "off"
     },
-    "rev": 20
+    "rev": 21
    }
   },
   {
@@ -657,7 +717,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 21
+    "rev": 22
    }
   },
   {
@@ -669,7 +729,7 @@
    },
    "expect": {
     "state": "worktrees",
-    "rev": 22
+    "rev": 23
    }
   },
   {
@@ -682,7 +742,7 @@
    "expect": {
     "state": "sessions",
     "active": "sessions",
-    "rev": 23
+    "rev": 24
    }
   },
   {
@@ -691,7 +751,7 @@
    "state": "shortfall",
    "expect": {
     "state": "shortfall",
-    "rev": 24
+    "rev": 25
    }
   },
   {
@@ -703,7 +763,7 @@
    },
    "expect": {
     "state": "shortfall",
-    "rev": 25
+    "rev": 26
    }
   },
   {
@@ -715,19 +775,48 @@
    "expect": {
     "state": "cleaning",
     "fraction": 0,
-    "rev": 26
+    "rev": 27
    }
   },
   {
-   "note": "cancel with no recorded origin falls back to projects",
+   "note": "cancel of a clean ends in the CANCELLED report, whatever was recorded as origin (here nothing)",
    "op": "intent",
    "section": "developers",
    "intent": {
     "kind": "cancel"
    },
    "expect": {
-    "state": "projects",
-    "rev": 27
+    "state": "cancelled",
+    "report": true,
+    "rev": 28
+   }
+  },
+  {
+   "note": "select is refused over the cancelled report (the list is gone)",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "worktrees"
+   },
+   "expect": {
+    "state": "cancelled",
+    "report": true,
+    "rev": 29
+   }
+  },
+  {
+   "note": "Analyze is the one intent the cancelled report accepts",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "report": false,
+    "rev": 30
    }
   },
   {
@@ -736,7 +825,7 @@
    "state": "idle",
    "expect": {
     "state": "idle",
-    "rev": 28
+    "rev": 31
    }
   },
   {
@@ -749,48 +838,8 @@
    },
    "expect": {
     "state": "idle",
-    "rev": 29
-   }
-  },
-  {
-   "op": "intent",
-   "section": "developers",
-   "intent": {
-    "kind": "analyze"
-   },
-   "expect": {
-    "state": "analyzing",
-    "fraction": 0,
-    "rev": 30
-   }
-  },
-  {
-   "op": "tick",
-   "pushed": [
-    {
-     "section": "developers",
-     "state": "analyzing",
-     "fraction": 0.3333333333333333,
-     "rev": 31
-    }
-   ]
-  },
-  {
-   "note": "cancel returns to the state before the job",
-   "op": "intent",
-   "section": "developers",
-   "intent": {
-    "kind": "cancel"
-   },
-   "expect": {
-    "state": "idle",
     "rev": 32
    }
-  },
-  {
-   "note": "a cancelled job stops ticking",
-   "op": "tick",
-   "pushed": []
   },
   {
    "op": "intent",
@@ -816,15 +865,40 @@
    ]
   },
   {
+   "note": "cancel of a scan is refused: the page is not offered it and Rust says nothing can be cancelled",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "analyzing",
+    "rev": 35
+   }
+  },
+  {
+   "note": "a refused cancel does not stop the scan: it goes on ticking",
    "op": "tick",
    "pushed": [
     {
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.6666666666666666,
-     "rev": 35
+     "rev": 36
     }
    ]
+  },
+  {
+   "note": "no new job while the scan runs",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "rev": 37
+   }
   },
   {
    "op": "tick",
@@ -833,7 +907,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 1,
-     "rev": 36
+     "rev": 38
     }
    ]
   },
@@ -845,7 +919,7 @@
      "section": "developers",
      "state": "projects",
      "fraction": null,
-     "rev": 37
+     "rev": 39
     }
    ]
   },
@@ -1303,7 +1377,7 @@
    "expect": {
     "state": "analyzing",
     "fraction": 0,
-    "rev": 31
+    "rev": 35
    }
   },
   {
@@ -1315,7 +1389,7 @@
    "expect": {
     "state": "analyzing",
     "fraction": 0,
-    "rev": 38
+    "rev": 40
    }
   },
   {
@@ -1326,13 +1400,13 @@
      "section": "cleanup",
      "state": "analyzing",
      "fraction": 0.3333333333333333,
-     "rev": 32
+     "rev": 36
     },
     {
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.3333333333333333,
-     "rev": 39
+     "rev": 41
     }
    ]
   },
@@ -1344,7 +1418,7 @@
    },
    "expect": {
     "state": "analyzed",
-    "rev": 33
+    "rev": 37
    }
   },
   {
@@ -1354,20 +1428,44 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.6666666666666666,
-     "rev": 40
+     "rev": 42
     }
    ]
   },
   {
+   "note": "cancel of a scan is refused here too",
    "op": "intent",
    "section": "developers",
    "intent": {
     "kind": "cancel"
    },
    "expect": {
-    "state": "projects",
-    "rev": 41
+    "state": "analyzing",
+    "rev": 43
    }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 1,
+     "rev": 44
+    }
+   ]
+  },
+  {
+   "note": "the scan, never cancelled, lands on projects",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "projects",
+     "fraction": null,
+     "rev": 45
+    }
+   ]
   },
   {
    "note": "closeDialog with no dialog and no report does nothing",
@@ -1380,7 +1478,7 @@
     "state": "analyzed",
     "dialog": false,
     "report": false,
-    "rev": 34
+    "rev": 38
    }
   },
   {
@@ -1392,7 +1490,7 @@
    },
    "expect": {
     "state": "analyzed",
-    "rev": 35
+    "rev": 39
    }
   },
   {
@@ -1406,7 +1504,7 @@
    "expect": {
     "state": "analyzed",
     "active": "cat:browser",
-    "rev": 36
+    "rev": 40
    }
   },
   {
@@ -1416,7 +1514,7 @@
    "state": "idle",
    "expect": {
     "state": "idle",
-    "rev": 37
+    "rev": 41
    }
   },
   {
@@ -1429,7 +1527,7 @@
    "expect": {
     "state": "idle",
     "dialog": false,
-    "rev": 38
+    "rev": 42
    }
   },
   {
@@ -1442,7 +1540,7 @@
    },
    "expect": {
     "state": "worktrees",
-    "rev": 42
+    "rev": 46
    }
   },
   {
@@ -1458,7 +1556,7 @@
     "checks": {
      "h:others": "none"
     },
-    "rev": 43
+    "rev": 47
    }
   }
  ]

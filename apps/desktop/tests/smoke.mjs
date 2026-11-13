@@ -422,14 +422,18 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
   check(await badgeOf(page) === 'Analysis done', 'Escape in the Developers dialog changed the state');
 
-  // Escape cancels a running job when no dialog is open, and closes a report.
+  // Escape cancels a running clean when no dialog is open (it ends in the cancelled report, the analysis dropped), and closes a report (the section is empty again).
   await page.evaluate(() => window.__xioxMock.pause(true));
   await goTo(page, 'cleanup', 'cleaning');
   await page.keyboard.press('Escape');
-  await page.locator('#badge', { hasText: 'Analysis done' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not cancel the running clean`));
+  await page.locator('#badge', { hasText: 'Clean cancelled' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not cancel the running clean`));
+  check(await page.locator('#rows .report .rp-cancelled').count() === 1, 'the cancelled clean shows no report');
+  check(await page.locator('[data-key="action:analyze"]').isEnabled() && await page.locator('[data-key="action:clean"]').isDisabled(), 'the cancelled report must offer Analyze and not Clean');
+  await page.keyboard.press('Escape');
+  await page.locator('#badge', { hasText: 'Ready' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close the cancelled report`));
   await goTo(page, 'cleanup', 'report');
   await page.keyboard.press('Escape');
-  await page.locator('#badge', { hasText: 'Analysis done' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close the report`));
+  await page.locator('#badge', { hasText: 'Ready' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close the report`));
   check(await page.locator('#rows .report').count() === 0, 'the report is still on screen after Escape');
   check(await page.locator('#rows .grid .r[data-row]').count() > 0, 'the list did not come back after the report closed');
   await page.evaluate(() => window.__xioxMock.pause(false));
@@ -525,7 +529,7 @@ async function reportFlows(page, size, shot) {
   check(await page.locator('#notices .tone-error').count() === 0, 'Save as text… ended in an error');
   check(await page.locator('#rows .report').count() === 1, 'Save as text… closed the report');
   await page.locator('#rows .report [data-key="report:close"]').click();
-  await page.locator('#badge', { hasText: 'Analysis done' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Close did not leave the report`));
+  await page.locator('#badge', { hasText: 'Ready' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Close did not leave the report`));
   check(await page.locator('#rows .report').count() === 0, 'the report is still there after Close');
   // The progress bar of a running job: a fraction in the middle.
   await goTo(page, 'cleanup', 'analyzing');

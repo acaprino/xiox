@@ -24,10 +24,10 @@ const enableAll = (views: Fixture['views']): void => {
 const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
 
 const FROZEN: [SectionId, string][] = [
-  ['cleanup', 'analyzing'], ['cleanup', 'confirm'], ['cleanup', 'cleaning'], ['cleanup', 'report'],
+  ['cleanup', 'analyzing'], ['cleanup', 'confirm'], ['cleanup', 'cleaning'], ['cleanup', 'report'], ['cleanup', 'cancelled'],
   ['registry', 'scanning'], ['registry', 'backup'], ['registry', 'fixing'],
   ['services', 'loading'], ['services', 'confirm'],
-  ['developers', 'analyzing'], ['developers', 'confirm'], ['developers', 'shortfall'], ['developers', 'cleaning'], ['developers', 'report'],
+  ['developers', 'analyzing'], ['developers', 'confirm'], ['developers', 'shortfall'], ['developers', 'cleaning'], ['developers', 'report'], ['developers', 'cancelled'],
 ];
 
 test('the fixture freezes the rows and the actions of every state with a job, a dialog or a report', () => {
@@ -35,7 +35,8 @@ test('the fixture freezes the rows and the actions of every state with a job, a 
     const view = fixture.views[section][name];
     assert.ok(view, `${section}:${name}`);
     assert.ok(view.rows.every((r) => !r.enabled), `${section}:${name} has an enabled row`);
-    assert.ok(view.actions.every((a) => !a.enabled || a.id === 'cancel'), `${section}:${name} has an enabled action`);
+    // A cancelled report is the one frozen view that offers Analyze (its analysis is dropped).
+    assert.ok(view.actions.every((a) => !a.enabled || a.id === 'cancel' || (name === 'cancelled' && a.id === 'analyze')), `${section}:${name} has an enabled action`);
   }
 });
 
@@ -54,12 +55,65 @@ test('toggle, select and analyze are refused while a job runs, a dialog is open 
       assert.deepEqual(after.nav.map((n) => n.active), before.nav.map((n) => n.active), `select in ${section}:${name}`);
       assert.equal(model.stateOf(section), name, `select moved ${section}:${name}`);
     }
+    if (name === 'cancelled') continue; // accepts Analyze: see the test below
     const start = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' }[section] as 'analyze';
     const rev = model.view(section).rev;
     const answered = model.intent(section, { kind: start });
     assert.equal(model.stateOf(section), name, `${start} moved ${section}:${name}`);
     assert.equal(answered.rev, rev + 1, 'a refused intent still bumps the revision');
   }
+});
+
+test('Analyze is accepted over a cancelled report and over nothing else that is frozen', () => {
+  const model = loose(enableAll);
+  for (const section of ['cleanup', 'developers'] as const) {
+    model.go(section, 'cancelled');
+    model.intent(section, { kind: 'analyze' });
+    assert.equal(model.stateOf(section), 'analyzing', `${section}: Analyze over the cancelled report`);
+    for (const name of ['report', 'confirm', 'cleaning']) {
+      model.go(section, name);
+      model.intent(section, { kind: 'analyze' });
+      assert.equal(model.stateOf(section), name, `${section}:${name} accepted Analyze`);
+    }
+  }
+});
+
+test('closeDialog over a report releases the section, whatever was recorded; a dialog still goes back', () => {
+  const model = fresh();
+  for (const section of ['cleanup', 'developers'] as const) {
+    for (const name of ['report', 'cancelled']) {
+      // From the analysis, through a dialog and a clean, a report is closed to the empty state.
+      model.go(section, HOME[section]);
+      model.intent(section, { kind: 'openConfirm' });
+      model.go(section, name);
+      const view = model.intent(section, { kind: 'closeDialog' });
+      assert.equal(model.stateOf(section), 'idle', `${section}:${name}`);
+      assert.equal(view.report, null);
+      assert.equal(view.rows.length === 0 || section === 'cleanup', true, 'the empty Developers list has no rows');
+      model.intent(section, { kind: 'closeDialog' });
+      assert.equal(model.stateOf(section), 'idle', 'nothing to close any more');
+    }
+  }
+  // A dialog goes back to where it was opened from (unchanged).
+  model.go('developers', 'worktrees');
+  model.intent('developers', { kind: 'openConfirm' });
+  model.intent('developers', { kind: 'closeDialog' });
+  assert.equal(model.stateOf('developers'), 'worktrees');
+});
+
+test('cancel: a clean goes to the cancelled report, a Developers scan is refused, other jobs go back', () => {
+  const model = fresh();
+  for (const section of ['cleanup', 'developers'] as const) {
+    model.go(section, 'cleaning');
+    model.intent(section, { kind: 'cancel' });
+    assert.equal(model.stateOf(section), 'cancelled', `${section}: the dialog and the analysis are not coming back`);
+  }
+  model.go('developers', 'analyzing');
+  model.intent('developers', { kind: 'cancel' });
+  assert.equal(model.stateOf('developers'), 'analyzing', 'a scan cannot be cancelled');
+  model.go('cleanup', 'analyzing');
+  model.intent('cleanup', { kind: 'cancel' });
+  assert.equal(model.stateOf('cleanup'), HOME.cleanup, 'a Cleanup analysis can');
 });
 
 test('confirm needs an open dialog whose button is enabled and whose ack box, where there is one, is on', () => {
@@ -125,10 +179,10 @@ test('openConfirm and openFix are refused when the action is disabled', () => {
 test('openConfirm and openFix are refused from a state that is not analyzed-like, even with the action enabled', () => {
   const model = loose(enableAll);
   const NOT_ANALYZED: [SectionId, string][] = [
-    ['cleanup', 'idle'], ['cleanup', 'analyzing'], ['cleanup', 'cleaning'], ['cleanup', 'report'],
+    ['cleanup', 'idle'], ['cleanup', 'analyzing'], ['cleanup', 'cleaning'], ['cleanup', 'report'], ['cleanup', 'cancelled'],
     ['registry', 'idle'], ['registry', 'scanning'], ['registry', 'fixed'],
     ['services', 'loading'],
-    ['developers', 'idle'], ['developers', 'analyzing'], ['developers', 'cleaning'], ['developers', 'report'],
+    ['developers', 'idle'], ['developers', 'analyzing'], ['developers', 'cleaning'], ['developers', 'report'], ['developers', 'cancelled'],
   ];
   for (const [section, name] of NOT_ANALYZED) {
     model.go(section, name);

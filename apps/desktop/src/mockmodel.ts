@@ -19,15 +19,21 @@
 //   registry   scanning  -> analyzed      fixing   -> fixed
 //   services   loading   -> loaded
 //   developers analyzing -> projects      cleaning -> report
+// A cleaning that is CANCELLED does not land on the report but on `cancelled` (see `cancel`).
 // "Home" (where cancel / closeDialog fall back when nothing was recorded, e.g. after `go`):
 //   cleanup analyzed, registry analyzed, services loaded, developers projects.
+// "Empty" (where closeDialog goes from a report, whose analysis was dropped): cleanup idle, developers idle.
 // "Analyzed-like" (where a dialog can be opened): cleanup analyzed, registry analyzed, services loaded,
 //   developers projects / worktrees / sessions.
 // FROZEN = a job runs (busy state) OR the view has a dialog OR the view has a report.
+// CANCELLED (cleanup:cancelled, developers:cancelled) = the report of a clean that was cancelled
+//   (`report.cancelled` true). It is FROZEN like any report, with the differences the engine has: the
+//   analysis is DROPPED (no rows, nothing selectable, `clean` disabled) and Analyze is enabled and
+//   accepted (the one intent the frozen rule lets through: see `analyze`).
 //
 // INTENTS (any section unless named). `kind` is the intent's `kind`.
 //   analyze (cleanup, developers) | scan (registry) | refresh (services)
-//       refused when FROZEN. Otherwise records the current state as `back`, clears the Services notice,
+//       refused when FROZEN, except over a CANCELLED report, where it is accepted. Otherwise records the current state as `back`, clears the Services notice,
 //       goes to the busy state (analyzing / scanning / loading). That first view has job.fraction 0.
 //   tick (the timer: not an intent; returns the views pushed, in section order cleanup, registry,
 //       services, developers, at most one per section)
@@ -63,11 +69,20 @@
 //         disable  "Selected services disabled."
 //         manual   "Selected services set to Manual."
 //         restore  "Original startup types restored."
-//   closeDialog                      only when the view has a dialog or a report: goes to `back`
-//       (the state the dialog was opened from; a report also returns there), else to Home.
-//   cancel                           only in a busy state: goes to `back` (the state before the job; a
-//       cancelled clean returns to the analysis, not to the dialog), else Home. A cancelled job stops
-//       ticking.
+//   closeDialog                      only when the view has a dialog or a report.
+//       A dialog: goes to `back` (the state the dialog was opened from), else to Home.
+//       A report (done or CANCELLED): RELEASES the section, as Rust's `release()` does: the analysis and
+//       the cleaned data are dropped and the section goes to its Empty state (cleanup idle, developers
+//       idle), whatever `back` held; `back` is forgotten. A report never goes back to the analysis.
+//   cancel                           only in a busy state.
+//       cleaning (cleanup, developers): goes to `cancelled`, NOT back to the analysis nor to the dialog:
+//         the cancelled clean ends in a report of what was done (`report.cancelled` true, no rows, Clean
+//         disabled, Analyze enabled) and the analysis is dropped; `back` is forgotten.
+//       analyzing (developers): REFUSED. A scan cannot be stopped: its view has no `cancel` action and
+//         Rust answers "Nothing can be cancelled right now.". The scan runs on to `projects`.
+//       any other busy state (cleanup analyzing, registry scanning / fixing, services loading): goes to
+//         `back` (the state before the job), else Home.
+//       A cancelled job stops ticking.
 //   anything else (search, setOnlyOld, selectAll, setAll, setInactiveDays, ...)   the same state.
 // An intent that is refused or does not apply is IGNORED: same state, new rev, nothing else changes.
 //
@@ -79,7 +94,7 @@
 //       the backup dialog's button, which is `closeDialog`. This mock does not look at the section when
 //       it gets a `cancel` (a busy Registry would go back), because the page can never send one; the
 //       Rust FakeBackend rejects it at the type level (no such variant).
-//   closeDialog with no dialog and no report, cancel when nothing is busy, select of a category that is
+//   cancel of a developers scan, closeDialog with no dialog and no report, cancel when nothing is busy, select of a category that is
 //       not in the nav, toggle of a row whose check is `none` (a header: the OTHER WORKTREES row of
 //       developers:worktrees), openConfirm from a state that is not analyzed-like: all refused, as above
 //       (steps at the end of fixtures/intent-script.json).
@@ -112,6 +127,13 @@ const LANDS: Record<SectionId, Record<string, string>> = {
 };
 const ANALYZE_BUSY: Record<SectionId, string> = { cleanup: 'analyzing', registry: 'scanning', services: 'loading', developers: 'analyzing' };
 const ANALYZE_KIND: Record<SectionId, string> = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' };
+/** The state a report is closed to (Rust `release()`: the section is empty again). */
+const EMPTY: Partial<Record<SectionId, string>> = { cleanup: 'idle', developers: 'idle' };
+/** Where `cancel` goes from a busy state: a state name, or null when that job cannot be cancelled. Missing = `back`, else Home. */
+const CANCEL_TO: Partial<Record<SectionId, Record<string, string | null>>> = {
+  cleanup: { cleaning: 'cancelled' },
+  developers: { analyzing: null, cleaning: 'cancelled' },
+};
 const OPEN_KIND: Record<SectionId, string> = { cleanup: 'openConfirm', registry: 'openFix', services: 'openConfirm', developers: 'openConfirm' };
 const DIALOG: Record<SectionId, string> = { cleanup: 'confirm', registry: 'backup', services: 'confirm', developers: 'confirm' };
 const DEV_CATEGORIES = ['projects', 'worktrees', 'sessions'];
@@ -246,7 +268,7 @@ export class MockModel {
     const here = this.state[s];
     const kind = intent.kind;
     if (kind === ANALYZE_KIND[s]) {
-      if (this.frozen(s)) return;
+      if (this.frozen(s) && this.current(s).report?.cancelled !== true) return;
       this.back[s] = here;
       if (s === 'services') this.clearNotice();
       this.goTo(s, ANALYZE_BUSY[s]);
@@ -274,10 +296,19 @@ export class MockModel {
     } else if (kind === 'closeDialog') {
       const view = this.current(s);
       if (view.dialog === null && view.report === null) return;
+      if (view.report !== null) {
+        // A report is closed by releasing the section: the analysis is gone, the section is empty.
+        delete this.back[s];
+        this.goTo(s, EMPTY[s] ?? HOME[s]);
+        return;
+      }
       this.goTo(s, this.back[s] ?? HOME[s]);
     } else if (kind === 'cancel') {
       if (!this.isBusy(s)) return;
-      this.goTo(s, this.back[s] ?? HOME[s]);
+      const to = CANCEL_TO[s]?.[here];
+      if (to === null) return; // a scan cannot be cancelled
+      if (to !== undefined) delete this.back[s]; // the analysis is dropped: nothing to go back to
+      this.goTo(s, to ?? this.back[s] ?? HOME[s]);
     }
   }
 
@@ -317,7 +348,7 @@ export class MockModel {
       this.goTo(s, HOME[s]);
       return;
     }
-    // `back` stays what it was when the dialog opened: cancel and the closed report go there.
+    // `back` stays what it was when the dialog opened; a cancelled clean forgets it, a closed report ignores it.
     this.goTo(s, rule.busy);
   }
 }

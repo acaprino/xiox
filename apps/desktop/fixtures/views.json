@@ -2381,6 +2381,169 @@
           "saved": null
         },
         "footer": "Ready · Winapp2 rules updated today"
+      },
+      "cancelled": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Clean cancelled",
+          "text": "4.10 GB freed"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "7 items · 4 selected",
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "No analysis yet",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 0 items",
+            "key": "Enter",
+            "enabled": false,
+            "primary": true
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": null,
+        "report": {
+          "title": "Cleanup cancelled",
+          "freedBytes": 4402341478,
+          "recycledBytes": 0,
+          "files": 18202,
+          "dirs": 207,
+          "elapsedMs": 6000,
+          "cancelled": true,
+          "notes": [
+            {
+              "tone": "info",
+              "text": "The items not started were left where they were.",
+              "more": []
+            }
+          ],
+          "byCategory": [
+            [
+              "System",
+              4402341478
+            ]
+          ],
+          "skipped": [
+            {
+              "item": "Windows temporary files",
+              "why": "In use by another program",
+              "path": "C:\\Windows\\Temp\\wmi.log"
+            }
+          ],
+          "failed": [],
+          "items": [
+            {
+              "name": "Windows temporary files",
+              "freedBytes": 4402341478,
+              "removed": 18202,
+              "left": 1,
+              "note": "1 file was in use",
+              "lines": [
+                "C:\\Windows\\Temp\\wmi.log: in use by another program"
+              ]
+            }
+          ],
+          "canSave": true,
+          "saved": null
+        },
+        "footer": "Ready · Winapp2 rules updated today"
       }
     },
     "registry": {
@@ -4507,13 +4670,6 @@
             "key": "Enter",
             "enabled": false,
             "primary": false
-          },
-          {
-            "id": "cancel",
-            "label": "Cancel",
-            "key": "Escape",
-            "enabled": true,
-            "primary": false
           }
         ],
         "search": null,
@@ -6567,6 +6723,167 @@
           "saved": null
         },
         "footer": "Scanned 2 folders in 3 s"
+      },
+      "cancelled": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Clean cancelled",
+          "text": "2.10 GB freed"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": null,
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": null,
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": null,
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "No analysis yet",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 0 folders",
+            "key": "Enter",
+            "enabled": false,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": {
+          "title": "Cleanup cancelled",
+          "freedBytes": 2254857830,
+          "recycledBytes": 2254857830,
+          "files": 18420,
+          "dirs": 2511,
+          "elapsedMs": 7000,
+          "cancelled": true,
+          "notes": [
+            {
+              "tone": "info",
+              "text": "Moved to the Recycle Bin. The folders not started were left where they were.",
+              "more": []
+            }
+          ],
+          "byCategory": [
+            [
+              "Projects",
+              2254857830
+            ]
+          ],
+          "skipped": [],
+          "failed": [],
+          "items": [
+            {
+              "name": "acme-api / target",
+              "freedBytes": 2254857830,
+              "removed": 18420,
+              "left": 0,
+              "note": null,
+              "lines": []
+            }
+          ],
+          "canSave": true,
+          "saved": null
+        },
+        "footer": "Ready"
       }
     }
   }

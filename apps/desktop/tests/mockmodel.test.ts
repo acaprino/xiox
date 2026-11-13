@@ -7,12 +7,13 @@ import type { SectionId, SectionView } from '../src/types.ts';
 const raw = readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8');
 const fixture = JSON.parse(raw) as Fixture;
 const fresh = (): MockModel => new MockModel(JSON.parse(raw) as Fixture);
+const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
 
 const STATES: Record<SectionId, string[]> = {
-  cleanup: ['idle', 'analyzing', 'analyzed', 'confirm', 'cleaning', 'report'],
+  cleanup: ['idle', 'analyzing', 'analyzed', 'confirm', 'cleaning', 'report', 'cancelled'],
   registry: ['idle', 'scanning', 'analyzed', 'backup', 'fixing', 'fixed'],
   services: ['loading', 'loaded', 'confirm'],
-  developers: ['idle', 'analyzing', 'projects', 'worktrees', 'sessions', 'confirm', 'shortfall', 'cleaning', 'report'],
+  developers: ['idle', 'analyzing', 'projects', 'worktrees', 'sessions', 'confirm', 'shortfall', 'cleaning', 'report', 'cancelled'],
 };
 
 function checks(view: SectionView): Record<string, string> {
@@ -35,9 +36,22 @@ test('the fixture holds every state the table names', () => {
   for (const [section, name] of [['cleanup', 'confirm'], ['registry', 'backup'], ['services', 'confirm'], ['developers', 'confirm'], ['developers', 'shortfall']] as const) {
     assert.ok(fixture.views[section][name]?.dialog, `${section}:${name} has no dialog`);
   }
-  for (const [section, name] of [['cleanup', 'report'], ['developers', 'report']] as const) {
+  for (const [section, name] of [['cleanup', 'report'], ['developers', 'report'], ['cleanup', 'cancelled'], ['developers', 'cancelled']] as const) {
     assert.ok(fixture.views[section][name]?.report, `${section}:${name} has no report`);
   }
+  for (const section of ['cleanup', 'developers'] as const) {
+    assert.equal(fixture.views[section].report?.report?.cancelled, false, `${section}:report is a finished clean`);
+    const view = fixture.views[section].cancelled;
+    assert.equal(view?.report?.cancelled, true, `${section}:cancelled is the report of a cancelled clean`);
+    // The analysis is dropped: nothing to select, nothing to clean, only Analyze is on.
+    assert.deepEqual(view?.rows, [], `${section}:cancelled keeps rows`);
+    assert.deepEqual(view?.actions.map((a) => [a.id, a.enabled]), [['analyze', true], ['clean', false]], `${section}:cancelled actions`);
+    assert.equal(view?.dialog, null);
+    assert.equal(view?.job, null);
+  }
+  // A scan cannot be cancelled: no cancel action in Developers' analyzing. A clean can.
+  assert.ok(!fixture.views.developers.analyzing?.actions.some((a) => a.id === 'cancel'), 'developers:analyzing offers cancel');
+  assert.ok(fixture.views.developers.cleaning?.actions.some((a) => a.id === 'cancel' && a.enabled), 'developers:cleaning has no cancel');
   assert.equal(fixture.views.developers.confirm?.dialog?.ack, false);
 });
 
@@ -173,27 +187,63 @@ test('closeDialog returns to the state the dialog was opened from', () => {
   assert.equal(model.stateOf('cleanup'), 'idle');
 });
 
-test('cancel returns to the state before the job', () => {
+test('cancel of an analysis returns to the state before it; a Developers scan cannot be cancelled', () => {
   const model = fresh();
-  model.go('developers', 'sessions');
-  model.intent('developers', { kind: 'analyze' });
-  model.tick();
-  assert.equal(model.stateOf('developers'), 'analyzing');
-  model.intent('developers', { kind: 'cancel' });
-  assert.equal(model.stateOf('developers'), 'sessions');
-  assert.deepEqual(model.tick(), [], 'a cancelled job stops ticking');
-  // A job started from idle goes back to idle.
+  // A Cleanup analysis started from idle goes back to idle, one started from the analysis goes back to it.
   model.go('cleanup', 'idle');
   model.intent('cleanup', { kind: 'analyze' });
   model.intent('cleanup', { kind: 'cancel' });
   assert.equal(model.stateOf('cleanup'), 'idle');
-  // Cancelling a clean returns to the analysis it started from, not to the dialog.
+  assert.deepEqual(model.tick().filter((v) => v.section === 'cleanup'), [], 'a cancelled job stops ticking');
   model.go('cleanup', 'analyzed');
-  model.intent('cleanup', { kind: 'openConfirm' });
-  model.intent('cleanup', { kind: 'confirm' });
-  assert.equal(model.stateOf('cleanup'), 'cleaning');
+  model.intent('cleanup', { kind: 'analyze' });
   model.intent('cleanup', { kind: 'cancel' });
   assert.equal(model.stateOf('cleanup'), 'analyzed');
+  // Developers: the scan is not offered a cancel and the mock refuses it: it runs on to the projects.
+  model.go('developers', 'sessions');
+  model.intent('developers', { kind: 'analyze' });
+  model.tick();
+  assert.equal(model.stateOf('developers'), 'analyzing');
+  const refused = model.intent('developers', { kind: 'cancel' });
+  assert.equal(model.stateOf('developers'), 'analyzing');
+  assert.ok(!refused.actions.some((a) => a.id === 'cancel'), 'the scan view has no cancel action');
+  for (let i = 0; i < 3; i += 1) model.tick();
+  assert.equal(model.stateOf('developers'), 'projects', 'the refused cancel did not stop the scan');
+});
+
+test('cancel of a clean ends in the cancelled report with the analysis dropped, in Cleanup and in Developers', () => {
+  const model = fresh();
+  for (const section of ['cleanup', 'developers'] as const) {
+    model.go(section, HOME[section]);
+    model.intent(section, { kind: 'openConfirm' });
+    model.intent(section, { kind: 'setAck', on: true });
+    model.intent(section, { kind: 'confirm' });
+    assert.equal(model.stateOf(section), 'cleaning');
+    model.tick();
+    const view = model.intent(section, { kind: 'cancel' });
+    assert.equal(model.stateOf(section), 'cancelled', `${section}: neither the analysis nor the dialog`);
+    assert.equal(view.report?.cancelled, true);
+    assert.equal(view.job, null);
+    assert.deepEqual(view.rows, [], 'nothing is selectable');
+    assert.deepEqual(view.actions.map((a) => [a.id, a.enabled]), [['analyze', true], ['clean', false]]);
+    assert.deepEqual(model.tick().filter((v) => v.section === section), [], 'a cancelled job stops ticking');
+    // Nothing but Analyze works over it.
+    for (const refusedIntent of [{ kind: 'openConfirm' }, { kind: 'confirm' }, { kind: 'toggle', row: 'x' }, { kind: 'cancel' }] as const) {
+      model.intent(section, refusedIntent);
+      assert.equal(model.stateOf(section), 'cancelled', `${section}: ${refusedIntent.kind}`);
+    }
+    // closeDialog releases the section: empty again, not the analysis.
+    const closed = model.intent(section, { kind: 'closeDialog' });
+    assert.equal(model.stateOf(section), 'idle');
+    assert.equal(closed.report, null);
+    // Analyze over the cancelled report is accepted and, cancelled, goes back to where it was.
+    model.go(section, 'cancelled');
+    const again = model.intent(section, { kind: 'analyze' });
+    assert.equal(model.stateOf(section), 'analyzing');
+    assert.equal(again.job?.fraction, 0);
+    for (let i = 0; i < 4; i += 1) model.tick();
+    assert.equal(model.stateOf(section), section === 'cleanup' ? 'analyzed' : 'projects');
+  }
 });
 
 test('a confirmed clean runs three ticks and ends on the report', () => {
@@ -225,14 +275,17 @@ test('a confirmed clean runs three ticks and ends on the report', () => {
   model.go('developers', 'projects');
   model.intent('developers', { kind: 'confirm' });
   assert.equal(model.stateOf('developers'), 'projects');
-  // The report is closed back to the analysis.
+  // A report is closed by releasing the section (Rust's release()): its empty state, not the analysis.
   model.go('cleanup', 'analyzed');
   model.intent('cleanup', { kind: 'openConfirm' });
   model.intent('cleanup', { kind: 'confirm' });
   for (let i = 0; i < 4; i += 1) model.tick();
   assert.equal(model.stateOf('cleanup'), 'report');
   model.intent('cleanup', { kind: 'closeDialog' });
-  assert.equal(model.stateOf('cleanup'), 'analyzed');
+  assert.equal(model.stateOf('cleanup'), 'idle');
+  model.go('developers', 'report');
+  model.intent('developers', { kind: 'closeDialog' });
+  assert.equal(model.stateOf('developers'), 'idle');
 });
 
 test('registry fixes through the backup dialog and services confirm goes straight back to loaded', () => {
