@@ -96,6 +96,18 @@ mod tests {
     }
 
     #[test]
+    fn the_new_blocks_and_notes_have_stable_kebab_case_names() {
+        let v = scan_json(&every_variant_scan()).unwrap();
+        let text = v.to_string();
+        for name in ["unsaved-work-unknown", "sessions-not-read", "logs-not-checked", "container-root"] {
+            assert!(text.contains(&format!("\"{name}\"")), "{name} missing in {text}");
+        }
+        for bad in ["UnsavedWorkUnknown", "SessionsNotRead", "LogsNotChecked", "ContainerRoot"] {
+            assert!(!text.contains(bad), "{bad} in {text}");
+        }
+    }
+
+    #[test]
     fn outcome_json_is_null_when_nothing_was_run() {
         let v = outcome_json(&scan(vec![]), None).unwrap();
         assert_eq!(v["schema"], 1);

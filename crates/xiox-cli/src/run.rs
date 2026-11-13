@@ -109,13 +109,22 @@ fn analyze(project: Option<PathBuf>, json: bool, no_drives: bool, out: &mut dyn 
     code_of(write_result(out, err, &text))
 }
 
+/// An I/O error in English: its kind (fixed English text) and the OS code. The operating system's own
+/// description is in the language of Windows and is never printed.
+fn io_text(e: &std::io::Error) -> String {
+    match e.raw_os_error() {
+        Some(code) => format!("{} (os error {code})", e.kind()),
+        None => e.kind().to_string(),
+    }
+}
+
 /// Write a result to stdout. A closed pipe (`| head`) is not an error; any other failure is.
 pub fn write_result(out: &mut dyn Write, err: &mut dyn Write, text: &str) -> Result<(), i32> {
     match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(e) => {
-            let _ = writeln!(err, "error: cannot write to the output: {e}");
+            let _ = writeln!(err, "error: cannot write to the output: {}", io_text(&e));
             Err(EXIT_ERROR)
         }
     }
@@ -202,11 +211,17 @@ fn is_yes(answer: &str) -> bool {
 
 /// Ask `Remove <n> items (<size>)? [y/N] ` on `err` and read one line from `input`. End of input
 /// or a read error is a no.
-fn confirm(err: &mut dyn Write, input: &mut dyn BufRead, chosen: &Chosen) -> bool {
+fn confirm(err: &mut dyn Write, input: &mut dyn BufRead, chosen: &Chosen, mode: RemoveMode) -> bool {
     let n = chosen.keys.len();
+    // Worktrees are removed by git for good, also when the rest goes to the Recycle Bin.
+    let worktrees = if mode == RemoveMode::Recycle && !chosen.permanent_anyway.is_empty() {
+        "; worktrees are removed by git for good, not to the Recycle Bin"
+    } else {
+        ""
+    };
     let _ = write!(
         err,
-        "Remove {n} item{} ({})? [y/N] ",
+        "Remove {n} item{} ({}{worktrees})? [y/N] ",
         if n == 1 { "" } else { "s" },
         render::fmt_size(chosen.bytes)
     );
@@ -315,7 +330,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
             s.fail("error: not a terminal: pass --yes to remove without asking");
             return Ok(EXIT_USAGE);
         }
-        if !confirm(s.err, deps.stdin, &chosen) {
+        if !confirm(s.err, deps.stdin, &chosen, mode) {
             s.note("Cancelled.\n");
             return Ok(EXIT_OK);
         }
@@ -355,13 +370,37 @@ mod tests {
     #[test]
     fn the_question_names_the_count_and_the_size_and_waits_for_one_line() {
         let mut err = Vec::new();
-        assert!(confirm(&mut err, &mut "yes\n".as_bytes(), &chosen(3, 6 * 1024 * 1024 * 1024)));
+        assert!(confirm(&mut err, &mut "yes\n".as_bytes(), &chosen(3, 6 * 1024 * 1024 * 1024), RemoveMode::Recycle));
         assert_eq!(String::from_utf8(err).unwrap(), "Remove 3 items (6.0 GB)? [y/N] ");
         let mut err = Vec::new();
-        assert!(!confirm(&mut err, &mut "n\n".as_bytes(), &chosen(1, 512)));
+        assert!(!confirm(&mut err, &mut "n\n".as_bytes(), &chosen(1, 512), RemoveMode::Recycle));
         assert_eq!(String::from_utf8(err).unwrap(), "Remove 1 item (512 B)? [y/N] ");
         // End of input is a no, never a yes.
-        assert!(!confirm(&mut Vec::new(), &mut "".as_bytes(), &chosen(1, 1)));
+        assert!(!confirm(&mut Vec::new(), &mut "".as_bytes(), &chosen(1, 1), RemoveMode::Recycle));
+    }
+
+    #[test]
+    fn the_question_says_worktrees_go_for_good_when_the_rest_goes_to_the_bin() {
+        let mut c = chosen(2, 2048);
+        c.permanent_anyway = vec!["k0".to_string()];
+        let mut err = Vec::new();
+        assert!(confirm(&mut err, &mut "y\n".as_bytes(), &c, RemoveMode::Recycle));
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "Remove 2 items (2 KB; worktrees are removed by git for good, not to the Recycle Bin)? [y/N] "
+        );
+        // Everything is permanent already: nothing to add.
+        let mut err = Vec::new();
+        assert!(confirm(&mut err, &mut "y\n".as_bytes(), &c, RemoveMode::Permanent));
+        assert_eq!(String::from_utf8(err).unwrap(), "Remove 2 items (2 KB)? [y/N] ");
+    }
+
+    #[test]
+    fn an_io_error_is_printed_with_its_kind_and_code_never_the_os_description() {
+        let os = std::io::Error::from_raw_os_error(5);
+        assert_eq!(io_text(&os), format!("{} (os error 5)", os.kind()));
+        assert!(io_text(&os).is_ascii());
+        assert_eq!(io_text(&std::io::Error::other("disk full")), std::io::Error::other("x").kind().to_string());
     }
 
     // ── clean_run with fakes: no analysis, no removal, no terminal ──

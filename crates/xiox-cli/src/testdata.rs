@@ -138,6 +138,7 @@ pub fn every_variant_scan() -> ProjectScan {
         Block::Unreachable,
         Block::SessionLocked,
         Block::UnsavedWork,
+        Block::UnsavedWorkUnknown,
         Block::Unknown,
     ];
     let mut s = scan(vec![
@@ -163,6 +164,9 @@ pub fn every_variant_scan() -> ProjectScan {
         Note::WalkMayMissDeepFolders,
         Note::PrunableWorktree { path: PathBuf::from("D:\\Projects\\gone") },
         Note::EngineWarning,
+        Note::SessionsNotRead,
+        Note::LogsNotChecked,
+        Note::ContainerRoot,
     ];
     s.search = SearchMode::MftIndex;
     s

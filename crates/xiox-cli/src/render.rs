@@ -36,17 +36,9 @@ pub fn is_top_level(path: &Path) -> bool {
     path.components().filter(|c| matches!(c, Component::Normal(_))).count() < 2
 }
 
-/// English reason of a block.
+/// English reason of a block: the one wording of `dc_project`, also used in its errors.
 pub fn block_reason(b: Block) -> &'static str {
-    match b {
-        Block::LiveSession => "an agent session is open",
-        Block::DirtyGit => "uncommitted changes",
-        Block::UnpushedCommits => "commits not kept anywhere else",
-        Block::Unreachable => "could not be checked",
-        Block::SessionLocked => "session locked by its harness",
-        Block::UnsavedWork => "has commits or changes the project does not have",
-        Block::Unknown => "unknown reason",
-    }
+    b.reason()
 }
 
 fn level_name(l: Level) -> &'static str {
@@ -195,6 +187,18 @@ fn note_text(n: &Note, scan: &ProjectScan) -> Option<String> {
             path.display()
         ),
         Note::EngineWarning => "the analysis reported warnings; the listing may be incomplete".to_string(),
+        Note::SessionsNotRead => {
+            "the sessions of this PC could not be read: a live agent session may be missed, and archived \
+sessions may be missing; 'clean' leaves worktrees, copies and folders alone until they can be read"
+                .to_string()
+        }
+        Note::LogsNotChecked => {
+            "git could not list the files of the project or of a worktree: its log files are not in the listing"
+                .to_string()
+        }
+        Note::ContainerRoot => "this folder is a drive root, your user profile, or holds several projects: \
+'xiox clean' refuses --builds, --worktrees, --logs and --sessions here (run it on one project, or name a path with --include)"
+            .to_string(),
     })
 }
 
@@ -273,6 +277,7 @@ pub fn render_scan(scan: &ProjectScan) -> String {
         fmt_size(sum_bytes(&all)),
         fmt_size(sum_bytes(&recommended))
     ));
+    let container = scan.notes.contains(&Note::ContainerRoot);
     let flags: Vec<&str> = [
         (Category::Builds, "--builds"),
         (Category::Worktrees, "--worktrees"),
@@ -283,7 +288,8 @@ pub fn render_scan(scan: &ProjectScan) -> String {
     .filter(|(c, _)| recommended.iter().any(|i| i.category == *c))
     .map(|(_, f)| *f)
     .collect();
-    if !flags.is_empty() {
+    // The flags are refused on a container root: no hint that would only fail.
+    if !flags.is_empty() && !container {
         o.push_str(&format!("Clean with: xiox clean \"{}\" {}\n", p.root.display(), flags.join(" ")));
     }
     o
@@ -454,7 +460,13 @@ mod tests {
         }
         assert!(!out.lines().any(|l| l.starts_with("LOGS")), "{out}");
         assert!(out.contains("BRANCHES (not removed)"), "{out}");
-        assert!(out.lines().next().unwrap().starts_with("Project  mukade   D:\\Projects\\mukade   (git, origin github.com/acme/mukade)"), "{out}");
+        assert!(
+            out.lines()
+                .next()
+                .unwrap()
+                .starts_with("Project  mukade   D:\\Projects\\mukade   (git, origin github.com/acme/mukade)"),
+            "{out}"
+        );
         assert!(line_with(&out, "Search   ").contains("fixed drives to 3 levels"), "{out}");
         assert!(line_with(&out, "target").trim_start().starts_with("recommended"), "{out}");
         assert!(line_with(&out, "D:\\Projects\\mukade\\target").contains("6.0 GB"), "{out}");
@@ -494,6 +506,7 @@ mod tests {
             Block::Unreachable,
             Block::SessionLocked,
             Block::UnsavedWork,
+            Block::UnsavedWorkUnknown,
             Block::Unknown,
         ];
         let reasons: std::collections::HashSet<_> = all.iter().map(|b| block_reason(*b)).collect();
@@ -501,6 +514,11 @@ mod tests {
         assert_eq!(block_reason(Block::LiveSession), "an agent session is open");
         assert_eq!(block_reason(Block::SessionLocked), "session locked by its harness");
         assert_eq!(block_reason(Block::UnsavedWork), "has commits or changes the project does not have");
+        assert_eq!(block_reason(Block::UnsavedWorkUnknown), "could not be checked for unsaved work");
+        // One wording for the listing and for the errors of `--include`.
+        for b in all {
+            assert_eq!(block_reason(b), b.to_string());
+        }
         let out = render_scan(&scan(vec![copy_with_work()]));
         let l = line_with(&out, "mukade-copy");
         assert!(l.trim_start().starts_with("blocked"), "{l}");
@@ -597,6 +615,29 @@ mod tests {
         let mut s = full_scan();
         s.search = dc_project::SearchMode::MftIndex;
         assert!(line_with(&render_scan(&s), "Search   ").contains("MFT index"));
+    }
+
+    #[test]
+    fn a_container_root_says_so_and_offers_no_clean_hint() {
+        let mut s = full_scan();
+        s.notes = vec![Note::ContainerRoot];
+        let out = render_scan(&s);
+        assert!(
+            out.contains("note: this folder is a drive root, your user profile, or holds several projects"),
+            "{out}"
+        );
+        assert!(!out.contains("Clean with:"), "{out}");
+        // Without the note the hint is there.
+        assert!(render_scan(&full_scan()).contains("Clean with:"));
+    }
+
+    #[test]
+    fn failed_session_and_log_reads_are_notes() {
+        let mut s = full_scan();
+        s.notes = vec![Note::SessionsNotRead, Note::LogsNotChecked];
+        let out = render_scan(&s);
+        assert!(out.contains("note: the sessions of this PC could not be read"), "{out}");
+        assert!(out.contains("note: git could not list the files of the project or of a worktree"), "{out}");
     }
 
     #[test]

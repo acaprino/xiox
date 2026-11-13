@@ -9,12 +9,30 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Variables that make git work on a repository chosen by the environment (set when the tests run
+/// from a git hook): never passed to `xiox` or to the git the tests run.
+const GIT_SELECTION: [&str; 5] = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"];
+
 fn xiox() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_xiox"));
     c.env("XIOX_NO_SESSIONS", "1");
     c.env_remove("XIOX_SEARCH_ROOTS");
     c.env("GIT_TERMINAL_PROMPT", "0");
+    for var in GIT_SELECTION {
+        c.env_remove(var);
+    }
     c
+}
+
+#[test]
+fn the_test_commands_never_inherit_a_repository_selection() {
+    let (x, g) = (xiox(), git_command(Path::new("."), &["status"]));
+    for c in [&x, &g] {
+        for var in GIT_SELECTION {
+            let set = c.get_envs().find(|(k, _)| *k == std::ffi::OsStr::new(var));
+            assert!(matches!(set, Some((_, None))), "{var} must be removed from the child environment");
+        }
+    }
 }
 
 /// A fake project (not a git repository) with a Rust `target` folder; returns (temp dir, project).
@@ -147,9 +165,9 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
+fn git_command(dir: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new("git");
+    c.arg("-C")
         .arg(dir)
         .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
         .args(args)
@@ -157,9 +175,15 @@ fn git(dir: &Path, args: &[&str]) {
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git must be installed to run these tests");
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for var in GIT_SELECTION {
+        c.env_remove(var);
+    }
+    c
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = git_command(dir, args).output().expect("git must be installed to run these tests");
     assert!(out.status.success(), "git {args:?} failed: {}", text(&out.stderr));
 }
 
@@ -344,4 +368,96 @@ fn clean_exits_3_when_an_item_cannot_be_removed_and_says_why() {
     assert!(stdout.contains("Not everything was removed: 1 item skipped or failed."), "{stdout}");
     assert!(project.join("target").join("debug").join("big.bin").exists());
     drop(held);
+}
+
+// ───────────────────────────── final review ─────────────────────────────
+
+/// The fake project as a git repository, and `fakeproj-old` next to it holding `copy`: a clone with a
+/// commit of its own, so the copy is blocked and the folder around it is only a name match.
+fn project_with_a_named_folder_holding_a_copy_with_work() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let (t, project) = fake_project();
+    std::fs::remove_dir_all(project.join("target")).unwrap();
+    git(&project, &["init", "-q", "-b", "main"]);
+    git(&project, &["add", "-A"]);
+    git(&project, &["commit", "-q", "-m", "first"]);
+    let named = project.parent().unwrap().join("fakeproj-old");
+    std::fs::create_dir_all(&named).unwrap();
+    let copy = named.join("copy");
+    git(project.parent().unwrap(), &["clone", "-q", &project.to_string_lossy(), &copy.to_string_lossy()]);
+    std::fs::write(copy.join("private.txt"), "only here\n").unwrap();
+    git(&copy, &["add", "-A"]);
+    git(&copy, &["commit", "-q", "-m", "private"]);
+    (t, project, named, copy)
+}
+
+#[test]
+fn c1_include_of_a_named_folder_that_holds_a_copy_with_work_exits_2_and_the_copy_survives() {
+    let (_t, project, named, copy) = project_with_a_named_folder_holding_a_copy_with_work();
+    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(err.contains("cannot be removed: it holds "), "{err}");
+    assert!(err.contains("has commits or changes the project does not have"), "{err}");
+    assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+    assert!(named.exists());
+}
+
+#[test]
+fn c1_with_no_drives_the_copy_is_not_listed_but_the_folder_is_still_not_removed() {
+    let (_t, project, named, copy) = project_with_a_named_folder_holding_a_copy_with_work();
+    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent", "--no-drives"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
+    assert!(stdout.contains("skipped"), "{stdout}");
+    assert!(stdout.contains("git repository"), "{stdout}");
+    assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+}
+
+#[test]
+fn a_folder_holding_several_repositories_refuses_the_category_flags_with_exit_2() {
+    let (_t, project) = fake_project();
+    let work = project.parent().unwrap().to_path_buf();
+    for name in ["alpha", "beta"] {
+        let r = work.join(name);
+        std::fs::create_dir_all(&r).unwrap();
+        git(&r, &["init", "-q", "-b", "main"]);
+    }
+    // `analyze` still works, with a note.
+    let out = run_analyze(&work, &["--no-drives"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
+    assert!(
+        stdout.contains("note: this folder is a drive root, your user profile, or holds several projects"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("Clean with:"), "{stdout}");
+
+    let out = xiox()
+        .args(["clean"])
+        .arg(&work)
+        .args(["--builds", "--yes", "--permanent", "--no-drives"])
+        .env("XIOX_SEARCH_ROOTS", work.parent().unwrap())
+        .env("GIT_CEILING_DIRECTORIES", work.parent().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
+    let err = text(&out.stderr);
+    assert!(err.contains("refusing to clean everything under "), "{err}");
+    assert!(err.contains("run it on one project"), "{err}");
+    assert!(project.join("target").exists(), "nothing was removed");
+
+    // The same folder with an explicit path still works.
+    let target = project.join("target");
+    let out = xiox()
+        .args(["clean"])
+        .arg(&work)
+        .args(["--include"])
+        .arg(&target)
+        .args(["--yes", "--permanent", "--no-drives"])
+        .env("XIOX_SEARCH_ROOTS", work.parent().unwrap())
+        .env("GIT_CEILING_DIRECTORIES", work.parent().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
+    assert!(!target.exists());
 }
