@@ -313,6 +313,8 @@ Usage:
   xiox analyze [<project>] [--json] [--no-drives]
   xiox clean   [<project>] [--builds] [--worktrees] [--logs] [--sessions]
                [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
+  xiox observe [<project>] [--interval <seconds>] [--grow-threshold <size>]
+               [--worktree-threshold <n>] [--no-drives] [--mcp]
   xiox --help | --version
 ```
 

@@ -170,6 +170,9 @@ impl Observer {
                 continue; // a repeated key keeps its first item
             }
             let before = previous.remove(&item.key);
+            // The same folder listed in another category than at the last check (a worktree seen
+            // while git was still creating it comes first as a copy): told again, in its new one.
+            let recategorized = before.as_ref().is_some_and(|b| b.item.category != item.category);
             let in_baseline = self.baseline.contains_key(&item.key);
             let measured_at_ms = match (item.bytes, &before) {
                 (Some(_), _) => Some(now_ms),
@@ -191,7 +194,7 @@ impl Observer {
                 (None, false) => now_ms,
             };
             let view = ItemView { item, new: !in_baseline, first_seen_ms, measured_at_ms };
-            if before.is_none() {
+            if before.is_none() || recategorized {
                 added.push(view.clone());
             }
             items.push(view);

@@ -462,3 +462,87 @@ fn clean_command_leaves_out_an_item_that_holds_a_blocked_item() {
     o.update(scan(vec![build("outer", Some(MB)), inner]), T0 + 1);
     assert_eq!(o.report(false).clean_command, None);
 }
+
+/// The same folder (same key) as a worktree: what a check sees once git has registered it.
+fn as_worktree(copy: &xiox_project::Item) -> xiox_project::Item {
+    let mut wt = item(
+        Category::Worktrees,
+        &copy.path.as_ref().unwrap().display().to_string(),
+        copy.bytes,
+        Level::Recommended,
+        vec![],
+    );
+    wt.key = copy.key.clone();
+    wt
+}
+
+fn as_copy(path: &str) -> xiox_project::Item {
+    item(Category::Copies, path, Some(MB), Level::Caution, vec![])
+}
+
+#[test]
+fn a_category_change_of_the_same_key_is_added_again_in_its_new_category() {
+    let copy = as_copy(r"D:\Projects\mukade-spike");
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), quiet(), T0);
+    let events = o.update(scan(vec![build("target", Some(GB)), copy.clone()]), T0 + 1);
+    let Event::Changed { added, .. } = &events[0] else { panic!("{events:?}") };
+    assert_eq!(added[0].item.category, Category::Copies);
+
+    let wt = as_worktree(&copy);
+    let events = o.update(scan(vec![build("target", Some(GB)), wt.clone()]), T0 + 2);
+    assert_eq!(events.len(), 1, "{events:?}");
+    let Event::Changed { added, removed, .. } = &events[0] else { panic!("{events:?}") };
+    assert!(removed.is_empty(), "{removed:?}");
+    assert_eq!(added.len(), 1, "{added:?}");
+    assert_eq!(added[0].item.key, copy.key);
+    assert_eq!(added[0].item.category, Category::Worktrees);
+    assert!(added[0].new);
+    assert_eq!(added[0].first_seen_ms, T0 + 1, "first seen stays when it was first seen");
+    // The report agrees, and nothing more is said when nothing changes any more.
+    let r = o.report(false);
+    assert_eq!(r.items.iter().find(|i| i.item.key == copy.key).unwrap().item.category, Category::Worktrees);
+    assert!(o.update(scan(vec![build("target", Some(GB)), wt]), T0 + 3).is_empty());
+}
+
+#[test]
+fn a_baseline_item_that_changes_category_is_added_again_and_stays_not_new() {
+    let copy = as_copy(r"D:\Projects\mukade-old");
+    let mut o = Observer::new(scan(vec![copy.clone()]), quiet(), T0);
+    let events = o.update(scan(vec![as_worktree(&copy)]), T0 + 1);
+    let Event::Changed { added, removed, .. } = &events[0] else { panic!("{events:?}") };
+    assert!(removed.is_empty());
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].item.category, Category::Worktrees);
+    assert!(!added[0].new);
+    assert_eq!(added[0].first_seen_ms, T0);
+}
+
+#[test]
+fn a_new_copy_that_becomes_a_worktree_counts_for_the_worktree_threshold_and_the_clean_command() {
+    let copy = as_copy(r"D:\Projects\mukade-spike");
+    let mut o = Observer::new(scan(vec![]), params(u64::MAX, 1), T0);
+    let events = o.update(scan(vec![copy.clone(), worktree("other")]), T0 + 1);
+    assert!(events.iter().all(|e| matches!(e, Event::Changed { .. })), "one new worktree is not more than one: {events:?}");
+    assert_eq!(o.report(false).clean_command, None, "a copy is caution: not in the command");
+
+    let events = o.update(scan(vec![as_worktree(&copy), worktree("other")]), T0 + 2);
+    let Event::Attention { kind, value, threshold, clean_command } = events.last().unwrap() else { panic!("{events:?}") };
+    assert_eq!((*kind, *value, *threshold), (AttentionKind::Worktrees, 2, 1));
+    let command = clean_command.as_deref().expect("the recommended worktree is in the command");
+    assert!(command.contains("mukade-spike") && !command.contains("other"), "{command}");
+    assert_eq!(events.iter().filter(|e| matches!(e, Event::Attention { .. })).count(), 1, "{events:?}");
+    assert_eq!(o.report(false).attention, vec![AttentionKind::Worktrees]);
+}
+
+#[test]
+fn a_later_measure_that_gives_nothing_keeps_the_last_bytes_and_their_time() {
+    // A build folder that outgrows the measuring caps after the start: the check measures it
+    // again and gets `None`. The report keeps the last measured value (and when it was measured).
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), quiet(), T0);
+    o.update(scan(vec![build("target", Some(GB + 10 * MB))]), T0 + 10);
+    o.update(scan(vec![build("target", None)]), T0 + 20);
+    let r = o.report(false);
+    assert_eq!(r.items[0].item.bytes, Some(GB + 10 * MB));
+    assert_eq!(r.items[0].measured_at_ms, Some(T0 + 10));
+    assert_eq!(r.growth_bytes, (10 * MB) as i64);
+}

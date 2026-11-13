@@ -154,7 +154,7 @@ Guida per chi lo usa: `docs/xiox-observe.md` (in inglese).
 
 - Il crate `xiox-observer`: fotografia iniziale, differenze fra un controllo e l'altro, soglie con
   riarmo, resoconto, misura dei pesi con limiti (200.000 voci e 10 secondi per cartella, i collegamenti
-  non si seguono, `bytes: null` oltre il limite). Funzioni pure: non toccano disco, orologio né git.
+  non si seguono, `bytes: null` per una voce mai misurata oltre il limite). Funzioni pure: non toccano disco, orologio né git.
   `too_shallow` e `is_recommended` sono passate in `xiox-project`, in modo che l'elenco di `analyze`
   e il comando dell'osservatore usino la stessa regola.
 - Il comando `xiox observe [<project>]` in `xiox-cli`: parametri `--interval` (predefinito 600,
@@ -203,17 +203,20 @@ Guida per chi lo usa: `docs/xiox-observe.md` (in inglese).
 - Le voci non misurate valgono 0 nella crescita e vengono misurate di nuovo a ogni controllo; dopo la
   partenza si rimisurano solo le voci nuove e le cartelle `builds` della fotografia.
 - Un cambio di categoria della stessa cartella fra due controlli (osservato: un worktree creato mentre
-  un controllo girava, elencato come copia da quel controllo) non genera un evento: la chiave è il
-  percorso.
+  un controllo girava, elencato come copia da quel controllo e come worktree dal successivo): la
+  chiave è il percorso, quindi la voce non è mai contata due volte; `changed` la elenca di nuovo in
+  `added` nella categoria nuova (`new` e `firstSeenMs` invariati). Corretto dopo la revisione: la
+  prima versione taceva e chi leggeva solo gli eventi restava con la categoria vecchia.
 - Il panic hook scrive solo su stderr, senza poter restare bloccato dal blocco di stderr, e il processo
   esce con un codice diverso da zero. `--interval` ha un massimo (30 giorni).
 
 ### Prove
 
-- Suite completa del workspace (`cargo test -j 1 --workspace --exclude mukade`): **1093 superati, 0
-  falliti, 20 ignorati** (prima dell'osservatore: 1013 superati, 0 falliti, 20 ignorati). Nuovi test:
-  `xiox-observer` 27, `xiox-cli` 87 di unità e 27 sul binario (compresi quelli di `observe` e `--mcp`
-  che avviano il binario di debug con gli interruttori di prova su alberi finti).
+- Suite completa del workspace (`cargo test -j 1 --workspace --exclude mukade`): **1097 superati, 0
+  falliti, 20 ignorati** (prima dell'osservatore: 1013 superati, 0 falliti, 20 ignorati).
+  Totali dei crate toccati: `xiox-observer` 31 test, `xiox-cli` 87 di unità e 27 sul binario (compresi
+  quelli di `observe` e `--mcp` che avviano il binario di debug con gli interruttori di prova su alberi
+  finti), `xiox-project` 107.
 - Build di rilascio (`cargo build -j 1 --release --locked -p xiox-desktop -p xiox-cli`): `xiox.exe`
   3.191.808 byte (circa 3,2 MB), `xiox-ui.exe` 12.262.400 byte (invariato dall'osservatore: l'app non
   dipende da `xiox-cli`).
@@ -221,8 +224,11 @@ Guida per chi lo usa: `docs/xiox-observe.md` (in inglese).
 ### Limiti noti
 
 - Non c'è osservazione in tempo reale: un worktree creato e tolto fra due controlli non si vede mai.
-- Le dimensioni hanno un tetto (200.000 voci o 10 secondi per cartella): oltre, `bytes` è `null` e
-  la voce vale 0 nella crescita; un sottoalbero illeggibile fa sottostimare il peso.
+- Le dimensioni hanno un tetto (200.000 voci o 10 secondi per cartella): oltre, una voce mai misurata
+  ha `bytes: null` e vale 0 nella crescita; una voce già misurata conserva l'ultimo valore e il suo
+  `measuredAtMs`, quindi una cartella `builds` che supera il tetto dopo la partenza smette di crescere
+  nel resoconto senza dirlo (la crescita può essere sottostimata); un sottoalbero illeggibile fa
+  sottostimare il peso.
 - Senza elevazione la ricerca di copie e cartelle per nome è la camminata limitata dell'analisi mirata
   (tre livelli): un progetto più in profondità può sfuggire (nota `walk-may-miss-deep-folders`).
 - Nessuna attribuzione a una sessione o a un harness: «comparso da quando sono partito».

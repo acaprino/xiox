@@ -194,7 +194,7 @@ xiox observe [<project>] [--interval <seconds>] [--grow-threshold <size>]
 
 | Flag | Default | What it does |
 |---|---|---|
-| `<project>` | the current folder | The project to watch. It must exist (`error: path not found: ...`, exit code 1). |
+| `<project>` | the current folder | The project to watch. It must exist: in default mode a missing folder ends the process (`error: path not found: ...`, exit code 1, empty stdout); with `--mcp` the server starts anyway and every tool call answers that error (see [Troubleshooting](#troubleshooting)). |
 | `--interval <seconds>` | `600` | Seconds between two checks. A whole number from `60` to `2592000` (30 days); anything else is a usage error (exit code 2). The timer restarts after every check, including the one a `report` runs. Does not apply with `--mcp`. |
 | `--grow-threshold <size>` | `2GB` | Growth since the start that raises an `attention` event. Units `B`, `KB`, `MB`, `GB`, `TB` (binary: `1 KB` = `1 KiB` = 1024 bytes; `KiB`, `MiB`, ... are the same), any case, optional space, decimals allowed: `500MB`, `1.5GiB`, `1073741824`. Zero or garbage is a usage error. |
 | `--worktree-threshold <n>` | `3` | New worktrees (more than this many) that raise an `attention` event. A whole number, at least `1`. |
@@ -226,7 +226,7 @@ Everything meant for a person goes to **stderr**.
 | Code | Meaning |
 |---|---|
 | `0` | Ended normally: `stop`, end of stdin, or the reader of stdout went away (closed pipe). |
-| `1` | Error: the project path does not exist or is not a folder; in default mode, the first analysis failed (stdout is then empty and the reason is on stderr); stdout cannot be written; stdin cannot be read; the reader thread cannot start. An internal error (a panic) is reported on stderr and ends the process with a non-zero code. |
+| `1` | Error. In default mode: the project path does not exist or is not a folder, or the first analysis failed (stdout is then empty and the reason is on stderr); in both modes: stdout cannot be written, stdin cannot be read. Default mode also: the reader thread cannot start, or the `started` line cannot be written as JSON. An internal error (a panic) is reported on stderr and ends the process with a non-zero code. With `--mcp` a missing folder or a failed first analysis is **not** an exit: the server stays up and ends with `0` at the end of stdin. |
 | `2` | Wrong usage: unknown flag, a flag of another command, a value out of range, a second project. Nothing is analysed. |
 
 ## Events (JSON lines)
@@ -254,8 +254,25 @@ that only the observer knows:
 | `firstSeenMs` | When the observer first saw it. For an item of the first snapshot: when the process started. |
 | `measuredAtMs` | When `bytes` was last measured, or `null` if it never was. |
 
-`bytes` is `null` while the item has not been measured: it has no folder to measure, or the
+`bytes` is `null` while the item has never been measured: it has no folder to measure, or the
 measuring hit a limit or could not read it (see [Limits](#limits)).
+
+A `changed` event can list an item that an earlier event already listed: when a check finds the
+same folder (same `key`) in **another category** than before (for example a worktree that git was
+still creating when the previous check ran, and that was seen as a copy), it is listed again in
+`added`, in its current category, with `new` and `firstSeenMs` unchanged. A consumer that keeps
+the items from the events should replace the item with the same `key`. The `report` is always the
+source of truth.
+
+A project that is not a git repository is watched too: `isRepo` is `false`, and the report carries
+`"notes": [{"type": "not-a-repository"}, ...]`. Only build folders, name-matched folders and
+sessions can be listed (`items` is `[]` when there are none).
+
+If an item has a path that JSON cannot carry (a folder name that is not valid Unicode), the event
+that would list it is replaced by an `error` event (`cannot write an event as JSON: path contains
+invalid UTF-8 characters`, also on stderr) and the observer goes on; in MCP mode the tool answers
+`isError: true` with `The report cannot be written as JSON: ...`. If the `started` line itself
+cannot be written, the process exits with 1.
 
 If a check fails (for example the project folder was moved or deleted), the observer writes an `error` event
 and the same text on stderr, keeps the last good picture, and tries again at the next tick. A
@@ -544,8 +561,10 @@ shown [above](#the-report-and-cleancommand):
   that it answers a tool result with `isError: true` and the text
   `The first analysis of the project is still running. Call project_leftovers again in a moment.`
   The agent can call again; the snapshot is not lost.
-- If the first analysis **failed**, the server stays up and reports it on stderr. Each later
-  call tries the first analysis again, and while that fails the result is `isError: true` with
+- If the first analysis **failed** (for example the project folder does not exist), the server
+  stays up and reports it on stderr. The call that finds the failure, and every later call,
+  tries the first analysis again **at once and without the 30 second bound**, so a call can last
+  as long as a whole analysis. While it fails the result is `isError: true` with
   `The project could not be analysed: <reason>. No report is available yet.` **Caveat:** the
   snapshot is then taken by the first call that succeeds, so everything that existed before
   that call is `new: false`, including what the agent created in the meantime. `startedAtMs`
@@ -559,8 +578,9 @@ server keeps running after any of them.
 
 ## Configuring an MCP client
 
-An MCP client starts the server with a command and its arguments, over stdio. The entry is the
-same everywhere:
+An MCP client starts the server with a command and its arguments, over stdio. The command and
+the arguments are the same for every client; the JSON (or TOML) around them differs by client.
+In JSON they are:
 
 ```json
 {"command": "xiox", "args": ["observe", "C:\\path\\to\\project", "--mcp"]}
@@ -610,8 +630,11 @@ and nothing else on stdout.
   `mft-index`, `parent-only`), and `notes` says when the walk may have missed deeper folders
   (`walk-may-miss-deep-folders`). `--no-drives` limits the search to the project's parent folder.
 - **Sizes are measured with caps.** Each folder is measured by walking it, for at most
-  200,000 entries and 10 seconds. Over either, or when the folder cannot be read, its `bytes`
-  is `null` and it counts 0 in the growth. Links and junctions are not followed. A subfolder that
+  200,000 entries and 10 seconds. Over either, or when the folder cannot be read, the measure
+  gives nothing: an item never measured has `bytes: null` and counts 0 in the growth, but an
+  item measured before **keeps its last measured `bytes`** and its old `measuredAtMs`. So a build
+  folder that outgrows the caps after the start stops growing in the report, silently: `growthBytes`
+  can understate it, and a stale `measuredAtMs` is the hint. Links and junctions are not followed. A subfolder that
   cannot be read is skipped, so the size can be under-counted. The measurer is the same at the
   start and at every check, so growth is never the difference between two different measurers.
 - **Only new items and build folders are measured again.** An item of the first snapshot that
@@ -621,10 +644,11 @@ and nothing else on stdout.
   its starting size.
 - **Checks, not events.** There is no real-time watching of files. A worktree created and
   removed between two checks is never seen. Between checks nothing happens.
-- **A change of category is not an event.** An item is identified by its path. If the same folder
-  is listed in another category by a later check, no `changed` event is written: the report
-  always shows the current category. (Seen in a real run: a worktree that was created while a
-  check was running was listed as a copy by that check and as a worktree by the next.)
+- **An item is identified by its path.** If the same folder is listed in another category by a
+  later check, `changed` lists it again in its new category (see [Events](#events-json-lines)); it
+  is never counted twice in the totals, the growth or the worktree threshold. (Seen in a real run: a
+  worktree that was created while a check was running was listed as a copy by that check and as a
+  worktree by the next.)
 - **No attribution.** The observer says what appeared since it started. It does not say which
   agent, session or harness created it, and it does not read sessions for that. Two agents
   working in the same project are seen together.
@@ -650,8 +674,12 @@ the pipe closes. Make sure the program that starts it keeps the stdin pipe open 
 as it wants the observer to live (for example, started with input redirected from `NUL` it
 exits after printing `started`). Closing stdin is also the way to stop it.
 
-**`error: path not found: <path>` (exit code 1).** The project folder does not exist or is not
-a folder. Stdout is empty.
+**`error: path not found: <path>` (exit code 1, default mode).** The project folder does not exist
+or is not a folder. Stdout is empty. In MCP mode the same mistake does **not** stop the server:
+`initialize` and `tools/list` answer normally, and every `tools/call` returns `isError: true` with
+`The project could not be analysed: path not found: <path>. No report is available yet.` (the exit
+code is still `0` at the end of stdin). A mistyped path in a client configuration is the likeliest
+cause: fix the path in the client configuration and restart the server.
 
 **An error about usage (exit code 2).** The message says which flag is wrong, for example
 `--interval must be at least 60 seconds, not 30`, `--interval must be at most 2592000 seconds
@@ -664,7 +692,7 @@ the folder was moved or deleted). The observer stays up and tries again; reports
 marked `stale: true` until a check succeeds. The same text goes to stderr.
 
 **The first analysis fails.** Default mode: the reason is on stderr, stdout is empty, exit code
-1. MCP mode: the server stays up and each call tries again (see
+1. MCP mode: the server stays up and each call tries again, synchronously (see
 [MCP mode](#mcp-mode), including the caveat about `new`).
 
 **A parser breaks on stdout.** It should not: stdout carries only JSON lines. Everything meant
