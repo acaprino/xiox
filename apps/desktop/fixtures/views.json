@@ -25,7 +25,7 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
+            "note": "7 items · 4 selected",
             "bytes": null,
             "active": true
           },
@@ -285,6 +285,36 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": null,
+            "sizeText": null,
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -330,7 +360,7 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
+            "note": "7 items · 4 selected",
             "bytes": null,
             "active": true
           },
@@ -416,7 +446,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows temporary files",
             "sub": "%TEMP%, C:\\Windows\\Temp",
             "level": "recommended",
@@ -446,7 +476,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Recycle Bin",
             "sub": "all drives",
             "level": "recommended",
@@ -476,7 +506,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "User temporary files",
             "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
             "level": "recommended",
@@ -506,7 +536,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows log files",
             "sub": "C:\\Windows\\Logs",
             "level": "recommended",
@@ -536,7 +566,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows Error Reporting",
             "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
             "level": "caution",
@@ -566,7 +596,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Memory dumps",
             "sub": "C:\\Windows\\Minidump",
             "level": "optional",
@@ -590,6 +620,36 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": null,
+            "sizeText": null,
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -638,8 +698,8 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
-            "bytes": 13314398618,
+            "note": "7 items · 4 selected",
+            "bytes": 14048401818,
             "active": true
           },
           {
@@ -703,7 +763,7 @@
           }
         ],
         "title": "System",
-        "subtitle": "6 items · largest first",
+        "subtitle": "7 items · largest first",
         "columns": [
           {
             "title": "Item",
@@ -946,6 +1006,44 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": 734003200,
+            "sizeText": "700.0 MB",
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "files",
+                "312"
+              ],
+              [
+                "size",
+                "700.0 MB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -987,8 +1085,8 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
-            "bytes": 13314398618,
+            "note": "7 items · 4 selected",
+            "bytes": 14048401818,
             "active": true
           },
           {
@@ -1052,7 +1150,7 @@
           }
         ],
         "title": "System",
-        "subtitle": "6 items · largest first",
+        "subtitle": "7 items · largest first",
         "columns": [
           {
             "title": "Item",
@@ -1073,7 +1171,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows temporary files",
             "sub": "%TEMP%, C:\\Windows\\Temp",
             "level": "recommended",
@@ -1111,7 +1209,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Recycle Bin",
             "sub": "all drives",
             "level": "recommended",
@@ -1149,7 +1247,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "User temporary files",
             "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
             "level": "recommended",
@@ -1187,7 +1285,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows log files",
             "sub": "C:\\Windows\\Logs",
             "level": "recommended",
@@ -1225,7 +1323,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows Error Reporting",
             "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
             "level": "caution",
@@ -1263,7 +1361,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Memory dumps",
             "sub": "C:\\Windows\\Minidump",
             "level": "optional",
@@ -1295,6 +1393,44 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": 734003200,
+            "sizeText": "700.0 MB",
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "files",
+                "312"
+              ],
+              [
+                "size",
+                "700.0 MB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -1305,14 +1441,14 @@
             "id": "analyze",
             "label": "Analyze",
             "key": "a",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "clean",
             "label": "Clean 4 items",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],
@@ -1387,8 +1523,8 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
-            "bytes": 13314398618,
+            "note": "7 items · 4 selected",
+            "bytes": 14048401818,
             "active": true
           },
           {
@@ -1452,7 +1588,7 @@
           }
         ],
         "title": "System",
-        "subtitle": "6 items · largest first",
+        "subtitle": "7 items · largest first",
         "columns": [
           {
             "title": "Item",
@@ -1473,7 +1609,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows temporary files",
             "sub": "%TEMP%, C:\\Windows\\Temp",
             "level": "recommended",
@@ -1511,7 +1647,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Recycle Bin",
             "sub": "all drives",
             "level": "recommended",
@@ -1549,7 +1685,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "User temporary files",
             "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
             "level": "recommended",
@@ -1587,7 +1723,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows log files",
             "sub": "C:\\Windows\\Logs",
             "level": "recommended",
@@ -1625,7 +1761,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows Error Reporting",
             "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
             "level": "caution",
@@ -1663,7 +1799,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Memory dumps",
             "sub": "C:\\Windows\\Minidump",
             "level": "optional",
@@ -1695,6 +1831,44 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": 734003200,
+            "sizeText": "700.0 MB",
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "files",
+                "312"
+              ],
+              [
+                "size",
+                "700.0 MB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -1743,8 +1917,8 @@
           {
             "id": "cat:system",
             "name": "System",
-            "note": "6 items · 4 selected",
-            "bytes": 13314398618,
+            "note": "7 items · 4 selected",
+            "bytes": 14048401818,
             "active": true
           },
           {
@@ -1808,7 +1982,7 @@
           }
         ],
         "title": "System",
-        "subtitle": "6 items · largest first",
+        "subtitle": "7 items · largest first",
         "columns": [
           {
             "title": "Item",
@@ -1829,7 +2003,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows temporary files",
             "sub": "%TEMP%, C:\\Windows\\Temp",
             "level": "recommended",
@@ -1867,7 +2041,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Recycle Bin",
             "sub": "all drives",
             "level": "recommended",
@@ -1905,7 +2079,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "User temporary files",
             "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
             "level": "recommended",
@@ -1943,7 +2117,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows log files",
             "sub": "C:\\Windows\\Logs",
             "level": "recommended",
@@ -1981,7 +2155,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows Error Reporting",
             "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
             "level": "caution",
@@ -2019,7 +2193,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Memory dumps",
             "sub": "C:\\Windows\\Minidump",
             "level": "optional",
@@ -2051,6 +2225,44 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [],
+            "lines": [],
+            "id": "cat:6",
+            "name": "Windows Update downloads",
+            "sub": "C:\\Windows\\SoftwareDistribution\\Download",
+            "level": "caution",
+            "bytes": 734003200,
+            "sizeText": "700.0 MB",
+            "why": "Windows Update is installing updates right now; try again when it is done.",
+            "detail": [
+              [
+                "item",
+                "Windows Update downloads"
+              ],
+              [
+                "files",
+                "312"
+              ],
+              [
+                "size",
+                "700.0 MB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ]
           }
         ],
         "bulk": false,
@@ -2061,14 +2273,14 @@
             "id": "analyze",
             "label": "Analyze",
             "key": "a",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "clean",
             "label": "Clean 4 items",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],
@@ -2345,7 +2557,7 @@
         "job": null,
         "status": {
           "badge": "Scan done",
-          "text": "24 problems found in 4 categories"
+          "text": "26 problems found in 4 categories"
         },
         "nav": [],
         "options": [
@@ -2383,7 +2595,7 @@
           }
         ],
         "title": "Registry problems",
-        "subtitle": "4 groups · 24 problems",
+        "subtitle": "5 groups · 26 problems",
         "columns": [
           {
             "title": "Problem",
@@ -2522,6 +2734,39 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [
+              "Startup",
+              "2"
+            ],
+            "lines": [],
+            "id": "i:4",
+            "name": "Protected service registration",
+            "sub": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend",
+            "level": "caution",
+            "bytes": null,
+            "sizeText": null,
+            "why": "Protected by Windows; Xiox never changes this entry.",
+            "detail": [
+              [
+                "item",
+                "Protected service registration"
+              ],
+              [
+                "key",
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ]
           }
         ],
         "bulk": true,
@@ -2560,7 +2805,7 @@
         "job": null,
         "status": {
           "badge": "Scan done",
-          "text": "24 problems found in 4 categories"
+          "text": "26 problems found in 4 categories"
         },
         "nav": [],
         "options": [
@@ -2598,7 +2843,7 @@
           }
         ],
         "title": "Registry problems",
-        "subtitle": "4 groups · 24 problems",
+        "subtitle": "5 groups · 26 problems",
         "columns": [
           {
             "title": "Problem",
@@ -2623,7 +2868,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Missing shared DLL",
             "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
             "level": "recommended",
@@ -2656,7 +2901,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Orphaned uninstall entry",
             "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OldTool",
             "level": "recommended",
@@ -2685,7 +2930,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Broken file association",
             "sub": "HKCU\\Software\\Classes\\.xyz",
             "level": "optional",
@@ -2714,7 +2959,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Stale startup entry",
             "sub": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "level": "caution",
@@ -2737,6 +2982,39 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [
+              "Startup",
+              "2"
+            ],
+            "lines": [],
+            "id": "i:4",
+            "name": "Protected service registration",
+            "sub": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend",
+            "level": "caution",
+            "bytes": null,
+            "sizeText": null,
+            "why": "Protected by Windows; Xiox never changes this entry.",
+            "detail": [
+              [
+                "item",
+                "Protected service registration"
+              ],
+              [
+                "key",
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ]
           }
         ],
         "bulk": true,
@@ -2753,14 +3031,14 @@
             "id": "scan",
             "label": "Scan",
             "key": "s",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "fix",
             "label": "Fix 2 groups",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],
@@ -2864,7 +3142,7 @@
           }
         ],
         "title": "Registry problems",
-        "subtitle": "4 groups · 24 problems",
+        "subtitle": "5 groups · 26 problems",
         "columns": [
           {
             "title": "Problem",
@@ -2889,7 +3167,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Missing shared DLL",
             "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
             "level": "recommended",
@@ -2922,7 +3200,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Orphaned uninstall entry",
             "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OldTool",
             "level": "recommended",
@@ -2951,7 +3229,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Broken file association",
             "sub": "HKCU\\Software\\Classes\\.xyz",
             "level": "optional",
@@ -2980,7 +3258,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Stale startup entry",
             "sub": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "level": "caution",
@@ -3003,6 +3281,39 @@
               ]
             ],
             "lines": []
+          },
+          {
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "muted": true,
+            "cells": [
+              "Startup",
+              "2"
+            ],
+            "lines": [],
+            "id": "i:4",
+            "name": "Protected service registration",
+            "sub": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend",
+            "level": "caution",
+            "bytes": null,
+            "sizeText": null,
+            "why": "Protected by Windows; Xiox never changes this entry.",
+            "detail": [
+              [
+                "item",
+                "Protected service registration"
+              ],
+              [
+                "key",
+                "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinDefend"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ]
           }
         ],
         "bulk": true,
@@ -3623,7 +3934,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Fax",
             "sub": "Fax",
             "level": "recommended",
@@ -3664,7 +3975,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Connected User Experiences and Telemetry",
             "sub": "DiagTrack",
             "level": "recommended",
@@ -3705,7 +4016,7 @@
             "kind": "item",
             "parent": null,
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "Downloaded Maps Manager",
             "sub": "MapsBroker",
             "level": "recommended",
@@ -3746,7 +4057,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "Windows Search",
             "sub": "WSearch",
             "level": "optional",
@@ -3787,7 +4098,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "SysMain",
             "sub": "SysMain",
             "level": "caution",
@@ -3832,21 +4143,21 @@
             "id": "refresh",
             "label": "Refresh",
             "key": "r",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "disable",
             "label": "Disable",
             "key": null,
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "manual",
             "label": "Set to Manual",
             "key": null,
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
@@ -4198,8 +4509,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -4441,8 +4752,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": true
           },
           {
@@ -4504,7 +4815,7 @@
           }
         ],
         "title": "Worktrees",
-        "subtitle": "3 worktrees · largest first",
+        "subtitle": "4 worktrees · largest first",
         "columns": [
           {
             "title": "Worktree",
@@ -4588,6 +4899,42 @@
               [
                 "level",
                 "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "w:3",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "name": "wip-search",
+            "sub": "D:\\Projects\\acme-api-wt\\wip-search",
+            "level": "caution",
+            "cells": [
+              "wip/search"
+            ],
+            "bytes": 41943040,
+            "sizeText": "40.0 MB",
+            "muted": true,
+            "why": "Has uncommitted changes (3 files); commit or stash them before removing it.",
+            "detail": [
+              [
+                "item",
+                "wip-search"
+              ],
+              [
+                "size",
+                "40.0 MB"
+              ],
+              [
+                "level",
+                "caution"
               ],
               [
                 "mode",
@@ -4693,8 +5040,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -5120,8 +5467,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -5208,7 +5555,7 @@
             "kind": "item",
             "parent": null,
             "check": "mixed",
-            "enabled": true,
+            "enabled": false,
             "name": "acme-api",
             "sub": "D:\\Projects\\acme-api",
             "level": "recommended",
@@ -5240,7 +5587,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "target",
             "sub": "cargo build output",
             "level": "recommended",
@@ -5268,7 +5615,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "node_modules",
             "sub": "npm packages",
             "level": "recommended",
@@ -5296,7 +5643,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "old-prototype",
             "sub": "D:\\Projects\\old-prototype",
             "level": "optional",
@@ -5328,14 +5675,14 @@
             "id": "analyze",
             "label": "Analyze",
             "key": "a",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "clean",
             "label": "Clean 1 folder",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],
@@ -5400,8 +5747,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -5488,7 +5835,7 @@
             "kind": "item",
             "parent": null,
             "check": "mixed",
-            "enabled": true,
+            "enabled": false,
             "name": "acme-api",
             "sub": "D:\\Projects\\acme-api",
             "level": "recommended",
@@ -5520,7 +5867,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "target",
             "sub": "cargo build output",
             "level": "recommended",
@@ -5548,7 +5895,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "node_modules",
             "sub": "npm packages",
             "level": "recommended",
@@ -5576,7 +5923,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "old-prototype",
             "sub": "D:\\Projects\\old-prototype",
             "level": "optional",
@@ -5608,14 +5955,14 @@
             "id": "analyze",
             "label": "Analyze",
             "key": "a",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "clean",
             "label": "Clean 1 folder",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],
@@ -5676,8 +6023,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -5764,7 +6111,7 @@
             "kind": "item",
             "parent": null,
             "check": "mixed",
-            "enabled": true,
+            "enabled": false,
             "name": "acme-api",
             "sub": "D:\\Projects\\acme-api",
             "level": "recommended",
@@ -5796,7 +6143,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "target",
             "sub": "cargo build output",
             "level": "recommended",
@@ -5824,7 +6171,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "node_modules",
             "sub": "npm packages",
             "level": "recommended",
@@ -5852,7 +6199,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "old-prototype",
             "sub": "D:\\Projects\\old-prototype",
             "level": "optional",
@@ -5926,8 +6273,8 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 2 selected",
-            "bytes": 966367642,
+            "note": "4 worktrees · 2 selected",
+            "bytes": 1008310682,
             "active": false
           },
           {
@@ -6014,7 +6361,7 @@
             "kind": "item",
             "parent": null,
             "check": "mixed",
-            "enabled": true,
+            "enabled": false,
             "name": "acme-api",
             "sub": "D:\\Projects\\acme-api",
             "level": "recommended",
@@ -6046,7 +6393,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "on",
-            "enabled": true,
+            "enabled": false,
             "name": "target",
             "sub": "cargo build output",
             "level": "recommended",
@@ -6074,7 +6421,7 @@
             "kind": "child",
             "parent": "p:1",
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "node_modules",
             "sub": "npm packages",
             "level": "recommended",
@@ -6102,7 +6449,7 @@
             "kind": "item",
             "parent": null,
             "check": "off",
-            "enabled": true,
+            "enabled": false,
             "name": "old-prototype",
             "sub": "D:\\Projects\\old-prototype",
             "level": "optional",
@@ -6134,14 +6481,14 @@
             "id": "analyze",
             "label": "Analyze",
             "key": "a",
-            "enabled": true,
+            "enabled": false,
             "primary": false
           },
           {
             "id": "clean",
             "label": "Clean 1 folder",
             "key": "Enter",
-            "enabled": true,
+            "enabled": false,
             "primary": true
           }
         ],

@@ -1,26 +1,80 @@
 // The scripted stand-in for the Rust core: serves the fixture views and their transitions.
-// The Rust `FakeBackend` (Task 11) implements the same transition table over the same fixture.
-// No DOM and no Vite here, so `node --experimental-strip-types --test` can load it.
+// The Rust `FakeBackend` (Task 11) must implement exactly this machine over the same fixture
+// (fixtures/views.json) and replay fixtures/intent-script.json, which tests/mockrules.test.ts
+// replays here. No DOM and no Vite in this file, so `node --experimental-strip-types --test` loads it.
 //
-//   intent                         from                          to
-//   show(s)                        -                             the current state (initial: cleanup:idle,
-//                                                                registry:idle, services:loaded, developers:idle)
-//   analyze / scan / refresh       not busy                      the busy state; each tick pushes it with
-//                                                                job.fraction 1/3, 2/3, 1; the tick after lands
-//                                                                on analyzed (Developers projects, Services loaded)
-//   select{category}  Developers   projects/worktrees/sessions   that state
-//   select{category}  other        any                           same state, nav[].active moved
-//   toggle{row}                    any                           same state, that row on<->off (mixed -> on)
-//   openConfirm / openFix          analyzed-like                 confirm (Registry: backup)
-//   setAck{on}                     a dialog with an ack box      same, dialog.ack = on, primary button enabled = on
-//   confirm / fix / permanent      confirm / backup / shortfall  cleaning / fixing for 3 ticks, then report
-//                                                                (Registry: fixed); Services goes back to loaded
-//                                                                at once with an ok notice
-//   closeDialog                    a dialog or a report          the state it was opened from
-//   cancel                         a busy state                  the state before the job
-//   anything else                  -                             unchanged
+// A VIEW is a fixture state (`cleanup:analyzed`...). The model holds, per section, the name of the
+// current state, a revision counter, and a few memories (below). Fixture states are fixed copies:
+// a toggle or an ack changes the view it was made in and nothing else (the confirm / cleaning /
+// report copies of a list do not follow the toggles made in the analysed one); the list does not
+// change with the Cleanup category (`select` only moves `nav[].active`).
 //
-// `rev` grows by one on every view the model returns.
+// REVISIONS. `rev` starts at 0 and grows by one on EVERY view the model returns or pushes: `show`,
+// `view`, `go`, each `intent` (also an ignored or refused one: the same state with a new rev) and
+// each view `tick` pushes. Revisions are per section.
+//
+// STATES. Initial: cleanup:idle, registry:idle, services:loaded, developers:idle. Busy states (a job
+// runs) and what they land on after their ticks:
+//   cleanup    analyzing -> analyzed      cleaning -> report
+//   registry   scanning  -> analyzed      fixing   -> fixed
+//   services   loading   -> loaded
+//   developers analyzing -> projects      cleaning -> report
+// "Home" (where cancel / closeDialog fall back when nothing was recorded, e.g. after `go`):
+//   cleanup analyzed, registry analyzed, services loaded, developers projects.
+// "Analyzed-like" (where a dialog can be opened): cleanup analyzed, registry analyzed, services loaded,
+//   developers projects / worktrees / sessions.
+// FROZEN = a job runs (busy state) OR the view has a dialog OR the view has a report.
+//
+// INTENTS (any section unless named). `kind` is the intent's `kind`.
+//   analyze (cleanup, developers) | scan (registry) | refresh (services)
+//       refused when FROZEN. Otherwise records the current state as `back`, clears the Services notice,
+//       goes to the busy state (analyzing / scanning / loading). That first view has job.fraction 0.
+//   tick (the timer: not an intent; returns the views pushed, in section order cleanup, registry,
+//       services, developers, at most one per section)
+//       a section that is not busy pushes nothing. A busy section counts its ticks: tick 1, 2, 3 push the
+//       busy view with job.fraction 1/3, 2/3, 1 (same state); tick 4 goes to the landing state and
+//       pushes that view (no job). Every pushed view bumps the rev.
+//   select{category} (cleanup)       refused when FROZEN or when the category is not in nav; otherwise the
+//       same state, and from now on every view of the section has nav[].active moved to that id (the
+//       model remembers it across states and revs and rewrites nav[].active on every view it returns;
+//       it applies only to views whose nav has that id).
+//   select{category} (developers)    only from projects / worktrees / sessions to one of the three
+//       (so never when FROZEN); goes to that state. No memory is needed: each state's nav marks its own.
+//   toggle{row}                      refused when FROZEN, or when the row is missing, disabled
+//       (enabled false: blocked rows) or has check 'none'. Otherwise that row's check goes on<->off
+//       (mixed -> on) in the current fixture state; nothing else is recounted.
+//   openConfirm (cleanup, developers) | openFix (registry) | openConfirm{action} (services)
+//       only from an analyzed-like state AND only when the action is enabled in the current view
+//       (cleanup / developers action `clean`; registry `fix`; services the action named by `action`:
+//       disable | manual | restore). Records the current state as `back`, clears the Services notice,
+//       remembers the services action, goes to the dialog state (confirm; registry: backup). A dialog's
+//       ack box is reset to false and its primary button to disabled each time it opens.
+//   setAck{on} (developers only)     only when the current view has a dialog with an ack box (ack not
+//       null): dialog.ack = on and the primary button enabled = on. Anything else ignores it.
+//   confirm (cleanup, services, developers) | fix{backup} (registry) | permanent (developers)
+//       run only from the right dialog state AND when the dialog's button for that intent is enabled AND
+//       the dialog's ack is null or true:
+//         cleanup confirm: state confirm, button `continue`.   services confirm: state confirm, `continue`.
+//         developers confirm: state confirm, button `clean`.   developers permanent: state shortfall,
+//         button `permanent`.   registry fix{backup}: state backup, button `backup` (true) / `nobackup`.
+//       Then: cleanup / developers go to `cleaning`, registry to `fixing` (busy, job.fraction 0, `back`
+//       unchanged: the state recorded when the dialog opened; `go` clears it). Services goes straight
+//       back to `loaded` with one notice {tone ok, more []} whose text is, by the action:
+//         disable  "Selected services disabled."
+//         manual   "Selected services set to Manual."
+//         restore  "Original startup types restored."
+//   closeDialog                      only when the view has a dialog or a report: goes to `back`
+//       (the state the dialog was opened from; a report also returns there), else to Home.
+//   cancel                           only in a busy state: goes to `back` (the state before the job; a
+//       cancelled clean returns to the analysis, not to the dialog), else Home. A cancelled job stops
+//       ticking.
+//   anything else (search, setOnlyOld, selectAll, setAll, setInactiveDays, ...)   the same state.
+// An intent that is refused or does not apply is IGNORED: same state, new rev, nothing else changes.
+//
+// SERVICES NOTICE. The notice of `services:loaded` is cleared when a refresh starts, when a dialog opens
+// and when `show('services')` is called (the section is shown again); it is set only by a confirm.
+//
+// `go(s, state)` jumps to a named state (smoke only): resets the tick counter and `back`.
 
 import type { AboutView, AnyIntent, AppInfo, DialogView, SectionId, SectionView } from './types.ts';
 
@@ -33,13 +87,10 @@ export interface Fixture {
 const SECTIONS: readonly SectionId[] = ['cleanup', 'registry', 'services', 'developers'];
 
 const INITIAL: Record<SectionId, string> = { cleanup: 'idle', registry: 'idle', services: 'loaded', developers: 'idle' };
-/** The analysed state a job or a dialog falls back to when it was reached with `go`. */
 const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
-/** Analyzed-like states: where a confirmation can be opened. */
 const ANALYZED: Record<SectionId, readonly string[]> = {
   cleanup: ['analyzed'], registry: ['analyzed'], services: ['loaded'], developers: ['projects', 'worktrees', 'sessions'],
 };
-/** Busy state -> the state it lands on after its three ticks. */
 const LANDS: Record<SectionId, Record<string, string>> = {
   cleanup: { analyzing: 'analyzed', cleaning: 'report' },
   registry: { scanning: 'analyzed', fixing: 'fixed' },
@@ -50,25 +101,35 @@ const ANALYZE_BUSY: Record<SectionId, string> = { cleanup: 'analyzing', registry
 const ANALYZE_KIND: Record<SectionId, string> = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' };
 const OPEN_KIND: Record<SectionId, string> = { cleanup: 'openConfirm', registry: 'openFix', services: 'openConfirm', developers: 'openConfirm' };
 const DIALOG: Record<SectionId, string> = { cleanup: 'confirm', registry: 'backup', services: 'confirm', developers: 'confirm' };
-/** Dialog states a confirm / fix / permanent can run from, and the intent kinds each section accepts. */
-const RUNNABLE: Record<SectionId, readonly string[]> = {
-  cleanup: ['confirm'], registry: ['backup'], services: ['confirm'], developers: ['confirm', 'shortfall'],
-};
-const RUN_KINDS: Record<SectionId, readonly string[]> = {
-  cleanup: ['confirm'], registry: ['fix'], services: ['confirm'], developers: ['confirm', 'permanent'],
-};
-const RUN_BUSY: Record<SectionId, string | null> = { cleanup: 'cleaning', registry: 'fixing', services: null, developers: 'cleaning' };
 const DEV_CATEGORIES = ['projects', 'worktrees', 'sessions'];
+const NOTICE: Record<string, string> = {
+  disable: 'Selected services disabled.',
+  manual: 'Selected services set to Manual.',
+  restore: 'Original startup types restored.',
+};
 const TICKS = 3;
+
+/** What it takes to run: the dialog state, the dialog button and the busy state it starts; null when the intent is not a run. */
+function runRule(s: SectionId, intent: AnyIntent): { from: string; button: string; busy: string | null } | null {
+  if (s === 'cleanup' && intent.kind === 'confirm') return { from: 'confirm', button: 'continue', busy: 'cleaning' };
+  if (s === 'services' && intent.kind === 'confirm') return { from: 'confirm', button: 'continue', busy: null };
+  if (s === 'registry' && intent.kind === 'fix') return { from: 'backup', button: intent.backup ? 'backup' : 'nobackup', busy: 'fixing' };
+  if (s === 'developers' && intent.kind === 'confirm') return { from: 'confirm', button: 'clean', busy: 'cleaning' };
+  if (s === 'developers' && intent.kind === 'permanent') return { from: 'shortfall', button: 'permanent', busy: 'cleaning' };
+  return null;
+}
 
 export class MockModel {
   private readonly work: Fixture['views'];
   private readonly state: Record<SectionId, string>;
   private readonly revs: Record<SectionId, number>;
-  /** Where closeDialog and cancel go back to; undefined = HOME. */
+  /** Where closeDialog and cancel go back to; undefined = Home. */
   private readonly back: Partial<Record<SectionId, string>> = {};
   private readonly ticks: Record<SectionId, number> = { cleanup: 0, registry: 0, services: 0, developers: 0 };
+  /** The Cleanup category chosen by `select`, applied to every view whose nav has it. */
   private readonly active: Partial<Record<SectionId, string>> = {};
+  /** The Services action whose dialog is open (decides the notice text). */
+  private pendingAction = 'disable';
 
   constructor(fixture: Fixture) {
     // A working copy: toggles and acks change it, the fixture stays as loaded.
@@ -80,8 +141,9 @@ export class MockModel {
     }
   }
 
-  /** Opens a section: the view it was left in. */
+  /** Opens a section: its current view (the Services notice does not outlive the section being left). */
   show(s: SectionId): SectionView {
+    if (s === 'services') this.clearNotice();
     return this.stamp(s);
   }
 
@@ -136,10 +198,8 @@ export class MockModel {
     if (active !== undefined && view.nav.some((n) => n.id === active)) {
       view.nav = view.nav.map((n) => ({ ...n, active: n.id === active }));
     }
-    if (view.job) {
-      const landing = LANDS[s][this.state[s]];
-      // The fixture's own fraction is the starting point; ticks move it.
-      view.job = { ...view.job, fraction: landing === undefined ? view.job.fraction : Math.min(this.ticks[s], TICKS) / TICKS };
+    if (view.job && LANDS[s][this.state[s]] !== undefined) {
+      view.job = { ...view.job, fraction: Math.min(this.ticks[s], TICKS) / TICKS };
     }
     return view;
   }
@@ -148,20 +208,37 @@ export class MockModel {
     return LANDS[s][this.state[s]] !== undefined;
   }
 
+  /** A job runs, a dialog is open or a report is on screen: selection and new jobs are refused. */
+  private frozen(s: SectionId): boolean {
+    const view = this.current(s);
+    return this.isBusy(s) || view.dialog !== null || view.report !== null;
+  }
+
   private goTo(s: SectionId, state: string): void {
     if (!this.work[s][state]) throw new Error(`no state ${state} for ${s}`);
     this.state[s] = state;
     this.ticks[s] = 0;
   }
 
+  private clearNotice(): void {
+    const loaded = this.work.services[HOME.services];
+    if (loaded) loaded.notices = [];
+  }
+
+  private actionEnabled(s: SectionId, id: string): boolean {
+    return this.current(s).actions.find((a) => a.id === id)?.enabled === true;
+  }
+
   private apply(s: SectionId, intent: AnyIntent): void {
     const here = this.state[s];
     const kind = intent.kind;
     if (kind === ANALYZE_KIND[s]) {
-      if (this.isBusy(s)) return;
+      if (this.frozen(s)) return;
       this.back[s] = here;
+      if (s === 'services') this.clearNotice();
       this.goTo(s, ANALYZE_BUSY[s]);
     } else if (kind === 'select' && (s === 'cleanup' || s === 'developers')) {
+      if (this.frozen(s)) return;
       const category = (intent as { category: string }).category;
       if (s === 'developers') {
         if (DEV_CATEGORIES.includes(here) && DEV_CATEGORIES.includes(category)) this.goTo(s, category);
@@ -169,16 +246,18 @@ export class MockModel {
         this.active[s] = category;
       }
     } else if (kind === 'toggle') {
-      this.toggle(s, (intent as { row: string }).row);
+      if (!this.frozen(s)) this.toggle(s, (intent as { row: string }).row);
     } else if (kind === OPEN_KIND[s]) {
-      if (!ANALYZED[s].includes(here)) return;
+      const action = s === 'services' ? (intent as { action: string }).action : s === 'registry' ? 'fix' : 'clean';
+      if (!ANALYZED[s].includes(here) || !this.actionEnabled(s, action)) return;
       this.back[s] = here;
+      if (s === 'services') { this.clearNotice(); this.pendingAction = action; }
       this.goTo(s, DIALOG[s]);
+      this.resetAck(s);
     } else if (kind === 'setAck' && s === 'developers') {
       this.setAck((intent as { on: boolean }).on);
-    } else if (RUN_KINDS[s].includes(kind)) {
-      if (!RUNNABLE[s].includes(here)) return;
-      this.run(s);
+    } else if (runRule(s, intent) !== null) {
+      this.run(s, intent);
     } else if (kind === 'closeDialog') {
       const view = this.current(s);
       if (view.dialog === null && view.report === null) return;
@@ -203,16 +282,29 @@ export class MockModel {
     if (primary) primary.enabled = on;
   }
 
-  private run(s: SectionId): void {
-    const busy = RUN_BUSY[s];
-    if (busy === null) {
+  /** A dialog that opens again must not start pre-checked. */
+  private resetAck(s: SectionId): void {
+    const dialog = this.current(s).dialog;
+    if (!dialog || dialog.ack === null) return;
+    dialog.ack = false;
+    const primary = dialog.buttons.find((b) => b.primary);
+    if (primary) primary.enabled = false;
+  }
+
+  private run(s: SectionId, intent: AnyIntent): void {
+    const rule = runRule(s, intent);
+    if (!rule || this.state[s] !== rule.from) return;
+    const dialog = this.current(s).dialog;
+    const button = dialog?.buttons.find((b) => b.id === rule.button);
+    if (!dialog || !button || !button.enabled || (dialog.ack !== null && !dialog.ack)) return;
+    if (rule.busy === null) {
       // Services: the change is applied at once and the list comes back with a notice.
       const loaded = this.work[s][HOME[s]];
-      if (loaded) loaded.notices = [{ tone: 'ok', text: 'Startup type changed for the selected services.', more: [] }];
+      if (loaded) loaded.notices = [{ tone: 'ok', text: NOTICE[this.pendingAction] ?? NOTICE.disable ?? '', more: [] }];
       this.goTo(s, HOME[s]);
       return;
     }
     // `back` stays what it was when the dialog opened: cancel and the closed report go there.
-    this.goTo(s, busy);
+    this.goTo(s, rule.busy);
   }
 }

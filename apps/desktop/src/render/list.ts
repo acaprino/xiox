@@ -30,6 +30,12 @@ function checkbox(row: RowView, on: Handlers, section: SectionView['section']): 
   });
 }
 
+/** The line under the name: the path or reason, or, for a blocked row (muted and disabled), why it cannot be chosen. */
+function subLine(row: RowView): HTMLElement | null {
+  if (row.muted && !row.enabled && row.why) return ellipsis(row.why, 's blocked');
+  return row.sub ? ellipsis(row.sub, 's') : null;
+}
+
 function sizeText(row: RowView): string {
   if (row.bytes !== null) return formatBytes(row.bytes);
   return row.sizeText ?? '—';
@@ -49,7 +55,7 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
         })
         : anyParent ? h('span', { class: 'caret-gap' }) : null;
       parts.push(h('div', { class: 'nm' }, caret,
-        h('div', { class: 'nm-text' }, ellipsis(row.name, 't'), row.sub ? ellipsis(row.sub, 's') : null)));
+        h('div', { class: 'nm-text' }, ellipsis(row.name, 't'), subLine(row))));
     } else if (column.kind === 'cell') {
       const text = cells.shift() ?? '';
       parts.push(h('div', { class: 'cell num ellipsis', title: text }, text));

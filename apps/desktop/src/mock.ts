@@ -36,9 +36,12 @@ export async function answer(command: string, args?: Args): Promise<unknown> {
   }
 }
 
-setInterval(() => { for (const view of model.tick()) emit(view); }, 200);
+let paused = false;
+setInterval(() => { if (!paused) for (const view of model.tick()) emit(view); }, 200);
 
 (window as unknown as { __xioxMock: unknown }).__xioxMock = {
+  /** The smoke script holds the timer while it inspects a busy state. */
+  pause(on: boolean): void { paused = on; },
   go(target: SectionId, state: string): SectionView {
     const view = model.go(target, state);
     emit(view);

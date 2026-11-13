@@ -1,0 +1,1373 @@
+{
+ "about": "Replayed by tests/mockrules.test.ts on the MockModel and (Task 11) by the Rust FakeBackend. Every returned or pushed view bumps its section rev by one; `go` is the smoke script lever. Fields under `expect` are checked only when present.",
+ "steps": [
+  {
+   "note": "starts idle",
+   "op": "show",
+   "section": "cleanup",
+   "expect": {
+    "state": "idle",
+    "dialog": false,
+    "rev": 1
+   }
+  },
+  {
+   "note": "an intent outside the table changes nothing but the rev",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "search",
+    "text": "x"
+   },
+   "expect": {
+    "state": "idle",
+    "rev": 2
+   }
+  },
+  {
+   "note": "a job starts: busy view, fraction 0",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "rev": 3
+   }
+  },
+  {
+   "note": "selection is frozen while a job runs",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "cat:0"
+   },
+   "expect": {
+    "state": "analyzing",
+    "checks": {
+     "cat:0": "on"
+    },
+    "rev": 4
+   }
+  },
+  {
+   "note": "three ticks: 1/3, 2/3, 1",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "analyzing",
+     "fraction": 0.3333333333333333,
+     "rev": 5
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "analyzing",
+     "fraction": 0.6666666666666666,
+     "rev": 6
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "analyzing",
+     "fraction": 1,
+     "rev": 7
+    }
+   ]
+  },
+  {
+   "note": "the next tick lands",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "analyzed",
+     "fraction": null,
+     "rev": 8
+    }
+   ]
+  },
+  {
+   "note": "a section that is not busy pushes nothing",
+   "op": "tick",
+   "pushed": []
+  },
+  {
+   "note": "toggle flips that row only",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "cat:4"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "cat:4": "on",
+     "cat:0": "on"
+    },
+    "rev": 9
+   }
+  },
+  {
+   "note": "a blocked row cannot be toggled",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "cat:6"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "cat:6": "off"
+    },
+    "rev": 10
+   }
+  },
+  {
+   "note": "select moves nav active, same state",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "cat:browser"
+   },
+   "expect": {
+    "state": "analyzed",
+    "active": "cat:browser",
+    "rev": 11
+   }
+  },
+  {
+   "note": "the dialog opens from the analysis",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "dialog": true,
+    "rev": 12
+   }
+  },
+  {
+   "note": "selection is frozen while the dialog is open",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "cat:4"
+   },
+   "expect": {
+    "state": "confirm",
+    "checks": {
+     "cat:4": "off"
+    },
+    "rev": 13
+   }
+  },
+  {
+   "note": "so is the category",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "cat:windows"
+   },
+   "expect": {
+    "state": "confirm",
+    "active": "cat:browser",
+    "rev": 14
+   }
+  },
+  {
+   "note": "and a new analysis",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 15
+   }
+  },
+  {
+   "note": "closeDialog returns to where it was opened from; the nav memory survives",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "cat:4": "on"
+    },
+    "active": "cat:browser",
+    "dialog": false,
+    "rev": 16
+   }
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 17
+   }
+  },
+  {
+   "note": "confirm from the open dialog starts the clean",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "cleaning",
+    "fraction": 0,
+    "rev": 18
+   }
+  },
+  {
+   "note": "no new job while one runs",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "cleaning",
+    "rev": 19
+   }
+  },
+  {
+   "note": "cancel returns to the analysis, not to the dialog",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 20
+   }
+  },
+  {
+   "note": "confirm with no dialog open does nothing",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 21
+   }
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 22
+   }
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "cleaning",
+    "fraction": 0,
+    "rev": 23
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "cleaning",
+     "fraction": 0.3333333333333333,
+     "rev": 24
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "cleaning",
+     "fraction": 0.6666666666666666,
+     "rev": 25
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "cleaning",
+     "fraction": 1,
+     "rev": 26
+    }
+   ]
+  },
+  {
+   "note": "a finished clean lands on the report",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "report",
+     "report": true,
+     "fraction": null,
+     "rev": 27
+    }
+   ]
+  },
+  {
+   "note": "selection is frozen on the report",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "cat:4"
+   },
+   "expect": {
+    "state": "report",
+    "rev": 28
+   }
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "report",
+    "rev": 29
+   }
+  },
+  {
+   "note": "closeDialog from the report returns to the analysis",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "analyzed",
+    "report": false,
+    "rev": 30
+   }
+  },
+  {
+   "op": "go",
+   "section": "developers",
+   "state": "projects",
+   "expect": {
+    "state": "projects",
+    "rev": 1
+   }
+  },
+  {
+   "note": "mixed turns on",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "p:1"
+   },
+   "expect": {
+    "state": "projects",
+    "checks": {
+     "p:1": "on"
+    },
+    "rev": 2
+   }
+  },
+  {
+   "note": "on turns off",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "p:1"
+   },
+   "expect": {
+    "state": "projects",
+    "checks": {
+     "p:1": "off"
+    },
+    "rev": 3
+   }
+  },
+  {
+   "note": "a row that does not exist changes nothing",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "p:nope"
+   },
+   "expect": {
+    "state": "projects",
+    "checks": {
+     "p:1": "off"
+    },
+    "rev": 4
+   }
+  },
+  {
+   "note": "the dialog has an ack box, off, and its button is disabled",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "ack": false,
+    "primaryEnabled": false,
+    "rev": 5
+   }
+  },
+  {
+   "note": "confirm is refused while the ack box is off",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 6
+   }
+  },
+  {
+   "note": "permanent belongs to the shortfall dialog",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "permanent"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 7
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "setAck",
+    "on": true
+   },
+   "expect": {
+    "state": "confirm",
+    "ack": true,
+    "primaryEnabled": true,
+    "rev": 8
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "projects",
+    "rev": 9
+   }
+  },
+  {
+   "note": "a reopened dialog starts with the box off",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "ack": false,
+    "primaryEnabled": false,
+    "rev": 10
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "setAck",
+    "on": true
+   },
+   "expect": {
+    "state": "confirm",
+    "ack": true,
+    "primaryEnabled": true,
+    "rev": 11
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "cleaning",
+    "fraction": 0,
+    "rev": 12
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "cleaning",
+     "fraction": 0.3333333333333333,
+     "rev": 13
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "cleaning",
+     "fraction": 0.6666666666666666,
+     "rev": 14
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "cleaning",
+     "fraction": 1,
+     "rev": 15
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "report",
+     "report": true,
+     "rev": 16
+    }
+   ]
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "projects",
+    "rev": 17
+   }
+  },
+  {
+   "note": "select changes the state",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "worktrees"
+   },
+   "expect": {
+    "state": "worktrees",
+    "active": "worktrees",
+    "rev": 18
+   }
+  },
+  {
+   "note": "a worktree with uncommitted changes is blocked",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "w:3"
+   },
+   "expect": {
+    "state": "worktrees",
+    "checks": {
+     "w:3": "off"
+    },
+    "rev": 19
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "w:1"
+   },
+   "expect": {
+    "state": "worktrees",
+    "checks": {
+     "w:1": "off"
+    },
+    "rev": 20
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "openConfirm"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 21
+   }
+  },
+  {
+   "note": "closeDialog returns to the state the dialog was opened from",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "worktrees",
+    "rev": 22
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "sessions"
+   },
+   "expect": {
+    "state": "sessions",
+    "active": "sessions",
+    "rev": 23
+   }
+  },
+  {
+   "op": "go",
+   "section": "developers",
+   "state": "shortfall",
+   "expect": {
+    "state": "shortfall",
+    "rev": 24
+   }
+  },
+  {
+   "note": "shortfall accepts permanent only",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "shortfall",
+    "rev": 25
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "permanent"
+   },
+   "expect": {
+    "state": "cleaning",
+    "fraction": 0,
+    "rev": 26
+   }
+  },
+  {
+   "note": "cancel with no recorded origin falls back to projects",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "projects",
+    "rev": 27
+   }
+  },
+  {
+   "op": "go",
+   "section": "developers",
+   "state": "idle",
+   "expect": {
+    "state": "idle",
+    "rev": 28
+   }
+  },
+  {
+   "note": "select needs an analysis",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "sessions"
+   },
+   "expect": {
+    "state": "idle",
+    "rev": 29
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "rev": 30
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 0.3333333333333333,
+     "rev": 31
+    }
+   ]
+  },
+  {
+   "note": "cancel returns to the state before the job",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "idle",
+    "rev": 32
+   }
+  },
+  {
+   "note": "a cancelled job stops ticking",
+   "op": "tick",
+   "pushed": []
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "rev": 33
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 0.3333333333333333,
+     "rev": 34
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 0.6666666666666666,
+     "rev": 35
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 1,
+     "rev": 36
+    }
+   ]
+  },
+  {
+   "note": "developers lands on projects",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "projects",
+     "fraction": null,
+     "rev": 37
+    }
+   ]
+  },
+  {
+   "op": "show",
+   "section": "registry",
+   "expect": {
+    "state": "idle",
+    "rev": 1
+   }
+  },
+  {
+   "note": "nothing to fix before a scan",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "openFix"
+   },
+   "expect": {
+    "state": "idle",
+    "rev": 2
+   }
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "scan"
+   },
+   "expect": {
+    "state": "scanning",
+    "fraction": 0,
+    "rev": 3
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "scanning",
+     "fraction": 0.3333333333333333,
+     "rev": 4
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "scanning",
+     "fraction": 0.6666666666666666,
+     "rev": 5
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "scanning",
+     "fraction": 1,
+     "rev": 6
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "analyzed",
+     "rev": 7
+    }
+   ]
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "toggle",
+    "row": "i:0"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "i:0": "off"
+    },
+    "rev": 8
+   }
+  },
+  {
+   "note": "a protected entry is blocked",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "toggle",
+    "row": "i:4"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "i:4": "off"
+    },
+    "rev": 9
+   }
+  },
+  {
+   "note": "selectAll is outside the table",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "selectAll",
+    "on": true
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 10
+   }
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "openFix"
+   },
+   "expect": {
+    "state": "backup",
+    "dialog": true,
+    "rev": 11
+   }
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "fix",
+    "backup": false
+   },
+   "expect": {
+    "state": "fixing",
+    "fraction": 0,
+    "rev": 12
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "fixing",
+     "fraction": 0.3333333333333333,
+     "rev": 13
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "fixing",
+     "fraction": 0.6666666666666666,
+     "rev": 14
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "fixing",
+     "fraction": 1,
+     "rev": 15
+    }
+   ]
+  },
+  {
+   "note": "registry lands on fixed",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "registry",
+     "state": "fixed",
+     "rev": 16
+    }
+   ]
+  },
+  {
+   "op": "go",
+   "section": "registry",
+   "state": "analyzed",
+   "expect": {
+    "state": "analyzed",
+    "rev": 17
+   }
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "openFix"
+   },
+   "expect": {
+    "state": "backup",
+    "rev": 18
+   }
+  },
+  {
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 19
+   }
+  },
+  {
+   "op": "show",
+   "section": "services",
+   "expect": {
+    "state": "loaded",
+    "notices": [],
+    "rev": 1
+   }
+  },
+  {
+   "note": "Restore originals is disabled: refused",
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "restore"
+   },
+   "expect": {
+    "state": "loaded",
+    "rev": 2
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "disable"
+   },
+   "expect": {
+    "state": "confirm",
+    "dialog": true,
+    "rev": 3
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "loaded",
+    "rev": 4
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "manual"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 5
+   }
+  },
+  {
+   "note": "confirm goes straight back to loaded with an ok notice",
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "loaded",
+    "dialog": false,
+    "notices": [
+     "Selected services set to Manual."
+    ],
+    "rev": 6
+   }
+  },
+  {
+   "note": "no job: nothing pushed",
+   "op": "tick",
+   "pushed": []
+  },
+  {
+   "note": "the notice goes when the section is shown again",
+   "op": "show",
+   "section": "services",
+   "expect": {
+    "state": "loaded",
+    "notices": [],
+    "rev": 7
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "disable"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 8
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "loaded",
+    "notices": [
+     "Selected services disabled."
+    ],
+    "rev": 9
+   }
+  },
+  {
+   "note": "a new job clears the notice",
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "refresh"
+   },
+   "expect": {
+    "state": "loading",
+    "fraction": 0,
+    "notices": [],
+    "rev": 10
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "services",
+     "state": "loading",
+     "fraction": 0.3333333333333333,
+     "rev": 11
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "services",
+     "state": "loading",
+     "fraction": 0.6666666666666666,
+     "rev": 12
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "services",
+     "state": "loading",
+     "fraction": 1,
+     "rev": 13
+    }
+   ]
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "services",
+     "state": "loaded",
+     "notices": [],
+     "fraction": null,
+     "rev": 14
+    }
+   ]
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "disable"
+   },
+   "expect": {
+    "state": "confirm",
+    "rev": 15
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "confirm"
+   },
+   "expect": {
+    "state": "loaded",
+    "notices": [
+     "Selected services disabled."
+    ],
+    "rev": 16
+   }
+  },
+  {
+   "note": "opening a dialog clears the notice",
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "openConfirm",
+    "action": "manual"
+   },
+   "expect": {
+    "state": "confirm",
+    "notices": [],
+    "rev": 17
+   }
+  },
+  {
+   "op": "intent",
+   "section": "services",
+   "intent": {
+    "kind": "closeDialog"
+   },
+   "expect": {
+    "state": "loaded",
+    "notices": [],
+    "rev": 18
+   }
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "rev": 31
+   }
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "analyze"
+   },
+   "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "rev": 38
+   }
+  },
+  {
+   "note": "both jobs move, one view each",
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "cleanup",
+     "state": "analyzing",
+     "fraction": 0.3333333333333333,
+     "rev": 32
+    },
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 0.3333333333333333,
+     "rev": 39
+    }
+   ]
+  },
+  {
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "analyzed",
+    "rev": 33
+   }
+  },
+  {
+   "op": "tick",
+   "pushed": [
+    {
+     "section": "developers",
+     "state": "analyzing",
+     "fraction": 0.6666666666666666,
+     "rev": 40
+    }
+   ]
+  },
+  {
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "cancel"
+   },
+   "expect": {
+    "state": "projects",
+    "rev": 41
+   }
+  }
+ ]
+}

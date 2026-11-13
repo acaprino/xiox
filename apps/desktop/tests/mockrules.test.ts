@@ -1,0 +1,222 @@
+// The safety rules of the mock (Review Focus 1: a removal without the confirmation) and the shared
+// intent script. The Rust FakeBackend must obey the same rules and replay the same script.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { MockModel, type Fixture } from '../src/mockmodel.ts';
+import type { AnyIntent, SectionId, SectionView } from '../src/types.ts';
+
+const raw = readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8');
+const fixture = JSON.parse(raw) as Fixture;
+const fresh = (): MockModel => new MockModel(JSON.parse(raw) as Fixture);
+/** A model over a copy of the fixture that `edit` may loosen: the model must refuse on its own rules, not on the fixture's flags. */
+function loose(edit: (views: Fixture['views']) => void): MockModel {
+  const copy = JSON.parse(raw) as Fixture;
+  edit(copy.views);
+  return new MockModel(copy);
+}
+const checks = (view: SectionView): Record<string, string> => Object.fromEntries(view.rows.map((r) => [r.id, r.check]));
+const everyView = (views: Fixture['views']): SectionView[] => Object.values(views).flatMap((states) => Object.values(states));
+const enableAll = (views: Fixture['views']): void => {
+  for (const v of everyView(views)) { v.rows.forEach((r) => { r.enabled = true; }); v.actions.forEach((a) => { a.enabled = true; }); }
+};
+const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
+
+const FROZEN: [SectionId, string][] = [
+  ['cleanup', 'analyzing'], ['cleanup', 'confirm'], ['cleanup', 'cleaning'], ['cleanup', 'report'],
+  ['registry', 'scanning'], ['registry', 'backup'], ['registry', 'fixing'],
+  ['services', 'loading'], ['services', 'confirm'],
+  ['developers', 'analyzing'], ['developers', 'confirm'], ['developers', 'shortfall'], ['developers', 'cleaning'], ['developers', 'report'],
+];
+
+test('the fixture freezes the rows and the actions of every state with a job, a dialog or a report', () => {
+  for (const [section, name] of FROZEN) {
+    const view = fixture.views[section][name];
+    assert.ok(view, `${section}:${name}`);
+    assert.ok(view.rows.every((r) => !r.enabled), `${section}:${name} has an enabled row`);
+    assert.ok(view.actions.every((a) => !a.enabled || a.id === 'cancel'), `${section}:${name} has an enabled action`);
+  }
+});
+
+test('toggle, select and analyze are refused while a job runs, a dialog is open or a report is on screen', () => {
+  // Even when the fixture says a row is enabled, the model itself refuses.
+  const model = loose(enableAll);
+  for (const [section, name] of FROZEN) {
+    model.go(section, name);
+    const before = model.view(section);
+    const row = before.rows[0];
+    if (row) assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: row.id })), checks(before), `toggle in ${section}:${name}`);
+    assert.equal(model.stateOf(section), name, `toggle moved ${section}:${name}`);
+    const other = before.nav.find((n) => !n.active);
+    if (other) {
+      const after = model.intent(section, { kind: 'select', category: other.id });
+      assert.deepEqual(after.nav.map((n) => n.active), before.nav.map((n) => n.active), `select in ${section}:${name}`);
+      assert.equal(model.stateOf(section), name, `select moved ${section}:${name}`);
+    }
+    const start = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' }[section] as 'analyze';
+    const rev = model.view(section).rev;
+    const answered = model.intent(section, { kind: start });
+    assert.equal(model.stateOf(section), name, `${start} moved ${section}:${name}`);
+    assert.equal(answered.rev, rev + 1, 'a refused intent still bumps the revision');
+  }
+});
+
+test('confirm needs an open dialog whose button is enabled and whose ack box, where there is one, is on', () => {
+  // Cleanup: the dialog's `continue` button is disabled -> refused.
+  const cleanup = loose((v) => { v.cleanup.confirm?.dialog?.buttons.forEach((b) => { if (b.id === 'continue') b.enabled = false; }); });
+  cleanup.go('cleanup', 'analyzed');
+  cleanup.intent('cleanup', { kind: 'openConfirm' });
+  cleanup.intent('cleanup', { kind: 'confirm' });
+  assert.equal(cleanup.stateOf('cleanup'), 'confirm');
+  // Developers: the button is enabled in the fixture but the ack box is off -> refused until it is on.
+  const dev = loose((v) => { v.developers.confirm?.dialog?.buttons.forEach((b) => { b.enabled = true; }); });
+  dev.go('developers', 'projects');
+  dev.intent('developers', { kind: 'openConfirm' });
+  assert.equal(dev.view('developers').dialog?.ack, false);
+  dev.intent('developers', { kind: 'confirm' });
+  assert.equal(dev.stateOf('developers'), 'confirm');
+  dev.intent('developers', { kind: 'permanent' });
+  assert.equal(dev.stateOf('developers'), 'confirm', 'permanent belongs to the shortfall dialog');
+  dev.intent('developers', { kind: 'setAck', on: true });
+  dev.intent('developers', { kind: 'confirm' });
+  assert.equal(dev.stateOf('developers'), 'cleaning');
+  // The shortfall dialog: `permanent` only.
+  const model = fresh();
+  model.go('developers', 'shortfall');
+  model.intent('developers', { kind: 'confirm' });
+  assert.equal(model.stateOf('developers'), 'shortfall');
+  model.intent('developers', { kind: 'permanent' });
+  assert.equal(model.stateOf('developers'), 'cleaning');
+  // Registry: each choice goes through its own button.
+  const reg = loose((v) => { v.registry.backup?.dialog?.buttons.forEach((b) => { if (b.id === 'nobackup') b.enabled = false; }); });
+  reg.go('registry', 'analyzed');
+  reg.intent('registry', { kind: 'openFix' });
+  reg.intent('registry', { kind: 'fix', backup: false });
+  assert.equal(reg.stateOf('registry'), 'backup');
+  reg.intent('registry', { kind: 'fix', backup: true });
+  assert.equal(reg.stateOf('registry'), 'fixing');
+  // Nothing runs without a dialog.
+  const bare: [SectionId, AnyIntent][] = [['cleanup', { kind: 'confirm' }], ['registry', { kind: 'fix', backup: true }], ['services', { kind: 'confirm' }], ['developers', { kind: 'confirm' }]];
+  for (const [s, intent] of bare) {
+    const m = fresh();
+    m.go(s, HOME[s]);
+    m.intent(s, intent);
+    assert.equal(m.stateOf(s), HOME[s], `${s} ran without a dialog`);
+  }
+});
+
+test('openConfirm and openFix are refused when the action is disabled', () => {
+  const model = fresh();
+  model.go('services', 'loaded');
+  model.intent('services', { kind: 'openConfirm', action: 'restore' });
+  assert.equal(model.stateOf('services'), 'loaded', 'Restore originals is disabled in the fixture');
+  const off = loose((v) => {
+    v.cleanup.analyzed?.actions.forEach((a) => { if (a.id === 'clean') a.enabled = false; });
+    v.registry.analyzed?.actions.forEach((a) => { if (a.id === 'fix') a.enabled = false; });
+    v.developers.projects?.actions.forEach((a) => { if (a.id === 'clean') a.enabled = false; });
+  });
+  off.go('cleanup', 'analyzed'); off.intent('cleanup', { kind: 'openConfirm' });
+  off.go('registry', 'analyzed'); off.intent('registry', { kind: 'openFix' });
+  off.go('developers', 'projects'); off.intent('developers', { kind: 'openConfirm' });
+  assert.deepEqual([off.stateOf('cleanup'), off.stateOf('registry'), off.stateOf('developers')], ['analyzed', 'analyzed', 'projects']);
+});
+
+test('a dialog that is reopened starts with its ack box off', () => {
+  const model = fresh();
+  model.go('developers', 'projects');
+  model.intent('developers', { kind: 'openConfirm' });
+  model.intent('developers', { kind: 'setAck', on: true });
+  model.intent('developers', { kind: 'closeDialog' });
+  const again = model.intent('developers', { kind: 'openConfirm' });
+  assert.equal(again.dialog?.ack, false);
+  assert.equal(again.dialog?.buttons.find((b) => b.primary)?.enabled, false);
+  // setAck means something in the Developers dialog only.
+  model.go('cleanup', 'analyzed');
+  model.intent('cleanup', { kind: 'openConfirm' });
+  assert.equal(model.intent('cleanup', { kind: 'setOnlyOld', on: false }).dialog?.ack, null);
+});
+
+const BLOCKED: [SectionId, string, string][] = [['cleanup', 'analyzed', 'cat:6'], ['registry', 'analyzed', 'i:4'], ['developers', 'worktrees', 'w:3']];
+
+test('a blocked row is listed, dimmed, with its reason, and toggling it changes nothing', () => {
+  for (const [section, name, id] of BLOCKED) {
+    const model = fresh();
+    model.go(section, name);
+    const view = model.view(section);
+    const row = view.rows.find((r) => r.id === id);
+    assert.ok(row, `${section}:${name} has no ${id}`);
+    assert.equal(row.enabled, false); assert.equal(row.muted, true);
+    assert.ok(row.why && row.why.length > 10, `${id} has no reason`);
+    assert.equal(row.check, 'off');
+    assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view), `toggle of ${id}`);
+    assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view));
+  }
+});
+
+test('the Services notice says what was done and goes when a new job starts, a dialog opens or the section is shown again', () => {
+  const model = fresh();
+  const done = (action: 'disable' | 'manual'): SectionView => {
+    model.go('services', 'loaded');
+    model.intent('services', { kind: 'openConfirm', action });
+    return model.intent('services', { kind: 'confirm' });
+  };
+  assert.deepEqual(done('manual').notices, [{ tone: 'ok', text: 'Selected services set to Manual.', more: [] }]);
+  assert.deepEqual(done('disable').notices, [{ tone: 'ok', text: 'Selected services disabled.', more: [] }]);
+  assert.deepEqual(model.show('services').notices, [], 'shown again');
+  done('disable');
+  model.intent('services', { kind: 'refresh' });
+  for (let i = 0; i < 4; i += 1) model.tick();
+  assert.deepEqual(model.view('services').notices, [], 'a new job');
+  done('manual');
+  model.intent('services', { kind: 'openConfirm', action: 'manual' });
+  model.intent('services', { kind: 'closeDialog' });
+  assert.deepEqual(model.view('services').notices, [], 'a dialog opened');
+});
+
+// ---- The shared script: the Rust FakeBackend replays the same file.
+
+interface Expect {
+  state?: string; rev?: number; fraction?: number | null; checks?: Record<string, string>; active?: string;
+  ack?: boolean | null; primaryEnabled?: boolean; notices?: string[]; dialog?: boolean; report?: boolean;
+}
+type Step =
+  | { op: 'go' | 'show' | 'view'; section: SectionId; state?: string; expect?: Expect; note?: string }
+  | { op: 'intent'; section: SectionId; intent: AnyIntent; expect?: Expect; note?: string }
+  | { op: 'tick'; pushed: ({ section: SectionId } & Expect)[]; note?: string };
+
+function matches(view: SectionView, state: string, want: Expect, where: string): void {
+  if (want.state !== undefined) assert.equal(state, want.state, `${where}: state`);
+  if (want.rev !== undefined) assert.equal(view.rev, want.rev, `${where}: rev`);
+  if (want.fraction !== undefined) {
+    if (want.fraction === null) assert.equal(view.job, null, `${where}: job`);
+    else assert.ok(view.job && Math.abs(view.job.fraction - want.fraction) < 1e-6, `${where}: fraction ${view.job?.fraction}`);
+  }
+  for (const [id, check] of Object.entries(want.checks ?? {})) assert.equal(view.rows.find((r) => r.id === id)?.check, check, `${where}: check ${id}`);
+  if (want.active !== undefined) assert.deepEqual(view.nav.filter((n) => n.active).map((n) => n.id), [want.active], `${where}: active`);
+  if (want.ack !== undefined) assert.equal(view.dialog?.ack, want.ack, `${where}: ack`);
+  if (want.primaryEnabled !== undefined) assert.equal(view.dialog?.buttons.find((b) => b.primary)?.enabled, want.primaryEnabled, `${where}: primary`);
+  if (want.notices !== undefined) assert.deepEqual(view.notices.map((n) => n.text), want.notices, `${where}: notices`);
+  if (want.dialog !== undefined) assert.equal(view.dialog !== null, want.dialog, `${where}: dialog`);
+  if (want.report !== undefined) assert.equal(view.report !== null, want.report, `${where}: report`);
+}
+
+test('the intent script replays on the model', () => {
+  const script = JSON.parse(readFileSync(new URL('../fixtures/intent-script.json', import.meta.url), 'utf8')) as { steps: Step[] };
+  assert.ok(script.steps.length > 60, 'the script is short');
+  const model = fresh();
+  script.steps.forEach((step, index) => {
+    const where = `step ${index + 1}${step.note ? ` (${step.note})` : ''}`;
+    if (step.op === 'tick') {
+      const pushed = model.tick();
+      assert.deepEqual(pushed.map((v) => v.section), step.pushed.map((p) => p.section), `${where}: sections pushed`);
+      pushed.forEach((view, i) => matches(view, model.stateOf(view.section), step.pushed[i] as Expect, where));
+      return;
+    }
+    const view = step.op === 'go' ? model.go(step.section, step.state as string)
+      : step.op === 'show' ? model.show(step.section)
+        : step.op === 'view' ? model.view(step.section)
+          : model.intent(step.section, step.intent);
+    matches(view, model.stateOf(step.section), step.expect ?? {}, where);
+  });
+});

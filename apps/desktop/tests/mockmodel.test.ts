@@ -125,7 +125,8 @@ test('toggle flips one row only', () => {
   model.go('developers', 'projects');
   const dev = model.view('developers');
   const mixed = dev.rows.find((r) => r.check === 'mixed');
-  if (mixed) assert.equal(checks(model.intent('developers', { kind: 'toggle', row: mixed.id }))[mixed.id], 'on');
+  assert.ok(mixed, 'the Developers fixture has a mixed row');
+  assert.equal(checks(model.intent('developers', { kind: 'toggle', row: mixed.id }))[mixed.id], 'on');
   assert.deepEqual(checks(model.intent('developers', { kind: 'toggle', row: 'p:nope' })), checks(model.view('developers')));
 });
 
@@ -205,6 +206,10 @@ test('a confirmed clean runs three ticks and ends on the report', () => {
   const unacked = model.intent('developers', { kind: 'setAck', on: false });
   assert.equal(unacked.dialog?.ack, false);
   assert.equal(unacked.dialog?.buttons.find((b) => b.primary)?.enabled, false);
+  // The ack box is off: the confirmation is refused, whatever the page sends.
+  model.intent('developers', { kind: 'confirm' });
+  assert.equal(model.stateOf('developers'), 'confirm');
+  model.intent('developers', { kind: 'setAck', on: true });
   model.intent('developers', { kind: 'confirm' });
   assert.equal(model.stateOf('developers'), 'cleaning');
   for (let i = 0; i < 3; i += 1) model.tick();

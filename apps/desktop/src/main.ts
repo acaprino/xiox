@@ -9,8 +9,8 @@ import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
 let app: AppInfo | null = null;
-/** The message of the last failed command; cleared by the next answer that arrives. */
-let error: string | null = null;
+/** The last failed command and the section it concerns: shown only while that section is open; any later success, a section switch or a push for another section clears it. */
+let error: { section: SectionId; text: string } | null = null;
 /** Rapid clicks on the section bar: only the answer to the last one is drawn. */
 const opening = createGate();
 
@@ -21,12 +21,12 @@ function render(): void {
   const view = ui.views[ui.section];
   if (!app || !view) {
     // Nothing to draw yet and a command failed: say so rather than leave a blank window.
-    if (error !== null) renderFailure(error);
+    if (error !== null) renderFailure(error.text);
     return;
   }
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, error }, handlers);
+  renderShell({ app, view, ui, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
   SCROLLERS.forEach((selector, i) => {
     const node = document.querySelector(selector);
     if (node) node.scrollTop = scrolls[i] ?? 0;
@@ -46,7 +46,8 @@ async function open(section: SectionId): Promise<void> {
       render();
     },
     (failure) => {
-      error = errorText(failure);
+      // The section stays as it was: the error belongs to the one on screen.
+      error = { section: ui.section, text: errorText(failure) };
       render();
     },
   );
@@ -59,7 +60,7 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
     error = null;
     acceptView(ui, view);
   } catch (failure) {
-    error = errorText(failure);
+    error = { section, text: errorText(failure) };
   }
   render();
 }
@@ -73,7 +74,7 @@ const handlers: Handlers = {
     render();
   },
   addRoot: () => {
-    void api.addRoot().then((view) => { acceptView(ui, view); render(); }, (failure) => { error = errorText(failure); render(); });
+    void api.addRoot().then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
   },
 };
 
@@ -81,6 +82,8 @@ async function start(): Promise<void> {
   try {
     app = await api.appInfo();
     onView((view) => {
+      // News about another section ends an error that was about this one.
+      if (error !== null && error.section !== view.section) error = null;
       if (acceptView(ui, view) && view.section === ui.section) render();
     });
     await open('cleanup');

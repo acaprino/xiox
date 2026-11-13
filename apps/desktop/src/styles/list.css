@@ -4,7 +4,7 @@
 .tone-info { --tone: var(--ice); }
 .tone-ok { --tone: var(--ok); }
 .tone-warn { --tone: var(--warn); }
-.tone-error { --tone: #ff6b6b; }
+.tone-error { --tone: var(--err); }
 
 /* Small buttons (list header, bar 2). */
 .btn.sm { padding: 1px 9px; font-size: 11px; clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px); }
@@ -61,7 +61,8 @@
   font: 700 11px var(--font-display); letter-spacing: .08em; text-transform: uppercase;
 }
 .r.sel { background: var(--sel-soft); }
-.r.muted { opacity: .55; }
+/* A blocked row is dimmed, but the reason under its name stays readable. */
+.r.muted > :not(.nm), .r.muted .nm-text .t, .r.muted .caret { opacity: .55; }
 
 .nm { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .r.child .nm { padding-left: 14px; }
@@ -69,6 +70,7 @@
 .nm-text .t { color: var(--text); font-weight: 600; }
 .r.sel .nm-text .t { color: var(--text-hi); }
 .nm-text .s { color: var(--muted); font-size: 11px; font-weight: 400; }
+.nm-text .s.blocked { color: var(--warn); }
 .caret, .caret-gap { flex: none; width: 14px; height: 14px; }
 .caret {
   appearance: none; padding: 0; border: 0; background: none; color: var(--ice); cursor: pointer;

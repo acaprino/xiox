@@ -103,6 +103,41 @@ async function checkToggle(page, label) {
   return after === want ? [] : [`${label}: ${id} went ${before} -> ${after}, expected ${want}`];
 }
 
+/**
+ * Every row the fixture state has: its check box is disabled exactly when the row is, a disabled one says
+ * why in its title, and a blocked row (disabled and muted) is listed, dimmed, with its reason on the row
+ * and, once selected, in the detail panel.
+ */
+async function checkRows(page, label, view) {
+  const failures = [];
+  for (const row of view.rows) {
+    if (row.kind === 'header') continue;
+    const node = page.locator(`#rows [data-row="${row.id}"]`);
+    if (await node.count() === 0) continue; // a child under a collapsed parent
+    const box = node.locator('[role=checkbox]');
+    if (row.check === 'none') continue;
+    const disabled = await box.isDisabled();
+    if (disabled !== !row.enabled) failures.push(`${label}: ${row.id} check box disabled=${disabled}, row enabled=${row.enabled}`);
+    if (!row.enabled && row.why && !(await box.getAttribute('title'))) failures.push(`${label}: disabled ${row.id} has no title`);
+    if (row.muted) {
+      const opacity = await node.locator('.nm-text .t').evaluate((n) => Number(getComputedStyle(n).opacity));
+      if (!(opacity < 1)) failures.push(`${label}: muted ${row.id} is not dimmed (opacity ${opacity})`);
+    }
+    if (row.muted && !row.enabled && row.why) {
+      const shown = await node.locator('.s.blocked').textContent();
+      if (shown !== row.why) failures.push(`${label}: blocked ${row.id} does not show its reason on the row`);
+      await node.locator('.nm').click();
+      await page.waitForTimeout(80);
+      const detail = await page.locator('#detail').textContent();
+      if (!detail.includes(row.why)) failures.push(`${label}: the detail of blocked ${row.id} does not give the reason`);
+      if ((await box.getAttribute('aria-checked')) !== 'false') failures.push(`${label}: blocked ${row.id} is checked`);
+      await page.screenshot({ path: `${out}${label}-blocked-${row.id.replace(/[^a-z0-9]+/gi, '_')}.png` });
+      shots += 1;
+    }
+  }
+  return failures;
+}
+
 /** The selected row is highlighted, marked and described by the detail panel. */
 async function checkSelection(page, label) {
   const failures = [];
@@ -147,6 +182,7 @@ try {
     expect(await page.locator('#sections [data-section="cleanup"][aria-current="page"]').count() === 1, `${size}: the open section has no aria-current`);
     expect(await page.locator('#sections [aria-current]').count() === 1, `${size}: more than one section is marked current`);
 
+    await page.evaluate(() => window.__xioxMock.pause(true)); // busy states stay put while they are inspected
     for (const [section, stateName] of SECTIONS) {
       const label = `${section}-${stateName}-${size}`;
       await page.locator(`#sections [data-section="${section}"]`).click();
@@ -156,6 +192,7 @@ try {
       failures.push(...await checkFit(page, label));
       await page.screenshot({ path: `${out}${label}.png` });
       shots += 1;
+      failures.push(...await checkRows(page, label, fixture.views[section][stateName]));
       if (ANALYZED.has(`${section}:${stateName}`)) {
         failures.push(...await checkSelection(page, label));
         if (stateName === 'projects') {
@@ -166,6 +203,8 @@ try {
         failures.push(...await checkFit(page, `${label}-after-toggle`));
       }
     }
+
+    await page.evaluate(() => window.__xioxMock.pause(false));
 
     // Cleanup: a category click goes through the model and moves aria-current; a row click moves the selection.
     await page.locator('#sections [data-section="cleanup"]').click();
