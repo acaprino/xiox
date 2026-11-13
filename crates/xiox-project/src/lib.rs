@@ -10,6 +10,7 @@
 
 mod clean;
 mod container;
+mod hint;
 mod logs;
 mod nested;
 mod owned;
@@ -24,6 +25,7 @@ pub use clean::{
     select,
 };
 pub use xiox_git::normalize_remote;
+pub use hint::{is_recommended, is_top_level, too_shallow};
 pub use owned::key_within;
 pub use resolve::resolve_project;
 

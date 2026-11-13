@@ -3,10 +3,14 @@
 
 use xiox_model::{Agent, Level, RemoveMode};
 use xiox_project::{
-    Block, Category, Chosen, CleanOutcome, Item, Note, Outcome, ProjectScan, SearchMode, Target, Why, key_within,
-    normalize_remote,
+    Block, Category, Chosen, CleanOutcome, Item, Note, Outcome, ProjectScan, SearchMode, Target, Why, is_recommended,
+    key_within, normalize_remote, too_shallow,
 };
-use std::path::{Component, Path};
+// Only the tests of this module name them (the listing uses `too_shallow`).
+#[cfg(test)]
+use std::path::Path;
+#[cfg(test)]
+use xiox_project::is_top_level;
 
 const LEVEL_W: usize = 11;
 const SIZE_W: usize = 9;
@@ -28,12 +32,6 @@ pub fn fmt_size(bytes: u64) -> String {
         return format!("{mb:.0} MB");
     }
     format!("{:.1} GB", mb / 1024.0)
-}
-
-/// True when the guard of the cleaner (`xiox_cleaner::guard`) refuses the folder for being
-/// directly under a drive root or share root: fewer than two folders below it.
-pub fn is_top_level(path: &Path) -> bool {
-    path.components().filter(|c| matches!(c, Component::Normal(_))).count() < 2
 }
 
 /// English reason of a block: the one wording of `xiox_project`, also used in its errors.
@@ -132,12 +130,6 @@ fn path_text(item: &Item) -> String {
     }
 }
 
-/// The guard of `clean` (`xiox_cleaner::guard`) refuses any path directly under a drive or share
-/// root, whatever the kind of item: it is shown, never offered.
-fn too_shallow(item: &Item) -> bool {
-    item.path.as_deref().is_some_and(is_top_level)
-}
-
 fn reason_text(item: &Item) -> String {
     let mut reason = if item.blocked.is_empty() {
         why_text(&item.why)
@@ -161,10 +153,6 @@ fn sum_bytes(items: &[&Item]) -> u64 {
         })
         .map(|i| i.bytes.unwrap_or(0))
         .sum()
-}
-
-fn is_recommended(i: &Item) -> bool {
-    i.level == Level::Recommended && i.blocked.is_empty() && !too_shallow(i)
 }
 
 fn note_text(n: &Note, scan: &ProjectScan) -> Option<String> {
