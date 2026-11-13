@@ -30,6 +30,13 @@ pub fn scan(items: Vec<Item>) -> ProjectScan {
     }
 }
 
+/// Like [`scan`] for a project rooted at `root`.
+pub fn scan_at(root: &str, items: Vec<Item>) -> ProjectScan {
+    let mut s = scan(items);
+    s.project.root = PathBuf::from(root);
+    s
+}
+
 pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, blocked: Vec<Block>) -> Item {
     let p = PathBuf::from(path);
     let (target, why) = match category {

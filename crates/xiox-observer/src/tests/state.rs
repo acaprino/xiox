@@ -1,4 +1,4 @@
-use super::fixtures::{GB, MB, build, item, scan, worktree};
+use super::fixtures::{GB, MB, build, item, scan, scan_at, worktree};
 use crate::{AttentionKind, Event, Observer, Params};
 use xiox_model::Level;
 use xiox_project::{Block, Category, SCHEMA};
@@ -196,7 +196,8 @@ fn unmeasured_new_item_is_listed_for_measuring_and_counts_when_measured() {
     assert_eq!(o.report(false).growth_bytes, (3 * GB) as i64);
     let fresh_view = o.report(false).items.into_iter().find(|i| i.item.key == fresh.key).unwrap();
     assert_eq!(fresh_view.measured_at_ms, Some(T0 + 2));
-    assert_eq!(o.keys_to_measure(), vec![known.key.clone()], "measured: not asked again");
+    // New items are measured again at every check: they may still be growing.
+    assert_eq!(o.keys_to_measure(), vec![known.key.clone(), fresh.key.clone()]);
 
     // A light re-check brings no bytes: the last measurement stays.
     o.update(scan(vec![build("target", None), wt, build("fresh", None)]), T0 + 3);
@@ -338,4 +339,126 @@ fn events_serialize_with_kebab_case_event_tag() {
 
     let error = serde_json::to_value(Event::Error { message: "boom".into() }).unwrap();
     assert_eq!(error, serde_json::json!({"event": "error", "message": "boom"}));
+}
+
+#[test]
+fn a_new_item_measured_small_then_big_makes_growth_and_fires_attention() {
+    let mut o = Observer::new(scan(vec![]), params(GB, usize::MAX), T0);
+    // First seen mid-compile: 10 MB.
+    let events = o.update(scan(vec![build("target", Some(10 * MB))]), T0 + 1);
+    assert!(events.iter().all(|e| matches!(e, Event::Changed { .. })), "{events:?}");
+    assert_eq!(o.keys_to_measure(), vec![key_of("target")], "still to be measured at the next check");
+    // The next check measures it again: 3 GB.
+    let events = o.update(scan(vec![build("target", Some(3 * GB))]), T0 + 2);
+    assert_eq!(o.report(false).growth_bytes, (3 * GB) as i64);
+    let [Event::Attention { kind: AttentionKind::Growth, value, .. }] = &events[..] else { panic!("{events:?}") };
+    assert_eq!(*value, 3 * GB);
+}
+
+#[test]
+fn growth_counts_a_new_item_inside_another_new_item_once() {
+    let mut o = Observer::new(scan(vec![]), quiet(), T0);
+    let wt = item(Category::Worktrees, r"D:\Projects\wt", Some(3 * GB), Level::Optional, vec![]);
+    let inner = item(Category::Builds, r"D:\Projects\wt\target", Some(GB), Level::Recommended, vec![]);
+    o.update(scan(vec![wt, inner]), T0 + 1);
+    assert_eq!(o.report(false).growth_bytes, (3 * GB) as i64);
+
+    // A new folder inside a baseline one is new growth, in full; a grown baseline folder inside a
+    // baseline one that was not measured again counts its growth.
+    let base_wt = item(Category::Worktrees, r"D:\Projects\old", Some(5 * GB), Level::Optional, vec![]);
+    let base_inner = item(Category::Builds, r"D:\Projects\old\target", Some(GB), Level::Recommended, vec![]);
+    let mut o = Observer::new(scan(vec![base_wt.clone(), base_inner]), quiet(), T0);
+    let grown = item(Category::Builds, r"D:\Projects\old\target", Some(2 * GB), Level::Recommended, vec![]);
+    let fresh = item(Category::Builds, r"D:\Projects\old\dist", Some(GB), Level::Recommended, vec![]);
+    o.update(scan(vec![base_wt, grown, fresh]), T0 + 1);
+    assert_eq!(o.report(false).growth_bytes, (2 * GB) as i64);
+}
+
+#[test]
+fn totals_count_nested_items_once() {
+    let wt = item(Category::Worktrees, r"D:\Projects\wt", Some(3 * GB), Level::Recommended, vec![]);
+    let inner = item(Category::Builds, r"D:\Projects\wt\target", Some(GB), Level::Recommended, vec![]);
+    let outer_build = build("target", Some(2 * GB));
+    let nested_build = build(r"target\debug", Some(GB));
+    let o = Observer::new(scan(vec![wt, inner, outer_build, nested_build]), quiet(), T0);
+    let Event::Started { totals, .. } = o.started() else { panic!() };
+    // Recommended: the worktree (3 GB, holds its build) and the outer build (2 GB, holds its subfolder).
+    assert_eq!(totals.recommended_bytes, 5 * GB);
+    // Per category: the nested build is inside a build of the same category, not counted twice there.
+    assert_eq!(totals.by_category.get("builds"), Some(&(3 * GB)));
+    assert_eq!(totals.by_category.get("worktrees"), Some(&(3 * GB)));
+}
+
+#[test]
+fn report_carries_the_shape_of_analyze_json_from_the_latest_scan() {
+    let mut first = scan(vec![build("a", Some(GB))]);
+    first.scanned_at_ms = 111;
+    first.elapsed_ms = 7;
+    first.branches = vec![xiox_project::StaleBranch { name: "old".into(), merged: true, worktree_missing: false }];
+    let mut o = Observer::new(first, quiet(), T0);
+    let j = serde_json::to_value(o.report(false)).unwrap();
+    assert_eq!(j["branches"][0]["name"], "old");
+    assert_eq!(j["search"], "bounded-walk");
+    assert_eq!((j["scannedAtMs"].as_i64(), j["elapsedMs"].as_u64()), (Some(111), Some(7)));
+
+    let mut next = scan(vec![build("a", Some(GB))]);
+    next.scanned_at_ms = 222;
+    next.elapsed_ms = 9;
+    next.search = xiox_project::SearchMode::ParentOnly;
+    o.update(next, T0 + 1);
+    let j = serde_json::to_value(o.report(false)).unwrap();
+    assert_eq!(j["branches"], serde_json::json!([]));
+    assert_eq!(j["search"], "parent-only");
+    assert_eq!((j["scannedAtMs"].as_i64(), j["elapsedMs"].as_u64()), (Some(222), Some(9)));
+}
+
+#[test]
+fn a_repeated_key_in_the_first_scan_keeps_the_first_item_as_baseline() {
+    let mut o = Observer::new(scan(vec![build("a", Some(GB)), build("a", Some(5 * GB))]), quiet(), T0);
+    assert_eq!(o.report(false).items.len(), 1);
+    o.update(scan(vec![build("a", Some(2 * GB))]), T0 + 1);
+    assert_eq!(o.report(false).growth_bytes, GB as i64, "baseline is the first item's 1 GB");
+}
+
+#[test]
+fn clean_command_quotes_for_the_windows_argument_parser() {
+    let mut o = Observer::new(scan_at(r"D:\My Projects\mukade", vec![]), quiet(), T0);
+    let spaced = item(Category::Builds, r"D:\My Projects\mukade\my target", Some(MB), Level::Recommended, vec![]);
+    o.update(scan_at(r"D:\My Projects\mukade", vec![spaced]), T0 + 1);
+    assert_eq!(
+        o.report(false).clean_command.as_deref(),
+        Some(r#"xiox clean "D:\My Projects\mukade" --include "D:\My Projects\mukade\my target""#)
+    );
+
+    // A root or path ending in a backslash: the backslash must not swallow the closing quote
+    // (backslashes before a closing quote are doubled).
+    let mut o = Observer::new(scan_at(r"D:\", vec![]), quiet(), T0);
+    let trailing = item(Category::Builds, r"D:\a\b\", Some(MB), Level::Recommended, vec![]);
+    o.update(scan_at(r"D:\", vec![trailing]), T0 + 1);
+    let cmd = o.report(false).clean_command.unwrap();
+    assert_eq!(cmd, r#"xiox clean "D:\\" --include "D:\a\b\\""#);
+}
+
+#[test]
+fn clean_command_leaves_out_an_item_that_holds_a_blocked_item() {
+    let mut o = Observer::new(scan(vec![]), quiet(), T0);
+    let outer = build("outer", Some(MB));
+    let blocked_inner = item(
+        Category::Worktrees,
+        r"D:\Projects\mukade\outer\wt",
+        None,
+        Level::Optional,
+        vec![Block::DirtyGit],
+    );
+    let fine = build("fine", Some(MB));
+    o.update(scan(vec![outer, blocked_inner, fine.clone()]), T0 + 1);
+    let cmd = o.report(false).clean_command.unwrap();
+    assert_eq!(cmd.matches("--include").count(), 1, "{cmd}");
+    assert!(cmd.contains(&path_of(&fine)) && !cmd.contains("outer"), "{cmd}");
+
+    // Only the one that holds a blocked item: no command at all.
+    let mut o = Observer::new(scan(vec![]), quiet(), T0);
+    let inner = item(Category::Builds, r"D:\Projects\mukade\outer\x", None, Level::Optional, vec![Block::Unreachable]);
+    o.update(scan(vec![build("outer", Some(MB)), inner]), T0 + 1);
+    assert_eq!(o.report(false).clean_command, None);
 }

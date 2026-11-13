@@ -4,7 +4,9 @@
 
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use xiox_project::{Category, Item, Note, Project, ProjectScan, SCHEMA, is_recommended};
+use xiox_project::{
+    Category, Item, Note, Project, ProjectScan, SCHEMA, SearchMode, StaleBranch, is_recommended, key_within,
+};
 
 /// How many `--include` paths one `xiox clean` command carries before it is cut.
 const CLEAN_COMMAND_MAX_ITEMS: usize = 25;
@@ -63,6 +65,12 @@ pub struct Report {
     pub project: Project,
     pub items: Vec<ItemView>,
     pub notes: Vec<Note>,
+    /// Stale local branches, from the latest scan (same field as `xiox analyze --json`).
+    pub branches: Vec<StaleBranch>,
+    pub search: SearchMode,
+    /// When the latest scan was taken, and how long it took.
+    pub scanned_at_ms: i64,
+    pub elapsed_ms: u64,
     pub totals: Totals,
     /// Since the baseline, measured bytes only.
     pub growth_bytes: i64,
@@ -93,6 +101,10 @@ pub struct Observer {
     params: Params,
     project: Project,
     notes: Vec<Note>,
+    branches: Vec<StaleBranch>,
+    search: SearchMode,
+    scanned_at_ms: i64,
+    elapsed_ms: u64,
     started_at_ms: i64,
     checked_at_ms: i64,
     /// Every key of the first scan, with its bytes at the baseline (`None` until first measured).
@@ -109,9 +121,10 @@ impl Observer {
         let mut baseline = HashMap::new();
         let mut items = Vec::new();
         for item in first.items {
-            if baseline.insert(item.key.clone(), item.bytes).is_some() {
+            if baseline.contains_key(&item.key) {
                 continue; // a repeated key keeps its first item
             }
+            baseline.insert(item.key.clone(), item.bytes);
             items.push(ItemView {
                 measured_at_ms: item.bytes.map(|_| now_ms),
                 item,
@@ -123,6 +136,10 @@ impl Observer {
             params,
             project: first.project,
             notes: first.notes,
+            branches: first.branches,
+            search: first.search,
+            scanned_at_ms: first.scanned_at_ms,
+            elapsed_ms: first.elapsed_ms,
             started_at_ms: now_ms,
             checked_at_ms: now_ms,
             baseline,
@@ -183,6 +200,10 @@ impl Observer {
 
         self.project = scan.project;
         self.notes = scan.notes;
+        self.branches = scan.branches;
+        self.search = scan.search;
+        self.scanned_at_ms = scan.scanned_at_ms;
+        self.elapsed_ms = scan.elapsed_ms;
         self.items = items;
         self.checked_at_ms = now_ms;
 
@@ -224,16 +245,15 @@ impl Observer {
         events
     }
 
-    /// Keys of items whose bytes should be measured at the next check: new items without bytes
-    /// and the `builds` folders of the baseline (their growth is what is watched). Only items
-    /// with a folder to measure.
+    /// Keys of items whose bytes should be measured at the next check: every new item (it may
+    /// still be growing: a worktree being checked out, a build in progress) and the `builds`
+    /// folders of the baseline (their growth is what is watched). Only items with a folder to
+    /// measure; the caller bounds each measure.
     pub fn keys_to_measure(&self) -> Vec<String> {
         self.items
             .iter()
             .filter(|v| v.item.path.is_some())
-            .filter(|v| {
-                if v.new { v.item.bytes.is_none() } else { v.item.category == Category::Builds }
-            })
+            .filter(|v| v.new || v.item.category == Category::Builds)
             .map(|v| v.item.key.clone())
             .collect()
     }
@@ -252,6 +272,10 @@ impl Observer {
             project: self.project.clone(),
             items: self.items.clone(),
             notes: self.notes.clone(),
+            branches: self.branches.clone(),
+            search: self.search,
+            scanned_at_ms: self.scanned_at_ms,
+            elapsed_ms: self.elapsed_ms,
             totals: self.totals(),
             growth_bytes: self.growth_bytes(),
             attention,
@@ -263,16 +287,32 @@ impl Observer {
         }
     }
 
-    /// New items count all their measured bytes; baseline items only what they grew by since the
-    /// baseline (shrinking counts 0). An item not measured (yet) counts 0.
+    /// What one item adds to the growth: a new item all its measured bytes; a baseline item what
+    /// it grew by since the baseline (shrinking counts 0). An item not measured (yet) counts 0.
+    fn growth_of(&self, v: &ItemView) -> u64 {
+        match (self.baseline.get(&v.item.key), v.item.bytes) {
+            (None, Some(now)) => now,
+            (Some(Some(base)), Some(now)) => now.saturating_sub(*base),
+            _ => 0,
+        }
+    }
+
+    /// Growth since the baseline, measured bytes only. An item inside another item that already
+    /// contributes (same kind: both new or both baseline) is counted with it, once.
     fn growth(&self) -> u64 {
         self.items
             .iter()
-            .map(|v| match (self.baseline.get(&v.item.key), v.item.bytes) {
-                (None, Some(now)) => now,
-                (Some(Some(base)), Some(now)) => now.saturating_sub(*base),
-                _ => 0,
+            .filter(|v| {
+                !(v.item.path.is_some()
+                    && self.items.iter().any(|o| {
+                        o.item.path.is_some()
+                            && o.new == v.new
+                            && o.item.key != v.item.key
+                            && key_within(&v.item.key, &o.item.key)
+                            && self.growth_of(o) > 0
+                    }))
             })
+            .map(|v| self.growth_of(v))
             .fold(0u64, u64::saturating_add)
     }
 
@@ -288,27 +328,38 @@ impl Observer {
         self.new_worktrees() > self.params.worktree_threshold
     }
 
+    /// Per category the measured bytes, an item inside another of its category counted once;
+    /// `recommended_bytes` likewise over the recommended items (a worktree and the build inside
+    /// it are freed together).
     fn totals(&self) -> Totals {
+        let measured: Vec<&Item> = self.items.iter().map(|v| &v.item).filter(|i| i.bytes.is_some()).collect();
         let mut totals = Totals { items: self.items.len(), ..Totals::default() };
-        for v in &self.items {
-            let Some(bytes) = v.item.bytes else { continue };
-            let sum = totals.by_category.entry(v.item.category.to_string()).or_insert(0);
-            *sum = sum.saturating_add(bytes);
-            if is_recommended(&v.item) {
-                totals.recommended_bytes = totals.recommended_bytes.saturating_add(bytes);
-            }
+        for category in measured.iter().map(|i| i.category).collect::<HashSet<_>>() {
+            let of: Vec<&Item> = measured.iter().copied().filter(|i| i.category == category).collect();
+            totals.by_category.insert(category.to_string(), sum_outer(&of));
         }
+        let recommended: Vec<&Item> = measured.iter().copied().filter(|i| is_recommended(i)).collect();
+        totals.recommended_bytes = sum_outer(&recommended);
         totals
     }
 
     /// The command that would remove the new recommended items `xiox clean` accepts by path
-    /// (not blocked, not directly under a drive root, with a path: sessions cannot be named), and
-    /// whether more than [`CLEAN_COMMAND_MAX_ITEMS`] had to be left out.
+    /// (not blocked, not directly under a drive root, with a path: sessions cannot be named, and
+    /// not holding a blocked item: `clean` refuses the whole command for it), and whether more than
+    /// [`CLEAN_COMMAND_MAX_ITEMS`] had to be left out.
     fn clean_command(&self) -> (Option<String>, bool) {
+        let holds_blocked = |outer: &Item| {
+            self.items.iter().any(|j| {
+                j.item.path.is_some()
+                    && j.item.key != outer.key
+                    && !j.item.blocked.is_empty()
+                    && key_within(&j.item.key, &outer.key)
+            })
+        };
         let paths: Vec<String> = self
             .items
             .iter()
-            .filter(|v| v.new && is_recommended(&v.item))
+            .filter(|v| v.new && is_recommended(&v.item) && !holds_blocked(&v.item))
             .filter_map(|v| v.item.path.as_ref())
             .map(|p| p.display().to_string())
             .collect();
@@ -316,10 +367,48 @@ impl Observer {
             return (None, false);
         }
         let truncated = paths.len() > CLEAN_COMMAND_MAX_ITEMS;
-        let mut command = format!("xiox clean \"{}\"", self.project.root.display());
+        let mut command = format!("xiox clean {}", quote_arg(&self.project.root.display().to_string()));
         for p in paths.iter().take(CLEAN_COMMAND_MAX_ITEMS) {
-            command.push_str(&format!(" --include \"{p}\""));
+            command.push_str(" --include ");
+            command.push_str(&quote_arg(p));
         }
         (Some(command), truncated)
     }
+}
+
+/// Sum of the measured bytes of `items`, an item inside another one counted once (with the outer one).
+fn sum_outer(items: &[&Item]) -> u64 {
+    items
+        .iter()
+        .filter(|i| {
+            !(i.path.is_some()
+                && items.iter().any(|o| o.path.is_some() && o.key != i.key && key_within(&i.key, &o.key)))
+        })
+        .fold(0u64, |sum, i| sum.saturating_add(i.bytes.unwrap_or(0)))
+}
+
+/// `arg` in double quotes for the Windows command-line parser: a run of backslashes before a
+/// closing or embedded quote is doubled (`D:\` is written `"D:\\"`), an embedded quote is escaped.
+fn quote_arg(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
 }
