@@ -144,3 +144,92 @@ L'elenco di `report` e di `project_leftovers` ha la stessa forma del `--json` di
 - Libreria MCP o protocollo scritto a mano.
 - Come accorgersi che chi l'ha avviato è morto quando stdin non viene chiuso.
 - Un esempio di configurazione MCP nella guida di `xiox observe --help`.
+
+## Esito
+
+Data: 2026-11-14. Costruito secondo il piano `docs/superpowers/plans/2026-11-14-xiox-observe.md`.
+Guida per chi lo usa: `docs/xiox-observe.md` (in inglese).
+
+### Cosa è stato costruito
+
+- Il crate `xiox-observer`: fotografia iniziale, differenze fra un controllo e l'altro, soglie con
+  riarmo, resoconto, misura dei pesi con limiti (200.000 voci e 10 secondi per cartella, i collegamenti
+  non si seguono, `bytes: null` oltre il limite). Funzioni pure: non toccano disco, orologio né git.
+  `too_shallow` e `is_recommended` sono passate in `xiox-project`, in modo che l'elenco di `analyze`
+  e il comando dell'osservatore usino la stessa regola.
+- Il comando `xiox observe [<project>]` in `xiox-cli`: parametri `--interval` (predefinito 600,
+  da 60 a 2.592.000 secondi), `--grow-threshold` (predefinito 2GB, unità binarie), `--worktree-threshold`
+  (predefinito 3), `--no-drives`, `--mcp`. Modo predefinito: righe JSON `started`, `changed`,
+  `attention`, `report`, `error` su stdout; su stdin `report` e `stop`; fine con `stop`, con la chiusura
+  di stdin o con la pipe di stdout chiusa. Su stdout nient'altro; U+2028 e U+2029 sono scritti come
+  escape; le righe di stdin sono limitate a 64 KiB.
+- Il modo `--mcp`: server MCP su stdio scritto a mano (`initialize`, `ping`, `tools/list`,
+  `tools/call`; versioni di protocollo 2025-06-18, 2025-03-26, 2024-11-05), con uno strumento solo in
+  sola lettura, `project_leftovers`, e il campo `instructions`. Nessun timer: un controllo a ogni
+  chiamata. Nessuna dipendenza nuova oltre a `chrono` (già nel workspace) e `serde_json`: né `rmcp` né
+  un runtime asincrono.
+- La documentazione: `docs/xiox-observe.md`, il testo di `xiox --help` (con un esempio di
+  configurazione MCP), il README (sezione «Observe a project» e la voce della Roadmap spuntata), un
+  rimando in `docs/xiox-cli.md`. Gli esempi della guida vengono da esecuzioni vere di una build di debug
+  su un albero finto in `%TEMP%`.
+
+### Le due deviazioni del piano rispetto a questo documento
+
+1. **Ciclo a un solo thread, niente attesa di 20 secondi.** Il documento prevede che una richiesta
+   (`report` o `project_leftovers`) durante un controllo aspetti fino a 20 secondi e poi risponda con
+   l'ultimo risultato e `stale: true`. Il piano non ha una regola a tempo: la richiesta viene servita
+   quando il controllo in corso finisce (un controllo alla volta, un solo thread che li esegue). Se il
+   controllo nuovo fallisce, si risponde con l'ultimo risultato buono, `stale: true`, e in modo
+   predefinito esce un evento `error`.
+2. **Il comando `clean` usa `--include`, non i flag di categoria.** Il documento dice «il comando
+   `xiox clean …` che toglierebbe le voci `recommended` nuove». Un flag come `--worktrees` prenderebbe
+   anche le voci raccomandate che c'erano già alla partenza e che l'osservatore non garantisce. Il
+   comando è quindi fatto di `--include <percorso>` per le sole voci nuove, raccomandate, non bloccate,
+   con una cartella, non sotto una radice di disco e che non contengono una voce bloccata; al massimo
+   25, con `cleanCommandTruncated: true` se ce ne sono di più. Copie e cartelle trovate per nome sono
+   `caution`: non vi entrano mai.
+
+### Altre decisioni prese durante la costruzione
+
+- In modo `--mcp` la fotografia iniziale si fa subito alla partenza, su un thread a parte
+  (`xiox-mcp-baseline`): `initialize`, `ping` e `tools/list` rispondono subito anche se l'analisi è
+  lenta; `tools/call` aspetta la fotografia fino a 30 secondi e poi risponde con un risultato
+  `isError` («still running, call again») senza perderla. Se la prima analisi fallisce il server resta
+  acceso e ogni chiamata la ritenta; in quel caso la fotografia è presa dalla prima chiamata riuscita, e
+  le voci create prima sono `new: false` (`startedAtMs` del resoconto dice quando è stata presa). In
+  modo predefinito, invece, una prima analisi fallita fa uscire con codice 1 e stdout vuoto.
+- L'evento `attention` scatta quando il valore è **maggiore** della soglia (con 3 al quarto
+  worktree nuovo), una volta per superamento, e si riarma quando il valore torna a soglia o sotto.
+- Le voci non misurate valgono 0 nella crescita e vengono misurate di nuovo a ogni controllo; dopo la
+  partenza si rimisurano solo le voci nuove e le cartelle `builds` della fotografia.
+- Un cambio di categoria della stessa cartella fra due controlli (osservato: un worktree creato mentre
+  un controllo girava, elencato come copia da quel controllo) non genera un evento: la chiave è il
+  percorso.
+- Il panic hook scrive solo su stderr, senza poter restare bloccato dal blocco di stderr, e il processo
+  esce con un codice diverso da zero. `--interval` ha un massimo (30 giorni).
+
+### Prove
+
+- Suite completa del workspace (`cargo test -j 1 --workspace --exclude mukade`): **1093 superati, 0
+  falliti, 20 ignorati** (prima dell'osservatore: 1013 superati, 0 falliti, 20 ignorati). Nuovi test:
+  `xiox-observer` 27, `xiox-cli` 87 di unità e 27 sul binario (compresi quelli di `observe` e `--mcp`
+  che avviano il binario di debug con gli interruttori di prova su alberi finti).
+- Build di rilascio (`cargo build -j 1 --release --locked -p xiox-desktop -p xiox-cli`): `xiox.exe`
+  3.191.808 byte (circa 3,2 MB), `xiox-ui.exe` 12.262.400 byte (invariato dall'osservatore: l'app non
+  dipende da `xiox-cli`).
+
+### Limiti noti
+
+- Non c'è osservazione in tempo reale: un worktree creato e tolto fra due controlli non si vede mai.
+- Le dimensioni hanno un tetto (200.000 voci o 10 secondi per cartella): oltre, `bytes` è `null` e
+  la voce vale 0 nella crescita; un sottoalbero illeggibile fa sottostimare il peso.
+- Senza elevazione la ricerca di copie e cartelle per nome è la camminata limitata dell'analisi mirata
+  (tre livelli): un progetto più in profondità può sfuggire (nota `walk-may-miss-deep-folders`).
+- Nessuna attribuzione a una sessione o a un harness: «comparso da quando sono partito».
+- Con `--mcp` la prima chiamata che segue una prima analisi fallita ridefinisce «nuovo» (vedi sopra).
+- Un chiamante che sparisce senza chiudere le pipe viene notato alla prossima scrittura su stdout o alla
+  fine di stdin (Windows le chiude quando un processo muore).
+- Il resoconto è lungo per progetti con molte voci; in MCP viaggia due volte (testo e
+  `structuredContent`).
+- Non è stato misurato il carico su un progetto reale grande: i tetti sono verificati dai test, non da
+  una misura sul campo.

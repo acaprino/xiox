@@ -29,7 +29,7 @@ There is no installer. Build the release executable from the workspace root (the
 cargo build --release -p xiox-cli
 ```
 
-The result is `target\release\xiox.exe` (about 2.8 MB, one file). Copy it anywhere, or put its
+The result is `target\release\xiox.exe` (about 3.2 MB, one file). Copy it anywhere, or put its
 folder on your `PATH`. `xiox --version` prints the version, `xiox --help` the full usage.
 
 Requirements: Windows, and `git` on the `PATH` for everything that involves git (worktrees,
@@ -765,6 +765,12 @@ You can call `xiox` as a tool. A safe routine:
    it would lose work or because a session is using it.
 4. Check the exit code. `3` means something was not removed: read `outcome.items` and tell the
    user. Never remove the folder you are working in.
+
+**Watching a project over time.** `xiox observe` is a separate, read-only command for a process
+that stays alive while you or an agent work on a project: it takes a snapshot, checks again at
+intervals and reports what appeared since (new worktrees, copies, build folders, growth), as JSON
+lines or as an MCP server, with a ready `xiox clean` command for the new recommended items. It
+removes nothing. See [xiox-observe.md](xiox-observe.md).
 
 ## Safety
 

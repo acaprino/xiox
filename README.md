@@ -91,6 +91,21 @@ Exit codes: `0` done, `1` error, `2` bad usage or refused, `3` partial (somethin
 
 **[Full guide: docs/xiox-cli.md](docs/xiox-cli.md)**: categories, levels and blocks, JSON fields, PowerShell and agent examples, limits.
 
+### Observe a project
+
+`xiox observe` is a process that you (or an agent harness) start for one project. It takes a snapshot, checks again at intervals and tells its caller what **appeared since it started**: new worktrees, copies, build folders and how much they grow. It never removes anything; the report carries a ready `xiox clean` command for the new items.
+
+```text
+xiox observe C:\work\sampleapp                 # one JSON object per line on stdout; stdin: report, stop
+xiox observe C:\work\sampleapp --mcp           # a read-only MCP server on stdio (tool: project_leftovers)
+```
+
+```json
+{"command": "xiox", "args": ["observe", "C:\\work\\sampleapp", "--mcp"]}
+```
+
+*(the last line is the stanza to add to an MCP client)* **[Guide: docs/xiox-observe.md](docs/xiox-observe.md)**: events, report, thresholds, MCP mode, client configuration, limits.
+
 ## The desktop app
 
 The Windows app (`xiox-ui.exe`) has four sections:
@@ -143,7 +158,7 @@ The workspace is the Rust engine as crates: `xiox-git` (git queries), `xiox-scan
 ## Roadmap
 
 - [x] `xiox analyze` and `xiox clean` for one project, with a [guide](docs/xiox-cli.md)
-- [ ] `xiox observe <project>`: an observer that a harness or an agent starts for its own project; it warns (never cleans) when worktrees, copies and backups pile up, as JSON lines or as a read-only MCP server. [Design](docs/superpowers/specs/2026-11-13-project-observer-mcp-design.md)
+- [x] `xiox observe <project>`: an observer that a harness or an agent starts for its own project; it warns (never cleans) when worktrees, copies and backups pile up, as JSON lines or as a read-only MCP server, with a [guide](docs/xiox-observe.md). [Design](docs/superpowers/specs/2026-11-13-project-observer-mcp-design.md)
 - [ ] A **Xiox** desktop app: Tauri 2, the same engine, the interface above
 - [ ] A tab in [Mukade](https://github.com/acaprino/mukade) that starts observers and shows their warnings
 

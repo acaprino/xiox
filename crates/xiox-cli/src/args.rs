@@ -88,7 +88,12 @@ Flags:
   -h, --help       show this help
   -V, --version    show the version
 
-Exit codes: 0 done, 1 error, 2 wrong usage, 3 partly cleaned (an item failed or was skipped)."
+Exit codes: 0 done, 1 error, 2 wrong usage, 3 partly cleaned (an item failed or was skipped).
+
+Observe as an MCP server: add a stdio server to your MCP client with this command
+(one server per project; use the full path to xiox.exe if it is not on the PATH):
+  {{\"command\": \"xiox\", \"args\": [\"observe\", \"C:\\\\path\\\\to\\\\project\", \"--mcp\"]}}
+Guide: docs/xiox-observe.md"
     )
 }
 
