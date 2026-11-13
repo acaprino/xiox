@@ -54,9 +54,11 @@ di presentazione.
   `shell` per il JavaScript), CSP `default-src 'self'`, nessun contenuto remoto, nessuna
   richiesta di rete dall'interfaccia (l'aggiornamento delle regole Winapp2 resta nel motore, come
   oggi).
-- **Privilegi**: l'app parte come utente normale (`asInvoker`); come oggi mostra un avviso e un
-  pulsante «Restart as administrator» per le voci che lo richiedono. Mai una richiesta UAC
-  all'avvio.
+- **Privilegi: come oggi.** La versione di produzione chiede l'amministratore all'avvio
+  (`requireAdministrator`, una richiesta UAC); le build di sviluppo e i test restano `asInvoker`
+  (stessa coppia di manifesti di oggi: `xiox-ui.manifest` e `xiox-ui.dev.manifest`, scelta in
+  `build.rs`). Decisione dell'utente. Nessun rilancio da utente normale in questo lavoro. La
+  barra di stato mostra `administrator` o `standard user` come oggi.
 - **Finestra**: minimo 1000 x 640, ricorda dimensione e posizione, una sola istanza.
   Barra del titolo del sistema (non disegnata a mano) con il colore scuro del tema se Windows lo
   permette.
@@ -95,17 +97,53 @@ di presentazione.
 Il comportamento di ogni sezione è quello dell'app egui, descritto dal suo codice (`src/main.rs`,
 `src/dev.rs`) e dalle specifiche già approvate (`2026-11-10-dev-mode-design.md`,
 `2026-11-10-catalogo-sviluppo-design.md`, `2026-11-12`/`-13` per le regole). Il builder le rilegge;
-qui solo l'elenco, con il nome inglese dei testi.
+qui solo l'elenco, con il nome inglese dei testi. Restano anche: la finestra About con
+l'attribuzione CC-BY-SA di Winapp2 e la versione caricata (obbligatoria), l'avviso di profilo
+diverso, la riga di stato di Winapp2, la ricerca fra le regole e la scelta delle cartelle
+aggiuntive di Developers (plugin di dialogo di Tauri, come mukade).
 
 | Sezione | Funzioni da portare |
 |---|---|
-| **Cleanup** | categorie `System`, `Explorer`, `Advanced`, browser e applicazioni (dal catalogo di regole); opzione «Only delete Temp files older than 24 hours»; analisi con progresso e annulla; elenco per voce con dimensione, livello, motivo; pulizia con conferma e avvisi delle opzioni scelte; resoconto; pulizia dello spazio libero (wipe) e le sue protezioni com'è oggi; Cestino |
-| **Registry** | scansione dei problemi, elenco, backup del registro prima di correggere (cartella `Xiox` dei backup), correzione, ripristino |
-| **Services & RAM** | elenco dei servizi e del loro stato/avvio come oggi, memoria in uso e stima di RAM liberabile |
+| **Cleanup** | categorie `System`, `Explorer`, `Advanced`, browser e applicazioni (dal catalogo di regole); le voci native (pulizia dello spazio libero, `PATH`, credenziali di rete, dati vecchi di Windows, elenco dei cookie da tenere) con i loro avvisi e le loro conferme; opzione «Only delete Temp files older than 24 hours»; analisi con progresso e annulla; elenco per voce con dimensione, livello, motivo; pulizia con conferma e avvisi delle opzioni scelte; resoconto; pulizia dello spazio libero (wipe) e le sue protezioni com'è oggi; Cestino |
+| **Registry** | scansione dei problemi, elenco, backup del registro prima di correggere (cartella `Xiox` dei backup), correzione. Nessun ripristino dentro l'app (oggi non c'è: si fa con un doppio clic sul file `.reg` del backup) |
+| **Services & RAM** | elenco dei servizi con stato e avvio, interruttore Recommended/All, ricerca, aggiorna; azioni `Disable`, `Set to Manual` e `Restore originals`, ognuna con la sua conferma; memoria in uso e stima di RAM liberabile |
 | **Developers** | `Projects`, `Worktrees`, `Archived sessions`; opzioni giorni di inattività, Cestino/definitiva, cartelle aggiuntive; livelli, «I have read the warnings», pulsante e conferma per sezione («Clean 5 folders»…), resoconto, «Save as text…», annulla a metà |
 
 I testi italiani dell'interfaccia di oggi si traducono in inglese (una sola lingua). I nomi dei
 file di dati e le regole non cambiano.
+
+## Decisioni dopo il controllo del builder (mie, da controllare)
+
+Un revisore ha letto il codice contro questo documento. Le risposte che ho dato:
+
+- **Lo stato vive in Rust.** `DevState` (selezioni, preselezione, controllo di vecchiaia
+  dell'analisi, limite di 30 minuti sulla conferma, righe `caution`, Cestino/definitiva, mancanza
+  di spazio nel Cestino) e l'orchestrazione che oggi sta in `main.rs` (thread di pulizia,
+  `poll`, `finish_clean`, `clean_report`, lavori di registro e servizi) escono dall'egui e vanno in
+  `xiox-core` senza `egui::Context`: al suo posto un'interfaccia di notifica (un trait) che il
+  livello Tauri implementa mandando eventi. L'interfaccia web **disegna** soltanto: non decide
+  cosa è selezionabile né cosa si può rimuovere. I 37 test di `dev.rs` si spostano intatti; la
+  logica non si riscrive in TypeScript. In TypeScript restano solo formattazione, ordinamenti e
+  i testi dei pulsanti.
+- **Cleanup: cosa sono le righe.** Come oggi si spuntano le voci prima dell'analisi e l'analisi
+  restituisce il totale (byte e file) per voce. Il mock-up si realizza così: barra 2 = i gruppi
+  del catalogo (`System`, `Explorer`, `Advanced`, browser, applicazioni); area centrale = le voci
+  (regole) del gruppo con casella, dimensione dopo l'analisi, e un livello **derivato**:
+  `RECOMMENDED` se la regola è accesa di default, `OPTIONAL` se è spenta di default, `CAUTION` se
+  ha un avviso; modo `to the Recycle Bin` solo per la voce Recycle Bin, `permanently` per le
+  altre. «Why» è la descrizione della regola dove il catalogo ce l'ha, altrimenti il campo si
+  nasconde. Nessun dato inventato.
+- **Italiano nel motore**: si traduce **alla fonte** (nomi delle categorie, avvisi delle regole,
+  nomi del registro, suggerimenti dei servizi, `start_text`, `ABOUT_RULES`, `NO_PREVIEW`, i testi
+  di errore); i test che asseriscono quei testi si aggiornano. «I test del motore non cambiano»
+  vale per la logica, non per le stringhe tradotte.
+- **Prove di schermata**: due livelli. Rust: `Backend` finto per i test dei comandi. Interfaccia:
+  `src/mock.ts` con gli stessi dati e uno script Playwright su Vite in Chromium, come lo
+  `smoke.mjs` di mukade (Playwright non guida direttamente una finestra Tauri/WebView2).
+- **Versioni** (dal controllo): `package.json` di mukade sta nella radice del repository, non in
+  `apps/desktop`; Tauri 2.12.4 è la versione npm, il crate Rust è bloccato a 2.12.5;
+  `tauri-plugin-dialog` è agganciato a `=2.8.4`. Il builder copia i blocchi esatti da
+  `D:\Projects\mukade\Cargo.lock` e `package-lock.json`.
 
 ## Come si prova
 
@@ -145,7 +183,7 @@ file di dati e le regole non cambiano.
 - l'interfaccia sembra ancora un'app egui o un'app qualunque;
 - una prova automatica o una schermata modifica il sistema vero;
 - una funzione di oggi manca o ha protezioni più deboli;
-- l'app chiede i privilegi di amministratore all'avvio;
+- la versione di produzione non chiede l'amministratore all'avvio come oggi, o le build di sviluppo e i test lo chiedono;
 - c'è testo italiano visibile o testo tagliato a 1000 x 640;
 - `cargo test` o la build di produzione non passano.
 
