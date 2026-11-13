@@ -1,5 +1,5 @@
 use super::fixtures::{GB, MB, build, item, scan, scan_at, worktree};
-use crate::{AttentionKind, Event, Observer, Params};
+use crate::{AttentionKind, Event, Observer, PARTIAL_BACK_OFF_MS, Params};
 use xiox_model::Level;
 use xiox_project::{Block, Category, SCHEMA};
 
@@ -179,11 +179,11 @@ fn unmeasured_new_item_is_listed_for_measuring_and_counts_when_measured() {
     let wt = worktree("old-wt");
     let mut o = Observer::new(scan(vec![known.clone(), wt.clone()]), quiet(), T0);
     // Only the known `builds` folder is re-measured, never a baseline worktree.
-    assert_eq!(o.keys_to_measure(), vec![known.key.clone()]);
+    assert_eq!(o.keys_to_measure(T0 + 3), vec![known.key.clone()]);
 
     let fresh = build("fresh", None);
     o.update(scan(vec![known.clone(), wt.clone(), fresh.clone()]), T0 + 1);
-    let mut keys = o.keys_to_measure();
+    let mut keys = o.keys_to_measure(T0 + 3);
     keys.sort();
     let mut expected = vec![known.key.clone(), fresh.key.clone()];
     expected.sort();
@@ -197,7 +197,7 @@ fn unmeasured_new_item_is_listed_for_measuring_and_counts_when_measured() {
     let fresh_view = o.report(false).items.into_iter().find(|i| i.item.key == fresh.key).unwrap();
     assert_eq!(fresh_view.measured_at_ms, Some(T0 + 2));
     // New items are measured again at every check: they may still be growing.
-    assert_eq!(o.keys_to_measure(), vec![known.key.clone(), fresh.key.clone()]);
+    assert_eq!(o.keys_to_measure(T0 + 3), vec![known.key.clone(), fresh.key.clone()]);
 
     // A light re-check brings no bytes: the last measurement stays.
     o.update(scan(vec![build("target", None), wt, build("fresh", None)]), T0 + 3);
@@ -209,7 +209,7 @@ fn unmeasured_new_item_is_listed_for_measuring_and_counts_when_measured() {
 #[test]
 fn a_baseline_build_first_measured_later_takes_that_as_its_baseline() {
     let mut o = Observer::new(scan(vec![build("target", None)]), quiet(), T0);
-    assert_eq!(o.keys_to_measure().len(), 1);
+    assert_eq!(o.keys_to_measure(T0 + 3).len(), 1);
     o.update(scan(vec![build("target", Some(2 * GB))]), T0 + 1);
     assert_eq!(o.report(false).growth_bytes, 0);
     o.update(scan(vec![build("target", Some(3 * GB))]), T0 + 2);
@@ -347,7 +347,7 @@ fn a_new_item_measured_small_then_big_makes_growth_and_fires_attention() {
     // First seen mid-compile: 10 MB.
     let events = o.update(scan(vec![build("target", Some(10 * MB))]), T0 + 1);
     assert!(events.iter().all(|e| matches!(e, Event::Changed { .. })), "{events:?}");
-    assert_eq!(o.keys_to_measure(), vec![key_of("target")], "still to be measured at the next check");
+    assert_eq!(o.keys_to_measure(T0 + 3), vec![key_of("target")], "still to be measured at the next check");
     // The next check measures it again: 3 GB.
     let events = o.update(scan(vec![build("target", Some(3 * GB))]), T0 + 2);
     assert_eq!(o.report(false).growth_bytes, (3 * GB) as i64);
@@ -545,4 +545,112 @@ fn a_later_measure_that_gives_nothing_keeps_the_last_bytes_and_their_time() {
     assert_eq!(r.items[0].item.bytes, Some(GB + 10 * MB));
     assert_eq!(r.items[0].measured_at_ms, Some(T0 + 10));
     assert_eq!(r.growth_bytes, (10 * MB) as i64);
+}
+
+// ───────────────── partial sizes: a folder over the measuring caps ─────────────────
+
+fn partial_of(keys: &[&str]) -> std::collections::HashSet<String> {
+    keys.iter().map(|n| key_of(n)).collect()
+}
+
+#[test]
+fn a_partial_size_is_a_lower_bound_that_counts_in_the_growth_and_fires_the_attention() {
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), params(2 * GB, 3), T0);
+    // A new folder over the caps: only the walked part (3 GB) is known, and it is flagged.
+    let events = o.update_measured(
+        scan(vec![build("target", Some(GB)), build("huge", Some(3 * GB))]),
+        T0 + 10,
+        &partial_of(&["huge"]),
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Attention { kind: AttentionKind::Growth, value, .. } if *value == 3 * GB)),
+        "{events:?}"
+    );
+    let r = o.report(false);
+    assert_eq!(r.growth_bytes, (3 * GB) as i64);
+    assert_eq!(r.attention, vec![AttentionKind::Growth]);
+    let huge = r.items.iter().find(|i| i.item.key == key_of("huge")).unwrap();
+    assert!(huge.bytes_partial);
+    assert!(!r.items.iter().find(|i| i.item.key == key_of("target")).unwrap().bytes_partial);
+    // The `changed` event carries the flag of the item it adds.
+    let Event::Changed { added, .. } = &events[0] else { panic!("{events:?}") };
+    assert!(added[0].bytes_partial);
+}
+
+#[test]
+fn bytes_partial_is_written_camel_case_on_every_item() {
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), quiet(), T0);
+    o.update_measured(scan(vec![build("target", Some(GB)), build("huge", Some(MB))]), T0 + 1, &partial_of(&["huge"]));
+    let report = serde_json::to_value(o.report(false)).unwrap();
+    let items = report["items"].as_array().unwrap();
+    let flag = |name: &str| items.iter().find(|i| i["key"] == key_of(name)).unwrap()["bytesPartial"].clone();
+    assert_eq!(flag("target"), serde_json::json!(false));
+    assert_eq!(flag("huge"), serde_json::json!(true));
+}
+
+#[test]
+fn the_partial_flag_follows_the_bytes_it_describes() {
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), quiet(), T0);
+    o.update_measured(scan(vec![build("target", Some(GB)), build("huge", Some(MB))]), T0 + 1, &partial_of(&["huge"]));
+    // Not measured at the next check (budget, back-off): the last bytes and their flag stay.
+    o.update(scan(vec![build("target", None), build("huge", None)]), T0 + 2);
+    let view = o.report(false).items.into_iter().find(|i| i.item.key == key_of("huge")).unwrap();
+    assert_eq!((view.item.bytes, view.bytes_partial, view.measured_at_ms), (Some(MB), true, Some(T0 + 1)));
+    // A later whole measure clears it.
+    o.update(scan(vec![build("target", None), build("huge", Some(2 * MB))]), T0 + 3);
+    let view = o.report(false).items.into_iter().find(|i| i.item.key == key_of("huge")).unwrap();
+    assert_eq!((view.item.bytes, view.bytes_partial), (Some(2 * MB), false));
+}
+
+#[test]
+fn a_baseline_build_measured_partial_at_the_start_is_flagged() {
+    let o = Observer::new_measured(scan(vec![build("target", Some(GB))]), quiet(), T0, &partial_of(&["target"]));
+    let r = o.report(false);
+    assert!(r.items[0].bytes_partial);
+    assert!(!r.items[0].new);
+}
+
+#[test]
+fn an_item_whose_last_measure_hit_the_caps_is_measured_again_only_after_the_back_off() {
+    let mut o = Observer::new(scan(vec![build("target", Some(GB))]), quiet(), T0);
+    o.update_measured(
+        scan(vec![build("target", Some(GB)), build("huge", Some(MB)), build("small", Some(MB))]),
+        T0 + 1_000,
+        &partial_of(&["huge"]),
+    );
+    let huge = key_of("huge");
+    let small = key_of("small");
+    // Right after: the whole folders are measured again (a new one may still grow), the capped one is left alone.
+    let keys = o.keys_to_measure(T0 + 2_000);
+    assert!(keys.contains(&small) && !keys.contains(&huge), "{keys:?}");
+    // Just before the back-off ends: still left alone; at its end: measured again.
+    assert!(!o.keys_to_measure(T0 + 1_000 + PARTIAL_BACK_OFF_MS - 1).contains(&huge));
+    assert!(o.keys_to_measure(T0 + 1_000 + PARTIAL_BACK_OFF_MS).contains(&huge));
+    // A baseline build that was capped is backed off the same way.
+    let mut o = Observer::new_measured(scan(vec![build("target", Some(GB))]), quiet(), T0, &partial_of(&["target"]));
+    assert!(o.keys_to_measure(T0 + 1_000).is_empty());
+    assert_eq!(o.keys_to_measure(T0 + PARTIAL_BACK_OFF_MS), vec![key_of("target")]);
+    // Measured whole later, it is back in every check.
+    o.update(scan(vec![build("target", Some(2 * GB))]), T0 + PARTIAL_BACK_OFF_MS);
+    assert_eq!(o.keys_to_measure(T0 + PARTIAL_BACK_OFF_MS + 1), vec![key_of("target")]);
+}
+
+#[test]
+fn keys_to_measure_come_oldest_measured_first_and_never_measured_before_all() {
+    let mut o = Observer::new(
+        scan(vec![build("a", Some(MB)), build("b", Some(MB)), build("c", None)]),
+        quiet(),
+        T0,
+    );
+    // `b` is measured at T0 + 5, `a` stays at T0; `c` was never measured.
+    o.update(scan(vec![build("a", None), build("b", Some(MB)), build("c", None)]), T0 + 5);
+    assert_eq!(o.keys_to_measure(T0 + 6), vec![key_of("c"), key_of("a"), key_of("b")]);
+}
+
+#[test]
+fn a_partial_baseline_item_that_grows_beyond_what_was_walked_counts_what_was_seen_grow() {
+    // Both measures are lower bounds: the difference is what the walked part grew by, nothing more is claimed.
+    let mut o = Observer::new_measured(scan(vec![build("target", Some(GB))]), params(GB, 3), T0, &partial_of(&["target"]));
+    let events = o.update_measured(scan(vec![build("target", Some(3 * GB))]), T0 + 1, &partial_of(&["target"]));
+    assert!(events.iter().any(|e| matches!(e, Event::Attention { kind: AttentionKind::Growth, .. })), "{events:?}");
 }

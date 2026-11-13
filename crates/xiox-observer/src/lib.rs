@@ -5,8 +5,8 @@
 mod measure;
 mod state;
 
-pub use measure::measure_bytes;
-pub use state::{AttentionKind, Event, ItemView, Observer, Params, Report, Totals};
+pub use measure::{Measured, measure_bytes};
+pub use state::{AttentionKind, Event, ItemView, Observer, PARTIAL_BACK_OFF_MS, Params, Report, Totals};
 
 #[cfg(test)]
 mod tests;

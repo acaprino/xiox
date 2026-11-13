@@ -5,6 +5,13 @@ use xiox_git::WorktreeEntry;
 use xiox_model::normalize_path;
 use std::path::{Path, PathBuf};
 
+/// How many linked worktrees (the main one and the prunable ones excluded) `git worktree list`
+/// gives for `root`; `None` when git fails or answers nothing. A new question for callers that
+/// must tell "git failed" from "there are none": [`resolve_project`] turns a failure into an empty list.
+pub fn linked_worktree_count(root: &Path) -> Option<usize> {
+    xiox_git::list_worktrees(root).map(|entries| entries.iter().filter(|e| !e.is_main && !e.prunable).count())
+}
+
 /// The project that holds `path`: the main working tree of its git repository (also when
 /// `path` is a subfolder or a linked worktree), else `path` itself.
 pub fn resolve_project(path: &Path) -> Result<Project, Error> {

@@ -7,18 +7,21 @@
 
 use crate::run::{EXIT_ERROR, scan_project, write_result};
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
-use xiox_observer::{Event, Observer, Params, measure_bytes};
+use xiox_observer::{Event, Measured, Observer, Params, measure_bytes};
 use xiox_project::{Category, Options, ProjectScan};
 
 /// Folders are measured with these caps, for the baseline and for every later check alike, so that
 /// growth is never the difference between two different measurers.
 pub const MEASURE_MAX_ENTRIES: usize = 200_000;
 pub const MEASURE_MAX_TIME: Duration = Duration::from_secs(10);
+/// The longest one check spends measuring folders (the baseline is not bounded by it): once it
+/// is over, the folders left are measured at the next check, the oldest measure first.
+pub const MEASURE_BUDGET: Duration = Duration::from_secs(30);
 
 /// Longest piece of a stdin line quoted back in an `error` event.
 const ECHO_MAX_CHARS: usize = 80;
@@ -45,8 +48,14 @@ impl ObserveArgs {
 pub struct Deps {
     /// A light analysis of the project (no weights).
     pub analyze: Box<dyn Fn() -> Result<ProjectScan, String> + Send + Sync>,
-    /// The size of one folder, bounded; `None` when it cannot be told.
-    pub measure: Box<dyn Fn(&Path) -> Option<u64> + Send + Sync>,
+    /// The size of one folder, bounded (a lower bound when it hit a cap); `None` when it cannot
+    /// be told.
+    pub measure: Box<dyn Fn(&Path) -> Option<Measured> + Send + Sync>,
+    /// The longest one check spends measuring folders.
+    pub measure_budget: Duration,
+    /// How many linked worktrees git lists for a project root; `None` when git fails. Asked only
+    /// when a check lists none while the observer knew some, to tell a failure from a real removal.
+    pub linked_worktrees: Box<dyn Fn(&Path) -> Option<usize> + Send + Sync>,
     pub now_ms: Box<dyn Fn() -> i64 + Send + Sync>,
     pub interval: Duration,
     /// How long one MCP `tools/call` waits for the baseline before telling the agent to ask again.
@@ -57,16 +66,23 @@ pub struct Deps {
 /// "still running, call again" answer reaches the client.
 pub const BASELINE_WAIT: Duration = Duration::from_secs(30);
 
+/// The options of every analysis of the observer, the baseline and each check alike. Never `admin`:
+/// from an elevated terminal the search would read the whole MFT of every NTFS drive at each check
+/// (hundreds of MB, seconds), which a process that checks at intervals, next to others, must not do.
+pub fn observe_options(cmd: &ObserveArgs) -> Options {
+    Options {
+        drives: !cmd.no_drives,
+        measure: false,
+        admin: false,
+    }
+}
+
 impl Deps {
     /// The real PC (or the test switches' fake world in debug builds). In debug builds
     /// `XIOX_OBSERVE_INTERVAL_MS` replaces the interval and bypasses its 60-second minimum.
     pub fn real(cmd: &ObserveArgs) -> Self {
         let path = cmd.project.clone().unwrap_or_else(|| PathBuf::from("."));
-        let opts = Options {
-            drives: !cmd.no_drives,
-            measure: false,
-            admin: xiox_project::is_elevated(),
-        };
+        let opts = observe_options(cmd);
         let mut interval = Duration::from_secs(cmd.interval_secs);
         if cfg!(debug_assertions) {
             if let Some(ms) = std::env::var("XIOX_OBSERVE_INTERVAL_MS")
@@ -79,6 +95,8 @@ impl Deps {
         Deps {
             analyze: Box::new(move || scan_project(&path, &opts).map_err(|e| e.to_string())),
             measure: Box::new(|p| measure_bytes(p, MEASURE_MAX_ENTRIES, MEASURE_MAX_TIME)),
+            measure_budget: MEASURE_BUDGET,
+            linked_worktrees: Box::new(xiox_project::linked_worktree_count),
             now_ms: Box::new(|| chrono::Utc::now().timestamp_millis()),
             interval,
             baseline_wait: BASELINE_WAIT,
@@ -90,46 +108,134 @@ impl Deps {
 /// weight yet and of the build folders, then the baseline. Shared by both modes.
 pub fn start(deps: &Deps, params: Params) -> Result<Observer, String> {
     let mut scan = (deps.analyze)()?;
+    let mut partial = HashSet::new();
     for item in &mut scan.items {
         if let Some(path) = &item.path {
             if item.bytes.is_none() || item.category == Category::Builds {
-                item.bytes = (deps.measure)(path);
+                item.bytes = match (deps.measure)(path) {
+                    Some(m) => {
+                        if !m.complete {
+                            partial.insert(item.key.clone());
+                        }
+                        Some(m.bytes)
+                    }
+                    None => None,
+                };
             }
         }
     }
-    Ok(Observer::new(scan, params, (deps.now_ms)()))
+    Ok(Observer::new_measured(
+        scan,
+        params,
+        (deps.now_ms)(),
+        &partial,
+    ))
+}
+
+/// Why a check's analysis cannot be trusted, when it cannot: git failed in a way the analysis turns
+/// into "no worktrees" or "not a repository" instead of an error (a timeout, say), and feeding that
+/// to the observer would report every worktree as removed and then as new again.
+fn degraded(observer: &Observer, scan: &ProjectScan, deps: &Deps) -> Option<String> {
+    let before = observer.project();
+    let now = &scan.project;
+    if now.root != before.root {
+        return Some(format!(
+            "the project root is now {} instead of {}",
+            now.root.display(),
+            before.root.display()
+        ));
+    }
+    if now.is_repo != before.is_repo {
+        return Some(format!(
+            "git no longer gives the same answer for the project (repository: was {}, is {})",
+            before.is_repo, now.is_repo
+        ));
+    }
+    if now.worktrees.is_empty() && !before.worktrees.is_empty() {
+        return match (deps.linked_worktrees)(&now.root) {
+            Some(0) => None, // really all removed
+            Some(_) => Some("git lists linked worktrees that the analysis did not see".to_string()),
+            None => Some("git could not list the worktrees".to_string()),
+        };
+    }
+    None
 }
 
 /// One check: a light analysis, the weights of `observer.keys_to_measure()` and of the folders it
 /// has never seen (so that a new folder has its weight from its first `changed`), then the
-/// observer's events. Shared by both modes.
+/// observer's events. Shared by both modes. Measuring is bounded by `deps.measure_budget`: what is
+/// left when it is over waits for the next check (the folders never measured first, then the
+/// oldest measure). An analysis that looks degraded (see [`degraded`]) is an error, not a change.
 pub fn check(observer: &mut Observer, deps: &Deps) -> Result<Vec<Event>, String> {
     let mut scan = (deps.analyze)()?;
-    let mut measure: HashSet<String> = observer.keys_to_measure().into_iter().collect();
+    if let Some(reason) = degraded(observer, &scan, deps) {
+        return Err(format!(
+            "the analysis looks incomplete ({reason}); the last good report is kept"
+        ));
+    }
+    let started = (deps.now_ms)();
     let known: HashSet<String> = observer
         .report(false)
         .items
         .into_iter()
         .map(|v| v.item.key)
         .collect();
-    measure.extend(
-        scan.items
-            .iter()
-            .filter(|i| !known.contains(&i.key))
-            .map(|i| i.key.clone()),
-    );
-    for item in &mut scan.items {
-        if measure.contains(&item.key) {
-            if let Some(path) = &item.path {
-                item.bytes = (deps.measure)(path);
-            }
+    // Folders never seen first, then what the observer wants measured again, oldest first.
+    let mut order: Vec<String> = Vec::new();
+    let mut queued: HashSet<String> = HashSet::new();
+    for item in &scan.items {
+        if !known.contains(&item.key) && queued.insert(item.key.clone()) {
+            order.push(item.key.clone());
         }
     }
-    Ok(observer.update(scan, (deps.now_ms)()))
+    for key in observer.keys_to_measure(started) {
+        if queued.insert(key.clone()) {
+            order.push(key);
+        }
+    }
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for (i, item) in scan.items.iter().enumerate() {
+        index.entry(item.key.clone()).or_insert(i);
+    }
+    let budget_ms = i64::try_from(deps.measure_budget.as_millis()).unwrap_or(i64::MAX);
+    let mut partial: HashSet<String> = HashSet::new();
+    for key in order {
+        let Some(&i) = index.get(&key) else { continue };
+        let item = &mut scan.items[i];
+        let Some(path) = &item.path else { continue };
+        if (deps.now_ms)().saturating_sub(started) >= budget_ms {
+            break;
+        }
+        item.bytes = match (deps.measure)(path) {
+            Some(m) => {
+                if !m.complete {
+                    partial.insert(key);
+                }
+                Some(m.bytes)
+            }
+            None => None,
+        };
+    }
+    Ok(observer.update_measured(scan, (deps.now_ms)(), &partial))
 }
 
 /// How long the panic hook waits for its message to be written before the panicking thread goes on.
 const PANIC_REPORT_WAIT: Duration = Duration::from_millis(250);
+
+/// The name of the thread that takes the baseline of the MCP server: a panic there does not end
+/// the server, the next `tools/call` takes the baseline again.
+pub(crate) const MCP_BASELINE_THREAD: &str = "xiox-mcp-baseline";
+
+/// What the panic hook writes on stderr for a panic of `thread` (`info` is the hook's own text).
+pub(crate) fn panic_report(thread: Option<&str>, info: &str) -> String {
+    if thread == Some(MCP_BASELINE_THREAD) {
+        format!(
+            "error: the first analysis stopped on an internal error; the next call retries it: {info}\n"
+        )
+    } else {
+        format!("error: xiox observe stopped on an internal error: {info}\n")
+    }
+}
 
 /// A panic is told on stderr only (the default hook does the same, this one says what it is) and
 /// the process ends with a non-zero code. The hook must never block its thread: it runs before the
@@ -138,10 +244,8 @@ const PANIC_REPORT_WAIT: Duration = Duration::from_millis(250);
 /// thread, and the hook gives up after `PANIC_REPORT_WAIT` if somebody else holds the stderr lock.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let message = format!(
-            "error: xiox observe stopped on an internal error: {info}
-"
-        );
+        let thread = std::thread::current();
+        let message = panic_report(thread.name(), &info.to_string());
         let (done_tx, done_rx) = mpsc::channel();
         let helper = {
             let message = message.clone();
@@ -288,6 +392,10 @@ fn deadline_after(interval: Duration) -> Instant {
         .unwrap_or(now)
 }
 
+/// How many stdin lines wait for the loop at most: the reader thread (and, behind it, the pipe of
+/// a caller that writes faster than the observer answers) waits when the queue is full.
+const INPUT_QUEUE: usize = 16;
+
 /// What the stdin-reader thread tells the loop.
 enum Input {
     Line(String),
@@ -303,7 +411,7 @@ fn spawn_reader(
     mut stdin: impl BufRead + Send + 'static,
     spawn: Spawn,
 ) -> Result<mpsc::Receiver<Input>, String> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(INPUT_QUEUE);
     let job = Box::new(move || {
         loop {
             let message = match read_capped_line(&mut stdin, MAX_LINE_BYTES) {
@@ -322,6 +430,20 @@ fn spawn_reader(
     });
     spawn(job).map_err(|e| format!("cannot start the stdin reader thread: {e}"))?;
     Ok(rx)
+}
+
+/// After a `report` line: the `report` lines that already wait are folded into it (one check
+/// answers them all; each still gets its `report` event). Returns how many were folded and the
+/// first waiting message that is not a `report`, which the loop handles next.
+fn fold_queued_reports(input: &mpsc::Receiver<Input>) -> (usize, Option<Input>) {
+    let mut folded = 0;
+    loop {
+        match input.try_recv() {
+            Ok(Input::Line(line)) if line == "report" => folded += 1,
+            Ok(other) => return (folded, Some(other)),
+            Err(_) => return (folded, None),
+        }
+    }
 }
 
 /// A JSON value as one line with its line end. serde_json leaves U+2028 and U+2029 raw inside
@@ -470,15 +592,23 @@ pub(crate) fn observe_with(
     let mut deadline = deadline_after(deps.interval);
     // After a failed check the report is the last good one, marked stale.
     let mut last_check_failed = false;
+    // The message that followed folded `report` lines: handled before waiting for more.
+    let mut pending: Option<Input> = None;
     loop {
-        let wait = deadline.saturating_duration_since(Instant::now());
-        let message = match input.recv_timeout(wait) {
-            Ok(m) => Some(m),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => {
-                // The reader always says `Closed` or `Failed` before it ends: it died.
-                let _ = writeln!(emitter.err, "error: the stdin reader stopped unexpectedly");
-                return EXIT_ERROR;
+        let message = match pending.take() {
+            Some(m) => Some(m),
+            None => {
+                let wait = deadline.saturating_duration_since(Instant::now());
+                match input.recv_timeout(wait) {
+                    Ok(m) => Some(m),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        // The reader always says `Closed` or `Failed` before it ends: it died.
+                        let _ =
+                            writeln!(emitter.err, "error: the stdin reader stopped unexpectedly");
+                        return EXIT_ERROR;
+                    }
+                }
             }
         };
         let checked = match &message {
@@ -499,10 +629,18 @@ pub(crate) fn observe_with(
             Some(Input::Line(line)) => match line.as_str() {
                 "" => continue,
                 "stop" => return 0,
-                "report" => run_check(&mut observer, deps, &mut emitter, &mut last_check_failed)
-                    .and_then(|()| {
-                        emitter.emit(&Event::Report(observer.report(last_check_failed)))
-                    }),
+                "report" => {
+                    let (folded, next) = fold_queued_reports(&input);
+                    pending = next;
+                    run_check(&mut observer, deps, &mut emitter, &mut last_check_failed).and_then(
+                        |()| {
+                            for _ in 0..=folded {
+                                emitter.emit(&Event::Report(observer.report(last_check_failed)))?;
+                            }
+                            Ok(())
+                        },
+                    )
+                }
                 other => emitter.error(format!(
                     "unknown command: {} (expected report or stop)",
                     echo(other)
@@ -548,7 +686,8 @@ pub(crate) mod fakes {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
-    use xiox_model::{ArtifactKind, Level};
+    use xiox_model::{Agent, ArtifactKind, Level};
+    use xiox_observer::Measured;
     use xiox_project::{Category, Item, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
 
     pub(crate) const MB: u64 = 1024 * 1024;
@@ -594,6 +733,27 @@ pub(crate) mod fakes {
         }
     }
 
+    /// An archived agent session: no folder, no size.
+    pub(crate) fn session(n: usize, title: &str) -> Item {
+        let id = format!("s{n}");
+        Item {
+            key: format!("session:claude:{id}"),
+            category: Category::Sessions,
+            path: None,
+            bytes: None,
+            level: Level::Optional,
+            blocked: vec![],
+            why: Why::ArchivedSession {
+                agent: Agent::Claude,
+                title: Some(title.to_string()),
+            },
+            target: Target::Session {
+                agent: Agent::Claude,
+                id,
+            },
+        }
+    }
+
     pub(crate) fn worktree(name: &str) -> Item {
         let p = PathBuf::from(format!(r"D:\Projects\{name}"));
         Item {
@@ -628,7 +788,15 @@ pub(crate) mod fakes {
                 hook(n);
                 script[n.min(script.len() - 1)].clone()
             }),
-            measure: Box::new(|_| Some(10 * MB)),
+            measure: Box::new(|_| {
+                Some(Measured {
+                    bytes: 10 * MB,
+                    complete: true,
+                })
+            }),
+            // Far over what the fake clock (one second per reading) can reach in a test.
+            measure_budget: Duration::from_secs(1_000_000),
+            linked_worktrees: Box::new(|_| Some(0)),
             now_ms: Box::new(move || clock.fetch_add(1000, Ordering::SeqCst) + 1000),
             interval: Duration::from_millis(15),
             baseline_wait: Duration::from_secs(5),
@@ -678,7 +846,9 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::io::{Cursor, Read};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use xiox_project::Item;
 
     fn args() -> ObserveArgs {
         ObserveArgs {
@@ -1293,5 +1463,453 @@ stop
             "{}",
             r.stdout
         );
+    }
+
+    // ---- final review ----
+
+    const GB: u64 = 1024 * MB;
+
+    fn complete(bytes: u64) -> Option<Measured> {
+        Some(Measured {
+            bytes,
+            complete: true,
+        })
+    }
+
+    #[test]
+    fn the_analysis_of_the_observer_never_uses_the_admin_search() {
+        // From an elevated terminal the MFT of every NTFS drive would be read at each check.
+        let mut a = args();
+        a.no_drives = false;
+        let o = observe_options(&a);
+        assert!(!o.admin, "{o:?}");
+        assert!(o.drives && !o.measure, "{o:?}");
+        a.no_drives = true;
+        assert!(!observe_options(&a).drives);
+    }
+
+    #[test]
+    fn a_check_stops_measuring_when_its_budget_is_over_and_the_rest_waits_for_the_next_one() {
+        let measured: Arc<Mutex<Vec<String>>> = Arc::default();
+        let new: Vec<Item> = ["w1", "w2", "w3", "w4", "w5"]
+            .iter()
+            .map(|n| worktree(n))
+            .collect();
+        let mut with_new = vec![build()];
+        with_new.extend(new);
+        let mut d = deps(vec![Ok(scan(vec![build()])), Ok(scan(with_new))], |_| {});
+        d.measure = Box::new({
+            let measured = Arc::clone(&measured);
+            move |p| {
+                measured.lock().unwrap().push(p.display().to_string());
+                complete(MB)
+            }
+        });
+        // The fake clock moves one second per reading: 2.5 s leave room for two measures.
+        d.measure_budget = Duration::from_millis(2500);
+        let mut observer = start(&d, Params::default()).unwrap();
+        let tail = || -> Vec<String> {
+            let mut m = measured.lock().unwrap();
+            let names = m
+                .iter()
+                .map(|p| p.rsplit('\\').next().unwrap().to_string())
+                .collect();
+            m.clear();
+            names
+        };
+        let _ = tail(); // the baseline's own measure
+        check(&mut observer, &d).unwrap();
+        // Folders never seen first, in the order of the scan.
+        assert_eq!(tail(), ["w1", "w2"]);
+        let unmeasured = |o: &Observer| {
+            o.report(false)
+                .items
+                .iter()
+                .filter(|i| i.item.category == Category::Worktrees && i.item.bytes.is_none())
+                .count()
+        };
+        assert_eq!(unmeasured(&observer), 3);
+        // Then the ones never measured, before any measured again.
+        check(&mut observer, &d).unwrap();
+        assert_eq!(tail(), ["w3", "w4"]);
+        // Then the last one never measured, and the oldest measure of the others: the build folder.
+        check(&mut observer, &d).unwrap();
+        assert_eq!(tail(), ["w5", "target"]);
+        assert_eq!(unmeasured(&observer), 0);
+    }
+
+    #[test]
+    fn a_folder_over_the_caps_counts_as_a_lower_bound_and_is_not_walked_again_at_every_check() {
+        let clock = Arc::new(AtomicI64::new(1_700_000_000_000));
+        let big_walks = Arc::new(AtomicUsize::new(0));
+        let mut d = deps(
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("big")])),
+            ],
+            |_| {},
+        );
+        d.now_ms = Box::new({
+            let clock = Arc::clone(&clock);
+            move || clock.load(Ordering::SeqCst)
+        });
+        d.measure = Box::new({
+            let big_walks = Arc::clone(&big_walks);
+            move |p| {
+                if p.ends_with("big") {
+                    big_walks.fetch_add(1, Ordering::SeqCst);
+                    Some(Measured {
+                        bytes: 3 * GB,
+                        complete: false,
+                    })
+                } else {
+                    complete(10 * MB)
+                }
+            }
+        });
+        let params = Params {
+            grow_threshold: 2 * GB,
+            worktree_threshold: 99,
+        };
+        let mut observer = start(&d, params).unwrap();
+        clock.fetch_add(1000, Ordering::SeqCst);
+        let events = check(&mut observer, &d).unwrap();
+        // The part that was walked already tells the growth, and the attention fires.
+        assert!(
+            events.iter().any(|e| matches!(e,
+                Event::Attention { kind: xiox_observer::AttentionKind::Growth, value, .. } if *value == 3 * GB)),
+            "{events:?}"
+        );
+        let report = observer.report(false);
+        let big = report
+            .items
+            .iter()
+            .find(|i| i.item.category == Category::Worktrees)
+            .unwrap();
+        assert_eq!(big.item.bytes, Some(3 * GB));
+        assert!(big.bytes_partial);
+        assert!(
+            !report
+                .items
+                .iter()
+                .find(|i| i.item.category == Category::Builds)
+                .unwrap()
+                .bytes_partial
+        );
+        assert_eq!(big_walks.load(Ordering::SeqCst), 1);
+        // A check every minute for nine minutes: the capped folder is left alone, the others are not.
+        for _ in 0..9 {
+            clock.fetch_add(60_000, Ordering::SeqCst);
+            check(&mut observer, &d).unwrap();
+        }
+        assert_eq!(big_walks.load(Ordering::SeqCst), 1, "backed off");
+        // Past the ten minutes it is measured again.
+        clock.fetch_add(120_000, Ordering::SeqCst);
+        check(&mut observer, &d).unwrap();
+        assert_eq!(big_walks.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn the_baseline_flags_a_build_folder_that_hit_the_caps() {
+        let mut d = deps(vec![Ok(scan(vec![build()]))], |_| {});
+        d.measure = Box::new(|_| {
+            Some(Measured {
+                bytes: 5 * MB,
+                complete: false,
+            })
+        });
+        let observer = start(&d, Params::default()).unwrap();
+        let item = &observer.report(false).items[0];
+        assert_eq!(item.item.bytes, Some(5 * MB));
+        assert!(item.bytes_partial && !item.new);
+    }
+
+    /// The project as a check sees it when git answered: three worktrees at the start.
+    fn with_project(is_repo: bool, root: &str, linked: &[&str], items: Vec<Item>) -> ProjectScan {
+        let mut s = scan(items);
+        s.project.is_repo = is_repo;
+        s.project.root = PathBuf::from(root);
+        s.project.worktrees = linked
+            .iter()
+            .map(|n| PathBuf::from(format!(r"D:\Projects\{n}")))
+            .collect();
+        s
+    }
+
+    fn degraded_world(
+        second: ProjectScan,
+        linked: impl Fn(&Path) -> Option<usize> + Send + Sync + 'static,
+    ) -> (Deps, Observer) {
+        let first = with_project(
+            true,
+            r"D:\Projects\mukade",
+            &["w1", "w2"],
+            vec![build(), worktree("w1"), worktree("w2")],
+        );
+        let mut d = deps(vec![Ok(first), Ok(second)], |_| {});
+        d.linked_worktrees = Box::new(linked);
+        let observer = start(&d, Params::default()).unwrap();
+        (d, observer)
+    }
+
+    #[test]
+    fn a_check_whose_git_answers_look_degraded_is_an_error_and_never_a_change() {
+        // Git timed out: no worktrees listed, and git still fails when asked again.
+        let empty = || with_project(true, r"D:\Projects\mukade", &[], vec![build()]);
+        let (d, mut observer) = degraded_world(empty(), |_| None);
+        let message = check(&mut observer, &d).unwrap_err();
+        assert!(
+            message.contains("could not list the worktrees"),
+            "{message}"
+        );
+        // Nothing was fed to the observer: the worktrees are still there, not removed, and the
+        // next healthy check says nothing changed.
+        assert_eq!(observer.report(false).items.len(), 3);
+        let healthy = with_project(
+            true,
+            r"D:\Projects\mukade",
+            &["w1", "w2"],
+            vec![build(), worktree("w1"), worktree("w2")],
+        );
+        let mut d2 = deps(vec![Ok(healthy)], |_| {});
+        d2.linked_worktrees = Box::new(|_| None);
+        assert!(check(&mut observer, &d2).unwrap().is_empty());
+
+        // Git answers the second time: the first answer was incomplete.
+        let (d, mut observer) = degraded_world(empty(), |_| Some(2));
+        let message = check(&mut observer, &d).unwrap_err();
+        assert!(message.contains("lists linked worktrees"), "{message}");
+
+        // Git answers "none": they were really all removed, and that is a change.
+        let (d, mut observer) = degraded_world(empty(), |_| Some(0));
+        let events = check(&mut observer, &d).unwrap();
+        match &events[0] {
+            Event::Changed { removed, .. } => assert_eq!(removed.len(), 2),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_check_with_another_root_or_no_longer_a_repository_is_an_error() {
+        let items = || vec![build(), worktree("w1"), worktree("w2")];
+        let not_a_repo = with_project(false, r"D:\Projects\mukade", &[], items());
+        let (d, mut observer) = degraded_world(not_a_repo, |_| Some(0));
+        let message = check(&mut observer, &d).unwrap_err();
+        assert!(message.contains("repository"), "{message}");
+        let elsewhere = with_project(true, r"D:\Projects\mukade\crates", &["w1", "w2"], items());
+        let (d, mut observer) = degraded_world(elsewhere, |_| Some(0));
+        let message = check(&mut observer, &d).unwrap_err();
+        assert!(message.contains(r"D:\Projects\mukade\crates"), "{message}");
+        // Through the loop it is an `error` event and the report is stale, never a `changed`.
+        let first = with_project(
+            true,
+            r"D:\Projects\mukade",
+            &["w1"],
+            vec![build(), worktree("w1")],
+        );
+        let broken = with_project(true, r"D:\Projects\mukade", &[], vec![build()]);
+        let mut d = with_interval(
+            deps(vec![Ok(first), Ok(broken)], |_| {}),
+            Duration::from_secs(3600),
+        );
+        d.linked_worktrees = Box::new(|_| None);
+        let r = run_with(Cursor::new(b"report\nstop\n".to_vec()), &d);
+        assert_eq!(r.events(), ["started", "error", "report"], "{}", r.stdout);
+        let lines = r.lines();
+        assert!(
+            lines[1]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("check failed:")
+        );
+        assert_eq!(lines[2]["stale"], true);
+        assert_eq!(lines[2]["items"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_panic_message_of_the_baseline_worker_says_the_next_call_retries() {
+        let on_worker = panic_report(Some(MCP_BASELINE_THREAD), "boom at x.rs:1");
+        assert!(
+            on_worker.contains(
+                "the first analysis stopped on an internal error; the next call retries it"
+            ),
+            "{on_worker}"
+        );
+        assert!(
+            on_worker.contains("boom at x.rs:1") && !on_worker.contains("xiox observe stopped"),
+            "{on_worker}"
+        );
+        for other in [Some("xiox-observe-stdin"), Some("main"), None] {
+            let message = panic_report(other, "boom");
+            assert!(
+                message.starts_with("error: xiox observe stopped on an internal error: boom"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn report_lines_already_waiting_are_folded_into_one_check() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let line = |l: &str| Input::Line(l.to_string());
+        // The first `report` line is the one the loop already took off the queue.
+        for l in ["report", "stop", "report"] {
+            tx.send(line(l)).unwrap();
+        }
+        let (folded, next) = fold_queued_reports(&rx);
+        assert_eq!(
+            folded, 1,
+            "the report line that waits joins the one being answered"
+        );
+        assert!(matches!(next, Some(Input::Line(ref l)) if l == "stop"));
+        // What follows the first other line stays queued, in order.
+        assert!(matches!(rx.try_recv(), Ok(Input::Line(ref l)) if l == "report"));
+        // Nothing waiting: nothing folded.
+        let (folded, next) = fold_queued_reports(&rx);
+        assert_eq!((folded, next.is_none()), (0, true));
+    }
+
+    #[test]
+    fn every_report_line_gets_its_report_even_when_they_are_folded() {
+        let r = run_text(
+            "report\nreport\nreport\nstop\n",
+            vec![Ok(scan(vec![build()]))],
+        );
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert_eq!(
+            r.events(),
+            ["started", "report", "report", "report"],
+            "{}",
+            r.stdout
+        );
+    }
+
+    #[test]
+    fn the_stdin_queue_is_bounded() {
+        let mut lines = String::new();
+        for _ in 0..1000 {
+            lines.push_str("report\n");
+        }
+        let rx = spawn_reader(Cursor::new(lines.into_bytes()), spawn_named).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        // Nobody reads: the reader thread waits instead of queuing every line.
+        let queued = rx.try_iter().count();
+        assert!(queued <= INPUT_QUEUE + 1, "{queued} lines were queued");
+    }
+
+    /// The code of `source` with comments, string literals and char literals blanked out.
+    fn code_of(source: &str) -> String {
+        let chars: Vec<char> = source.chars().collect();
+        let mut out = String::with_capacity(source.len());
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '/' if chars.get(i + 1) == Some(&'/') => {
+                    while i < chars.len() && chars[i] != '\n' {
+                        i += 1;
+                    }
+                }
+                '"' => {
+                    i += 1;
+                    while i < chars.len() && chars[i] != '"' {
+                        i += if chars[i] == '\\' { 2 } else { 1 };
+                    }
+                    i += 1;
+                    out.push(' ');
+                }
+                '\'' if chars.get(i + 2) == Some(&'\'') => {
+                    i += 3;
+                    out.push(' ');
+                }
+                '\'' if chars.get(i + 1) == Some(&'\\') && chars.get(i + 3) == Some(&'\'') => {
+                    i += 4;
+                    out.push(' ');
+                }
+                c => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
+    /// What `source` names that removes or writes (comments and strings do not count).
+    fn offences(source: &str) -> Vec<String> {
+        // Words that are about something else: the `cleanCommand` the observer only PRINTS, and
+        // `remove`/`removed` of in-memory maps and of the `removed` field of a `changed` event.
+        let allowed = [
+            "clean_command",
+            "clean_command_truncated",
+            "clean_command_max_items",
+            "remove",
+            "removed",
+        ];
+        let code = code_of(source);
+        let mut found = Vec::new();
+        for forbidden in [
+            "fs::write",
+            "File::create",
+            "OpenOptions",
+            "create_dir",
+            "fs::rename",
+            "fs::copy",
+            "is_elevated",
+        ] {
+            if code.contains(forbidden) {
+                found.push(forbidden.to_string());
+            }
+        }
+        for ident in code.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+            let lower = ident.to_ascii_lowercase();
+            if allowed.contains(&lower.as_str()) {
+                continue;
+            }
+            if ["clean", "remove", "delete", "trash", "unlink"]
+                .iter()
+                .any(|word| lower.contains(word))
+            {
+                found.push(ident.to_string());
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_read_only_scan_catches_what_it_is_meant_to_catch() {
+        for bad in [
+            "std::fs::remove_dir_all(path)",
+            "fs::write(p, b)",
+            "let f = File::create(p);",
+            "OpenOptions::new()",
+            "move_to_trash(p)",
+            "xiox_project::clean(&scan)",
+            "std::fs::remove_file(p)",
+        ] {
+            assert!(!offences(bad).is_empty(), "{bad}");
+        }
+        // Comments, strings and the allowed words are not code that removes anything.
+        let fine = "// remove everything
+let m = \"xiox clean --delete\"; map.remove(&key); let c = '\"'; clean_command";
+        assert_eq!(offences(fine), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_observer_sources_never_name_anything_that_removes_or_writes() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let sources = [
+            "src/observe.rs",
+            "src/mcp.rs",
+            "../xiox-observer/src/lib.rs",
+            "../xiox-observer/src/measure.rs",
+            "../xiox-observer/src/state.rs",
+        ];
+        for path in sources {
+            let text = std::fs::read_to_string(format!("{manifest}/{path}")).unwrap();
+            // Everything after the first test module is test code.
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            assert!(code.len() > 300, "{path}: the scan reads the code");
+            assert_eq!(offences(code), Vec::<String>::new(), "{path}");
+        }
     }
 }

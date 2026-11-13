@@ -10,9 +10,11 @@ use crate::observe::{
 };
 use crate::run::{EXIT_ERROR, write_result};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, mpsc};
-use xiox_observer::{Observer, Params};
+use xiox_observer::{Observer, Params, Report};
+use xiox_project::Why;
 
 /// The newest protocol revision the server speaks; the others it accepts are echoed back.
 const LATEST_VERSION: &str = "2025-06-18";
@@ -26,14 +28,18 @@ build folders, git worktrees, copies of the repository, folders named like the p
 agent sessions. Call the project_leftovers tool before you declare your work finished, and again after you \
 create a git worktree or a copy of the repository. Items with new: true appeared since this server started. \
 The tool only reports and never removes anything; to clean up, show the cleanCommand of the report to the \
-person instead of running it yourself.";
+person instead of running it yourself. The text of a result is a compact view (totals, growth, attention, \
+the new items); the full listing is in structuredContent.";
 
 const TOOL_DESCRIPTION: &str = "Lists what this project has left on this PC since this server started: build \
 folders, linked worktrees, copies of the repository, folders named like the project, log files and archived \
 agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also \
 returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the \
 fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the \
-new recommended items. Runs a fresh check on every call. Read-only: it only reports and never removes anything.";
+new recommended items. Runs a fresh check on every call (the call that receives the first analysis reports it \
+as it is). The result has two parts: a compact text (totals, growth, attention, stale, cleanCommand and only the \
+NEW items, at most 50, one line each) and the full report with every item as structuredContent; a client that \
+forwards only the text to the model sees the compact view. Read-only: it only reports and never removes anything.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -167,11 +173,22 @@ impl Server {
         reply(id, self.leftovers(err))
     }
 
-    /// Waits (bounded) for the baseline and gives the observer; `Err` is the tool result to answer
-    /// with. A failed or dead baseline is tried again here, synchronously.
-    fn observer(&mut self, err: &mut dyn Write) -> Result<&mut Observer, Value> {
+    /// Waits (bounded) for the baseline and gives the observer, and whether it was taken while
+    /// this call was asking (then it is as fresh as a check would make it); `Err` is the tool
+    /// result to answer with. A failed or dead baseline is tried again here, synchronously.
+    fn observer(&mut self, err: &mut dyn Write) -> Result<(&mut Observer, bool), Value> {
+        let mut fresh = false;
         if let Baseline::Pending(rx) = &self.baseline {
-            match rx.recv_timeout(self.deps.baseline_wait) {
+            let outcome = match rx.try_recv() {
+                Ok(result) => Ok(result),
+                Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvTimeoutError::Disconnected),
+                Err(mpsc::TryRecvError::Empty) => {
+                    // The call has to wait: the baseline it gets was taken while it asked.
+                    fresh = true;
+                    rx.recv_timeout(self.deps.baseline_wait)
+                }
+            };
+            match outcome {
                 Ok(Ok(observer)) => self.baseline = Baseline::Ready(observer),
                 Ok(Err(message)) => {
                     let _ = writeln!(err, "error: {message} (the next tools/call tries again)");
@@ -193,7 +210,10 @@ impl Server {
         }
         if matches!(self.baseline, Baseline::Failed) {
             match start(&self.deps, self.params) {
-                Ok(observer) => self.baseline = Baseline::Ready(observer),
+                Ok(observer) => {
+                    self.baseline = Baseline::Ready(observer);
+                    fresh = true;
+                }
                 Err(message) => {
                     let _ = writeln!(err, "error: {message}");
                     return Err(tool_error(&format!(
@@ -203,33 +223,184 @@ impl Server {
             }
         }
         match &mut self.baseline {
-            Baseline::Ready(observer) => Ok(observer),
+            Baseline::Ready(observer) => Ok((observer, fresh)),
             _ => Err(tool_error("No report is available yet.")),
         }
     }
 
-    /// A fresh check, then the report. When the check fails the last report goes out with
-    /// `stale: true`; when there is no report at all the result is an error the agent can read.
+    /// A fresh check, then the report; the call that has just received the baseline reports it
+    /// as it is (a check would measure everything again for nothing). When the check fails the
+    /// last report goes out with `stale: true`; when there is no report at all the result is an
+    /// error the agent can read.
     fn leftovers(&mut self, err: &mut dyn Write) -> Value {
         let deps = Arc::clone(&self.deps);
-        let observer = match self.observer(err) {
-            Ok(o) => o,
+        let (observer, fresh) = match self.observer(err) {
+            Ok(found) => found,
             Err(result) => return result,
         };
         let mut stale = false;
-        if let Err(message) = check(observer, &deps) {
-            let _ = writeln!(err, "error: check failed: {message}");
-            stale = true;
+        if !fresh {
+            if let Err(message) = check(observer, &deps) {
+                let _ = writeln!(err, "error: check failed: {message}");
+                stale = true;
+            }
         }
-        let report = match serde_json::to_value(observer.report(stale)) {
+        let report = observer.report(stale);
+        let structured = match serde_json::to_value(&report) {
             Ok(v) => v,
             Err(e) => {
                 let _ = writeln!(err, "error: cannot write the report as JSON: {e}");
                 return tool_error(&format!("The report cannot be written as JSON: {e}"));
             }
         };
-        json!({"content": [{"type": "text", "text": report.to_string()}], "structuredContent": report, "isError": false})
+        json!({"content": [{"type": "text", "text": compact_text(&report)}], "structuredContent": structured, "isError": false})
     }
+}
+
+/// New items the text of a result lists, at most; the rest is only counted.
+const TEXT_MAX_NEW_ITEMS: usize = 50;
+/// The longest path or title in that text.
+const TEXT_MAX_FIELD_CHARS: usize = 200;
+
+/// `text` on one line (control characters become spaces), cut after `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let mut cut: String = flat.chars().take(max).collect();
+    if flat.chars().count() > max {
+        cut.push_str("...");
+    }
+    cut
+}
+
+/// The word a unit enum is written as in the JSON (`recommended`, `claude`).
+fn word(value: Result<Value, serde_json::Error>) -> String {
+    value
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// The compact view of a report, for the `content` of a result: what a model needs to decide
+/// whether to look further, in a size that does not grow with the history of the project. The
+/// full report is in `structuredContent`.
+fn compact_text(report: &Report) -> String {
+    let mut t = String::new();
+    let project = &report.project;
+    let _ = writeln!(
+        t,
+        "Project: {} ({}), {}",
+        one_line(&project.name, 100),
+        one_line(&project.root.display().to_string(), TEXT_MAX_FIELD_CHARS),
+        if project.is_repo {
+            "git repository"
+        } else {
+            "not a git repository"
+        }
+    );
+    let _ = writeln!(
+        t,
+        "startedAtMs: {}, checkedAtMs: {}, stale: {}",
+        report.started_at_ms, report.checked_at_ms, report.stale
+    );
+    let mut totals = format!("Totals: {} items", report.totals.items);
+    for (category, bytes) in &report.totals.by_category {
+        let _ = write!(totals, ", {category} {bytes} bytes");
+    }
+    let _ = writeln!(
+        t,
+        "{totals}; recommended {} bytes",
+        report.totals.recommended_bytes
+    );
+    let _ = writeln!(
+        t,
+        "growthBytes: {} (since the server started)",
+        report.growth_bytes
+    );
+    let attention: Vec<String> = report
+        .attention
+        .iter()
+        .map(|a| word(serde_json::to_value(a)))
+        .collect();
+    let _ = writeln!(
+        t,
+        "attention: {}",
+        if attention.is_empty() {
+            "none".to_string()
+        } else {
+            attention.join(", ")
+        }
+    );
+    match &report.clean_command {
+        Some(command) => {
+            let _ = writeln!(t, "cleanCommand: {}", one_line(command, usize::MAX));
+            if report.clean_command_truncated {
+                let _ = writeln!(
+                    t,
+                    "cleanCommandTruncated: true (more recommended items than one command carries)"
+                );
+            }
+        }
+        None => {
+            let _ = writeln!(t, "cleanCommand: none");
+        }
+    }
+    let new: Vec<_> = report.items.iter().filter(|v| v.new).collect();
+    let listed = new.len().min(TEXT_MAX_NEW_ITEMS);
+    match new.len() {
+        0 => {
+            let _ = writeln!(t, "New items: none");
+        }
+        n if n > listed => {
+            let _ = writeln!(t, "New items: {n} ({listed} listed)");
+        }
+        n => {
+            let _ = writeln!(t, "New items: {n}");
+        }
+    }
+    for view in new.iter().take(listed) {
+        let item = &view.item;
+        let size = match (item.bytes, view.bytes_partial) {
+            (Some(bytes), true) => format!("at least {bytes} bytes"),
+            (Some(bytes), false) => format!("{bytes} bytes"),
+            (None, _) => "size unknown".to_string(),
+        };
+        let what = match (&item.path, &item.why) {
+            (Some(path), _) => one_line(&path.display().to_string(), TEXT_MAX_FIELD_CHARS),
+            (None, Why::ArchivedSession { agent, title }) => format!(
+                "{} session \"{}\"",
+                word(serde_json::to_value(agent)),
+                title
+                    .as_deref()
+                    .map_or("untitled".to_string(), |t| one_line(
+                        t,
+                        TEXT_MAX_FIELD_CHARS
+                    ))
+            ),
+            (None, _) => "no path".to_string(),
+        };
+        let _ = write!(
+            t,
+            "- {} | {} | {size} | {what}",
+            item.category,
+            word(serde_json::to_value(item.level))
+        );
+        if !item.blocked.is_empty() {
+            let reasons: Vec<&str> = item.blocked.iter().map(|b| b.reason()).collect();
+            let _ = write!(t, " | blocked: {}", reasons.join("; "));
+        }
+        t.push('\n');
+    }
+    let others = report.items.len() - listed;
+    let unlisted_new = new.len() - listed;
+    let _ = write!(t, "Other items not listed here: {others}");
+    if unlisted_new > 0 {
+        let _ = write!(t, " ({unlisted_new} of them new)");
+    }
+    t.push_str(". The full listing of every item is in structuredContent.");
+    t
 }
 
 fn initialize_result(params: Option<&Value>) -> Value {
@@ -254,17 +425,16 @@ fn initialize_result(params: Option<&Value>) -> Value {
 /// process ends, whatever it is still measuring.
 pub fn serve(
     params: Params,
-    mut input: impl BufRead,
+    input: impl BufRead,
     out: &mut dyn Write,
     err: &mut dyn Write,
     deps: Arc<Deps>,
 ) -> i32 {
-    let mut out = Tap::new(out);
     let (tx, rx) = mpsc::channel();
     let worker = {
         let deps = Arc::clone(&deps);
         std::thread::Builder::new()
-            .name("xiox-mcp-baseline".into())
+            .name(crate::observe::MCP_BASELINE_THREAD.into())
             .spawn(move || {
                 // A panic becomes an `Err` on the channel (the hook has already told stderr).
                 let result =
@@ -285,6 +455,20 @@ pub fn serve(
             Baseline::Failed
         }
     };
+    serve_with(baseline, params, input, out, err, deps)
+}
+
+/// The loop of the server over a baseline that is being taken (or is ready): the part of
+/// [`serve`] that does not start a thread.
+fn serve_with(
+    baseline: Baseline,
+    params: Params,
+    mut input: impl BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    deps: Arc<Deps>,
+) -> i32 {
+    let mut out = Tap::new(out);
     let _ = writeln!(
         err,
         "xiox observe --mcp: serving the {TOOL_NAME} tool on stdio. Nothing is removed."
@@ -326,7 +510,7 @@ mod tests {
     use crate::observe::fakes::*;
     use std::io::Cursor;
     use std::time::Duration;
-    use xiox_observer::Params;
+    use xiox_observer::{Measured, Params};
     use xiox_project::{ProjectScan, Why};
 
     struct Session {
@@ -347,10 +531,23 @@ mod tests {
         }
     }
 
+    /// A baseline that was taken (on this thread, and its result queued) before the server runs:
+    /// the first call finds it ready, as a call that comes long after the start does.
+    fn ready_baseline(d: &Deps) -> Baseline {
+        let (tx, rx) = mpsc::channel();
+        tx.send(start(d, Params::default())).unwrap();
+        Baseline::Pending(rx)
+    }
+
     fn serve_text(input: &str, script: Vec<Result<ProjectScan, String>>) -> Session {
-        let d = deps(script, |_| {});
+        serve_text_with(input, deps(script, |_| {}))
+    }
+
+    fn serve_text_with(input: &str, d: Deps) -> Session {
+        let baseline = ready_baseline(&d);
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = serve(
+        let code = serve_with(
+            baseline,
             Params::default(),
             Cursor::new(input.as_bytes().to_vec()),
             &mut out,
@@ -504,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_call_returns_the_report_as_text_and_structured_content() {
+    fn tools_call_returns_a_compact_text_and_the_full_report_as_structured_content() {
         let s = serve_text(&lines(&[call(4)]), one_build());
         assert_eq!(s.code, 0, "{}", s.stderr);
         let replies = s.replies();
@@ -515,10 +712,25 @@ mod tests {
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
         let text = content[0]["text"].as_str().unwrap();
-        assert!(!text.contains('\n'), "compact JSON: {text}");
-        let from_text: Value = serde_json::from_str(text).unwrap();
+        assert!(text.is_ascii(), "{text}");
+        assert!(
+            text.contains("Project: mukade") && text.contains(r"D:\Projects\mukade"),
+            "{text}"
+        );
+        assert!(
+            text.contains("growthBytes: 0") && text.contains("stale: false"),
+            "{text}"
+        );
+        assert!(
+            text.contains("attention: none")
+                && text.contains("startedAtMs: ")
+                && text.contains("checkedAtMs: "),
+            "{text}"
+        );
+        assert!(text.contains("New items: none"), "{text}");
+        assert!(text.contains("Other items not listed here: 1"), "{text}");
+        assert!(text.contains("structuredContent"), "{text}");
         let structured = report_of(reply);
-        assert_eq!(&from_text, structured);
         assert_eq!(structured["schema"], 1);
         assert_eq!(structured["project"]["name"], "mukade");
         assert_eq!(structured["stale"], false);
@@ -526,6 +738,7 @@ mod tests {
         assert_eq!(structured["items"][0]["category"], "builds");
         assert_eq!(structured["items"][0]["new"], false);
         assert_eq!(structured["items"][0]["bytes"], 10 * MB);
+        assert_eq!(structured["items"][0]["bytesPartial"], false);
         assert_eq!(structured["attention"], json!([]));
         // The server never speaks on its own: no `started` line, no event.
         assert_eq!(replies.len(), 1);
@@ -533,6 +746,158 @@ mod tests {
         let bare = request(5, "tools/call", json!({"name": "project_leftovers"}));
         let s = serve_text(&lines(&[bare]), one_build());
         assert_eq!(s.replies()[0]["result"]["isError"], false, "{}", s.raw);
+    }
+
+    /// `n` archived sessions with long titles: the listing that grows with the history of a project.
+    fn sessions(n: usize) -> Vec<xiox_project::Item> {
+        (0..n)
+            .map(|i| {
+                session(
+                    i,
+                    &format!(
+                        "Refactor the parser of the exporter, take number {i}, with a long title"
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn text_of(reply: &Value) -> &str {
+        reply["result"]["content"][0]["text"].as_str().unwrap()
+    }
+
+    #[test]
+    fn the_text_of_a_project_with_300_archived_sessions_is_compact_and_the_structured_report_is_full()
+     {
+        let mut before = vec![build()];
+        before.extend(sessions(300));
+        let mut after = before.clone();
+        after.push(worktree("mukade-wt"));
+        let s = serve_text(&lines(&[call(1)]), vec![Ok(scan(before)), Ok(scan(after))]);
+        let reply = &s.replies()[0];
+        let text = text_of(reply);
+        assert!(text.len() < 8 * 1024, "{} bytes: {text}", text.len());
+        // It still names what is new, and says how much more there is.
+        assert!(
+            text.contains("mukade-wt") && text.contains("worktrees"),
+            "{text}"
+        );
+        assert!(text.contains("Other items not listed here: 301"), "{text}");
+        assert!(
+            !text.contains("Refactor the parser"),
+            "baseline sessions are not listed: {text}"
+        );
+        // The structured content is the whole report: every item.
+        let structured = report_of(reply);
+        assert_eq!(structured["items"].as_array().unwrap().len(), 302);
+        assert_eq!(structured["totals"]["items"], 302);
+        // The whole reply is about the size of the structured part alone, not twice the report.
+        let size = serde_json::to_string(&reply["result"]["structuredContent"])
+            .unwrap()
+            .len();
+        assert!(s.raw.len() < size + 8 * 1024, "{} vs {}", s.raw.len(), size);
+    }
+
+    #[test]
+    fn the_text_lists_at_most_50_new_items_with_their_level_size_and_reasons() {
+        let mut next = vec![build()];
+        for n in 0..60 {
+            next.push(worktree(&format!("wt{n:02}")));
+        }
+        // A new recommended build folder comes last in the scan: it is one of the 11 cut out.
+        let mut dist = build();
+        dist.path = Some(std::path::PathBuf::from(r"D:\Projects\mukade\dist"));
+        dist.key = xiox_model::path_key(dist.path.as_ref().unwrap());
+        next.push(dist);
+        let s = serve_text(
+            &lines(&[call(1)]),
+            vec![Ok(scan(vec![build()])), Ok(scan(next))],
+        );
+        let text = text_of(&s.replies()[0]).to_string();
+        let listed = text.lines().filter(|l| l.starts_with("- ")).count();
+        assert_eq!(listed, 50, "{text}");
+        // 61 new, 50 listed: the 11 left out are counted with the baseline item.
+        assert!(
+            text.contains("Other items not listed here: 12 (11 of them new)"),
+            "{text}"
+        );
+        assert!(text.contains("New items: 61 (50 listed)"), "{text}");
+    }
+
+    #[test]
+    fn a_new_item_line_carries_category_level_bytes_path_and_blocked_reasons() {
+        use xiox_project::Block;
+        let mut dist = build();
+        dist.path = Some(std::path::PathBuf::from(r"D:\Projects\mukade\dist"));
+        dist.key = xiox_model::path_key(dist.path.as_ref().unwrap());
+        let mut dirty = worktree("mukade-wt");
+        dirty.blocked = vec![Block::DirtyGit, Block::LiveSession];
+        let mut chat = session(7, "Fix the\nparser");
+        chat.blocked = vec![Block::SessionLocked];
+        let mut d = deps(
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), dist.clone(), dirty, chat])),
+            ],
+            |_| {},
+        );
+        d.measure = Box::new(|p| {
+            Some(Measured {
+                bytes: 4096,
+                complete: !p.ends_with("dist"),
+            })
+        });
+        let s = serve_text_with(&lines(&[call(1)]), d);
+        let text = text_of(&s.replies()[0]).to_string();
+        assert!(
+            text.contains(
+                r"- builds | recommended | at least 4096 bytes | D:\Projects\mukade\dist"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                r"- worktrees | optional | 4096 bytes | D:\Projects\mukade-wt | blocked: uncommitted changes; an agent session is open"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                r#"- sessions | optional | size unknown | claude session "Fix the parser" | blocked: session locked by its harness"#
+            ),
+            "{text}"
+        );
+        // The clean command of the new recommended items is there, once.
+        assert!(
+            text.contains(r#"cleanCommand: xiox clean "D:\Projects\mukade" --include "D:\Projects\mukade\dist""#),
+            "{text}"
+        );
+        assert!(text.contains("attention: none"), "{text}");
+    }
+
+    #[test]
+    fn the_text_says_when_the_report_is_stale_and_which_thresholds_are_exceeded() {
+        let script = vec![
+            Ok(scan(vec![build()])),
+            Ok(scan(vec![
+                build(),
+                worktree("a"),
+                worktree("b"),
+                worktree("c"),
+                worktree("d"),
+            ])),
+            Err("disk went away".into()),
+        ];
+        let s = serve_text(&lines(&[call(1), call(2)]), script);
+        let replies = s.replies();
+        let first = text_of(&replies[0]);
+        assert!(
+            first.contains("attention: worktrees") && first.contains("stale: false"),
+            "{first}"
+        );
+        assert!(first.contains("growthBytes: 41943040"), "{first}");
+        let second = text_of(&replies[1]);
+        assert!(second.contains("stale: true"), "{second}");
     }
 
     #[test]
@@ -912,7 +1277,7 @@ mod tests {
         let d = deps(
             vec![
                 Ok(scan(vec![build()])), // the baseline, behind the gate
-                Ok(scan(vec![build(), worktree("mukade-wt")])), // the check made by the call
+                Ok(scan(vec![build(), worktree("mukade-wt")])), // a check: not made by this call
             ],
             {
                 let released = Arc::clone(&released);
@@ -987,8 +1352,8 @@ mod tests {
             .collect();
         let ids: Vec<Value> = replies.iter().map(|r| r["id"].clone()).collect();
         assert_eq!(ids, [json!(1), json!(2), json!(3), json!(4)], "{raw}");
-        // The call was answered after the gate, and the baseline is the state at the start: the
-        // build folder was there (new: false), the worktree appeared since (new: true).
+        // The call was answered after the gate with the baseline itself: the build folder was
+        // there (new: false) and no second analysis ran for this call.
         let report = report_of(&replies[3]);
         let items = report["items"].as_array().unwrap();
         assert!(
@@ -998,10 +1363,8 @@ mod tests {
             "{report}"
         );
         assert!(
-            items
-                .iter()
-                .any(|i| i["category"] == "worktrees" && i["new"] == true),
-            "{report}"
+            !items.iter().any(|i| i["category"] == "worktrees"),
+            "the baseline is reported as it is: {report}"
         );
         assert_eq!(report["stale"], false);
     }
@@ -1043,9 +1406,22 @@ mod tests {
             .collect()
     }
 
+    /// Waits (polling, bounded) until `condition` holds.
+    fn wait_until(what: &str, condition: impl Fn() -> bool) {
+        let end = std::time::Instant::now() + Duration::from_secs(20);
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
     fn a_call_that_waits_too_long_for_the_baseline_gets_an_actionable_error_and_a_later_call_succeeds()
      {
+        use std::sync::atomic::{AtomicBool, Ordering};
         let (d, open) = gated_deps(
             vec![
                 Ok(scan(vec![build()])),
@@ -1053,22 +1429,38 @@ mod tests {
             ],
             Duration::from_millis(100),
         );
+        let d = Arc::new(d);
+        // The baseline worker, by hand: it says when its result is in the channel.
+        let (tx, rx) = mpsc::channel();
+        let sent = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let (d, sent) = (Arc::clone(&d), Arc::clone(&sent));
+            std::thread::spawn(move || {
+                let _ = tx.send(start(&d, Params::default()));
+                sent.store(true, Ordering::SeqCst);
+            })
+        };
         let out = Shared::default();
-        let input = scripted(&[call(1), call(2)], move |n| {
-            if n == 1 {
-                // The baseline finishes between the two calls.
-                open.send(()).unwrap();
-                std::thread::sleep(Duration::from_millis(400));
+        let input = scripted(&[call(1), call(2)], {
+            let sent = Arc::clone(&sent);
+            move |n| {
+                if n == 1 {
+                    // The baseline finishes between the two calls: go on once its result is queued.
+                    open.send(()).unwrap();
+                    wait_until("the baseline result", || sent.load(Ordering::SeqCst));
+                }
             }
         });
         let mut err = Vec::new();
-        let code = serve(
+        let code = serve_with(
+            Baseline::Pending(rx),
             Params::default(),
             input,
             &mut out.clone(),
             &mut err,
-            Arc::new(d),
+            d,
         );
+        worker.join().unwrap();
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
         let replies = parse(&out.0.lock().unwrap());
         assert_eq!(replies.len(), 2);
@@ -1078,6 +1470,7 @@ mod tests {
             text.contains("still running") && text.contains("again"),
             "{text}"
         );
+        // The baseline was ready before the second call: that call checks, and sees the worktree.
         let report = report_of(&replies[1]);
         let items = report["items"].as_array().unwrap();
         assert!(
@@ -1094,14 +1487,111 @@ mod tests {
         );
     }
 
+    /// Counts the analyses (the call that ends with the count `n` is the one that starts the
+    /// `n`th), with the baseline analysis behind a gate.
+    fn counting_gated(
+        script: Vec<Result<ProjectScan, String>>,
+    ) -> (
+        Deps,
+        std::sync::mpsc::Sender<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (open, gate) = mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let analyses = Arc::new(AtomicUsize::new(0));
+        let mut d = deps(script, {
+            let analyses = Arc::clone(&analyses);
+            move |n| {
+                analyses.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(30));
+                }
+            }
+        });
+        d.baseline_wait = Duration::from_secs(20);
+        (d, open, analyses)
+    }
+
+    #[test]
+    fn the_call_that_receives_the_baseline_reports_it_without_a_second_analysis_and_a_later_call_checks()
+     {
+        use std::sync::atomic::Ordering;
+        let (d, open, analyses) = counting_gated(vec![
+            Ok(scan(vec![build()])),
+            Ok(scan(vec![build(), worktree("mukade-wt")])),
+        ]);
+        let seen: Arc<std::sync::Mutex<Vec<usize>>> = Arc::default();
+        let out = Shared::default();
+        let input = scripted(&[call(1), call(2)], {
+            let (analyses, seen) = (Arc::clone(&analyses), Arc::clone(&seen));
+            move |n| {
+                seen.lock().unwrap().push(analyses.load(Ordering::SeqCst));
+                if n == 0 {
+                    // The call is read, then waits for the baseline: release it a moment later.
+                    std::thread::spawn({
+                        let open = open.clone();
+                        move || {
+                            std::thread::sleep(Duration::from_millis(200));
+                            let _ = open.send(());
+                        }
+                    });
+                }
+            }
+        });
+        let mut err = Vec::new();
+        let code = serve(
+            Params::default(),
+            input,
+            &mut out.clone(),
+            &mut err,
+            Arc::new(d),
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        let replies = parse(&out.0.lock().unwrap());
+        assert_eq!(replies.len(), 2);
+        // Before the second call was read: the baseline analysis and nothing else.
+        assert_eq!(
+            seen.lock().unwrap()[1],
+            1,
+            "the first call ran no second analysis"
+        );
+        let first = report_of(&replies[0]);
+        assert!(
+            first["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["new"] == false),
+            "{first}"
+        );
+        // The later call does check: a second analysis, and the worktree is there.
+        assert_eq!(analyses.load(Ordering::SeqCst), 2);
+        let second = report_of(&replies[1]);
+        assert!(
+            second["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["category"] == "worktrees" && i["new"] == true),
+            "{second}"
+        );
+    }
+
     #[test]
     fn a_dead_baseline_worker_falls_back_to_a_fresh_analysis_on_the_next_call() {
         let (tx, rx) = std::sync::mpsc::channel();
         drop(tx); // the worker is gone without having said anything
+        let analyses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut server = Server {
             baseline: Baseline::Pending(rx),
             params: Params::default(),
-            deps: Arc::new(deps(one_build(), |_| {})),
+            deps: Arc::new(deps(one_build(), {
+                let analyses = Arc::clone(&analyses);
+                move |_| {
+                    analyses.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })),
         };
         let mut err = Vec::new();
         let reply = server
@@ -1114,6 +1604,8 @@ mod tests {
         );
         let err = String::from_utf8_lossy(&err);
         assert!(err.contains("stopped unexpectedly"), "{err}");
+        // The fresh analysis of the call is the baseline: it is not checked again at once.
+        assert_eq!(analyses.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

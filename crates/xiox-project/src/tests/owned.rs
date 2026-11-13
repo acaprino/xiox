@@ -43,6 +43,20 @@ fn subfolder_and_linked_worktree_resolve_to_the_main_repository() {
 }
 
 #[test]
+fn linked_worktree_count_tells_none_from_a_git_failure() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    // A repository with no linked worktree: git answered, the count is 0 (not a failure).
+    assert_eq!(linked_worktree_count(&root), Some(0));
+    worktree(&root, &base.join("proj-wt"), "feature");
+    assert_eq!(linked_worktree_count(&root), Some(1));
+    // Not a repository: git fails, and that is not "none".
+    let plain = base.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert_eq!(linked_worktree_count(&plain), None);
+}
+
+#[test]
 fn plain_folder_is_its_own_project_with_a_not_a_repository_note() {
     let (_t, base) = tmp();
     let dir = base.join("plain");

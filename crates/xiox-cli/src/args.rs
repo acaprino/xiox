@@ -83,8 +83,9 @@ Flags:
   --worktree-threshold <n>
                    observe: new worktrees since the start that raise `attention` (default 3)
   --mcp            observe: be a read-only MCP server on stdio (one tool, project_leftovers)
-                   instead of printing JSON lines. It checks only when the tool is called,
-                   so --interval does not apply, and ends when stdin closes.
+                   instead of printing JSON lines. It checks only when the tool is called
+                   (--interval is ignored; what is created and removed between two calls is
+                   never seen), and ends when stdin closes.
   -h, --help       show this help
   -V, --version    show the version
 

@@ -1,9 +1,13 @@
-use crate::measure_bytes;
+use crate::{Measured, measure_bytes};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
 const LONG: Duration = Duration::from_secs(30);
+
+fn whole(bytes: u64) -> Option<Measured> {
+    Some(Measured { bytes, complete: true })
+}
 
 fn write(path: &Path, len: usize) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -17,9 +21,9 @@ fn sums_nested_files() {
     write(&dir.path().join("sub/b.bin"), 200);
     write(&dir.path().join("sub/deeper/c.bin"), 300);
     fs::create_dir_all(dir.path().join("empty")).unwrap();
-    assert_eq!(measure_bytes(dir.path(), 1000, LONG), Some(600));
+    assert_eq!(measure_bytes(dir.path(), 1000, LONG), whole(600));
     // A plain file is its own size.
-    assert_eq!(measure_bytes(&dir.path().join("a.bin"), 1000, LONG), Some(100));
+    assert_eq!(measure_bytes(&dir.path().join("a.bin"), 1000, LONG), whole(100));
 }
 
 #[test]
@@ -33,9 +37,9 @@ fn does_not_follow_a_junction_or_symlink() {
         eprintln!("skipped: this account may not create a junction or a directory symlink here");
         return;
     }
-    assert_eq!(measure_bytes(dir.path(), 1000, LONG), Some(10), "the target of the link must not count");
+    assert_eq!(measure_bytes(dir.path(), 1000, LONG), whole(10), "the target of the link must not count");
     // A link as the root is not followed either.
-    assert_eq!(measure_bytes(&link, 1000, LONG), Some(0));
+    assert_eq!(measure_bytes(&link, 1000, LONG), whole(0));
 }
 
 #[cfg(windows)]
@@ -58,22 +62,42 @@ fn make_dir_link(target: &Path, link: &Path) -> bool {
 }
 
 #[test]
-fn entry_cap_returns_none() {
+fn entry_cap_returns_the_partial_total_as_a_lower_bound() {
     let dir = tempfile::tempdir().unwrap();
     for n in 0..10 {
         write(&dir.path().join(format!("f{n}.bin")), 1);
     }
-    assert_eq!(measure_bytes(dir.path(), 5, LONG), None);
-    assert_eq!(measure_bytes(dir.path(), 10, LONG), Some(10), "exactly the cap still fits");
-    assert_eq!(measure_bytes(dir.path(), 100, LONG), Some(10));
+    // Over the cap: what was counted so far, flagged incomplete.
+    let partial = measure_bytes(dir.path(), 5, LONG).expect("a lower bound, not nothing");
+    assert!(!partial.complete);
+    assert_eq!(partial.bytes, 5, "the first five entries were counted");
+    assert_eq!(measure_bytes(dir.path(), 10, LONG), whole(10), "exactly the cap still fits");
+    assert_eq!(measure_bytes(dir.path(), 100, LONG), whole(10));
 }
 
 #[test]
-fn time_cap_returns_none() {
+fn the_partial_total_never_exceeds_the_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("a.bin"), 100);
+    write(&dir.path().join("sub/b.bin"), 200);
+    write(&dir.path().join("sub/deeper/c.bin"), 300);
+    for cap in 0..6 {
+        match measure_bytes(dir.path(), cap, LONG) {
+            Some(m) if !m.complete => assert!(m.bytes <= 600, "cap {cap}: {m:?}"),
+            Some(m) => assert_eq!(m.bytes, 600, "cap {cap}"),
+            None => panic!("a readable root always gives a lower bound (cap {cap})"),
+        }
+    }
+}
+
+#[test]
+fn time_cap_returns_a_partial_total_too() {
     let dir = tempfile::tempdir().unwrap();
     write(&dir.path().join("a.bin"), 1);
     write(&dir.path().join("sub/b.bin"), 1);
-    assert_eq!(measure_bytes(dir.path(), 1000, Duration::from_millis(0)), None);
+    let m = measure_bytes(dir.path(), 1000, Duration::from_millis(0)).expect("a lower bound");
+    assert!(!m.complete);
+    assert!(m.bytes <= 2);
 }
 
 #[test]

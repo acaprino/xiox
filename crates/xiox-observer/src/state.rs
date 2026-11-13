@@ -11,6 +11,10 @@ use xiox_project::{
 /// How many `--include` paths one `xiox clean` command carries before it is cut.
 const CLEAN_COMMAND_MAX_ITEMS: usize = 25;
 
+/// A folder whose last measure hit the caps is measured again at most this often (10 minutes):
+/// walking a huge tree at every check, while agents compile, is the cost the caps exist to avoid.
+pub const PARTIAL_BACK_OFF_MS: i64 = 10 * 60 * 1000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Params {
@@ -38,6 +42,10 @@ pub struct ItemView {
     pub first_seen_ms: i64,
     /// When `item.bytes` was last measured; `None` while it never was.
     pub measured_at_ms: Option<i64>,
+    /// `item.bytes` is a LOWER BOUND: the last measure hit the entry or time cap before the end of
+    /// the folder, so the real size is at least that. Such a folder is measured again only after
+    /// [`PARTIAL_BACK_OFF_MS`].
+    pub bytes_partial: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -118,6 +126,12 @@ pub struct Observer {
 impl Observer {
     /// Everything in `first` is the baseline: never `new`.
     pub fn new(first: ProjectScan, params: Params, now_ms: i64) -> Self {
+        Self::new_measured(first, params, now_ms, &HashSet::new())
+    }
+
+    /// Like [`Observer::new`]; `partial` are the keys whose `bytes` are a lower bound (the measure
+    /// hit a cap).
+    pub fn new_measured(first: ProjectScan, params: Params, now_ms: i64, partial: &HashSet<String>) -> Self {
         let mut baseline = HashMap::new();
         let mut items = Vec::new();
         for item in first.items {
@@ -127,6 +141,7 @@ impl Observer {
             baseline.insert(item.key.clone(), item.bytes);
             items.push(ItemView {
                 measured_at_ms: item.bytes.map(|_| now_ms),
+                bytes_partial: item.bytes.is_some() && partial.contains(&item.key),
                 item,
                 new: false,
                 first_seen_ms: now_ms,
@@ -149,6 +164,11 @@ impl Observer {
         }
     }
 
+    /// The project as the last scan the observer accepted saw it.
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
     pub fn started(&self) -> Event {
         Event::Started { project: self.project.clone(), params: self.params, totals: self.totals() }
     }
@@ -157,6 +177,12 @@ impl Observer {
     /// measured: the last measurement of the same item is kept). Returns `Changed` (only if
     /// something was added or removed) and then any `Attention` events.
     pub fn update(&mut self, scan: ProjectScan, now_ms: i64) -> Vec<Event> {
+        self.update_measured(scan, now_ms, &HashSet::new())
+    }
+
+    /// Like [`Observer::update`]; `partial` are the keys measured in this scan whose `bytes` are a
+    /// lower bound (the measure hit a cap). An item not measured keeps its last bytes and their flag.
+    pub fn update_measured(&mut self, scan: ProjectScan, now_ms: i64, partial: &HashSet<String>) -> Vec<Event> {
         let previous = std::mem::take(&mut self.items);
         let previous_order: Vec<String> = previous.iter().map(|v| v.item.key.clone()).collect();
         let mut previous: HashMap<String, ItemView> =
@@ -174,10 +200,15 @@ impl Observer {
             // while git was still creating it comes first as a copy): told again, in its new one.
             let recategorized = before.as_ref().is_some_and(|b| b.item.category != item.category);
             let in_baseline = self.baseline.contains_key(&item.key);
+            let mut bytes_partial = false;
             let measured_at_ms = match (item.bytes, &before) {
-                (Some(_), _) => Some(now_ms),
+                (Some(_), _) => {
+                    bytes_partial = partial.contains(&item.key);
+                    Some(now_ms)
+                }
                 (None, Some(b)) if b.item.bytes.is_some() => {
                     item.bytes = b.item.bytes;
+                    bytes_partial = b.bytes_partial;
                     b.measured_at_ms
                 }
                 _ => None,
@@ -193,7 +224,7 @@ impl Observer {
                 (Some(b), false) => b.first_seen_ms,
                 (None, false) => now_ms,
             };
-            let view = ItemView { item, new: !in_baseline, first_seen_ms, measured_at_ms };
+            let view = ItemView { item, new: !in_baseline, first_seen_ms, measured_at_ms, bytes_partial };
             if before.is_none() || recategorized {
                 added.push(view.clone());
             }
@@ -248,17 +279,24 @@ impl Observer {
         events
     }
 
-    /// Keys of items whose bytes should be measured at the next check: every new item (it may
-    /// still be growing: a worktree being checked out, a build in progress) and the `builds`
-    /// folders of the baseline (their growth is what is watched). Only items with a folder to
-    /// measure; the caller bounds each measure.
-    pub fn keys_to_measure(&self) -> Vec<String> {
-        self.items
+    /// Keys of items whose bytes should be measured at the next check, oldest measure first
+    /// (never measured before all): every new item (it may still be growing: a worktree being
+    /// checked out, a build in progress) and the `builds` folders of the baseline (their growth is
+    /// what is watched). Only items with a folder to measure; the caller bounds each measure and
+    /// the whole check. An item whose last measure hit the caps is left out until
+    /// [`PARTIAL_BACK_OFF_MS`] have passed since it.
+    pub fn keys_to_measure(&self, now_ms: i64) -> Vec<String> {
+        let mut due: Vec<&ItemView> = self
+            .items
             .iter()
             .filter(|v| v.item.path.is_some())
             .filter(|v| v.new || v.item.category == Category::Builds)
-            .map(|v| v.item.key.clone())
-            .collect()
+            .filter(|v| {
+                !(v.bytes_partial && v.measured_at_ms.is_some_and(|at| now_ms.saturating_sub(at) < PARTIAL_BACK_OFF_MS))
+            })
+            .collect();
+        due.sort_by_key(|v| v.measured_at_ms); // stable: `None` first, the scan order among equals
+        due.into_iter().map(|v| v.item.key.clone()).collect()
     }
 
     pub fn report(&self, stale: bool) -> Report {

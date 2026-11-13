@@ -568,14 +568,24 @@ fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added(
     let wt = project.parent().unwrap().join("wt");
     git(&project, &["worktree", "add", "-q", "-b", "side", &wt.to_string_lossy()]);
 
-    let (changed, before) = o.until("changed", 60);
-    assert!(before.is_empty(), "nothing between started and changed: {before:?}");
-    let added = changed["added"].as_array().unwrap();
-    assert_eq!(added.len(), 1, "{changed}");
-    assert_eq!(added[0]["category"], "worktrees");
-    assert_eq!(added[0]["new"], true);
-    assert!(added[0]["path"].as_str().unwrap().ends_with("wt"), "{changed}");
-    assert_eq!(changed["schema"], 1);
+    // `git worktree add` creates the folder before it registers the worktree: a check that runs in
+    // between lists it as a copy, and the next one as a worktree. Both are right; what is checked
+    // is the final state, waited for with a bound (every `next` has its own deadline).
+    let mut seen = Vec::new();
+    let mut category = String::new();
+    while category != "worktrees" {
+        let line = o.next(60);
+        assert_eq!(line["event"], "changed", "only changes until the worktree is listed: {line}");
+        assert_eq!(line["schema"], 1);
+        for added in line["added"].as_array().unwrap() {
+            if added["path"].as_str().unwrap().ends_with("wt") {
+                assert_eq!(added["new"], true, "{line}");
+                category = added["category"].as_str().unwrap().to_string();
+            }
+        }
+        seen.push(line);
+        assert!(seen.len() <= 10, "the worktree is still not listed as one: {seen:?}");
+    }
 
     // `report` on stdin answers with the whole list, the worktree marked new and the build folder not.
     use std::io::Write;
