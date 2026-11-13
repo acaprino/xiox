@@ -5,3 +5,7 @@ shots/dev-*.png
 shots/check-*.png
 shots/before-*.png
 shots/after-*.png
+node_modules/
+apps/desktop/dist/
+apps/desktop/tests/out/
+apps/desktop/src-tauri/gen/

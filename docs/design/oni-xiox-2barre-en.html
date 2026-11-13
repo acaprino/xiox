@@ -1,0 +1,119 @@
+<meta charset="utf-8"><style>
+.x{--stage:#0b0416;--chrome:#10081f;--surface:#1b2c52;--pane:#0d0a22;--line:#3f6fb5;--lineS:#6aa0e6;--ice:#9cc4f5;--text:#ffb21e;--text2:#f0a020;--muted:#7f9fd0;--accent:#ffb21e;--live:#8fd6ff;--warn:#ff6a3a;--sel:#2a4f8f;
+ --mono:'Cascadia Mono','Cascadia Code',Consolas,monospace;--disp:Bahnschrift,'Segoe UI',sans-serif;
+ position:relative;height:560px;display:grid;grid-template-rows:38px 34px 1fr 26px;background:var(--stage);color:var(--text);font:12px/1.45 var(--mono);overflow:hidden;border:1px solid var(--line)}
+.x::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(700px 300px at 100% 100%,color-mix(in srgb,var(--accent) 10%,transparent),transparent 70%),radial-gradient(600px 300px at 0 0,color-mix(in srgb,var(--lineS) 14%,transparent),transparent 70%)}
+.x>*{position:relative}
+.x .top{display:flex;align-items:stretch;gap:0;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--chrome) 64%,transparent);padding:0 10px}
+.x .brand{display:flex;align-items:center;gap:8px;font:700 13px var(--disp);letter-spacing:.32em;color:var(--ice);padding-right:14px}
+.x .brand i{width:10px;height:10px;background:var(--accent);transform:skewX(-20deg);display:block}
+.x .ver{display:flex;align-items:center;color:var(--muted);padding:0 14px;border-left:1px solid var(--line)}
+.x .tab{display:flex;align-items:center;gap:7px;padding:0 13px;font:600 11px var(--disp);letter-spacing:.12em;color:var(--muted);border-bottom:2px solid transparent}
+.x .tab kbd{font:11px var(--mono);color:var(--muted);letter-spacing:0}
+.x .tab.on{color:var(--text);background:var(--surface);border-bottom-color:var(--accent)}
+.x .sp{flex:1}
+.x .tb{align-self:center;margin-left:6px;padding:4px 10px;border:1px solid var(--line);font:600 11px var(--disp);letter-spacing:.1em;color:var(--text)}
+.x .tb.p{background:var(--accent);border-color:var(--accent);color:#1a0600}
+.x .st{display:flex;align-items:center;gap:12px;padding:0 10px;color:var(--text2)}
+.x .badge{border:1px solid var(--live);color:var(--live);padding:1px 6px;font-size:10.5px}
+.x .st .rt{margin-left:auto;color:var(--muted)}
+.x .body{display:grid;grid-template-columns:170px 200px 1fr;gap:8px;padding:0 8px 8px;min-height:0}
+.x .pane{border:1px solid var(--line);background:color-mix(in srgb,var(--pane) 86%,transparent);display:flex;flex-direction:column;min-height:0}
+.x .pane.f{border-top:2px solid var(--accent)}
+.x .hd{display:flex;justify-content:space-between;padding:8px 10px;font:600 11px var(--disp);letter-spacing:.14em;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--surface) 70%,transparent)}
+.x .hd span{color:var(--muted);font:11px var(--mono);letter-spacing:0}
+.x .it{padding:5px 10px;display:flex;justify-content:space-between}
+.x .it small{display:block;color:var(--muted);font-size:10.5px}
+.x .it.on{background:var(--sel)}
+.x .nv{padding:8px 10px;display:flex;justify-content:space-between;font:600 11px var(--disp);letter-spacing:.12em;color:var(--muted);border-left:2px solid transparent}
+.x .nv kbd{font:11px var(--mono);letter-spacing:0}
+.x .nv.on{color:var(--text);background:var(--surface);border-left-color:var(--accent)}
+.x .det{margin-top:auto;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr}
+.x .it b{font-weight:400;color:var(--text2)}
+.x .r{display:grid;grid-template-columns:16px 1fr 96px 74px;gap:8px;align-items:center;padding:5px 10px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.x .r.h{color:var(--muted);font-size:10.5px}
+.x .ck{width:10px;height:10px;border:1px solid var(--lineS)}
+.x .ck.on{background:var(--ice);border-color:var(--ice)}
+.x .r small{color:var(--muted);font-size:10.5px;display:block}
+.x .lv{font-size:10.5px;border:1px solid;padding:0 5px;justify-self:start}
+.x .lv.g{color:var(--live)} .x .lv.w{color:var(--warn)} .x .lv.o{color:var(--muted)}
+.x .sz{text-align:right}
+.x .kv{display:grid;grid-template-columns:86px 1fr;gap:4px 8px;padding:10px;color:var(--muted)}
+.x .kv b{color:var(--text);font-weight:400}
+.x .box{margin:8px;border:1px solid var(--line);background:color-mix(in srgb,var(--surface) 50%,transparent)}
+.x .foot{display:flex;gap:16px;align-items:center;padding:0 10px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+.x .foot .dot{width:7px;height:7px;background:var(--live)}
+.x .foot .rt{margin-left:auto}
+.x .sub{padding:4px 10px 4px 24px;display:flex;justify-content:space-between;color:var(--text2)}
+.x .sub.on{background:var(--sel);color:var(--text)}
+.x .sub b{font-weight:400;color:var(--muted)}
+.x.one .body{grid-template-columns:230px 1fr}
+
+.x{font:600 12.5px/1.45 'Segoe UI',sans-serif;border:0}
+.x::before{background:
+ linear-gradient(90deg,#2a4a8018 1px,transparent 1px) 0 0/22px 22px,
+ linear-gradient(0deg,#2a4a8018 1px,transparent 1px) 0 0/22px 22px,
+ radial-gradient(700px 360px at 80% 60%,#2b4f9a40,transparent 70%)}
+.x .top{border-bottom:0;background:transparent}
+.x .brand{color:var(--accent);font-size:15px}
+.x .brand i{background:var(--ice)}
+.x .ver,.x .st,.x .foot{color:var(--muted);border-color:#3f6fb555}
+.x .tb{border:2px solid var(--line);background:#24457a;color:var(--accent);clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.x .tb.p{background:#3566b0;border-color:var(--lineS);color:#ffd257}
+.x .badge{border-color:var(--ice);color:var(--ice)}
+.x .pane,.x .pane.f{border:2px solid var(--line);border-top:2px solid var(--line);background:#0d0a22cc;
+ clip-path:polygon(0 14px,14px 0,calc(50% - 30px) 0,calc(50% - 22px) 6px,calc(50% + 22px) 6px,calc(50% + 30px) 0,calc(100% - 14px) 0,100% 14px,100% calc(100% - 14px),calc(100% - 14px) 100%,14px 100%,0 calc(100% - 14px));
+ box-shadow:inset 0 0 0 1px #6aa0e633}
+.x .hd{background:transparent;border-bottom:0;color:var(--ice);font:700 13px 'Segoe UI',sans-serif;letter-spacing:.02em;padding:14px 16px 6px}
+.x .hd span{color:var(--muted)}
+.x .nv{font:700 13px 'Segoe UI',sans-serif;letter-spacing:0;color:var(--text2);padding:6px 16px;border-left:0}
+.x .nv.on{background:var(--sel);color:#ffd257}
+.x .sub{padding-left:30px;color:var(--text2)} .x .sub.on{background:#2a4f8f99;color:#ffd257}
+.x .r{border-bottom:0;padding:5px 16px} .x .r.h{color:var(--ice)}
+.x .r small,.x .it small{color:var(--muted);font-weight:400}
+.x .ck{width:13px;height:13px;border:2px solid var(--lineS);background:#24457a}
+.x .ck.on{background:#24457a;border-color:var(--ice);box-shadow:inset 0 0 0 2px #24457a,inset 0 0 0 9px #7fe0a0}
+.x .lv{border:0;padding:0} .x .lv.g{color:var(--ice)} .x .lv.o{color:var(--muted)}
+.x .det{border-top:0} .x .box{border:1px solid #3f6fb588;background:#1b2c5266}
+.x .kv{color:var(--ice)} .x .kv b{color:var(--text);font-weight:600}
+.x .foot .dot{background:var(--ice)}
+</style>
+<h2>Xiox in stile Oni, con due barre</h2>
+<p class="subtitle">Dal tuo riferimento: fondo viola-nero, cornici blu acciaio con gli angoli tagliati e la tacca in alto, scritte ambra in grassetto, titoli azzurri, trama da circuito sullo sfondo. Disposizione: due barre, come hai scelto.</p>
+<div class="x">
+ <div class="top">
+  <div class="brand"><i></i>XIOX</div><div class="ver">0.1.0</div>
+  <div class="sp"></div>
+  <div class="tb">ANALYZE a</div><div class="tb p">CLEAN 3 ITEMS ↵</div><div class="tb">AUTO</div>
+ </div>
+ <div class="st"><span class="badge">ANALYSIS DONE</span>12.4 GB found · 10.7 GB selected · 16 s<span class="rt">administrator · RAM 31 GB</span></div>
+ <div class="body">
+  <div class="pane f">
+   <div class="hd">SECTIONS<span>4</span></div>
+   <div class="nv on">CLEANUP<kbd>1</kbd></div><div class="nv">REGISTRY<kbd>2</kbd></div><div class="nv">SERVICES &amp; RAM<kbd>3</kbd></div><div class="nv">DEVELOPERS<kbd>4</kbd></div>
+  </div>
+  <div class="pane">
+   <div class="hd">CATEGORIES<span>6</span></div>
+   <div class="it on"><div>windows<small>14 items · 3 selected</small></div><b>9.7 GB</b></div>
+   <div class="it"><div>browser<small>9 items · 1 selected</small></div><b>2.7 GB</b></div>
+   <div class="it"><div>applications<small>31 items · 0 selected</small></div><b>0 B</b></div>
+   <div class="it"><div>system<small>8 items · 0 selected</small></div><b>0 B</b></div>
+  </div>
+  <div class="pane">
+   <div class="hd">WINDOWS<span>14 items · largest first</span></div>
+   <div class="r h"><div></div><div>item</div><div>level</div><div class="sz">size</div></div>
+   <div class="r"><div class="ck on"></div><div>Windows temporary files<small>%TEMP%, C:\Windows\Temp</small></div><div class="lv g">RECOMMENDED</div><div class="sz">4.1 GB</div></div>
+   <div class="r"><div class="ck on"></div><div>Recycle Bin<small>all drives</small></div><div class="lv g">RECOMMENDED</div><div class="sz">3.9 GB</div></div>
+   <div class="r"><div class="ck"></div><div>Windows Update logs<small>C:\Windows\Logs\WindowsUpdate</small></div><div class="lv w">CAUTION</div><div class="sz">1.7 GB</div></div>
+   <div class="r"><div class="ck on"></div><div>Explorer thumbnails<small>thumbcache_*.db</small></div><div class="lv g">RECOMMENDED</div><div class="sz">212 MB</div></div>
+   <div class="r"><div class="ck"></div><div>Memory dumps<small>C:\Windows\Minidump</small></div><div class="lv o">OPTIONAL</div><div class="sz">96 MB</div></div>
+   <div class="det"><div class="box"><div class="kv"><span>item</span><b>Windows temporary files</b><span>files</span><b>18 204</b><span>size</span><b>4.1 GB</b><span>level</span><b>recommended</b><span>mode</span><b>to the Recycle Bin</b></div></div><div class="box"><div class="kv"><span>why</span><b>Files Windows and programs recreate on their own.</b></div></div></div>
+  </div>
+ </div>
+ <div class="foot"><span class="dot"></span>ready · Winapp2 rules updated today<span class="rt">↑↓ move · space toggle · a analyze · ↵ clean</span></div>
+</div>
+
+<div class="options" style="margin-top:20px">
+ <div class="option" data-choice="si" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>Questa è la strada</h3></div></div>
+ <div class="option" data-choice="no" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>Ancora no</h3></div></div>
+</div>

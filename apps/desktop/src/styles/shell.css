@@ -1,0 +1,78 @@
+/* Window layout: top bar, status row, (profile warning), the three panes, footer. */
+html, body { height: 100%; overflow: hidden; }
+
+#app {
+  position: relative; height: 100vh; min-width: 0; overflow: hidden;
+  display: grid; grid-template-rows: 38px 34px auto 1fr 26px; grid-template-columns: minmax(0, 1fr);
+}
+#app > * { position: relative; min-width: 0; }
+/* Explicit rows: a hidden #profile takes no row, and the rest must not slide up. */
+#top { grid-row: 1; } #status { grid-row: 2; } #profile { grid-row: 3; } #body { grid-row: 4; } #foot { grid-row: 5; }
+
+/* Titles: display font, uppercase. */
+.hd, .nv, #badge, .btn { font-family: var(--font-display); font-weight: 700; font-size: 13px; text-transform: uppercase; }
+.num, #version { font-family: var(--font-mono); }
+.ellipsis { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-fit] { white-space: nowrap; }
+
+#top { display: flex; align-items: center; gap: 14px; padding: 0 10px; }
+#wordmark { height: 24px; width: auto; display: block; }
+#version { color: var(--muted); font-size: 12px; padding-left: 14px; border-left: 1px solid var(--line-soft); line-height: 20px; }
+.spring { flex: 1; }
+#actions { display: flex; gap: 6px; align-items: center; }
+
+#status { display: flex; align-items: center; gap: 12px; padding: 0 10px; color: var(--muted); min-width: 0; }
+#badge {
+  flex: none; border: 1px solid var(--ice); color: var(--ice); padding: 1px 7px; font-size: 11px; letter-spacing: .08em;
+}
+#status-text { flex: 0 1 auto; min-width: 0; color: var(--text-2); }
+#status-right { margin-left: auto; flex: none; white-space: nowrap; }
+#profile { padding: 4px 10px; color: var(--warn); }
+
+#body {
+  display: grid; grid-template-columns: 170px 200px minmax(0, 1fr); gap: 8px; padding: 0 8px 8px; min-height: 0;
+}
+#body > .frame { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+.hd { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 14px 16px 6px; color: var(--ice); }
+.hd .count, .hd .sub { color: var(--muted); font: 11px var(--font-mono); text-transform: none; letter-spacing: 0; }
+.hd .sub { min-width: 0; }
+.hd-title { white-space: nowrap; }
+
+/* Sections bar. */
+.nv {
+  display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 16px;
+  border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer;
+}
+.nv kbd { color: var(--muted); }
+.nv.on { background: var(--sel); color: var(--text-hi); }
+
+/* Bar 2. */
+.items { overflow: auto; min-height: 0; }
+.it {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; width: 100%; padding: 5px 12px 5px 16px;
+  border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer;
+}
+.it.opt { cursor: default; display: block; }
+.it.on { background: var(--sel-soft); color: var(--text-hi); }
+.it-name { min-width: 0; }
+.it small { grid-column: 1 / -1; display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+.it b { font-weight: 400; color: var(--text-2); font-size: 12px; }
+
+/* Main pane. */
+#main #list-head { flex: none; }
+#notices { flex: none; }
+#rows { flex: 1; min-height: 0; overflow: auto; }
+#detail { flex: none; max-height: 34%; overflow: auto; margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; }
+#detail:empty { display: none; }
+.box { margin: 8px; border: 1px solid var(--box-line); background: var(--box); }
+.kv { display: grid; grid-template-columns: 86px 1fr; gap: 4px 8px; padding: 10px; color: var(--ice); }
+.kv b { color: var(--text); font-weight: 600; }
+
+#foot {
+  display: flex; align-items: center; gap: 16px; padding: 0 10px; border-top: 1px solid var(--line-soft);
+  color: var(--muted); font-size: 11px;
+}
+#foot .dot { flex: none; width: 7px; height: 7px; background: var(--ice); }
+#foot .foot-left { flex: 1; min-width: 0; }
+#foot .foot-right { flex: none; margin-left: auto; font-family: var(--font-mono); }

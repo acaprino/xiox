@@ -1,0 +1,28 @@
+/* Oni palette of the approved mock-up (docs/design/oni-xiox-2barre-en.html). Dark only. */
+:root {
+  color-scheme: dark;
+  --stage: #0b0416; --chrome: #10081f; --surface: #1b2c52; --pane: #0d0a22; --pane-fill: #0d0a22cc;
+  --line: #3f6fb5; --line-strong: #6aa0e6; --line-soft: #3f6fb555; --ice: #9cc4f5; --live: #8fd6ff;
+  --text: #ffb21e; --text-2: #f0a020; --text-hi: #ffd257; --muted: #7f9fd0; --warn: #ff6a3a; --ok: #7fe0a0;
+  --sel: #2a4f8f; --sel-soft: #2a4f8f99; --button: #24457a; --button-primary: #3566b0;
+  --grid: #2a4a8018; --glow: #2b4f9a40; --inner: #6aa0e633; --box: #1b2c5266; --box-line: #3f6fb588;
+  --font-display: Bahnschrift, 'Segoe UI', sans-serif; --font-body: 'Segoe UI', sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; --text-size: 13px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; background: var(--stage); color: var(--text);
+  font: 600 var(--text-size)/1.45 var(--font-body);
+}
+
+button { font: inherit; color: inherit; }
+kbd { font: 11px var(--font-mono); letter-spacing: 0; text-transform: none; }
+
+/* clip-path cuts outlines, so the focus ring is drawn inside the box. */
+:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--live); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before { transition: none !important; animation: none !important; }
+}

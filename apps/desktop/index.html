@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
+  <title>Xiox</title>
+</head>
+<body>
+  <main id="app">
+    <header id="top">
+      <img id="wordmark" src="/xiox-wordmark.png" alt="Xiox">
+      <span id="version"></span>
+      <span class="spring"></span>
+      <div id="actions"></div>
+    </header>
+    <div id="status"><span id="badge"></span><span id="status-text"></span><span id="status-right"></span></div>
+    <div id="profile" hidden></div>
+    <div id="body">
+      <nav id="sections" class="frame" aria-label="Sections"></nav>
+      <aside id="bar2" class="frame"></aside>
+      <section id="main" class="frame">
+        <div id="notices"></div>
+        <div id="list-head" class="hd"></div>
+        <div id="rows"></div>
+        <div id="detail"></div>
+      </section>
+    </div>
+    <footer id="foot"></footer>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
