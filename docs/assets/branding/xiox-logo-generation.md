@@ -1,19 +1,11 @@
 # Xiox logo
 
-`xiox-logo.png` is a transparent PNG, 1650 x 490 px.
+`xiox-logo.png` is a transparent PNG, 2172 x 724 px, supplied by the project owner (generated outside this repository; the file name on the owner's machine is "Logo XIOX retro-futuristico blu e ambra"). It replaces an earlier cyan-and-chrome draft generated with `google/gemini-3-pro-image`, which is no longer used.
 
-- **Generated with** `google/gemini-3-pro-image` through OpenRouter, from the prompt below, on a plain background.
-- **Post-processing:** the background was removed (connected near-white regions flood-filled from the border and from the enclosed pockets, then a 0.9 px soft edge), cropped to the artwork. The result is checked on a dark (`#0B0416`) background; it is not meant for light backgrounds.
-- **Family:** same construction as the MUKADE and DAODAN wordmarks (extended, slanted, chrome outline, multi-band underline), with cut corners taken from the Oni options menu.
+- **Look:** extended slanted block letters, amber upper half and midnight-blue lower half, steel-blue double outline with a bevel, a multi-band underline with an amber segment under the first X. Same family as the MUKADE and DAODAN wordmarks and the same amber and steel-blue as the interface.
+- **Use:** transparent background, made for dark backgrounds (the interface stage is `#0B0416`). Not meant for light backgrounds.
 
-## Prompt
-
-Horizontal logo wordmark for the brand "XIOX", exactly four capital letters X I O X, on a pure solid black background, panoramic composition about 2000x690 px, wide empty margin around.
-Lettering: custom extended extra-bold geometric sans, strongly slanted italic to the right, low wide letters, aggressive diagonal cuts, sharp corners and arrow-like terminals, with notched (cut) corners like the frames of the Oni video game menu. The two X letters have crossing strokes with a sharp notch; the O is an octagon with a cut-corner counter.
-Colour: very dark midnight-blue fill with metallic gradients from near-black blue to electric blue, thick crisp ice-white-blue main outline, a second thin dark-blue outer outline, small cyan lens-flare sparks on the I and O, subtle controlled blue glow only around the letters, plus a thin amber (#FFB21E) accent line segment under the I. Under the whole word a long sharp horizontal multi-band line (white-cyan and electric blue bands, pointed ends) following the slant, tail merging into the last X.
-Same visual family as the logos MUKADE and DAODAN (cyberpunk racing-futuristic chrome lettering). No character, no mascot, no extra text, no watermark, no frame, no badge, no reflection, no drop shadow.
-
-## Palette
+## Palette (shared with the interface)
 
 | Role | Hex |
 |---|---|
