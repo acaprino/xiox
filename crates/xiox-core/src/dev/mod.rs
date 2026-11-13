@@ -10,6 +10,7 @@
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::sys;
+use crate::view::DevCategory;
 use xiox_app::{Cancel, DevScan, Tick, ANALYSIS_FAILED};
 use xiox_model::{
     path_key, Agent, Artifact, CleanPlan, CleanReport, ItemOutcome, Level, PlanAction, PlanItem, ProjectReport, ProjectStatus,
@@ -27,11 +28,26 @@ use std::time::Instant;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod intent_tests;
+/// `DevState::view`: the section as a `SectionView`.
+mod view;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Section {
     Projects,
     Worktrees,
     Sessions,
+}
+
+impl From<DevCategory> for Section {
+    fn from(c: DevCategory) -> Section {
+        match c {
+            DevCategory::Projects => Section::Projects,
+            DevCategory::Worktrees => Section::Worktrees,
+            DevCategory::Sessions => Section::Sessions,
+        }
+    }
 }
 
 impl Section {
@@ -152,12 +168,43 @@ pub struct DevState {
     pub cancel: Option<Cancel>,
     /// Esito di «Salva come testo…»: (testo, riuscito).
     pub saved: Option<(String, bool)>,
+    /// Chi fa il lavoro vero: i due thread di analisi e di pulizia. I test ne mettono di finti.
+    pub workers: DevWorkers,
     /// Solo build di debug: `--dev-demo`, per gli screenshot della conferma e del resoconto.
     #[cfg(debug_assertions)]
     pub demo: Option<Demo>,
     /// Fotogrammi dall'ultimo passo della dimostrazione (lo screenshot aspetta che il dialogo compaia).
     #[cfg(debug_assertions)]
     pub demo_frames: u32,
+}
+
+/// Tutto ciò che serve a un thread di pulizia: la conferma già accettata, spogliata di ciò che
+/// al thread non serve.
+pub struct DevCleanJob {
+    /// L'analisi da cui è nato il piano.
+    pub scan: Arc<DevScan>,
+    /// Cartelle e worktree da togliere; `None` se si puliscono solo sessioni.
+    pub plan: Option<CleanPlan>,
+    /// Le sessioni archiviate da cancellare.
+    pub sessions: Vec<(Agent, String)>,
+    pub mode: RemoveMode,
+    /// `path_key` → «progetto · cartella», per il resoconto.
+    pub plan_labels: HashMap<String, String>,
+    pub session_labels: HashMap<(Agent, String), String>,
+    /// Lo stesso flag di `DevState::cancel`: «Annulla» lo alza.
+    pub cancel: Cancel,
+}
+
+/// I due lavori di `DevState`, come puntatori a funzione: quelli veri per default, funzioni finte
+/// nei test (così `confirm` arriva fino all'avvio senza toccare il motore).
+#[derive(Clone, Copy)]
+pub struct DevWorkers {
+    pub scan: fn(Settings, bool, Outbox<DevMsg>),
+    pub clean: fn(DevCleanJob, Outbox<DevMsg>),
+}
+
+impl DevWorkers {
+    pub const REAL: DevWorkers = DevWorkers { scan: real_scan, clean: real_clean };
 }
 
 /// `--dev-demo` (solo build di debug, solo con `--only-root` su un albero finto): dopo l'analisi
@@ -187,6 +234,23 @@ impl Demo {
 pub const STALE_SCAN: &str = xiox_app::STALE_ANALYSIS;
 /// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
 pub const CLEANUP_DIED: &str = "Un errore interno ha fermato la pulizia: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
+
+// Why an intent is refused (English: the page shows them as they are).
+/// Un lavoro è in corso: tutto resta fermo tranne «Annulla».
+pub const BUSY: &str = "Wait for the running job to finish.";
+/// La conferma è aperta: ciò che descrive non deve cambiare.
+pub const DIALOG_OPEN: &str = "Close the confirmation first.";
+pub const NO_DIALOG: &str = "No confirmation is open.";
+pub const NOT_READY: &str = "Read the warnings and tick “I have read the warnings” first.";
+pub const NO_ANALYSIS: &str = "Analyze first: there is nothing to choose from yet.";
+pub const NOTHING_SELECTED: &str = "Nothing is selected in this list.";
+pub const NOTHING_TO_CANCEL: &str = "Nothing can be cancelled right now.";
+pub const NO_ROOT_SELECTED: &str = "Pick a folder in the list first.";
+pub const NO_FOLDERS: &str = "This project has no folders to choose.";
+pub const NO_WARNINGS: &str = "This confirmation has no warnings to read.";
+pub const NOTHING_TO_RUN: &str = "This confirmation has nothing to clean: close it and analyze again.";
+pub const PERMANENT_NOT_OFFERED: &str = "Permanent deletion is not offered here: the Recycle Bin has room.";
+pub const PERMANENT_ONLY: &str = "The Recycle Bin is too small: only permanent deletion is offered.";
 
 impl DevState {
     /// `analyze`: avvia l'analisi la prima volta che la voce viene mostrata (`--analyze`).
@@ -218,6 +282,7 @@ impl DevState {
             tick: None,
             cancel: None,
             saved: None,
+            workers: DevWorkers::REAL,
             #[cfg(debug_assertions)]
             demo: None,
             #[cfg(debug_assertions)]
@@ -361,12 +426,8 @@ impl DevState {
         let (tx, rx) = channel();
         self.job = Some(rx);
         let settings = self.settings.clone();
-        std::thread::spawn(move || {
-            let outbox = Outbox::new(tx, notifier, SectionId::Developers);
-            let step = |t: &str, p: f32| outbox.send(DevMsg::Step(t.to_string(), p));
-            let scan = xiox_app::run_scan(&settings, admin, &step);
-            outbox.send(DevMsg::Scanned(scan));
-        });
+        let work = self.workers.scan;
+        std::thread::spawn(move || work(settings, admin, Outbox::new(tx, notifier, SectionId::Developers)));
     }
 
     /// Quando «Avvia pulizia» è attivo: nessun lavoro in corso e qualcosa scelto nella sezione visibile.
@@ -514,58 +575,11 @@ impl DevState {
         });
         let cancel = Cancel::default();
         self.cancel = plan.is_some().then(|| cancel.clone());
+        let job = DevCleanJob { scan, plan, sessions, mode, plan_labels, session_labels, cancel };
         let (tx, rx) = channel();
         self.job = Some(rx);
-        std::thread::spawn(move || {
-            let outbox = Outbox::new(tx, notifier, SectionId::Developers);
-            let step = |t: &str, p: f32| outbox.send(DevMsg::Step(t.to_string(), p));
-            let tick = |t: Tick| outbox.send(DevMsg::Tick(t));
-            let mut out = DevCleaned::new();
-            out.labels = plan_labels;
-            guarded(&mut out, |out| {
-                if let Some(plan) = &plan {
-                    step("Eliminazione di cartelle e worktree…", 0.1);
-                    match xiox_app::execute_plan(&scan, plan, &tick, &cancel) {
-                        Ok(res) => merge_report(&mut out.report, xiox_app::report(&scan, plan, &res)),
-                        Err(e) => out.errors.push(e),
-                    }
-                }
-                if !sessions.is_empty() {
-                    let started = Instant::now();
-                    let label = |agent: Agent, id: &str| {
-                        session_labels
-                            .get(&(agent, id.to_string()))
-                            .cloned()
-                            .unwrap_or_else(|| format!("{} · {id}", agent_label(agent)))
-                    };
-                    // L'analisi può avere ore: si cancella solo ciò che è ANCORA archiviato e libero.
-                    step("Controllo delle sessioni archiviate…", 0.5);
-                    match xiox_app::revalidate_archived(&scan, &sessions, &xiox_app::fresh_archived) {
-                        Ok(checked) => {
-                            for o in checked.skipped {
-                                add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
-                            }
-                            if !checked.keep.is_empty() {
-                                step("Cancellazione delle sessioni archiviate…", 0.6);
-                                let cli = SystemCli::locate();
-                                match xiox_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
-                                    Ok(done) => {
-                                        for o in done {
-                                            add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
-                                        }
-                                    }
-                                    Err(e) => out.errors.push(e),
-                                }
-                            }
-                        }
-                        Err(e) => out.errors.push(e),
-                    }
-                    out.report.elapsed_ms = out.report.elapsed_ms.saturating_add(started.elapsed().as_millis() as u64);
-                }
-            });
-            drop(scan);
-            outbox.send(DevMsg::Cleaned(out));
-        });
+        let work = self.workers.clean;
+        std::thread::spawn(move || work(job, Outbox::new(tx, notifier, SectionId::Developers)));
     }
 
     /// «Annulla» durante la pulizia: i worker si fermano prima del file successivo.
@@ -620,6 +634,339 @@ impl DevState {
             }
         }
     }
+}
+
+/// The intents of the page. Every one of them refuses what the egui screen would have shown as
+/// disabled, with a reason in English (`Err`): the caller (the Tauri command) turns it into a
+/// `CmdError { kind: "refused" }`. A refused intent changes nothing.
+impl DevState {
+    /// The same state with other workers (tests; `DevWorkers::REAL` is the default).
+    pub fn with_workers(mut self, w: DevWorkers) -> Self {
+        self.workers = w;
+        self
+    }
+
+    /// A job runs: nothing may change under it.
+    fn idle(&self) -> Result<(), String> {
+        if self.busy() {
+            return Err(BUSY.into());
+        }
+        Ok(())
+    }
+
+    /// Selection and settings: no job, and no confirmation whose text describes the selection.
+    fn editable(&self) -> Result<(), String> {
+        self.idle()?;
+        if self.confirm.is_some() {
+            return Err(DIALOG_OPEN.into());
+        }
+        Ok(())
+    }
+
+    /// The analysis on screen, for the intents that act on its rows.
+    fn analysis(&self) -> Result<Arc<DevScan>, String> {
+        match (&self.scan, self.view) {
+            (Some(scan), View::Scanned) => Ok(scan.clone()),
+            _ => Err(NO_ANALYSIS.into()),
+        }
+    }
+
+    pub fn select_category(&mut self, c: DevCategory) -> Result<(), String> {
+        self.editable()?;
+        self.analysis()?;
+        self.set_section(c.into());
+        Ok(())
+    }
+
+    /// A row id of the contract: `p:` a project, `a:` one of its folders, `w:` a worktree,
+    /// `s:<agent>:<id>` a session. The others (`o:` worktrees nobody manages, the `h:` header) and
+    /// anything unknown are not choosable. A row the table shows disabled is refused here too.
+    pub fn toggle(&mut self, row: &str) -> Result<(), String> {
+        self.editable()?;
+        let scan = self.analysis()?;
+        if let Some(id) = row.strip_prefix("p:") {
+            let r = scan.projects.iter().find(|r| r.id == id).ok_or_else(|| unknown_row(row))?;
+            if !status_allows(r) {
+                return Err(locked_why(r));
+            }
+            if r.artifacts.is_empty() {
+                return Err(NO_FOLDERS.into());
+            }
+            toggle_project(r, &mut self.sel_artifacts);
+        } else if let Some(id) = row.strip_prefix("a:") {
+            let (r, a) = scan
+                .projects
+                .iter()
+                .flat_map(|r| r.artifacts.iter().map(move |a| (r, a)))
+                .find(|(_, a)| a.id == id)
+                .ok_or_else(|| unknown_row(row))?;
+            if !status_allows(r) {
+                return Err(locked_why(r));
+            }
+            let on = !self.sel_artifacts.contains(&a.id);
+            set_artifact(&mut self.sel_artifacts, a, on);
+        } else if let Some(id) = row.strip_prefix("w:") {
+            let i = scan.worktrees.iter().position(|r| r.id == id).ok_or_else(|| unknown_row(row))?;
+            let r = &scan.worktrees[i];
+            if !selectable(r) {
+                return Err(nothing_to_remove(r).map(str::to_string).unwrap_or_else(|| locked_why(r)));
+            }
+            let on = self.sel_worktrees.get(i).copied().unwrap_or(false);
+            *self.sel_worktrees.get_mut(i).ok_or_else(|| unknown_row(row))? = !on;
+        } else if let Some(rest) = row.strip_prefix("s:") {
+            let (agent, id) = rest.split_once(':').ok_or_else(|| unknown_row(row))?;
+            let i = scan
+                .archived
+                .iter()
+                .position(|s| session_agent_id(s.agent) == agent && s.id == id)
+                .ok_or_else(|| unknown_row(row))?;
+            if let Some(why) = &scan.archived[i].blocked {
+                return Err(why.clone());
+            }
+            let on = self.sel_sessions.get(i).copied().unwrap_or(false);
+            *self.sel_sessions.get_mut(i).ok_or_else(|| unknown_row(row))? = !on;
+        } else {
+            return Err(unknown_row(row));
+        }
+        Ok(())
+    }
+
+    /// «All» / «None» of the open list: the rows the table lets you tick.
+    pub fn select_all(&mut self, on: bool) -> Result<(), String> {
+        self.editable()?;
+        let scan = self.analysis()?;
+        match self.section {
+            Section::Projects => select_all_artifacts(&scan.projects, &mut self.sel_artifacts, on),
+            Section::Worktrees => select_reports(&scan.worktrees, &mut self.sel_worktrees, on),
+            Section::Sessions => select_sessions(&scan.archived, &mut self.sel_sessions, on),
+        }
+        Ok(())
+    }
+
+    pub fn set_inactive_days(&mut self, days: u32) -> Result<(), String> {
+        self.editable()?;
+        self.settings.inactive_days = days.clamp(1, 365);
+        self.save();
+        Ok(())
+    }
+
+    pub fn set_remove_mode(&mut self, mode: RemoveMode) -> Result<(), String> {
+        self.editable()?;
+        self.settings.remove_mode = mode;
+        self.save();
+        Ok(())
+    }
+
+    pub fn set_scan_roots(&mut self, on: bool) -> Result<(), String> {
+        self.editable()?;
+        self.settings.scan_roots = on;
+        self.save();
+        Ok(())
+    }
+
+    /// The folder highlighted in the list of extra folders (`None`: none).
+    pub fn select_root(&mut self, index: Option<usize>) -> Result<(), String> {
+        self.editable()?;
+        if index.is_some_and(|i| i >= self.settings.roots.len()) {
+            return Err(NO_ROOT_SELECTED.into());
+        }
+        self.root_sel = index;
+        Ok(())
+    }
+
+    /// A folder to analyze too (chosen in the picker, in Rust). One already there, by `path_key`,
+    /// is ignored.
+    pub fn add_root(&mut self, dir: PathBuf) -> Result<(), String> {
+        self.editable()?;
+        if !self.settings.roots.iter().any(|r| path_key(r) == path_key(&dir)) {
+            self.settings.roots.push(dir);
+            self.save();
+        }
+        Ok(())
+    }
+
+    /// Takes the highlighted folder out of the list.
+    pub fn remove_root(&mut self) -> Result<(), String> {
+        self.editable()?;
+        match self.root_sel {
+            Some(i) if i < self.settings.roots.len() => {
+                self.settings.roots.remove(i);
+                self.root_sel = None;
+                self.save();
+                Ok(())
+            }
+            _ => Err(NO_ROOT_SELECTED.into()),
+        }
+    }
+
+    pub fn analyze(&mut self, notifier: SharedNotifier, admin: bool) -> Result<(), String> {
+        self.editable()?;
+        self.start_scan(notifier, admin);
+        Ok(())
+    }
+
+    /// «Clean N …»: opens the confirmation for the visible list, or says why not. An analysis
+    /// older than `xiox_app::MAX_SCAN_AGE_MS` opens nothing and puts [`STALE_SCAN`] in `notice`.
+    pub fn request_clean(&mut self) -> Result<(), String> {
+        self.editable()?;
+        if !self.can_clean() {
+            return Err(NOTHING_SELECTED.into());
+        }
+        self.open_confirm();
+        Ok(())
+    }
+
+    /// The «I have read the warnings» box of the open confirmation.
+    pub fn set_ack(&mut self, on: bool) -> Result<(), String> {
+        self.idle()?;
+        let c = self.confirm.as_mut().ok_or_else(|| NO_DIALOG.to_string())?;
+        if c.cautions.is_empty() {
+            return Err(NO_WARNINGS.into());
+        }
+        c.ack = on;
+        Ok(())
+    }
+
+    /// The confirmation, if it can run now: open, ready (the warnings read, a plan that built),
+    /// and `permanent` is the button it shows («Permanently» only when the Recycle Bin is too
+    /// small, and then it is the only one). A confirmation that is not ready stays open.
+    /// `Ok(None)`: the analysis is too old at `now_ms`; the dialog is closed and [`STALE_SCAN`]
+    /// is on screen. `Some` goes to `start_clean`.
+    pub fn take_ready_confirm(&mut self, permanent: bool, now_ms: i64) -> Result<Option<Confirm>, String> {
+        self.idle()?;
+        let c = self.confirm.as_mut().ok_or_else(|| NO_DIALOG.to_string())?;
+        if c.error.is_some() || c.rows.is_empty() {
+            return Err(NOTHING_TO_RUN.into());
+        }
+        if !confirm_ready(c) {
+            return Err(NOT_READY.into());
+        }
+        let offered = !c.shortfall.is_empty();
+        if permanent != offered {
+            return Err(if offered { PERMANENT_ONLY } else { PERMANENT_NOT_OFFERED }.into());
+        }
+        if permanent {
+            if let Err(e) = make_permanent(c) {
+                c.error = Some(e.clone());
+                return Err(e);
+            }
+        }
+        let c = self.confirm.take().ok_or_else(|| NO_DIALOG.to_string())?;
+        Ok(self.accept_confirm(c, now_ms))
+    }
+
+    /// «Clean» / «Permanently» in the confirmation: runs it, at the current time.
+    pub fn confirm(&mut self, notifier: SharedNotifier, permanent: bool) -> Result<(), String> {
+        if let Some(c) = self.take_ready_confirm(permanent, xiox_app::now_ms())? {
+            self.start_clean(notifier, c);
+        }
+        Ok(())
+    }
+
+    /// «Cancel» in the confirmation (and Esc): nothing runs.
+    pub fn close_confirm(&mut self) {
+        self.confirm = None;
+    }
+
+    /// «Cancel» during a cleanup of folders or worktrees: the workers stop before the next item.
+    /// The cleanup then ends with a report of what was done (`cancelled`), never with the old
+    /// analysis back. An analysis, or a cleanup of sessions only, has nothing to stop.
+    pub fn cancel(&mut self) -> Result<(), String> {
+        if !self.busy() || self.cancel.is_none() {
+            return Err(NOTHING_TO_CANCEL.into());
+        }
+        self.cancel_clean();
+        Ok(())
+    }
+
+    /// The text of «Save as text…»: the report, when the cleanup is over and did something.
+    pub fn report_text(&self) -> Option<String> {
+        if self.busy() {
+            return None;
+        }
+        self.cleaned.as_ref().filter(|c| !c.is_empty()).map(|c| c.report.to_text())
+    }
+
+    /// The outcome of «Save as text…» (the dialog is Rust's): what the report shows.
+    pub fn set_saved(&mut self, text: String, ok: bool) {
+        self.saved = Some((text, ok));
+    }
+}
+
+fn unknown_row(row: &str) -> String {
+    format!("“{row}” is not a row that can be chosen.")
+}
+
+/// The agent as it appears in a row id: `claude` | `codex` | `opencode` | `pi`.
+pub fn session_agent_id(a: Agent) -> &'static str {
+    match a {
+        Agent::Claude => "claude",
+        Agent::Codex => "codex",
+        Agent::Opencode => "opencode",
+        Agent::Pi => "pi",
+    }
+}
+
+/// Il thread dell'analisi (il lavoro vero di `DevWorkers::REAL`). `outbox` avvisa la UI a ogni
+/// messaggio e, alla fine o in caso di panico, chiudendosi.
+pub fn real_scan(settings: Settings, admin: bool, outbox: Outbox<DevMsg>) {
+    let step = |t: &str, p: f32| outbox.send(DevMsg::Step(t.to_string(), p));
+    let scan = xiox_app::run_scan(&settings, admin, &step);
+    outbox.send(DevMsg::Scanned(scan));
+}
+
+/// Il thread della pulizia (il lavoro vero di `DevWorkers::REAL`): cartelle e worktree con
+/// `xiox_app::execute_plan`, poi le sessioni riverificate e cancellate. Un panico non perde gli
+/// esiti già raccolti (`guarded`).
+pub fn real_clean(job: DevCleanJob, outbox: Outbox<DevMsg>) {
+    let DevCleanJob { scan, plan, sessions, mode, plan_labels, session_labels, cancel } = job;
+    let step = |t: &str, p: f32| outbox.send(DevMsg::Step(t.to_string(), p));
+    let tick = |t: Tick| outbox.send(DevMsg::Tick(t));
+    let mut out = DevCleaned::new();
+    out.labels = plan_labels;
+    guarded(&mut out, |out| {
+        if let Some(plan) = &plan {
+            step("Eliminazione di cartelle e worktree…", 0.1);
+            match xiox_app::execute_plan(&scan, plan, &tick, &cancel) {
+                Ok(res) => merge_report(&mut out.report, xiox_app::report(&scan, plan, &res)),
+                Err(e) => out.errors.push(e),
+            }
+        }
+        if !sessions.is_empty() {
+            let started = Instant::now();
+            let label = |agent: Agent, id: &str| {
+                session_labels
+                    .get(&(agent, id.to_string()))
+                    .cloned()
+                    .unwrap_or_else(|| format!("{} · {id}", agent_label(agent)))
+            };
+            // L'analisi può avere ore: si cancella solo ciò che è ANCORA archiviato e libero.
+            step("Controllo delle sessioni archiviate…", 0.5);
+            match xiox_app::revalidate_archived(&scan, &sessions, &xiox_app::fresh_archived) {
+                Ok(checked) => {
+                    for o in checked.skipped {
+                        add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
+                    }
+                    if !checked.keep.is_empty() {
+                        step("Cancellazione delle sessioni archiviate…", 0.6);
+                        let cli = SystemCli::locate();
+                        match xiox_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
+                            Ok(done) => {
+                                for o in done {
+                                    add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
+                                }
+                            }
+                            Err(e) => out.errors.push(e),
+                        }
+                    }
+                }
+                Err(e) => out.errors.push(e),
+            }
+            out.report.elapsed_ms = out.report.elapsed_ms.saturating_add(started.elapsed().as_millis() as u64);
+        }
+    });
+    drop(scan);
+    outbox.send(DevMsg::Cleaned(out));
 }
 
 /// Il modo che il pulsante applica: con il Cestino troppo piccolo c'è solo «Definitiva».

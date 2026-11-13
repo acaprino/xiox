@@ -18,4 +18,5 @@ pub mod services;
 pub mod sys;
 pub mod sysclean;
 pub mod winold;
+pub mod view;
 pub mod wipe;
