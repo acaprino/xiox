@@ -126,7 +126,7 @@ ones, so not `node_modules`, and never the personal-data ones) or `--include <pa
 (`git worktree list`), wherever they are on disk. A worktree is `recommended` when it is clean
 and its HEAD commit is also contained in a remote branch or in a local branch other than the
 one checked out there, so no commit can be lost. Otherwise it is blocked (see the table
-below). A registered worktree whose folder no longer exists is not an item: it appears as a
+below); so it is when an agent session is open in it. A registered worktree whose folder no longer exists is not an item: it appears as a
 `note:` ("git still lists a worktree whose folder is gone"), and `git worktree prune` clears
 it. Selected with `--worktrees` or `--include <path>`.
 
@@ -137,21 +137,33 @@ identity as the project: they share at least one root (first) commit with it, or
 called. A fork has the same identity too, so a copy is **always `caution`**. The listing says
 whether the copy has work of its own:
 
-- `no own work`: it is clean, and its HEAD and every local branch tip exist in the project's
-  repository;
-- `has own work`, shown as blocked (`unsaved-work`): it has uncommitted changes or a commit the
-  project's repository does not have. **It cannot be removed, not even with `--include`.**
-- `own work not checked`: git could not tell. Such a copy is not blocked: look at it yourself
-  before you name it.
+- `no own work`: it is clean, and its HEAD, every local branch, every tag and every stash
+  entry is a commit that some branch, tag or remote branch of the project's repository
+  reaches (not merely a commit that the project's object store still holds, for example after
+  a deleted branch);
+- `has own work`, shown as blocked (`unsaved-work`): it has uncommitted changes, or a commit
+  (on a branch, a tag, a stash or HEAD) that the project's repository does not reach.
+  **It cannot be removed, not even with `--include`.**
+- `own work not checked`, shown as blocked (`unsaved-work-unknown`): git could not tell (it
+  cannot read the repository, or gave no answer). **It cannot be removed, not even with
+  `--include`**: when in doubt, `xiox` refuses.
 
-A folder inside the project, inside another git repository, or containing the project is
-never listed. Copies can only be removed with `--include <path>`, one folder at a time.
+A copy with an agent session open in it (a live session whose working folder is inside the
+copy) is blocked too (`live-session`). A folder inside the project, inside another git
+repository, or containing the project is never listed. Copies can only be removed with
+`--include <path>`, one folder at a time.
 
 **`named`: folders named like the project.** Folders outside the project whose name is the
 project name followed by `-`, `_`, `.` or a space and at least one more character
 (case-insensitive): `sampleapp-bench`, `sampleapp_tmp`. Nothing but the name links them to the
 project, so they are **always `caution`** ("matched by name only"). They are never taken by a
 category flag, only by `--include <path>`.
+
+A named folder is blocked when an agent session is open inside it (`live-session`), and when it
+is, or holds, a git repository that git cannot read (`unsaved-work-unknown`: nothing can show
+that it has no unsaved work), or when it is itself a repository with uncommitted changes or
+commits that no remote branch has (`unsaved-work`). A named folder that holds a git repository is
+also checked again when it is removed: see [Safety](#safety).
 
 **`logs`: log and temporary files.** Files (not folders) ending in `.log`, `.tmp`, `.bak` or
 `.dmp`, at least 1 MiB, inside the project and its worktrees (not inside a build folder that is
@@ -188,12 +200,13 @@ description; in JSON the `blocked` array holds the value of the first column.
 
 | JSON value | Listing text | Applies to |
 |---|---|---|
-| `live-session` | an agent session is open | builds, worktrees |
+| `live-session` | an agent session is open | builds, worktrees, copies, named folders |
 | `dirty-git` | uncommitted changes (also when git cannot tell) | worktrees |
 | `unpushed-commits` | commits not kept anywhere else (also when git cannot tell) | worktrees |
 | `unreachable` | could not be checked | builds |
 | `session-locked` | session locked by its harness | sessions |
-| `unsaved-work` | has commits or changes the project does not have | copies |
+| `unsaved-work` | has commits or changes the project does not have | copies, named folders that are repositories |
+| `unsaved-work-unknown` | could not be checked for unsaved work | copies, named folders that are or hold a repository |
 | `unknown` | unknown reason | reserved: the current version never produces it |
 
 **Top-level folders.** A folder directly under a drive or share root (such as `D:\sampleapp-old`)
@@ -234,7 +247,10 @@ Reading the output (see the example above):
 - `note:` lines, if any: the project is not a git repository; git was not found; the project
   name is too short to match folders by name; some drives were searched only to 3 levels;
   a registered worktree is gone; the analysis reported warnings and the listing may be
-  incomplete.
+  incomplete; the session listing of this PC could not be read (a live agent session may be
+  missed; `clean` then leaves worktrees, copies and named folders alone); git could not list the
+  files of the project or of a worktree (its log files are not in the listing); the folder is a
+  drive root, your user profile or holds several projects (see `clean`).
 - `Total <all> · recommended <n>`: the sum of everything listed, and of the recommended,
   unblocked, removable items. Then the `Clean with:` command. If nothing is found the output
   ends with `Nothing found for this project.`
@@ -274,6 +290,18 @@ listing and `Nothing selected. Name what to clean: --builds --worktrees --logs -
 | `--json` | One JSON object on stdout, see [JSON](#json). |
 | `--no-drives` | As for `analyze`. |
 
+**One project per run.** The category flags (`--builds`, `--worktrees`, `--logs`, `--sessions`)
+are refused, with exit code 2, when the folder is a drive root, your user profile or a folder
+above it, or is not a git repository and holds more than one repository (or more than one
+project) below it. Otherwise they would take the builds and the archived sessions of every
+project under it. `analyze` still works and prints a `note:`; `--include <path>` of one listed
+item still works:
+
+```text
+> xiox clean D:\Projects --builds --yes
+error: refusing to clean everything under D:\Projects: run it on one project
+```
+
 There are no `--copies` or `--named` flags, on purpose: copies and name-matched folders are
 never taken as a group. Name each folder with `--include`:
 
@@ -292,8 +320,9 @@ Usage:
 
 **What `--include` accepts.** A path that appears in the listing (absolute, or relative to the
 current folder; case does not matter). A path the analysis did not produce is an error, not a
-deletion. A blocked item is refused with its reason. When any part of a request is refused,
-nothing at all is removed (exit code 2):
+deletion. A blocked item is refused with its reason, and so is a folder that holds a blocked item
+(removing the folder would remove it). When any part of a request is refused, nothing at all
+is removed (exit code 2):
 
 ```text
 > xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-experiment --yes
@@ -304,6 +333,9 @@ error: cannot be removed (uncommitted changes): C:\Users\alice\AppData\Local\Tem
 
 > xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\nothing --yes
 error: not found in the analysis of this project: C:\Users\alice\AppData\Local\Temp\w\nothing
+
+> xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-old --yes
+error: cannot be removed: it holds C:\Users\alice\AppData\Local\Temp\w\sampleapp-old\copy (has commits or changes the project does not have): C:\Users\alice\AppData\Local\Temp\w\sampleapp-old
 ```
 
 ### Summary, confirmation and `--yes`
@@ -316,6 +348,9 @@ and a warning for a Recycle Bin that is too small. Then it asks a question of th
 ```text
 Remove 2 items (12 MB)? [y/N]
 ```
+
+When worktrees are chosen without `--permanent` the question also says that they go for good:
+`Remove 2 items (12 MB; worktrees are removed by git for good, not to the Recycle Bin)? [y/N]`.
 
 Only `y` or `yes` (any case) confirms. Anything else, an empty line or the end of the input is
 a no: `Cancelled.` is printed, nothing is removed, and the exit code is 0.
@@ -612,7 +647,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 | `project.root` | string | Main working tree (or the folder itself). |
 | `project.name` | string | Last component of `root`. |
 | `project.isRepo` | bool | Is it a git repository. |
-| `project.origin` | string or null | `remote.origin.url` as git has it. |
+| `project.origin` | string or null | `remote.origin.url` without the credentials of its authority (`user:token@` is dropped). |
 | `project.worktrees` | string[] | Existing linked worktrees. |
 | `items[]` | array | The listing, ordered by category, then size descending. |
 | `items[].key` | string | Stable id: the lower-cased normalized path; `session:<agent>:<id>` for sessions. |
@@ -624,7 +659,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 | `items[].why` | object | `type` is `catalog-folder` (`labelEn`), `linked-worktree` (`branch`, `head`; either may be null), `same-repository` (`sharedRootCommit`, `sameOrigin`, `hasOwnWork`: true, false or null), `name-only`, `log-file` (`ignored`) or `archived-session` (`agent`, `title`). |
 | `items[].target` | object | What removal means: `type` is `dir` (`kind`, e.g. `rust-target`, `node-modules`, `project-folder`), `file`, `worktree` (`repo`: where `git worktree remove` runs) or `session` (`agent`, `id`). |
 | `branches[]` | array | `name`, `merged`, `worktreeMissing`. Information only. |
-| `notes[]` | array | `type` is one of `not-a-repository`, `git-missing`, `name-too-short`, `walk-may-miss-deep-folders`, `prunable-worktree` (with `path`), `engine-warning`. |
+| `notes[]` | array | `type` is one of `not-a-repository`, `git-missing`, `name-too-short`, `walk-may-miss-deep-folders`, `prunable-worktree` (with `path`), `engine-warning`, `sessions-not-read`, `logs-not-checked`, `container-root`. |
 | `search` | string | `mft-index`, `bounded-walk` or `parent-only`. |
 | `scannedAtMs`, `elapsedMs` | number | Unix time of the analysis in milliseconds; how long it took. |
 
@@ -720,7 +755,10 @@ You can call `xiox` as a tool. A safe routine:
    look at what is left on the PC: build folders, worktrees you created, logs, sessions.
 2. Report the items and their sizes to the user. Remove with category flags only when the user
    agrees: `xiox clean <project> --builds --worktrees --logs --yes --json`, after a `--dry-run`
-   if in doubt. The recommended items are the ones that cannot lose anything.
+   if in doubt. A `recommended` item is one that regenerates or has no commit to lose, but
+   removing it still deletes files git does not keep: a removed worktree takes its ignored
+   files with it (`.env`, local databases, editor settings), and an ignored `*.bak` file is
+   recommended too. Look at the listing before you remove.
 3. **Never pass `--include` for a `caution` item** (a copy, a name-matched folder, a build folder
    or log that git tracks) **without asking the user**, and never use `--permanent` unless the
    user asked for it. Do not try to get around a `blocked` item: it is blocked because removing
@@ -733,7 +771,8 @@ You can call `xiox` as a tool. A safe routine:
 `xiox` never removes:
 
 - **a blocked item** (open agent session, uncommitted changes, commits that exist nowhere else,
-  a copy with unsaved work, a locked session), not even with `--include`;
+  a copy with unsaved work or whose work could not be checked, a locked session), not even with
+  `--include`; and not a folder that holds one, listed or not (see below);
 - **anything that is not in the analysis**: `--include` takes only paths the listing shows. The
   project's own folder, and any folder that is, contains or overlaps the project or one of its
   worktrees, are refused;
@@ -749,9 +788,22 @@ You can call `xiox` as a tool. A safe routine:
 the same category, unblocked and not more suspect than before (an item that now needs a manual
 review, or a copy that gained commits or changes, is skipped). The item that is removed is the
 fresh one, and a folder is checked once more right before it goes (still there, still a real
-folder and not a link, not overlapping the project). An item that no longer passes is reported
+folder and not a link, not overlapping the project, and with nothing in it that is blocked).
+A copy must have a fresh, positive answer that it has no work of its own; no answer is a refusal.
+A chosen worktree, copy or named folder is also left alone when the session listing of this PC
+cannot be read now (`the sessions of this PC could not be read, so a live agent session cannot
+be ruled out`). An item that no longer passes is reported
 as `skipped` with the reason (`no longer there`, `now blocked: uncommitted changes`, `now has
 commits or changes the project does not have`, ...). A dry run makes the same checks.
+
+**What is inside a folder.** Removing a folder removes everything in it, so a folder is skipped
+when it holds the project or one of its worktrees, an item the analysis lists as blocked, or
+(for a build folder) a worktree, copy or named folder of its own. A copy or a named folder is
+also skipped when it holds a git repository that the fresh analysis does not list as removable:
+the search is bounded (three levels, one level with `--no-drives`), so a repository it did not
+list cannot be vouched for. The reason is `it holds the git repository <path>, which is not
+listed as removable`. A named folder that holds a copy with unsaved work is refused by
+`--include` before anything runs.
 
 ## Limits
 
@@ -769,10 +821,14 @@ commits or changes the project does not have`, ...). A dry run makes the same ch
   (they would attribute other people's folders to the project). Copies are still found, by
   repository identity. The listing says so in a `note:`.
 - **Branches are listed only.** `xiox` has no way to delete a branch.
-- **One project per run.** There is no `--all`.
+- **One project per run.** There is no `--all`, and the category flags refuse a drive root, your
+  user profile or a folder with several projects (`--include <path>` still works there).
 - Log files need a git repository: a folder that is not a repository has only `builds`,
   `named` and `sessions`.
 - There is no search by file content, only git identity and folder name.
+- A build folder that carries a blocked status of the analysis (a project in a dirty or
+  unpushed agent worktree) is not turned into a block: the listing marks the builds of a
+  project with an open session (`live-session`) and of an unreachable one (`unreachable`) only.
 - `--include` cannot name a session: sessions are taken together with `--sessions`.
 
 ## Troubleshooting
@@ -785,6 +841,16 @@ folders, name-matched folders and sessions.
 The folder you gave is not inside a git repository. Pass the project's folder, or run `xiox`
 from inside it. A folder that is not a repository is still a project: its build folders,
 name-matched folders and sessions are listed.
+
+**`error: refusing to clean everything under <folder>: run it on one project`** (exit code 2).
+The folder is a drive root, your user profile (or a folder above it) or holds several
+projects, and a category flag would take the builds and sessions of all of them. Pass the one
+project's folder, or name items with `--include <path>`.
+
+**`note: the sessions of this PC could not be read ...`.** The list of agent sessions could not
+be read, so an open session cannot be ruled out. `analyze` shows it; `clean` skips worktrees,
+copies and named folders (reason `the sessions of this PC could not be read, so a live agent
+session cannot be ruled out`) until a run can read them.
 
 **`error: path not found: ...` or `error: not a directory: ...`** (exit code 1). Check the path;
 it must be a folder. Quote paths that contain spaces.

@@ -264,3 +264,68 @@ Limiti noti e rinvii (dal registro `.superpowers/sdd/2026-11-13-project-cleanup-
   resoconto va su stderr; una pipe chiusa da sola non è un errore.
 - Minori di stile: due punti da `cargo fmt` (`dc-project/src/tests/clean.rs`, un test di
   `render.rs`).
+
+### Dopo la review finale
+
+La review dell'intero ramo (`e95e931..88784c7`) ha trovato un difetto critico e otto importanti;
+una sola ondata di correzioni li ha chiusi, con i minori che toccavano la sicurezza. Cosa è cambiato:
+
+- **Una cartella con dentro una voce bloccata non si cancella.** `--include` di una cartella
+  `named` che conteneva una copia con commit propri (listata e bloccata) cancellava anche la
+  copia: `select` guardava solo i blocchi della voce nominata. Ora `select` rifiuta (uscita 2)
+  una voce che ne contiene una bloccata, e la riconvalida (`check_contents`) salta la cartella
+  se ne contiene una bloccata o un repository git che l'analisi fresca non elenca come
+  rimovibile (la ricerca è limitata: tre livelli, uno con `--no-drives`). Una cartella `named`
+  con dentro una copia pulita e listata si toglie ancora con tutto il suo contenuto. Ogni cartella
+  di catalogo non può contenere il progetto, un worktree, una copia o una cartella `named`.
+- **Copie e cartelle `named` hanno il blocco `live-session`** (una sessione viva con cartella di
+  lavoro dentro la voce), come i worktree.
+- **Il controllo del lavoro proprio** considera HEAD, branch locali, tag e ogni voce di stash, e
+  usa la raggiungibilità (`git rev-list -n1 --missing=print <punte> --not --all` nel progetto),
+  non l'esistenza dell'oggetto: un commit che il progetto ha solo come oggetto penzolante (branch
+  cancellato) è lavoro della copia. Tutte le chiamate git passano da `dc_git` (timeout, ambiente
+  pulito); la copia privata del comando in `search.rs` è sparita.
+- **Repository illeggibili.** Una cartella `named` che è o contiene un repository che git non sa
+  leggere è bloccata (`unsaved-work-unknown`, nuovo); lo stesso una copia il cui lavoro proprio
+  non si può verificare (prima restava rimovibile). Un repository indipendente con il nome del
+  progetto è bloccato se ha modifiche o commit che nessun remoto ha (`unsaved-work`). In
+  riconvalida, per una copia serve la risposta positiva «nessun lavoro proprio»: nessuna risposta
+  è un rifiuto.
+- **Cartelle che contengono molti progetti.** Le bandiere di categoria (`--builds`, `--worktrees`,
+  `--logs`, `--sessions`) sono rifiutate con uscita 2 («refusing to clean everything under
+  <root>: run it on one project») quando la radice è la radice di un disco, la cartella del
+  profilo utente o una sopra di essa (anche se è un repository: un repo di dotfile in `~`), oppure
+  non è un repository e contiene più di un repository git o più di una radice di progetto del
+  motore. Il conteggio è limitato: tre livelli, 2.000 cartelle, nessun link seguito, nessun
+  repository attraversato, si ferma a due. `analyze` funziona e stampa una nota; `--include` di un
+  percorso esplicito funziona.
+- **Sessioni illeggibili.** Un elenco di sessioni vivo che non restituisce nulla e si lamenta è una
+  nota (`sessions-not-read`) e `clean` salta worktree, copie e cartelle `named` («the sessions of
+  this PC could not be read, so a live agent session cannot be ruled out»); i log che git non sa
+  elencare sono una nota (`logs-not-checked`).
+- **Testo inglese.** L'errore del Cestino (`Os { code, description }` del crate `trash`, con la
+  descrizione nella lingua di Windows) e gli errori di scrittura su stdout si riducono al codice
+  OS.
+- Minori: le credenziali di `remote.origin.url` non arrivano più al JSON; la domanda `y/N` dice che
+  i worktree vanno via per sempre; una sola dicitura per i blocchi (`Block::reason`); la guida non
+  dice più che il `recommended` «non può perdere nulla» (git cancella i file ignorati di un
+  worktree rimosso, e un `*.bak` ignorato è `recommended`); i test non ereditano più
+  `GIT_DIR`/`GIT_WORK_TREE` (fixture di `dc-project`, `dc-git`, `xiox`).
+
+Scostamenti registrati: (1) `checked_plan` (righe 163-164) non c'è: il codice la sostituisce con
+una lista di ammissione costruita dall'analisi fresca (`Run::remove` rilegge il progetto e
+rimuove solo la voce fresca); con essa si perde il rifiuto per lo stato `Blocked` del motore (un
+build in un worktree di agente sporco o non pushato non è bloccato). È noto e vale solo per i
+`builds`. (2) Il rifiuto delle bandiere sui contenitori e lo stato «non so» come blocco vanno
+oltre la spec e sono scelte di sicurezza.
+
+Rinviati (elenco «può aspettare» della review): `stale_branches` sui worktree vivi e nomi con
+caratteri strani, marcatore `top-level` nel JSON e solo la regola di profondità, BrokenPipe dopo
+una rimozione, costo di `ls-files` e `inside_other_repo`, righe di test e di testo minori, un
+clone vendorizzato non elencato. I due punti di `cargo fmt` sono corretti; il resto del
+workspace non è formattato con `cargo fmt` e non è stato toccato.
+
+Sostituiti da questa sezione: il limite «`has_own_work` sconosciuto lascia la copia non
+bloccata» e «i log ignorati spariscono senza una nota».
+
+Test dopo le correzioni: `cargo test -j 1 --workspace --exclude mukade` = 991 passati, 0 falliti, 20 ignorati (prima 941; `dc-git` 42, `dc-project` 107, `xiox-cli` 39 unitari + 22 sul binario).
