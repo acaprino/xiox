@@ -14,6 +14,8 @@ mod testdata;
 
 fn main() {
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
-    let code = run::run(&args, &mut std::io::stdout().lock(), &mut std::io::stderr().lock());
+    // stderr is not locked for the whole run: a worker thread (or the panic hook) that writes to it
+    // while the main thread holds the lock would wait for ever. Each write locks it briefly.
+    let code = run::run(&args, &mut std::io::stdout().lock(), &mut std::io::stderr());
     std::process::exit(code);
 }

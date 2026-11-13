@@ -12,7 +12,6 @@ use crate::run::{EXIT_ERROR, write_result};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 use xiox_observer::{Observer, Params};
 
 /// The newest protocol revision the server speaks; the others it accepts are echoed back.
@@ -63,11 +62,6 @@ fn tool_error(message: &str) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
 }
 
-/// How long one `tools/call` waits for the baseline before telling the agent to ask again. The
-/// baseline itself is bounded (every measure has caps); this only keeps a call from hanging if the
-/// analysis does.
-const BASELINE_WAIT: Duration = Duration::from_secs(120);
-
 /// The snapshot the process took at its start, on a worker thread, so that the protocol answers
 /// (initialize, ping, tools/list) do not wait for it.
 enum Baseline {
@@ -82,7 +76,6 @@ struct Server {
     baseline: Baseline,
     params: Params,
     deps: Arc<Deps>,
-    wait: Duration,
 }
 
 impl Server {
@@ -178,7 +171,7 @@ impl Server {
     /// with. A failed or dead baseline is tried again here, synchronously.
     fn observer(&mut self, err: &mut dyn Write) -> Result<&mut Observer, Value> {
         if let Baseline::Pending(rx) = &self.baseline {
-            match rx.recv_timeout(self.wait) {
+            match rx.recv_timeout(self.deps.baseline_wait) {
                 Ok(Ok(observer)) => self.baseline = Baseline::Ready(observer),
                 Ok(Err(message)) => {
                     let _ = writeln!(err, "error: {message} (the next tools/call tries again)");
@@ -273,7 +266,13 @@ pub fn serve(
         std::thread::Builder::new()
             .name("xiox-mcp-baseline".into())
             .spawn(move || {
-                let _ = tx.send(start(&deps, params));
+                // A panic becomes an `Err` on the channel (the hook has already told stderr).
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start(&deps, params)))
+                        .unwrap_or_else(|_| {
+                            Err("the first analysis stopped on an internal error".to_string())
+                        });
+                let _ = tx.send(result);
             })
     };
     let baseline = match worker {
@@ -294,7 +293,6 @@ pub fn serve(
         baseline,
         params,
         deps,
-        wait: BASELINE_WAIT,
     };
     loop {
         let answer = match read_capped_line(&mut input, MAX_LINE_BYTES) {
@@ -1006,5 +1004,169 @@ mod tests {
             "{report}"
         );
         assert_eq!(report["stale"], false);
+    }
+
+    fn scripted(messages: &[Value], before: impl FnMut(usize) + 'static) -> Scripted {
+        Scripted {
+            lines: messages
+                .iter()
+                .map(|m| format!("{m}\n").into_bytes())
+                .collect(),
+            next: 0,
+            current: Vec::new(),
+            pos: 0,
+            before: Box::new(before),
+        }
+    }
+
+    /// Fake dependencies whose baseline analysis (the first call) waits for `open` to be sent
+    /// (or for 30 s, so that a failing test ends).
+    fn gated_deps(
+        script: Vec<Result<ProjectScan, String>>,
+        wait: Duration,
+    ) -> (Deps, std::sync::mpsc::Sender<()>) {
+        let (open, gate) = std::sync::mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let mut d = deps(script, move |n| {
+            if n == 0 {
+                let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(30));
+            }
+        });
+        d.baseline_wait = wait;
+        (d, open)
+    }
+
+    fn parse(raw: &[u8]) -> Vec<Value> {
+        String::from_utf8_lossy(raw)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_call_that_waits_too_long_for_the_baseline_gets_an_actionable_error_and_a_later_call_succeeds()
+     {
+        let (d, open) = gated_deps(
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("mukade-wt")])),
+            ],
+            Duration::from_millis(100),
+        );
+        let out = Shared::default();
+        let input = scripted(&[call(1), call(2)], move |n| {
+            if n == 1 {
+                // The baseline finishes between the two calls.
+                open.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        });
+        let mut err = Vec::new();
+        let code = serve(
+            Params::default(),
+            input,
+            &mut out.clone(),
+            &mut err,
+            Arc::new(d),
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        let replies = parse(&out.0.lock().unwrap());
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["result"]["isError"], true, "{}", replies[0]);
+        let text = replies[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("still running") && text.contains("again"),
+            "{text}"
+        );
+        let report = report_of(&replies[1]);
+        let items = report["items"].as_array().unwrap();
+        assert!(
+            items
+                .iter()
+                .any(|i| i["category"] == "builds" && i["new"] == false),
+            "{report}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i["category"] == "worktrees" && i["new"] == true),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn a_dead_baseline_worker_falls_back_to_a_fresh_analysis_on_the_next_call() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx); // the worker is gone without having said anything
+        let mut server = Server {
+            baseline: Baseline::Pending(rx),
+            params: Params::default(),
+            deps: Arc::new(deps(one_build(), |_| {})),
+        };
+        let mut err = Vec::new();
+        let reply = server
+            .handle(format!("{}", call(1)).as_bytes(), &mut err)
+            .unwrap();
+        assert_eq!(
+            report_of(&reply)["items"][0]["category"],
+            "builds",
+            "{reply}"
+        );
+        let err = String::from_utf8_lossy(&err);
+        assert!(err.contains("stopped unexpectedly"), "{err}");
+    }
+
+    #[test]
+    fn eof_while_the_baseline_is_still_blocked_ends_the_server_at_once() {
+        let (d, open) = gated_deps(one_build(), Duration::from_secs(30));
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let started = std::time::Instant::now();
+        let code = serve(
+            Params::default(),
+            Cursor::new(Vec::new()),
+            &mut out,
+            &mut err,
+            Arc::new(d),
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(out.is_empty());
+        drop(open);
+    }
+
+    #[test]
+    fn a_panic_on_the_baseline_worker_falls_back_even_when_another_thread_holds_the_stderr_lock() {
+        // The real binary used to hold `stderr().lock()` for its whole life: the panic hook of the
+        // worker then waited for that lock before unwinding, the channel never closed and every
+        // call waited for the whole bound.
+        let _hook = project_panic_hook();
+        let _stderr = std::io::stderr().lock();
+        let mut d = deps(one_build(), |n| {
+            if n == 0 {
+                panic!("baseline boom");
+            }
+        });
+        d.baseline_wait = Duration::from_secs(8);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let started = std::time::Instant::now();
+        let input = Cursor::new(format!("{}\n", call(1)).into_bytes());
+        let code = serve(Params::default(), input, &mut out, &mut err, Arc::new(d));
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "{:?}",
+            started.elapsed()
+        );
+        let replies = parse(&out);
+        assert_eq!(
+            report_of(&replies[0])["items"][0]["category"],
+            "builds",
+            "{}",
+            replies[0]
+        );
     }
 }

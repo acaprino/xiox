@@ -49,7 +49,13 @@ pub struct Deps {
     pub measure: Box<dyn Fn(&Path) -> Option<u64> + Send + Sync>,
     pub now_ms: Box<dyn Fn() -> i64 + Send + Sync>,
     pub interval: Duration,
+    /// How long one MCP `tools/call` waits for the baseline before telling the agent to ask again.
+    pub baseline_wait: Duration,
 }
+
+/// The default of `Deps::baseline_wait`: well under the shortest client tool timeout, so that the
+/// "still running, call again" answer reaches the client.
+pub const BASELINE_WAIT: Duration = Duration::from_secs(30);
 
 impl Deps {
     /// The real PC (or the test switches' fake world in debug builds). In debug builds
@@ -75,6 +81,7 @@ impl Deps {
             measure: Box::new(|p| measure_bytes(p, MEASURE_MAX_ENTRIES, MEASURE_MAX_TIME)),
             now_ms: Box::new(|| chrono::Utc::now().timestamp_millis()),
             interval,
+            baseline_wait: BASELINE_WAIT,
         }
     }
 }
@@ -121,14 +128,39 @@ pub fn check(observer: &mut Observer, deps: &Deps) -> Result<Vec<Event>, String>
     Ok(observer.update(scan, (deps.now_ms)()))
 }
 
+/// How long the panic hook waits for its message to be written before the panicking thread goes on.
+const PANIC_REPORT_WAIT: Duration = Duration::from_millis(250);
+
 /// A panic is told on stderr only (the default hook does the same, this one says what it is) and
-/// the process ends with a non-zero code.
+/// the process ends with a non-zero code. The hook must never block its thread: it runs before the
+/// unwinding, so a thread stuck in it never drops what it owns (a channel's sender, say) and the
+/// threads waiting on that thread wait for ever. The message is therefore written by a helper
+/// thread, and the hook gives up after `PANIC_REPORT_WAIT` if somebody else holds the stderr lock.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let _ = writeln!(
-            std::io::stderr(),
-            "error: xiox observe stopped on an internal error: {info}"
+        let message = format!(
+            "error: xiox observe stopped on an internal error: {info}
+"
         );
+        let (done_tx, done_rx) = mpsc::channel();
+        let helper = {
+            let message = message.clone();
+            std::thread::Builder::new()
+                .name("xiox-panic-report".into())
+                .spawn(move || {
+                    let _ = std::io::stderr().write_all(message.as_bytes());
+                    let _ = done_tx.send(());
+                })
+        };
+        match helper {
+            Ok(_) => {
+                let _ = done_rx.recv_timeout(PANIC_REPORT_WAIT);
+            }
+            // No thread to spare: the message matters more than the risk of a held lock.
+            Err(_) => {
+                let _ = std::io::stderr().write_all(message.as_bytes());
+            }
+        }
     }));
 }
 
@@ -599,6 +631,38 @@ pub(crate) mod fakes {
             measure: Box::new(|_| Some(10 * MB)),
             now_ms: Box::new(move || clock.fetch_add(1000, Ordering::SeqCst) + 1000),
             interval: Duration::from_millis(15),
+            baseline_wait: Duration::from_secs(5),
+        }
+    }
+
+    /// Serializes the tests that replace the process-wide panic hook, and puts the previous hook
+    /// back when dropped.
+    pub(crate) struct PanicHook {
+        previous: Option<Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>>,
+        _serial: std::sync::MutexGuard<'static, ()>,
+    }
+
+    static PANIC_HOOK_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Installs the project's own panic hook (`install_panic_hook`) for one test.
+    pub(crate) fn project_panic_hook() -> PanicHook {
+        let serial = PANIC_HOOK_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::panic::take_hook();
+        super::install_panic_hook();
+        PanicHook {
+            previous: Some(previous),
+            _serial: serial,
+        }
+    }
+
+    impl Drop for PanicHook {
+        fn drop(&mut self) {
+            // `set_hook` aborts the process when called from a panicking thread (a failed assert).
+            if let Some(previous) = self.previous.take() {
+                if !std::thread::panicking() {
+                    std::panic::set_hook(previous);
+                }
+            }
         }
     }
 
@@ -768,6 +832,29 @@ mod tests {
                 .to_string()
                 .contains("a\u{2028}b\u{2029}c")
         }));
+    }
+
+    #[test]
+    fn a_panicking_stdin_reader_ends_the_loop_even_when_another_thread_holds_the_stderr_lock() {
+        // The real binary used to hold `stderr().lock()` for its whole life: the panic hook of the
+        // reader thread then waited for that lock before unwinding, the channel never closed and
+        // the loop waited for ever.
+        let _hook = project_panic_hook();
+        let _stderr = std::io::stderr().lock();
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
+        let (tx, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            let r = run_with(std::io::BufReader::new(BadStdin { panic: true }), &d);
+            let _ = tx.send((r.code, r.stderr));
+        });
+        let (code, stderr) = done
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the loop must end, not wait for the dead reader for ever");
+        assert_eq!(code, 1, "{stderr}");
+        assert!(stderr.contains("stdin reader stopped"), "{stderr}");
     }
 
     #[test]
