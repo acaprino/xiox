@@ -34,17 +34,20 @@ pub struct ObserveArgs {
 
 impl ObserveArgs {
     pub fn params(&self) -> Params {
-        Params { grow_threshold: self.grow_threshold, worktree_threshold: self.worktree_threshold }
+        Params {
+            grow_threshold: self.grow_threshold,
+            worktree_threshold: self.worktree_threshold,
+        }
     }
 }
 
 /// What the loop needs from the outside, so that tests can fake the disk and the clock.
 pub struct Deps {
     /// A light analysis of the project (no weights).
-    pub analyze: Box<dyn Fn() -> Result<ProjectScan, String>>,
+    pub analyze: Box<dyn Fn() -> Result<ProjectScan, String> + Send + Sync>,
     /// The size of one folder, bounded; `None` when it cannot be told.
-    pub measure: Box<dyn Fn(&Path) -> Option<u64>>,
-    pub now_ms: Box<dyn Fn() -> i64>,
+    pub measure: Box<dyn Fn(&Path) -> Option<u64> + Send + Sync>,
+    pub now_ms: Box<dyn Fn() -> i64 + Send + Sync>,
     pub interval: Duration,
 }
 
@@ -53,10 +56,17 @@ impl Deps {
     /// `XIOX_OBSERVE_INTERVAL_MS` replaces the interval and bypasses its 60-second minimum.
     pub fn real(cmd: &ObserveArgs) -> Self {
         let path = cmd.project.clone().unwrap_or_else(|| PathBuf::from("."));
-        let opts = Options { drives: !cmd.no_drives, measure: false, admin: xiox_project::is_elevated() };
+        let opts = Options {
+            drives: !cmd.no_drives,
+            measure: false,
+            admin: xiox_project::is_elevated(),
+        };
         let mut interval = Duration::from_secs(cmd.interval_secs);
         if cfg!(debug_assertions) {
-            if let Some(ms) = std::env::var("XIOX_OBSERVE_INTERVAL_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            if let Some(ms) = std::env::var("XIOX_OBSERVE_INTERVAL_MS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+            {
                 interval = Duration::from_millis(ms.max(1));
             }
         }
@@ -89,8 +99,18 @@ pub fn start(deps: &Deps, params: Params) -> Result<Observer, String> {
 pub fn check(observer: &mut Observer, deps: &Deps) -> Result<Vec<Event>, String> {
     let mut scan = (deps.analyze)()?;
     let mut measure: HashSet<String> = observer.keys_to_measure().into_iter().collect();
-    let known: HashSet<String> = observer.report(false).items.into_iter().map(|v| v.item.key).collect();
-    measure.extend(scan.items.iter().filter(|i| !known.contains(&i.key)).map(|i| i.key.clone()));
+    let known: HashSet<String> = observer
+        .report(false)
+        .items
+        .into_iter()
+        .map(|v| v.item.key)
+        .collect();
+    measure.extend(
+        scan.items
+            .iter()
+            .filter(|i| !known.contains(&i.key))
+            .map(|i| i.key.clone()),
+    );
     for item in &mut scan.items {
         if measure.contains(&item.key) {
             if let Some(path) = &item.path {
@@ -105,7 +125,10 @@ pub fn check(observer: &mut Observer, deps: &Deps) -> Result<Vec<Event>, String>
 /// the process ends with a non-zero code.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let _ = writeln!(std::io::stderr(), "error: xiox observe stopped on an internal error: {info}");
+        let _ = writeln!(
+            std::io::stderr(),
+            "error: xiox observe stopped on an internal error: {info}"
+        );
     }));
 }
 
@@ -114,9 +137,21 @@ pub fn run_observe(cmd: ObserveArgs, out: &mut dyn Write, err: &mut dyn Write) -
     install_panic_hook();
     let deps = Deps::real(&cmd);
     if cmd.mcp {
-        return crate::mcp::serve(cmd.params(), std::io::stdin().lock(), out, err, &deps);
+        return crate::mcp::serve(
+            cmd.params(),
+            std::io::stdin().lock(),
+            out,
+            err,
+            std::sync::Arc::new(deps),
+        );
     }
-    observe(cmd, std::io::BufReader::new(std::io::stdin()), out, err, &deps)
+    observe(
+        cmd,
+        std::io::BufReader::new(std::io::stdin()),
+        out,
+        err,
+        &deps,
+    )
 }
 
 /// An output that remembers a closed pipe: `write_result` treats it as success (the person just ran
@@ -128,17 +163,24 @@ pub(crate) struct Tap<'a> {
 
 impl<'a> Tap<'a> {
     pub(crate) fn new(inner: &'a mut dyn Write) -> Self {
-        Tap { inner, pipe_closed: false }
+        Tap {
+            inner,
+            pipe_closed: false,
+        }
     }
 }
 
 impl Write for Tap<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.write(buf).inspect_err(|e| self.pipe_closed |= e.kind() == std::io::ErrorKind::BrokenPipe)
+        self.inner
+            .write(buf)
+            .inspect_err(|e| self.pipe_closed |= e.kind() == std::io::ErrorKind::BrokenPipe)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush().inspect_err(|e| self.pipe_closed |= e.kind() == std::io::ErrorKind::BrokenPipe)
+        self.inner
+            .flush()
+            .inspect_err(|e| self.pipe_closed |= e.kind() == std::io::ErrorKind::BrokenPipe)
     }
 }
 
@@ -199,7 +241,10 @@ pub(crate) fn read_capped_line(r: &mut impl BufRead, max: usize) -> std::io::Res
 pub(crate) type Spawn = fn(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>;
 
 fn spawn_named(job: Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()> {
-    std::thread::Builder::new().name("xiox-observe-stdin".into()).spawn(job).map(|_| ())
+    std::thread::Builder::new()
+        .name("xiox-observe-stdin".into())
+        .spawn(job)
+        .map(|_| ())
 }
 
 /// `Instant::now() + interval` that cannot panic: an interval too large for an `Instant` waits
@@ -222,13 +267,18 @@ enum Input {
 }
 
 /// Starts the reader thread. `Err` is the sentence for the person when the thread cannot start.
-fn spawn_reader(mut stdin: impl BufRead + Send + 'static, spawn: Spawn) -> Result<mpsc::Receiver<Input>, String> {
+fn spawn_reader(
+    mut stdin: impl BufRead + Send + 'static,
+    spawn: Spawn,
+) -> Result<mpsc::Receiver<Input>, String> {
     let (tx, rx) = mpsc::channel();
     let job = Box::new(move || {
         loop {
             let message = match read_capped_line(&mut stdin, MAX_LINE_BYTES) {
                 Ok(LineRead::Eof) => Input::Closed,
-                Ok(LineRead::Line(bytes)) => Input::Line(String::from_utf8_lossy(&bytes).trim().to_string()),
+                Ok(LineRead::Line(bytes)) => {
+                    Input::Line(String::from_utf8_lossy(&bytes).trim().to_string())
+                }
                 Ok(LineRead::TooLong) => Input::TooLong,
                 Err(e) => Input::Failed(e.to_string()),
             };
@@ -242,10 +292,23 @@ fn spawn_reader(mut stdin: impl BufRead + Send + 'static, spawn: Spawn) -> Resul
     Ok(rx)
 }
 
+/// A JSON value as one line with its line end. serde_json leaves U+2028 and U+2029 raw inside
+/// strings; some line splitters (Python `splitlines()`) break lines on them, so they are written
+/// as escapes: the line parses back to the same value.
+pub(crate) fn json_line(value: &Value) -> String {
+    let mut line = value
+        .to_string()
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
+    line.push('\n');
+    line
+}
+
 /// `{"schema":1,"event":"<kebab>","time":"<RFC 3339 UTC>", …event fields}` as one line. A `report`
 /// carries its own `schema`: it is not added twice.
 fn event_line(event: &Event, time_ms: i64) -> Result<String, String> {
-    let value = serde_json::to_value(event).map_err(|e| format!("cannot write an event as JSON: {e}"))?;
+    let value =
+        serde_json::to_value(event).map_err(|e| format!("cannot write an event as JSON: {e}"))?;
     let Value::Object(fields) = value else {
         return Err("cannot write an event as JSON: not an object".to_string());
     };
@@ -262,7 +325,7 @@ fn event_line(event: &Event, time_ms: i64) -> Result<String, String> {
             line.insert(key, value);
         }
     }
-    Ok(format!("{}\n", Value::Object(line)))
+    Ok(json_line(&Value::Object(line)))
 }
 
 fn echo(line: &str) -> String {
@@ -357,7 +420,11 @@ pub(crate) fn observe_with(
             return EXIT_ERROR;
         }
     };
-    let mut emitter = Emitter { out: Tap::new(out), err, now_ms: &*deps.now_ms };
+    let mut emitter = Emitter {
+        out: Tap::new(out),
+        err,
+        now_ms: &*deps.now_ms,
+    };
     if let Err(code) = emitter.write(&first) {
         return code;
     }
@@ -394,13 +461,20 @@ pub(crate) fn observe_with(
                 let _ = writeln!(emitter.err, "error: cannot read stdin: {message}");
                 return EXIT_ERROR;
             }
-            Some(Input::TooLong) => emitter.error(format!("stdin line too long (over {MAX_LINE_BYTES} bytes): dropped")),
+            Some(Input::TooLong) => emitter.error(format!(
+                "stdin line too long (over {MAX_LINE_BYTES} bytes): dropped"
+            )),
             Some(Input::Line(line)) => match line.as_str() {
                 "" => continue,
                 "stop" => return 0,
                 "report" => run_check(&mut observer, deps, &mut emitter, &mut last_check_failed)
-                    .and_then(|()| emitter.emit(&Event::Report(observer.report(last_check_failed)))),
-                other => emitter.error(format!("unknown command: {} (expected report or stop)", echo(other))),
+                    .and_then(|()| {
+                        emitter.emit(&Event::Report(observer.report(last_check_failed)))
+                    }),
+                other => emitter.error(format!(
+                    "unknown command: {} (expected report or stop)",
+                    echo(other)
+                )),
             },
         };
         if let Err(code) = result {
@@ -438,9 +512,9 @@ fn run_check(
 #[cfg(test)]
 pub(crate) mod fakes {
     use super::Deps;
-    use std::cell::Cell;
     use std::path::PathBuf;
-    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
     use xiox_model::{ArtifactKind, Level};
     use xiox_project::{Category, Item, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
@@ -479,8 +553,12 @@ pub(crate) mod fakes {
             bytes: None,
             level: Level::Recommended,
             blocked: vec![],
-            why: Why::CatalogFolder { label_en: "Rust build".into() },
-            target: Target::Dir { kind: ArtifactKind::Catalog },
+            why: Why::CatalogFolder {
+                label_en: "Rust build".into(),
+            },
+            target: Target::Dir {
+                kind: ArtifactKind::Catalog,
+            },
         }
     }
 
@@ -493,29 +571,33 @@ pub(crate) mod fakes {
             bytes: None,
             level: Level::Optional,
             blocked: vec![],
-            why: Why::LinkedWorktree { branch: None, head: None },
-            target: Target::Worktree { repo: PathBuf::from(r"D:\Projects\mukade") },
+            why: Why::LinkedWorktree {
+                branch: None,
+                head: None,
+            },
+            target: Target::Worktree {
+                repo: PathBuf::from(r"D:\Projects\mukade"),
+            },
         }
     }
 
     /// Fake dependencies: `analyze` returns the script's results in order and then repeats the
     /// last one; `hook(n)` runs at the start of the `n`th call (0 = the initial analysis).
     /// Every measured folder is 10 MB. The clock advances one second per call.
-    pub(crate) fn deps(script: Vec<Result<ProjectScan, String>>, hook: impl Fn(usize) + 'static) -> Deps {
-        let calls = Cell::new(0usize);
-        let clock = Rc::new(Cell::new(1_700_000_000_000i64));
+    pub(crate) fn deps(
+        script: Vec<Result<ProjectScan, String>>,
+        hook: impl Fn(usize) + Send + Sync + 'static,
+    ) -> Deps {
+        let calls = AtomicUsize::new(0);
+        let clock = Arc::new(AtomicI64::new(1_700_000_000_000i64));
         Deps {
             analyze: Box::new(move || {
-                let n = calls.get();
-                calls.set(n + 1);
+                let n = calls.fetch_add(1, Ordering::SeqCst);
                 hook(n);
                 script[n.min(script.len() - 1)].clone()
             }),
             measure: Box::new(|_| Some(10 * MB)),
-            now_ms: Box::new(move || {
-                clock.set(clock.get() + 1000);
-                clock.get()
-            }),
+            now_ms: Box::new(move || clock.fetch_add(1000, Ordering::SeqCst) + 1000),
             interval: Duration::from_millis(15),
         }
     }
@@ -524,7 +606,6 @@ pub(crate) mod fakes {
         d.interval = interval;
         d
     }
-
 }
 
 #[cfg(test)]
@@ -569,7 +650,13 @@ mod tests {
 
     fn gated() -> (mpsc::Sender<Vec<u8>>, std::io::BufReader<Gated>) {
         let (tx, rx) = mpsc::channel();
-        (tx, std::io::BufReader::new(Gated { rx, pending: Vec::new() }))
+        (
+            tx,
+            std::io::BufReader::new(Gated {
+                rx,
+                pending: Vec::new(),
+            }),
+        )
     }
 
     struct Run {
@@ -587,14 +674,21 @@ mod tests {
         }
 
         fn events(&self) -> Vec<String> {
-            self.lines().iter().map(|v| v["event"].as_str().unwrap().to_string()).collect()
+            self.lines()
+                .iter()
+                .map(|v| v["event"].as_str().unwrap().to_string())
+                .collect()
         }
     }
 
     fn run_with(stdin: impl BufRead + Send + 'static, d: &Deps) -> Run {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = observe(args(), stdin, &mut out, &mut err, d);
-        Run { code, stdout: String::from_utf8(out).unwrap(), stderr: String::from_utf8(err).unwrap() }
+        Run {
+            code,
+            stdout: String::from_utf8(out).unwrap(),
+            stderr: String::from_utf8(err).unwrap(),
+        }
     }
 
     fn run_text(input: &str, script: Vec<Result<ProjectScan, String>>) -> Run {
@@ -617,7 +711,10 @@ mod tests {
     #[test]
     fn started_is_the_first_line_and_all_lines_are_valid_json_with_schema_time_event() {
         let r = run_ticking(
-            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), worktree("mukade-wt")]))],
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("mukade-wt")])),
+            ],
             2,
             "report\nstop\n",
         );
@@ -628,16 +725,49 @@ mod tests {
         for v in &lines {
             assert!(v.is_object(), "{v}");
             assert_eq!(v["schema"], 1, "{v}");
-            let time = v["time"].as_str().unwrap_or_else(|| panic!("no time in {v}"));
+            let time = v["time"]
+                .as_str()
+                .unwrap_or_else(|| panic!("no time in {v}"));
             assert!(time.ends_with('Z'), "UTC: {time}");
             chrono::DateTime::parse_from_rfc3339(time).unwrap_or_else(|e| panic!("{time}: {e}"));
             let event = v["event"].as_str().unwrap();
-            assert!(["started", "changed", "attention", "report", "error"].contains(&event), "{event}");
+            assert!(
+                ["started", "changed", "attention", "report", "error"].contains(&event),
+                "{event}"
+            );
         }
         // Started carries the project, the parameters and the totals.
         assert_eq!(lines[0]["project"]["name"], "mukade");
         assert_eq!(lines[0]["params"]["worktreeThreshold"], 3);
         assert!(lines[0]["totals"].is_object());
+    }
+
+    #[test]
+    fn line_separators_are_escaped_on_every_json_line() {
+        let mut wt = worktree("mukade-wt");
+        wt.why = xiox_project::Why::LinkedWorktree {
+            branch: Some("a\u{2028}b\u{2029}c".into()),
+            head: None,
+        };
+        let r = run_ticking(
+            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), wt]))],
+            2,
+            "report\nstop\n",
+        );
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert!(
+            !r.stdout.contains('\u{2028}') && !r.stdout.contains('\u{2029}'),
+            "{}",
+            r.stdout
+        );
+        assert!(r.stdout.contains("a\\u2028b\\u2029c"), "{}", r.stdout);
+        // Every line still parses, and the string comes back intact.
+        assert!(r.stdout.lines().any(|l| {
+            serde_json::from_str::<Value>(l)
+                .unwrap()
+                .to_string()
+                .contains("a\u{2028}b\u{2029}c")
+        }));
     }
 
     #[test]
@@ -659,7 +789,10 @@ mod tests {
     #[test]
     fn a_new_worktree_appears_in_a_changed_event_and_a_report_marks_it_new() {
         let r = run_ticking(
-            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), worktree("mukade-wt")]))],
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("mukade-wt")])),
+            ],
             2,
             "report\nstop\n",
         );
@@ -676,18 +809,28 @@ mod tests {
         assert_eq!(added[0]["bytes"], 10 * MB);
         assert_eq!(changed[0]["removed"].as_array().unwrap().len(), 0);
 
-        let report = lines.iter().find(|v| v["event"] == "report").expect("a report line");
+        let report = lines
+            .iter()
+            .find(|v| v["event"] == "report")
+            .expect("a report line");
         assert_eq!(report["stale"], false);
         let items = report["items"].as_array().unwrap();
         let by_cat = |c: &str| items.iter().find(|i| i["category"] == c).unwrap();
         assert_eq!(by_cat("worktrees")["new"], true);
         assert_eq!(by_cat("builds")["new"], false);
         // `schema` is written once on a report line (the report carries its own).
-        let line = r.stdout.lines().find(|l| l.contains("\"event\":\"report\"")).unwrap();
+        let line = r
+            .stdout
+            .lines()
+            .find(|l| l.contains("\"event\":\"report\""))
+            .unwrap();
         assert_eq!(line.matches("\"schema\"").count(), 1, "{line}");
         // Changed comes before the report.
         let events = r.events();
-        let (c, p) = (events.iter().position(|e| e == "changed"), events.iter().position(|e| e == "report"));
+        let (c, p) = (
+            events.iter().position(|e| e == "changed"),
+            events.iter().position(|e| e == "report"),
+        );
         assert!(c < p, "{events:?}");
     }
 
@@ -724,12 +867,23 @@ mod tests {
     fn failed_check_emits_error_and_keeps_going_and_report_is_stale() {
         // After the first analysis every check fails; the loop goes on and answers the report with
         // the last good result, marked stale.
-        let r = run_ticking(vec![Ok(scan(vec![build()])), Err("disk went away".into())], 3, "report\nstop\n");
+        let r = run_ticking(
+            vec![Ok(scan(vec![build()])), Err("disk went away".into())],
+            3,
+            "report\nstop\n",
+        );
         assert_eq!(r.code, 0, "{}", r.stderr);
         let lines = r.lines();
         let errors: Vec<&Value> = lines.iter().filter(|v| v["event"] == "error").collect();
         assert!(errors.len() >= 2, "{}", r.stdout);
-        assert!(errors[0]["message"].as_str().unwrap().contains("disk went away"), "{}", errors[0]);
+        assert!(
+            errors[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("disk went away"),
+            "{}",
+            errors[0]
+        );
         let last = lines.last().unwrap();
         assert_eq!(last["event"], "report", "{}", r.stdout);
         assert_eq!(last["stale"], true);
@@ -748,7 +902,10 @@ mod tests {
 
     #[test]
     fn unknown_stdin_line_is_an_error_event() {
-        let r = run_text("frobnicate now\nreport\nstop\n", vec![Ok(scan(vec![build()]))]);
+        let r = run_text(
+            "frobnicate now\nreport\nstop\n",
+            vec![Ok(scan(vec![build()]))],
+        );
         assert_eq!(r.code, 0);
         assert_eq!(r.events(), ["started", "error", "report"], "{}", r.stdout);
         let message = r.lines()[1]["message"].as_str().unwrap().to_string();
@@ -764,15 +921,26 @@ mod tests {
     #[test]
     fn nothing_but_json_on_stdout() {
         let r = run_ticking(
-            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), worktree("a")])), Err("boom".into())],
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("a")])),
+                Err("boom".into()),
+            ],
             4,
             "what\nreport\nstop\n",
         );
         assert_eq!(r.code, 0, "{}", r.stderr);
         assert!(!r.stdout.is_empty());
         for line in r.stdout.lines() {
-            let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("stdout line {line:?}: {e}"));
-            assert!(v.is_object() && v["schema"] == 1 && v["event"].is_string() && v["time"].is_string(), "{line}");
+            let v: Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("stdout line {line:?}: {e}"));
+            assert!(
+                v.is_object()
+                    && v["schema"] == 1
+                    && v["event"].is_string()
+                    && v["time"].is_string(),
+                "{line}"
+            );
         }
         assert!(r.stdout.ends_with('\n'));
         // The human text is on stderr.
@@ -797,17 +965,35 @@ mod tests {
 
     #[test]
     fn a_closed_pipe_ends_the_loop_with_0_and_another_write_error_with_1() {
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
         // Never ends by itself: the failing write must end it.
         let (_tx, stdin) = gated();
         let mut err = Vec::new();
-        let code = observe(args(), stdin, &mut Failing(std::io::ErrorKind::BrokenPipe), &mut err, &d);
+        let code = observe(
+            args(),
+            stdin,
+            &mut Failing(std::io::ErrorKind::BrokenPipe),
+            &mut err,
+            &d,
+        );
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
 
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
         let (_tx, stdin) = gated();
         let mut err = Vec::new();
-        let code = observe(args(), stdin, &mut Failing(std::io::ErrorKind::PermissionDenied), &mut err, &d);
+        let code = observe(
+            args(),
+            stdin,
+            &mut Failing(std::io::ErrorKind::PermissionDenied),
+            &mut err,
+            &d,
+        );
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("cannot write to the output"));
     }
@@ -815,7 +1001,10 @@ mod tests {
     #[test]
     fn check_measures_new_and_known_builds_and_returns_the_observers_events() {
         let d = deps(
-            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), worktree("w")]))],
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("w")])),
+            ],
             |_| {},
         );
         let mut observer = start(&d, Params::default()).unwrap();
@@ -839,10 +1028,11 @@ mod tests {
 
     #[test]
     fn a_huge_interval_does_not_panic() {
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(u64::MAX));
-        let r = run_with(Cursor::new(b"report
-stop
-".to_vec()), &d);
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(u64::MAX),
+        );
+        let r = run_with(Cursor::new(b"report\nstop\n".to_vec()), &d);
         assert_eq!(r.code, 0, "{}", r.stderr);
         assert_eq!(r.events(), ["started", "report"], "{}", r.stdout);
         // The helper itself never overflows either.
@@ -855,16 +1045,29 @@ stop
 
     #[test]
     fn a_failed_reader_spawn_exits_1_with_one_error_line_and_nothing_on_stdout() {
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = observe_with(args(), Cursor::new(b"stop
-".to_vec()), &mut out, &mut err, &d, failing_spawn);
+        let code = observe_with(
+            args(),
+            Cursor::new(b"stop\n".to_vec()),
+            &mut out,
+            &mut err,
+            &d,
+            failing_spawn,
+        );
         let err = String::from_utf8(err).unwrap();
         assert_eq!(code, 1, "{err}");
         assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
         let errors: Vec<&str> = err.lines().filter(|l| l.starts_with("error:")).collect();
         assert_eq!(errors.len(), 1, "{err}");
-        assert!(errors[0].contains("cannot start the stdin reader thread") && errors[0].contains("no threads left"), "{err}");
+        assert!(
+            errors[0].contains("cannot start the stdin reader thread")
+                && errors[0].contains("no threads left"),
+            "{err}"
+        );
     }
 
     /// A stdin whose reads panic (the reader thread dies without saying anything) or fail.
@@ -883,10 +1086,17 @@ stop
 
     #[test]
     fn a_dead_reader_thread_is_reported_on_stderr_and_ends_the_loop_with_1() {
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
         let r = run_with(std::io::BufReader::new(BadStdin { panic: true }), &d);
         assert_eq!(r.code, 1, "{}", r.stderr);
-        let errors: Vec<&str> = r.stderr.lines().filter(|l| l.starts_with("error:")).collect();
+        let errors: Vec<&str> = r
+            .stderr
+            .lines()
+            .filter(|l| l.starts_with("error:"))
+            .collect();
         assert_eq!(errors.len(), 1, "{}", r.stderr);
         assert!(errors[0].contains("stdin reader stopped"), "{}", r.stderr);
         assert_eq!(r.events(), ["started"], "{}", r.stdout);
@@ -894,10 +1104,17 @@ stop
 
     #[test]
     fn a_stdin_read_error_is_reported_on_stderr_and_ends_the_loop_with_1() {
-        let d = with_interval(deps(vec![Ok(scan(vec![build()]))], |_| {}), Duration::from_secs(3600));
+        let d = with_interval(
+            deps(vec![Ok(scan(vec![build()]))], |_| {}),
+            Duration::from_secs(3600),
+        );
         let r = run_with(std::io::BufReader::new(BadStdin { panic: false }), &d);
         assert_eq!(r.code, 1, "{}", r.stderr);
-        assert!(r.stderr.contains("error: cannot read stdin: bad pipe"), "{}", r.stderr);
+        assert!(
+            r.stderr.contains("error: cannot read stdin: bad pipe"),
+            "{}",
+            r.stderr
+        );
     }
 
     #[test]
@@ -914,23 +1131,38 @@ stop
         // `abc\r` is 4 bytes, `xyzxyz` is 6 (too long), `five5` is exactly 5 (kept).
         assert_eq!(
             got,
-            [Some("abc\r".into()), Some("".into()), None, Some("five5".into()), Some("last".into())]
+            [
+                Some("abc\r".into()),
+                Some("".into()),
+                None,
+                Some("five5".into()),
+                Some("last".into())
+            ]
         );
         // A too-long last line without a newline is dropped too, then end of input.
         let mut r = Cursor::new(b"abcdefgh".to_vec());
-        assert!(matches!(read_capped_line(&mut r, 5).unwrap(), LineRead::TooLong));
-        assert!(matches!(read_capped_line(&mut r, 5).unwrap(), LineRead::Eof));
+        assert!(matches!(
+            read_capped_line(&mut r, 5).unwrap(),
+            LineRead::TooLong
+        ));
+        assert!(matches!(
+            read_capped_line(&mut r, 5).unwrap(),
+            LineRead::Eof
+        ));
     }
 
     #[test]
     fn read_capped_line_swallows_a_huge_line_in_small_pieces() {
         // 20 MB without a newline through a 4 KiB buffer: the result is one TooLong, then the
         // next line is read normally.
-        let huge = std::io::repeat(b'x').take(20 * 1024 * 1024).chain(Cursor::new(b"
-ok
-".to_vec()));
+        let huge = std::io::repeat(b'x')
+            .take(20 * 1024 * 1024)
+            .chain(Cursor::new(b"\nok\n".to_vec()));
         let mut r = std::io::BufReader::with_capacity(4096, huge);
-        assert!(matches!(read_capped_line(&mut r, MAX_LINE_BYTES).unwrap(), LineRead::TooLong));
+        assert!(matches!(
+            read_capped_line(&mut r, MAX_LINE_BYTES).unwrap(),
+            LineRead::TooLong
+        ));
         match read_capped_line(&mut r, MAX_LINE_BYTES).unwrap() {
             LineRead::Line(b) => assert_eq!(b, b"ok"),
             _ => panic!("expected the next line"),
@@ -940,19 +1172,39 @@ ok
     #[test]
     fn an_overlong_stdin_line_is_dropped_with_an_error_event_and_the_loop_goes_on() {
         let long = "x".repeat(MAX_LINE_BYTES + 1);
-        let r = run_text(&format!("{long}
+        let r = run_text(
+            &format!(
+                "{long}
 report
 stop
-"), vec![Ok(scan(vec![build()]))]);
+"
+            ),
+            vec![Ok(scan(vec![build()]))],
+        );
         assert_eq!(r.code, 0, "{}", r.stderr);
         assert_eq!(r.events(), ["started", "error", "report"], "{}", r.stdout);
         let message = r.lines()[1]["message"].as_str().unwrap().to_string();
-        assert!(message.contains("too long") && message.len() < 300, "{message}");
+        assert!(
+            message.contains("too long") && message.len() < 300,
+            "{message}"
+        );
         // A line of exactly the cap is read (and is just an unknown command).
         let edge = "y".repeat(MAX_LINE_BYTES);
-        let r = run_text(&format!("{edge}
+        let r = run_text(
+            &format!(
+                "{edge}
 stop
-"), vec![Ok(scan(vec![build()]))]);
-        assert!(r.lines()[1]["message"].as_str().unwrap().contains("unknown command"), "{}", r.stdout);
+"
+            ),
+            vec![Ok(scan(vec![build()]))],
+        );
+        assert!(
+            r.lines()[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown command"),
+            "{}",
+            r.stdout
+        );
     }
 }

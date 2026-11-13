@@ -5,10 +5,14 @@
 //! meant for a person goes to stderr. Single-threaded: there is no timer, a check runs only when
 //! `tools/call` arrives, and the server ends when stdin does.
 
-use crate::observe::{Deps, LineRead, MAX_LINE_BYTES, Tap, check, read_capped_line, start};
+use crate::observe::{
+    Deps, LineRead, MAX_LINE_BYTES, Tap, check, json_line, read_capped_line, start,
+};
 use crate::run::{EXIT_ERROR, write_result};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 use xiox_observer::{Observer, Params};
 
 /// The newest protocol revision the server speaks; the others it accepts are echoed back.
@@ -59,14 +63,29 @@ fn tool_error(message: &str) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
 }
 
-struct Server<'a> {
-    /// `None` until the first analysis succeeds (it is tried again at each call).
-    observer: Option<Observer>,
-    params: Params,
-    deps: &'a Deps,
+/// How long one `tools/call` waits for the baseline before telling the agent to ask again. The
+/// baseline itself is bounded (every measure has caps); this only keeps a call from hanging if the
+/// analysis does.
+const BASELINE_WAIT: Duration = Duration::from_secs(120);
+
+/// The snapshot the process took at its start, on a worker thread, so that the protocol answers
+/// (initialize, ping, tools/list) do not wait for it.
+enum Baseline {
+    /// The worker is still measuring.
+    Pending(mpsc::Receiver<Result<Observer, String>>),
+    Ready(Observer),
+    /// The first analysis failed (or its thread died): each `tools/call` tries again.
+    Failed,
 }
 
-impl Server<'_> {
+struct Server {
+    baseline: Baseline,
+    params: Params,
+    deps: Arc<Deps>,
+    wait: Duration,
+}
+
+impl Server {
     /// One input line: the reply to write, if any (notifications and blank lines get none).
     fn handle(&mut self, line: &[u8], err: &mut dyn Write) -> Option<Value> {
         let line = line.trim_ascii();
@@ -74,16 +93,28 @@ impl Server<'_> {
             return None;
         }
         let Ok(message) = serde_json::from_slice::<Value>(line) else {
-            return Some(failure(Value::Null, PARSE_ERROR, "Parse error: the line is not valid JSON"));
+            return Some(failure(
+                Value::Null,
+                PARSE_ERROR,
+                "Parse error: the line is not valid JSON",
+            ));
         };
         let Value::Object(message) = message else {
-            return Some(failure(Value::Null, INVALID_REQUEST, "Invalid Request: expected a JSON object"));
+            return Some(failure(
+                Value::Null,
+                INVALID_REQUEST,
+                "Invalid Request: expected a JSON object",
+            ));
         };
         let id = match message.get("id") {
             None => None,
             Some(id) if id.is_string() || id.is_number() => Some(id.clone()),
             Some(_) => {
-                return Some(failure(Value::Null, INVALID_REQUEST, "Invalid Request: id must be a string or a number"));
+                return Some(failure(
+                    Value::Null,
+                    INVALID_REQUEST,
+                    "Invalid Request: id must be a string or a number",
+                ));
             }
         };
         let Some(method) = message.get("method").and_then(Value::as_str) else {
@@ -91,7 +122,11 @@ impl Server<'_> {
             if message.contains_key("result") || message.contains_key("error") {
                 return None;
             }
-            return Some(failure(id.unwrap_or(Value::Null), INVALID_REQUEST, "Invalid Request: no method"));
+            return Some(failure(
+                id.unwrap_or(Value::Null),
+                INVALID_REQUEST,
+                "Invalid Request: no method",
+            ));
         };
         // A notification (no id) is never answered, whatever it says.
         let id = id?;
@@ -110,44 +145,89 @@ impl Server<'_> {
 
     fn call(&mut self, id: Value, params: Option<&Value>, err: &mut dyn Write) -> Value {
         let Some(Value::Object(params)) = params else {
-            return failure(id, INVALID_PARAMS, "Invalid params: expected an object with the tool name");
+            return failure(
+                id,
+                INVALID_PARAMS,
+                "Invalid params: expected an object with the tool name",
+            );
         };
         let Some(name) = params.get("name").and_then(Value::as_str) else {
-            return failure(id, INVALID_PARAMS, "Invalid params: the tool name is missing");
+            return failure(
+                id,
+                INVALID_PARAMS,
+                "Invalid params: the tool name is missing",
+            );
         };
         if name != TOOL_NAME {
             return failure(id, INVALID_PARAMS, format!("Unknown tool: {name}"));
         }
-        if !matches!(params.get("arguments"), None | Some(Value::Null | Value::Object(_))) {
-            return failure(id, INVALID_PARAMS, "Invalid params: arguments must be an object");
+        if !matches!(
+            params.get("arguments"),
+            None | Some(Value::Null | Value::Object(_))
+        ) {
+            return failure(
+                id,
+                INVALID_PARAMS,
+                "Invalid params: arguments must be an object",
+            );
         }
         reply(id, self.leftovers(err))
+    }
+
+    /// Waits (bounded) for the baseline and gives the observer; `Err` is the tool result to answer
+    /// with. A failed or dead baseline is tried again here, synchronously.
+    fn observer(&mut self, err: &mut dyn Write) -> Result<&mut Observer, Value> {
+        if let Baseline::Pending(rx) = &self.baseline {
+            match rx.recv_timeout(self.wait) {
+                Ok(Ok(observer)) => self.baseline = Baseline::Ready(observer),
+                Ok(Err(message)) => {
+                    let _ = writeln!(err, "error: {message} (the next tools/call tries again)");
+                    self.baseline = Baseline::Failed;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(tool_error(
+                        "The first analysis of the project is still running. Call project_leftovers again in a moment.",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = writeln!(
+                        err,
+                        "error: the first analysis stopped unexpectedly (the next tools/call tries again)"
+                    );
+                    self.baseline = Baseline::Failed;
+                }
+            }
+        }
+        if matches!(self.baseline, Baseline::Failed) {
+            match start(&self.deps, self.params) {
+                Ok(observer) => self.baseline = Baseline::Ready(observer),
+                Err(message) => {
+                    let _ = writeln!(err, "error: {message}");
+                    return Err(tool_error(&format!(
+                        "The project could not be analysed: {message}. No report is available yet."
+                    )));
+                }
+            }
+        }
+        match &mut self.baseline {
+            Baseline::Ready(observer) => Ok(observer),
+            _ => Err(tool_error("No report is available yet.")),
+        }
     }
 
     /// A fresh check, then the report. When the check fails the last report goes out with
     /// `stale: true`; when there is no report at all the result is an error the agent can read.
     fn leftovers(&mut self, err: &mut dyn Write) -> Value {
-        let mut stale = false;
-        match self.observer.as_mut() {
-            Some(observer) => {
-                if let Err(message) = check(observer, self.deps) {
-                    let _ = writeln!(err, "error: check failed: {message}");
-                    stale = true;
-                }
-            }
-            None => match start(self.deps, self.params) {
-                Ok(observer) => self.observer = Some(observer),
-                Err(message) => {
-                    let _ = writeln!(err, "error: {message}");
-                    return tool_error(&format!(
-                        "The project could not be analysed: {message}. No report is available yet."
-                    ));
-                }
-            },
-        }
-        let Some(observer) = self.observer.as_ref() else {
-            return tool_error("No report is available yet.");
+        let deps = Arc::clone(&self.deps);
+        let observer = match self.observer(err) {
+            Ok(o) => o,
+            Err(result) => return result,
         };
+        let mut stale = false;
+        if let Err(message) = check(observer, &deps) {
+            let _ = writeln!(err, "error: check failed: {message}");
+            stale = true;
+        }
         let report = match serde_json::to_value(observer.report(stale)) {
             Ok(v) => v,
             Err(e) => {
@@ -160,8 +240,12 @@ impl Server<'_> {
 }
 
 fn initialize_result(params: Option<&Value>) -> Value {
-    let wanted = params.and_then(|p| p.get("protocolVersion")).and_then(Value::as_str);
-    let version = wanted.filter(|v| SUPPORTED_VERSIONS.contains(v)).unwrap_or(LATEST_VERSION);
+    let wanted = params
+        .and_then(|p| p.get("protocolVersion"))
+        .and_then(Value::as_str);
+    let version = wanted
+        .filter(|v| SUPPORTED_VERSIONS.contains(v))
+        .unwrap_or(LATEST_VERSION);
     json!({
         "protocolVersion": version,
         "capabilities": {"tools": {}},
@@ -171,20 +255,47 @@ fn initialize_result(params: Option<&Value>) -> Value {
 }
 
 /// The server. Returns the exit code: 0 on end of input or a closed pipe, 1 when stdin cannot be
-/// read or stdout cannot be written. The baseline is taken before the first line is read, so
-/// "new" means new since the process started; if that first analysis fails the server still
-/// answers, and `tools/call` tries again.
-pub fn serve(params: Params, mut input: impl BufRead, out: &mut dyn Write, err: &mut dyn Write, deps: &Deps) -> i32 {
+/// read or stdout cannot be written. The baseline is taken at once, on a worker thread (so "new"
+/// means new since the process started, and `initialize` is not kept waiting by a slow
+/// measurement); a `tools/call` waits for it. The worker is not joined: when the input ends the
+/// process ends, whatever it is still measuring.
+pub fn serve(
+    params: Params,
+    mut input: impl BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    deps: Arc<Deps>,
+) -> i32 {
     let mut out = Tap::new(out);
-    let observer = match start(deps, params) {
-        Ok(o) => Some(o),
-        Err(message) => {
-            let _ = writeln!(err, "error: {message} (the next tools/call tries again)");
-            None
+    let (tx, rx) = mpsc::channel();
+    let worker = {
+        let deps = Arc::clone(&deps);
+        std::thread::Builder::new()
+            .name("xiox-mcp-baseline".into())
+            .spawn(move || {
+                let _ = tx.send(start(&deps, params));
+            })
+    };
+    let baseline = match worker {
+        Ok(_) => Baseline::Pending(rx),
+        Err(e) => {
+            let _ = writeln!(
+                err,
+                "error: cannot start the analysis thread: {e} (the next tools/call tries again)"
+            );
+            Baseline::Failed
         }
     };
-    let _ = writeln!(err, "xiox observe --mcp: serving the {TOOL_NAME} tool on stdio. Nothing is removed.");
-    let mut server = Server { observer, params, deps };
+    let _ = writeln!(
+        err,
+        "xiox observe --mcp: serving the {TOOL_NAME} tool on stdio. Nothing is removed."
+    );
+    let mut server = Server {
+        baseline,
+        params,
+        deps,
+        wait: BASELINE_WAIT,
+    };
     loop {
         let answer = match read_capped_line(&mut input, MAX_LINE_BYTES) {
             Ok(LineRead::Eof) => return 0,
@@ -201,7 +312,7 @@ pub fn serve(params: Params, mut input: impl BufRead, out: &mut dyn Write, err: 
         };
         if let Some(answer) = answer {
             // `Value` prints compact JSON with every control character escaped: one line.
-            if let Err(code) = write_result(&mut out, err, &format!("{answer}\n")) {
+            if let Err(code) = write_result(&mut out, err, &json_line(&answer)) {
                 return code;
             }
             if out.pipe_closed {
@@ -230,7 +341,10 @@ mod tests {
         fn replies(&self) -> Vec<Value> {
             self.raw
                 .lines()
-                .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("stdout line is not JSON: {l:?}: {e}")))
+                .map(|l| {
+                    serde_json::from_str(l)
+                        .unwrap_or_else(|e| panic!("stdout line is not JSON: {l:?}: {e}"))
+                })
                 .collect()
         }
     }
@@ -238,8 +352,18 @@ mod tests {
     fn serve_text(input: &str, script: Vec<Result<ProjectScan, String>>) -> Session {
         let d = deps(script, |_| {});
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = serve(Params::default(), Cursor::new(input.as_bytes().to_vec()), &mut out, &mut err, &d);
-        Session { code, raw: String::from_utf8(out).unwrap(), stderr: String::from_utf8(err).unwrap() }
+        let code = serve(
+            Params::default(),
+            Cursor::new(input.as_bytes().to_vec()),
+            &mut out,
+            &mut err,
+            std::sync::Arc::new(d),
+        );
+        Session {
+            code,
+            raw: String::from_utf8(out).unwrap(),
+            stderr: String::from_utf8(err).unwrap(),
+        }
     }
 
     fn lines(messages: &[Value]) -> String {
@@ -251,7 +375,11 @@ mod tests {
     }
 
     fn call(id: i64) -> Value {
-        request(id, "tools/call", json!({"name": "project_leftovers", "arguments": {}}))
+        request(
+            id,
+            "tools/call",
+            json!({"name": "project_leftovers", "arguments": {}}),
+        )
     }
 
     fn one_build() -> Vec<Result<ProjectScan, String>> {
@@ -266,7 +394,11 @@ mod tests {
     #[test]
     fn initialize_negotiates_the_protocol_version_and_has_instructions() {
         for version in ["2025-06-18", "2025-03-26", "2024-11-05"] {
-            let init = request(1, "initialize", json!({"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}));
+            let init = request(
+                1,
+                "initialize",
+                json!({"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}),
+            );
             let s = serve_text(&lines(&[init]), one_build());
             assert_eq!(s.code, 0, "{}", s.stderr);
             let replies = s.replies();
@@ -278,23 +410,47 @@ mod tests {
             assert_eq!(r["result"]["protocolVersion"], version);
             assert_eq!(r["result"]["capabilities"], json!({"tools": {}}));
             assert_eq!(r["result"]["serverInfo"]["name"], "xiox");
-            assert_eq!(r["result"]["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(
+                r["result"]["serverInfo"]["version"],
+                env!("CARGO_PKG_VERSION")
+            );
             let text = r["result"]["instructions"].as_str().expect("instructions");
             assert!(text.contains("project_leftovers"), "{text}");
-            assert!(text.contains("finished") && text.contains("worktree"), "{text}");
+            assert!(
+                text.contains("finished") && text.contains("worktree"),
+                "{text}"
+            );
             assert!(text.contains("never removes"), "{text}");
             assert!(text.is_ascii(), "English only: {text}");
         }
         // A string id is echoed as a string.
-        let s = serve_text(&lines(&[request("abc", "initialize", json!({"protocolVersion": "2025-06-18"}))]), one_build());
+        let s = serve_text(
+            &lines(&[request(
+                "abc",
+                "initialize",
+                json!({"protocolVersion": "2025-06-18"}),
+            )]),
+            one_build(),
+        );
         assert_eq!(s.replies()[0]["id"], "abc");
     }
 
     #[test]
     fn initialize_with_an_unknown_version_answers_the_latest() {
-        for params in [json!({"protocolVersion": "1999-01-01"}), json!({"protocolVersion": 7}), json!({})] {
-            let s = serve_text(&lines(&[request(1, "initialize", params.clone())]), one_build());
-            assert_eq!(s.replies()[0]["result"]["protocolVersion"], "2025-06-18", "{params}");
+        for params in [
+            json!({"protocolVersion": "1999-01-01"}),
+            json!({"protocolVersion": 7}),
+            json!({}),
+        ] {
+            let s = serve_text(
+                &lines(&[request(1, "initialize", params.clone())]),
+                one_build(),
+            );
+            assert_eq!(
+                s.replies()[0]["result"]["protocolVersion"],
+                "2025-06-18",
+                "{params}"
+            );
         }
     }
 
@@ -314,9 +470,15 @@ mod tests {
     #[test]
     fn ping_works() {
         let s = serve_text(&lines(&[request(9, "ping", json!({}))]), one_build());
-        assert_eq!(s.replies(), [json!({"jsonrpc": "2.0", "id": 9, "result": {}})]);
+        assert_eq!(
+            s.replies(),
+            [json!({"jsonrpc": "2.0", "id": 9, "result": {}})]
+        );
         // A ping without params works too.
-        let s = serve_text("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n", one_build());
+        let s = serve_text(
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n",
+            one_build(),
+        );
         assert_eq!(s.replies()[0]["result"], json!({}));
     }
 
@@ -328,13 +490,19 @@ mod tests {
         assert_eq!(tools.len(), 1, "{tools:?}");
         let tool = &tools[0];
         assert_eq!(tool["name"], "project_leftovers");
-        assert_eq!(tool["inputSchema"], json!({"type": "object", "properties": {}, "additionalProperties": false}));
+        assert_eq!(
+            tool["inputSchema"],
+            json!({"type": "object", "properties": {}, "additionalProperties": false})
+        );
         assert_eq!(
             tool["annotations"],
             json!({"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false})
         );
         let description = tool["description"].as_str().unwrap();
-        assert!(description.is_ascii() && description.contains("never removes"), "{description}");
+        assert!(
+            description.is_ascii() && description.contains("never removes"),
+            "{description}"
+        );
     }
 
     #[test]
@@ -372,30 +540,57 @@ mod tests {
     #[test]
     fn a_new_worktree_between_two_calls_shows_up_as_new_in_the_second() {
         let script = vec![
-            Ok(scan(vec![build()])),                                 // baseline, at the start
-            Ok(scan(vec![build()])),                                 // first call: nothing new
-            Ok(scan(vec![build(), worktree("mukade-wt")])),          // second call: a worktree
+            Ok(scan(vec![build()])),                        // baseline, at the start
+            Ok(scan(vec![build()])),                        // first call: nothing new
+            Ok(scan(vec![build(), worktree("mukade-wt")])), // second call: a worktree
         ];
         let s = serve_text(&lines(&[call(1), call(2)]), script);
         let replies = s.replies();
         assert_eq!(replies.len(), 2, "{}", s.raw);
         let first = report_of(&replies[0]);
-        assert!(first["items"].as_array().unwrap().iter().all(|i| i["new"] == false), "{first}");
+        assert!(
+            first["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["new"] == false),
+            "{first}"
+        );
         let second = report_of(&replies[1]);
         let items = second["items"].as_array().unwrap();
-        let wt = items.iter().find(|i| i["category"] == "worktrees").expect("the new worktree");
+        let wt = items
+            .iter()
+            .find(|i| i["category"] == "worktrees")
+            .expect("the new worktree");
         assert_eq!(wt["new"], true);
-        assert_eq!(wt["bytes"], 10 * MB, "a new folder is weighed when first seen");
-        assert!(items.iter().any(|i| i["category"] == "builds" && i["new"] == false));
+        assert_eq!(
+            wt["bytes"],
+            10 * MB,
+            "a new folder is weighed when first seen"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i["category"] == "builds" && i["new"] == false)
+        );
         assert_eq!(second["growthBytes"], 10 * MB as i64);
         // The baseline is the start of the process, not the first call: a worktree that is there
         // by the first call is new already.
         let s = serve_text(
             &lines(&[call(1)]),
-            vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), worktree("w")]))],
+            vec![
+                Ok(scan(vec![build()])),
+                Ok(scan(vec![build(), worktree("w")])),
+            ],
         );
         let first = report_of(&s.replies()[0]).clone();
-        assert!(first["items"].as_array().unwrap().iter().any(|i| i["category"] == "worktrees" && i["new"] == true));
+        assert!(
+            first["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["category"] == "worktrees" && i["new"] == true)
+        );
     }
 
     #[test]
@@ -412,7 +607,14 @@ mod tests {
         let stale = report_of(&replies[1]);
         assert_eq!(stale["stale"], true);
         // It is the last good report: the worktree seen by the first call is still there.
-        assert!(stale["items"].as_array().unwrap().iter().any(|i| i["category"] == "worktrees"), "{stale}");
+        assert!(
+            stale["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["category"] == "worktrees"),
+            "{stale}"
+        );
         assert_eq!(replies[1]["result"]["isError"], false);
         // The person is told on stderr, never on stdout.
         assert!(s.stderr.contains("disk went away"), "{}", s.stderr);
@@ -421,19 +623,32 @@ mod tests {
 
     #[test]
     fn failed_check_with_no_report_is_an_error_result() {
-        let s = serve_text(&lines(&[call(1)]), vec![Err("path not found: D:\\nope".into())]);
+        let s = serve_text(
+            &lines(&[call(1)]),
+            vec![Err("path not found: D:\\nope".into())],
+        );
         assert_eq!(s.code, 0, "the server stays up: {}", s.stderr);
         let reply = &s.replies()[0];
-        assert!(reply.get("error").is_none(), "an error RESULT, not a JSON-RPC error: {reply}");
+        assert!(
+            reply.get("error").is_none(),
+            "an error RESULT, not a JSON-RPC error: {reply}"
+        );
         assert_eq!(reply["result"]["isError"], true);
-        assert!(reply["result"].get("structuredContent").is_none(), "{reply}");
+        assert!(
+            reply["result"].get("structuredContent").is_none(),
+            "{reply}"
+        );
         let text = reply["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("path not found") && text.is_ascii(), "{text}");
         assert!(s.stderr.contains("path not found"), "{}", s.stderr);
         // The first analysis is tried again at the next call.
         let s = serve_text(
             &lines(&[call(1), call(2)]),
-            vec![Err("first".into()), Err("second".into()), Ok(scan(vec![build()]))],
+            vec![
+                Err("first".into()),
+                Err("second".into()),
+                Ok(scan(vec![build()])),
+            ],
         );
         let replies = s.replies();
         assert_eq!(replies[0]["result"]["isError"], true);
@@ -441,13 +656,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_unknown_method_and_garbage_line_give_jsonrpc_errors_and_the_server_keeps_running() {
+    fn unknown_tool_unknown_method_and_garbage_line_give_jsonrpc_errors_and_the_server_keeps_running()
+     {
         let mut input = String::from("{ this is not json\n");
         input += &lines(&[
             request(2, "resources/list", json!({})),
             request(3, "tools/call", json!({"name": "rm_rf", "arguments": {}})),
             request(4, "tools/call", json!({})),
-            request(5, "tools/call", json!({"name": "project_leftovers", "arguments": 7})),
+            request(
+                5,
+                "tools/call",
+                json!({"name": "project_leftovers", "arguments": 7}),
+            ),
             json!({"jsonrpc": "2.0", "method": "no/such/notification"}),
             json!([1, 2]),
             json!(42),
@@ -458,9 +678,20 @@ mod tests {
         let s = serve_text(&input, one_build());
         assert_eq!(s.code, 0, "{}", s.stderr);
         let replies = s.replies();
-        let error = |i: usize| (replies[i]["id"].clone(), replies[i]["error"]["code"].clone(), &replies[i]["error"]["message"]);
+        let error = |i: usize| {
+            (
+                replies[i]["id"].clone(),
+                replies[i]["error"]["code"].clone(),
+                &replies[i]["error"]["message"],
+            )
+        };
         // Garbage: parse error, id null.
-        assert_eq!((error(0).0, error(0).1), (Value::Null, json!(-32700)), "{}", s.raw);
+        assert_eq!(
+            (error(0).0, error(0).1),
+            (Value::Null, json!(-32700)),
+            "{}",
+            s.raw
+        );
         assert!(error(0).2.as_str().is_some_and(|m| !m.is_empty()));
         assert_eq!((error(1).0, error(1).1), (json!(2), json!(-32601)));
         assert_eq!((error(2).0, error(2).1), (json!(3), json!(-32602)));
@@ -473,7 +704,10 @@ mod tests {
         assert_eq!((error(7).0, error(7).1), (json!(8), json!(-32600)));
         // And it is still serving.
         assert_eq!(replies.len(), 9, "{}", s.raw);
-        assert_eq!(replies[8], json!({"jsonrpc": "2.0", "id": 10, "result": {}}));
+        assert_eq!(
+            replies[8],
+            json!({"jsonrpc": "2.0", "id": 10, "result": {}})
+        );
         for r in &replies[..8] {
             assert_eq!(r["jsonrpc"], "2.0");
             assert!(r.get("result").is_none(), "{r}");
@@ -495,10 +729,18 @@ mod tests {
 
     #[test]
     fn every_output_line_is_a_single_json_object() {
+        const BRANCH: &str = "a\nb\"c\u{2028}d\u{2029}e";
         // A branch name with a line break and quotes must come out escaped on one line.
         let mut wt = worktree("mukade-wt");
-        wt.why = Why::LinkedWorktree { branch: Some("a\nb\"c\u{2028}d".into()), head: None };
-        let script = vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), wt])), Err("boom\nsecond line".into())];
+        wt.why = Why::LinkedWorktree {
+            branch: Some(BRANCH.into()),
+            head: None,
+        };
+        let script = vec![
+            Ok(scan(vec![build()])),
+            Ok(scan(vec![build(), wt])),
+            Err("boom\nsecond line".into()),
+        ];
         let input = lines(&[
             request(1, "initialize", json!({"protocolVersion": "2025-06-18"})),
             json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
@@ -517,8 +759,30 @@ mod tests {
         for line in raw_lines {
             let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{line:?}: {e}"));
             assert!(v.is_object() && v["jsonrpc"] == "2.0", "{line}");
-            assert!(v.get("result").is_some() ^ v.get("error").is_some(), "{line}");
+            assert!(
+                v.get("result").is_some() ^ v.get("error").is_some(),
+                "{line}"
+            );
         }
+        // U+2028 / U+2029 are escaped on the wire (line splitters break on them) and come back intact.
+        assert!(
+            !s.raw.contains('\u{2028}') && !s.raw.contains('\u{2029}'),
+            "{}",
+            s.raw
+        );
+        assert!(s.raw.contains("\\u2028") && s.raw.contains("\\u2029"));
+        fn has_string(v: &Value, wanted: &str) -> bool {
+            match v {
+                Value::String(s) => s == wanted,
+                Value::Array(a) => a.iter().any(|x| has_string(x, wanted)),
+                Value::Object(o) => o.values().any(|x| has_string(x, wanted)),
+                _ => false,
+            }
+        }
+        assert!(
+            has_string(&s.replies()[3], BRANCH),
+            "the structured report carries the same string"
+        );
         // The multi-line error text reached stderr in one piece of text, never stdout.
         assert!(s.stderr.contains("boom"), "{}", s.stderr);
         assert!(!s.raw.contains("boom"));
@@ -530,7 +794,10 @@ mod tests {
         assert_eq!(s.code, 0, "{}", s.stderr);
         assert!(s.raw.is_empty(), "{}", s.raw);
         // The last request may have no line end.
-        let s = serve_text("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}", one_build());
+        let s = serve_text(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}",
+            one_build(),
+        );
         assert_eq!(s.code, 0);
         assert_eq!(s.replies().len(), 1);
         // Even when nothing could be analysed at the start, EOF is a clean end.
@@ -554,13 +821,190 @@ mod tests {
             let ping = format!("{}\n", request(1, "ping", json!({})));
             Cursor::new(ping.repeat(1000))
         };
-        let d = with_interval(deps(one_build(), |_| {}), Duration::from_secs(1));
+        let d = std::sync::Arc::new(with_interval(
+            deps(one_build(), |_| {}),
+            Duration::from_secs(1),
+        ));
         let mut err = Vec::new();
-        let code = serve(Params::default(), input(), &mut Failing(std::io::ErrorKind::BrokenPipe), &mut err, &d);
+        let code = serve(
+            Params::default(),
+            input(),
+            &mut Failing(std::io::ErrorKind::BrokenPipe),
+            &mut err,
+            d.clone(),
+        );
         assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
         let mut err = Vec::new();
-        let code = serve(Params::default(), input(), &mut Failing(std::io::ErrorKind::PermissionDenied), &mut err, &d);
+        let code = serve(
+            Params::default(),
+            input(),
+            &mut Failing(std::io::ErrorKind::PermissionDenied),
+            &mut err,
+            d,
+        );
         assert_eq!(code, 1);
         assert!(String::from_utf8_lossy(&err).contains("cannot write to the output"));
+    }
+
+    /// A stdin that hands out its lines one by one and runs `before(n)` just before line `n` is read.
+    struct Scripted {
+        lines: Vec<Vec<u8>>,
+        next: usize,
+        current: Vec<u8>,
+        pos: usize,
+        before: Box<dyn FnMut(usize)>,
+    }
+
+    impl std::io::Read for Scripted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = {
+                let chunk = self.fill_buf()?;
+                let n = chunk.len().min(buf.len());
+                buf[..n].copy_from_slice(&chunk[..n]);
+                n
+            };
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl BufRead for Scripted {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.pos >= self.current.len() {
+                self.current.clear();
+                self.pos = 0;
+                if self.next < self.lines.len() {
+                    (self.before)(self.next);
+                    self.current = self.lines[self.next].clone();
+                    self.next += 1;
+                }
+            }
+            Ok(&self.current[self.pos..])
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.pos += amt;
+        }
+    }
+
+    /// An output the test can look into while the server runs.
+    #[derive(Clone, Default)]
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn protocol_answers_do_not_wait_for_the_baseline_and_a_call_waits_for_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex, mpsc};
+        // The initial analysis is blocked until the gate opens; the gate opens only after the
+        // `tools/call` line has been handed to the server (by another thread, after a pause).
+        let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        let gate_rx = Mutex::new(gate_rx);
+        let released = Arc::new(AtomicBool::new(false));
+        let d = deps(
+            vec![
+                Ok(scan(vec![build()])), // the baseline, behind the gate
+                Ok(scan(vec![build(), worktree("mukade-wt")])), // the check made by the call
+            ],
+            {
+                let released = Arc::clone(&released);
+                move |n| {
+                    if n == 0 {
+                        // A safety net: a failing test must end, not hang.
+                        let _ = gate_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(30));
+                        released.store(true, Ordering::SeqCst);
+                    }
+                }
+            },
+        );
+        let out = Shared::default();
+        let seen_before_call: Arc<Mutex<Option<(usize, bool)>>> = Arc::default();
+        let input = Scripted {
+            lines: [
+                request(1, "initialize", json!({"protocolVersion": "2025-06-18"})),
+                json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                request(2, "ping", json!({})),
+                request(3, "tools/list", json!({})),
+                call(4),
+            ]
+            .iter()
+            .map(|m| format!("{m}\n").into_bytes())
+            .collect(),
+            next: 0,
+            current: Vec::new(),
+            pos: 0,
+            before: Box::new({
+                let (out, released, seen) = (
+                    out.clone(),
+                    Arc::clone(&released),
+                    Arc::clone(&seen_before_call),
+                );
+                move |n| {
+                    if n == 4 {
+                        let answered = out
+                            .0
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|&&b| b == b'\n')
+                            .count();
+                        *seen.lock().unwrap() = Some((answered, released.load(Ordering::SeqCst)));
+                        let gate_tx = gate_tx.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_millis(100));
+                            let _ = gate_tx.send(());
+                        });
+                    }
+                }
+            }),
+        };
+        let mut err = Vec::new();
+        let code = serve(
+            Params::default(),
+            input,
+            &mut out.clone(),
+            &mut err,
+            Arc::new(d),
+        );
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        // When the call line was read: initialize, ping and tools/list were answered, the baseline analysis still blocked.
+        assert_eq!(*seen_before_call.lock().unwrap(), Some((3, false)));
+        let raw = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        let replies: Vec<Value> = raw
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let ids: Vec<Value> = replies.iter().map(|r| r["id"].clone()).collect();
+        assert_eq!(ids, [json!(1), json!(2), json!(3), json!(4)], "{raw}");
+        // The call was answered after the gate, and the baseline is the state at the start: the
+        // build folder was there (new: false), the worktree appeared since (new: true).
+        let report = report_of(&replies[3]);
+        let items = report["items"].as_array().unwrap();
+        assert!(
+            items
+                .iter()
+                .any(|i| i["category"] == "builds" && i["new"] == false),
+            "{report}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i["category"] == "worktrees" && i["new"] == true),
+            "{report}"
+        );
+        assert_eq!(report["stale"], false);
     }
 }
