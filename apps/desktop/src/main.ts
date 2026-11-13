@@ -1,37 +1,93 @@
 import './styles/tokens.css';
 import './styles/frame.css';
 import './styles/shell.css';
+import './styles/list.css';
 import { api, errorText, onView } from './api.ts';
-import { renderShell } from './render/shell.ts';
-import { accept, state } from './state.ts';
-import type { SectionId, SectionView } from './types.ts';
+import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
+import { acceptView, createGate, createUi } from './state.ts';
+import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
+const ui = createUi();
+let app: AppInfo | null = null;
+/** The message of the last failed command; cleared by the next answer that arrives. */
+let error: string | null = null;
+/** Rapid clicks on the section bar: only the answer to the last one is drawn. */
+const opening = createGate();
+
+const SCROLLERS = ['#bar2 .items', '#rows .grid'];
+
+/** Draws the open section's view and keeps what the user was doing: the focused control and the scroll positions. */
 function render(): void {
-  const view = state.views[state.open];
-  if (state.app && view) renderShell(state.app, view);
-}
-
-async function open(section: SectionId): Promise<void> {
-  try {
-    const view: SectionView = await api.show(section);
-    accept(view);
-    state.open = section;
-    render();
-  } catch (error) {
-    document.getElementById('status-text')?.replaceChildren(errorText(error));
+  const view = ui.views[ui.section];
+  if (!app || !view) {
+    // Nothing to draw yet and a command failed: say so rather than leave a blank window.
+    if (error !== null) renderFailure(error);
+    return;
+  }
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
+  const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
+  renderShell({ app, view, ui, error }, handlers);
+  SCROLLERS.forEach((selector, i) => {
+    const node = document.querySelector(selector);
+    if (node) node.scrollTop = scrolls[i] ?? 0;
+  });
+  if (active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
+    document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
   }
 }
 
+async function open(section: SectionId): Promise<void> {
+  await opening.run(
+    () => api.show(section),
+    (view) => {
+      acceptView(ui, view);
+      ui.section = section;
+      error = null;
+      render();
+    },
+    (failure) => {
+      error = errorText(failure);
+      render();
+    },
+  );
+}
+
+async function send(section: SectionId, intent: AnyIntent | null): Promise<void> {
+  if (intent === null) return;
+  try {
+    const view = await api.intent(section, intent);
+    error = null;
+    acceptView(ui, view);
+  } catch (failure) {
+    error = errorText(failure);
+  }
+  render();
+}
+
+const handlers: Handlers = {
+  openSection: (id) => { void open(id); },
+  send: (section, intent) => { void send(section, intent); },
+  focusRow: (id) => { ui.focus[ui.section] = id; render(); },
+  toggleExpanded: (id) => {
+    if (!ui.expanded.delete(id)) ui.expanded.add(id);
+    render();
+  },
+  addRoot: () => {
+    void api.addRoot().then((view) => { acceptView(ui, view); render(); }, (failure) => { error = errorText(failure); render(); });
+  },
+};
+
 async function start(): Promise<void> {
-  state.app = await api.appInfo();
-  onView((view) => {
-    if (accept(view) && view.section === state.open) render();
-  });
-  document.getElementById('sections')?.addEventListener('click', (event) => {
-    const target = (event.target as Element).closest<HTMLElement>('[data-section]');
-    if (target) void open(target.dataset.section as SectionId);
-  });
-  await open('cleanup');
+  try {
+    app = await api.appInfo();
+    onView((view) => {
+      if (acceptView(ui, view) && view.section === ui.section) render();
+    });
+    await open('cleanup');
+  } catch (failure) {
+    // No window state to draw: say what happened instead of leaving a blank window.
+    renderFailure(errorText(failure));
+  }
 }
 
 void start();

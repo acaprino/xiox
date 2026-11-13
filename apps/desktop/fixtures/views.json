@@ -13,6 +13,619 @@
   },
   "views": {
     "cleanup": {
+      "idle": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Ready",
+          "text": "Pick what to clean, then analyze"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "6 items · 4 selected",
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "6 items",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "cat:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows temporary files",
+            "sub": "%TEMP%, C:\\Windows\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Files Windows and programs recreate on their own.",
+            "detail": [
+              [
+                "item",
+                "Windows temporary files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Recycle Bin",
+            "sub": "all drives",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Files you already deleted; emptying the bin frees the space for good.",
+            "detail": [
+              [
+                "item",
+                "Recycle Bin"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "empties the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "User temporary files",
+            "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Scratch files left behind by programs you ran.",
+            "detail": [
+              [
+                "item",
+                "User temporary files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:3",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows log files",
+            "sub": "C:\\Windows\\Logs",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Old diagnostic logs; Windows writes new ones when needed.",
+            "detail": [
+              [
+                "item",
+                "Windows log files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Error Reporting",
+            "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
+            "level": "caution",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Crash reports that support may ask for; keep them if you are chasing a crash.",
+            "detail": [
+              [
+                "item",
+                "Windows Error Reporting"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Memory dumps",
+            "sub": "C:\\Windows\\Minidump",
+            "level": "optional",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Crash dumps; only useful to someone debugging a blue screen.",
+            "detail": [
+              [
+                "item",
+                "Memory dumps"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": true
+          },
+          {
+            "id": "clean",
+            "label": "Clean 4 items",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": null,
+        "report": null,
+        "footer": "Ready · Winapp2 rules updated today"
+      },
+      "analyzing": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": {
+          "label": "Analyzing…",
+          "fraction": 0,
+          "detail": "Windows temporary files"
+        },
+        "status": {
+          "badge": "Analyzing",
+          "text": "Looking at 6 items"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "6 items · 4 selected",
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "6 items",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "cat:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows temporary files",
+            "sub": "%TEMP%, C:\\Windows\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Files Windows and programs recreate on their own.",
+            "detail": [
+              [
+                "item",
+                "Windows temporary files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Recycle Bin",
+            "sub": "all drives",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Files you already deleted; emptying the bin frees the space for good.",
+            "detail": [
+              [
+                "item",
+                "Recycle Bin"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "empties the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "User temporary files",
+            "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Scratch files left behind by programs you ran.",
+            "detail": [
+              [
+                "item",
+                "User temporary files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:3",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows log files",
+            "sub": "C:\\Windows\\Logs",
+            "level": "recommended",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Old diagnostic logs; Windows writes new ones when needed.",
+            "detail": [
+              [
+                "item",
+                "Windows log files"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Error Reporting",
+            "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
+            "level": "caution",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Crash reports that support may ask for; keep them if you are chasing a crash.",
+            "detail": [
+              [
+                "item",
+                "Windows Error Reporting"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Memory dumps",
+            "sub": "C:\\Windows\\Minidump",
+            "level": "optional",
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Crash dumps; only useful to someone debugging a blue screen.",
+            "detail": [
+              [
+                "item",
+                "Memory dumps"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 4 items",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel",
+            "key": "Escape",
+            "enabled": true,
+            "primary": false
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": null,
+        "report": null,
+        "footer": "Ready · Winapp2 rules updated today"
+      },
       "analyzed": {
         "section": "cleanup",
         "rev": 1,
@@ -361,9 +974,1371 @@
         "dialog": null,
         "report": null,
         "footer": "Ready · Winapp2 rules updated today"
+      },
+      "confirm": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Analysis done",
+          "text": "12.4 GB to delete (18 204 files)"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "6 items · 4 selected",
+            "bytes": 13314398618,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": 222298112,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": 1825361101,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": 2899102925,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "6 items · largest first",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "cat:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows temporary files",
+            "sub": "%TEMP%, C:\\Windows\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4402341478,
+            "sizeText": "4.10 GB",
+            "muted": false,
+            "why": "Files Windows and programs recreate on their own.",
+            "detail": [
+              [
+                "item",
+                "Windows temporary files"
+              ],
+              [
+                "files",
+                "18 204"
+              ],
+              [
+                "size",
+                "4.10 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Recycle Bin",
+            "sub": "all drives",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4187593114,
+            "sizeText": "3.90 GB",
+            "muted": false,
+            "why": "Files you already deleted; emptying the bin frees the space for good.",
+            "detail": [
+              [
+                "item",
+                "Recycle Bin"
+              ],
+              [
+                "files",
+                "2 311"
+              ],
+              [
+                "size",
+                "3.90 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "empties the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "User temporary files",
+            "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 3435973837,
+            "sizeText": "3.20 GB",
+            "muted": false,
+            "why": "Scratch files left behind by programs you ran.",
+            "detail": [
+              [
+                "item",
+                "User temporary files"
+              ],
+              [
+                "files",
+                "9 870"
+              ],
+              [
+                "size",
+                "3.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:3",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows log files",
+            "sub": "C:\\Windows\\Logs",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 1288490189,
+            "sizeText": "1.20 GB",
+            "muted": false,
+            "why": "Old diagnostic logs; Windows writes new ones when needed.",
+            "detail": [
+              [
+                "item",
+                "Windows log files"
+              ],
+              [
+                "files",
+                "5 118"
+              ],
+              [
+                "size",
+                "1.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Error Reporting",
+            "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
+            "level": "caution",
+            "cells": [],
+            "bytes": 1825361101,
+            "sizeText": "1.70 GB",
+            "muted": false,
+            "why": "Crash reports that support may ask for; keep them if you are chasing a crash.",
+            "detail": [
+              [
+                "item",
+                "Windows Error Reporting"
+              ],
+              [
+                "files",
+                "742"
+              ],
+              [
+                "size",
+                "1.70 GB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Memory dumps",
+            "sub": "C:\\Windows\\Minidump",
+            "level": "optional",
+            "cells": [],
+            "bytes": 100663296,
+            "sizeText": "96.0 MB",
+            "muted": false,
+            "why": "Crash dumps; only useful to someone debugging a blue screen.",
+            "detail": [
+              [
+                "item",
+                "Memory dumps"
+              ],
+              [
+                "files",
+                "4"
+              ],
+              [
+                "size",
+                "96.0 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 4 items",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": {
+          "id": "confirm",
+          "title": "Clean 4 items?",
+          "text": [
+            "The selected items will be removed."
+          ],
+          "summary": [
+            "4 items · 13.31 GB"
+          ],
+          "rows": [
+            [
+              "Windows temporary files",
+              "4.10 GB"
+            ],
+            [
+              "Recycle Bin",
+              "3.90 GB"
+            ],
+            [
+              "User temporary files",
+              "3.20 GB"
+            ],
+            [
+              "Windows log files",
+              "1.20 GB"
+            ]
+          ],
+          "warningsTitle": null,
+          "warnings": [],
+          "cautionTitle": null,
+          "cautions": [],
+          "ack": null,
+          "error": null,
+          "buttons": [
+            {
+              "id": "cancel",
+              "label": "Cancel",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "continue",
+              "label": "Clean",
+              "enabled": true,
+              "primary": true
+            }
+          ]
+        },
+        "report": null,
+        "footer": "Ready · Winapp2 rules updated today"
+      },
+      "cleaning": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": {
+          "label": "Cleaning…",
+          "fraction": 0,
+          "detail": "Windows temporary files"
+        },
+        "status": {
+          "badge": "Cleaning",
+          "text": "Removing 4 items"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "6 items · 4 selected",
+            "bytes": 13314398618,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": 222298112,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": 1825361101,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": 2899102925,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "6 items · largest first",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "cat:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows temporary files",
+            "sub": "%TEMP%, C:\\Windows\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4402341478,
+            "sizeText": "4.10 GB",
+            "muted": false,
+            "why": "Files Windows and programs recreate on their own.",
+            "detail": [
+              [
+                "item",
+                "Windows temporary files"
+              ],
+              [
+                "files",
+                "18 204"
+              ],
+              [
+                "size",
+                "4.10 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Recycle Bin",
+            "sub": "all drives",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4187593114,
+            "sizeText": "3.90 GB",
+            "muted": false,
+            "why": "Files you already deleted; emptying the bin frees the space for good.",
+            "detail": [
+              [
+                "item",
+                "Recycle Bin"
+              ],
+              [
+                "files",
+                "2 311"
+              ],
+              [
+                "size",
+                "3.90 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "empties the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "User temporary files",
+            "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 3435973837,
+            "sizeText": "3.20 GB",
+            "muted": false,
+            "why": "Scratch files left behind by programs you ran.",
+            "detail": [
+              [
+                "item",
+                "User temporary files"
+              ],
+              [
+                "files",
+                "9 870"
+              ],
+              [
+                "size",
+                "3.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:3",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows log files",
+            "sub": "C:\\Windows\\Logs",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 1288490189,
+            "sizeText": "1.20 GB",
+            "muted": false,
+            "why": "Old diagnostic logs; Windows writes new ones when needed.",
+            "detail": [
+              [
+                "item",
+                "Windows log files"
+              ],
+              [
+                "files",
+                "5 118"
+              ],
+              [
+                "size",
+                "1.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Error Reporting",
+            "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
+            "level": "caution",
+            "cells": [],
+            "bytes": 1825361101,
+            "sizeText": "1.70 GB",
+            "muted": false,
+            "why": "Crash reports that support may ask for; keep them if you are chasing a crash.",
+            "detail": [
+              [
+                "item",
+                "Windows Error Reporting"
+              ],
+              [
+                "files",
+                "742"
+              ],
+              [
+                "size",
+                "1.70 GB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Memory dumps",
+            "sub": "C:\\Windows\\Minidump",
+            "level": "optional",
+            "cells": [],
+            "bytes": 100663296,
+            "sizeText": "96.0 MB",
+            "muted": false,
+            "why": "Crash dumps; only useful to someone debugging a blue screen.",
+            "detail": [
+              [
+                "item",
+                "Memory dumps"
+              ],
+              [
+                "files",
+                "4"
+              ],
+              [
+                "size",
+                "96.0 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 4 items",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel",
+            "key": "Escape",
+            "enabled": true,
+            "primary": false
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": null,
+        "report": null,
+        "footer": "Ready · Winapp2 rules updated today"
+      },
+      "report": {
+        "section": "cleanup",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Clean finished",
+          "text": "13.31 GB freed"
+        },
+        "nav": [
+          {
+            "id": "cat:system",
+            "name": "System",
+            "note": "6 items · 4 selected",
+            "bytes": 13314398618,
+            "active": true
+          },
+          {
+            "id": "cat:explorer",
+            "name": "Explorer",
+            "note": "5 items · 0 selected",
+            "bytes": 222298112,
+            "active": false
+          },
+          {
+            "id": "cat:advanced",
+            "name": "Advanced",
+            "note": "7 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:windows",
+            "name": "Windows",
+            "note": "14 items · 0 selected",
+            "bytes": 1825361101,
+            "active": false
+          },
+          {
+            "id": "cat:browser",
+            "name": "Browser",
+            "note": "9 items · 0 selected",
+            "bytes": 2899102925,
+            "active": false
+          },
+          {
+            "id": "cat:devai",
+            "name": "Development & AI",
+            "note": "12 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          },
+          {
+            "id": "cat:apps",
+            "name": "Applications",
+            "note": "31 items · 0 selected",
+            "bytes": 0,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "onlyOld",
+            "label": "Only delete Temp files older than 24 hours",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "button",
+            "id": "keepList",
+            "label": "Keep list…",
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "System",
+        "subtitle": "6 items · largest first",
+        "columns": [
+          {
+            "title": "Item",
+            "kind": "name"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "cat:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows temporary files",
+            "sub": "%TEMP%, C:\\Windows\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4402341478,
+            "sizeText": "4.10 GB",
+            "muted": false,
+            "why": "Files Windows and programs recreate on their own.",
+            "detail": [
+              [
+                "item",
+                "Windows temporary files"
+              ],
+              [
+                "files",
+                "18 204"
+              ],
+              [
+                "size",
+                "4.10 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Recycle Bin",
+            "sub": "all drives",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 4187593114,
+            "sizeText": "3.90 GB",
+            "muted": false,
+            "why": "Files you already deleted; emptying the bin frees the space for good.",
+            "detail": [
+              [
+                "item",
+                "Recycle Bin"
+              ],
+              [
+                "files",
+                "2 311"
+              ],
+              [
+                "size",
+                "3.90 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "empties the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "User temporary files",
+            "sub": "C:\\Users\\<you>\\AppData\\Local\\Temp",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 3435973837,
+            "sizeText": "3.20 GB",
+            "muted": false,
+            "why": "Scratch files left behind by programs you ran.",
+            "detail": [
+              [
+                "item",
+                "User temporary files"
+              ],
+              [
+                "files",
+                "9 870"
+              ],
+              [
+                "size",
+                "3.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:3",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Windows log files",
+            "sub": "C:\\Windows\\Logs",
+            "level": "recommended",
+            "cells": [],
+            "bytes": 1288490189,
+            "sizeText": "1.20 GB",
+            "muted": false,
+            "why": "Old diagnostic logs; Windows writes new ones when needed.",
+            "detail": [
+              [
+                "item",
+                "Windows log files"
+              ],
+              [
+                "files",
+                "5 118"
+              ],
+              [
+                "size",
+                "1.20 GB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Error Reporting",
+            "sub": "C:\\ProgramData\\Microsoft\\Windows\\WER",
+            "level": "caution",
+            "cells": [],
+            "bytes": 1825361101,
+            "sizeText": "1.70 GB",
+            "muted": false,
+            "why": "Crash reports that support may ask for; keep them if you are chasing a crash.",
+            "detail": [
+              [
+                "item",
+                "Windows Error Reporting"
+              ],
+              [
+                "files",
+                "742"
+              ],
+              [
+                "size",
+                "1.70 GB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "cat:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Memory dumps",
+            "sub": "C:\\Windows\\Minidump",
+            "level": "optional",
+            "cells": [],
+            "bytes": 100663296,
+            "sizeText": "96.0 MB",
+            "muted": false,
+            "why": "Crash dumps; only useful to someone debugging a blue screen.",
+            "detail": [
+              [
+                "item",
+                "Memory dumps"
+              ],
+              [
+                "files",
+                "4"
+              ],
+              [
+                "size",
+                "96.0 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "permanently"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 4 items",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": {
+          "placeholder": "Filter items",
+          "value": ""
+        },
+        "dialog": null,
+        "report": {
+          "title": "Cleanup finished",
+          "freedBytes": 13314398618,
+          "recycledBytes": 0,
+          "files": 35503,
+          "dirs": 412,
+          "elapsedMs": 16000,
+          "cancelled": false,
+          "notes": [],
+          "byCategory": [
+            [
+              "System",
+              13314398618
+            ]
+          ],
+          "skipped": [
+            {
+              "item": "Windows temporary files",
+              "why": "In use by another program",
+              "path": "C:\\Windows\\Temp\\wmi.log"
+            }
+          ],
+          "failed": [],
+          "items": [
+            {
+              "name": "Windows temporary files",
+              "freedBytes": 4402341478,
+              "removed": 18204,
+              "left": 0,
+              "note": null,
+              "lines": []
+            },
+            {
+              "name": "Recycle Bin",
+              "freedBytes": 4187593114,
+              "removed": 2311,
+              "left": 0,
+              "note": null,
+              "lines": []
+            },
+            {
+              "name": "User temporary files",
+              "freedBytes": 3435973837,
+              "removed": 9870,
+              "left": 0,
+              "note": null,
+              "lines": []
+            },
+            {
+              "name": "Windows log files",
+              "freedBytes": 1288490189,
+              "removed": 5118,
+              "left": 0,
+              "note": null,
+              "lines": []
+            }
+          ],
+          "canSave": true,
+          "saved": null
+        },
+        "footer": "Ready · Winapp2 rules updated today"
       }
     },
     "registry": {
+      "idle": {
+        "section": "registry",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Ready",
+          "text": "No scan yet"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Uninstall entries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "File types",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Startup entries",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "No scan yet",
+        "columns": [
+          {
+            "title": "Problem",
+            "kind": "name"
+          },
+          {
+            "title": "Category",
+            "kind": "cell"
+          },
+          {
+            "title": "Count",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "No scan yet",
+          "text": "Press Scan to look for registry problems."
+        },
+        "notices": [
+          {
+            "tone": "info",
+            "text": "A backup is saved before anything is fixed.",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Scan",
+            "key": "s",
+            "enabled": true,
+            "primary": true
+          },
+          {
+            "id": "fix",
+            "label": "Fix 0 groups",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "No scan yet"
+      },
+      "scanning": {
+        "section": "registry",
+        "rev": 1,
+        "job": {
+          "label": "Scanning the registry…",
+          "fraction": 0,
+          "detail": "HKLM\\SOFTWARE"
+        },
+        "status": {
+          "badge": "Scanning",
+          "text": "Looking for problems"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Uninstall entries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "File types",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Startup entries",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "No scan yet",
+        "columns": [
+          {
+            "title": "Problem",
+            "kind": "name"
+          },
+          {
+            "title": "Category",
+            "kind": "cell"
+          },
+          {
+            "title": "Count",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "No scan yet",
+          "text": "Press Scan to look for registry problems."
+        },
+        "notices": [
+          {
+            "tone": "info",
+            "text": "A backup is saved before anything is fixed.",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Scan",
+            "key": "s",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "fix",
+            "label": "Fix 0 groups",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "No scan yet"
+      },
       "analyzed": {
         "section": "registry",
         "rev": 1,
@@ -578,9 +2553,698 @@
         "dialog": null,
         "report": null,
         "footer": "Last scan 2 minutes ago"
+      },
+      "backup": {
+        "section": "registry",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Scan done",
+          "text": "24 problems found in 4 categories"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Uninstall entries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "File types",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Startup entries",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "4 groups · 24 problems",
+        "columns": [
+          {
+            "title": "Problem",
+            "kind": "name"
+          },
+          {
+            "title": "Category",
+            "kind": "cell"
+          },
+          {
+            "title": "Count",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [
+          {
+            "id": "i:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
+            "level": "recommended",
+            "cells": [
+              "Shared DLLs",
+              "12"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The file the entry points to no longer exists.",
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Orphaned uninstall entry",
+            "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OldTool",
+            "level": "recommended",
+            "cells": [
+              "Uninstall",
+              "7"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The program was removed but its uninstall entry stayed.",
+            "detail": [
+              [
+                "item",
+                "Orphaned uninstall entry"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Broken file association",
+            "sub": "HKCU\\Software\\Classes\\.xyz",
+            "level": "optional",
+            "cells": [
+              "File types",
+              "3"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The extension opens a program that is gone.",
+            "detail": [
+              [
+                "item",
+                "Broken file association"
+              ],
+              [
+                "level",
+                "optional"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:3",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Stale startup entry",
+            "sub": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "level": "caution",
+            "cells": [
+              "Startup",
+              "2"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Points to a missing program; check before removing.",
+            "detail": [
+              [
+                "item",
+                "Stale startup entry"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [
+          {
+            "tone": "info",
+            "text": "A backup is saved before anything is fixed.",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Scan",
+            "key": "s",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "fix",
+            "label": "Fix 2 groups",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": {
+          "id": "backup",
+          "title": "Back up the registry first?",
+          "text": [
+            "Fixing changes the registry. A backup lets you undo the fix by double-clicking its .reg file."
+          ],
+          "summary": [
+            "2 groups · 19 problems"
+          ],
+          "rows": [
+            [
+              "Shared DLLs",
+              "12"
+            ],
+            [
+              "Uninstall entries",
+              "7"
+            ]
+          ],
+          "warningsTitle": "Before you continue",
+          "warnings": [
+            "Close other programs that may be using the registry."
+          ],
+          "cautionTitle": null,
+          "cautions": [],
+          "ack": null,
+          "error": null,
+          "buttons": [
+            {
+              "id": "cancel",
+              "label": "Cancel",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "nobackup",
+              "label": "Fix without backup",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "backup",
+              "label": "Back up and fix",
+              "enabled": true,
+              "primary": true
+            }
+          ]
+        },
+        "report": null,
+        "footer": "Last scan 2 minutes ago"
+      },
+      "fixing": {
+        "section": "registry",
+        "rev": 1,
+        "job": {
+          "label": "Fixing…",
+          "fraction": 0,
+          "detail": "Shared DLLs"
+        },
+        "status": {
+          "badge": "Fixing",
+          "text": "Fixing 19 problems"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Uninstall entries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "File types",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Startup entries",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "4 groups · 24 problems",
+        "columns": [
+          {
+            "title": "Problem",
+            "kind": "name"
+          },
+          {
+            "title": "Category",
+            "kind": "cell"
+          },
+          {
+            "title": "Count",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [
+          {
+            "id": "i:0",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs",
+            "level": "recommended",
+            "cells": [
+              "Shared DLLs",
+              "12"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The file the entry points to no longer exists.",
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Orphaned uninstall entry",
+            "sub": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OldTool",
+            "level": "recommended",
+            "cells": [
+              "Uninstall",
+              "7"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The program was removed but its uninstall entry stayed.",
+            "detail": [
+              [
+                "item",
+                "Orphaned uninstall entry"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Broken file association",
+            "sub": "HKCU\\Software\\Classes\\.xyz",
+            "level": "optional",
+            "cells": [
+              "File types",
+              "3"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "The extension opens a program that is gone.",
+            "detail": [
+              [
+                "item",
+                "Broken file association"
+              ],
+              [
+                "level",
+                "optional"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:3",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Stale startup entry",
+            "sub": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "level": "caution",
+            "cells": [
+              "Startup",
+              "2"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Points to a missing program; check before removing.",
+            "detail": [
+              [
+                "item",
+                "Stale startup entry"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [
+          {
+            "tone": "info",
+            "text": "A backup is saved before anything is fixed.",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Scan",
+            "key": "s",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "fix",
+            "label": "Fix 2 groups",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Last scan 2 minutes ago"
+      },
+      "fixed": {
+        "section": "registry",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Fixed",
+          "text": "19 problems fixed"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Uninstall entries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "File types",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Startup entries",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "0 problems",
+        "columns": [
+          {
+            "title": "Problem",
+            "kind": "name"
+          },
+          {
+            "title": "Category",
+            "kind": "cell"
+          },
+          {
+            "title": "Count",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "Nothing left to fix",
+          "text": "The selected problems were fixed."
+        },
+        "notices": [
+          {
+            "tone": "ok",
+            "text": "A backup was saved in the Xiox folder before fixing.",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Scan",
+            "key": "s",
+            "enabled": true,
+            "primary": true
+          },
+          {
+            "id": "fix",
+            "label": "Fix 0 groups",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Fixed just now"
       }
     },
     "services": {
+      "loading": {
+        "section": "services",
+        "rev": 1,
+        "job": {
+          "label": "Reading services…",
+          "fraction": 0,
+          "detail": null
+        },
+        "status": {
+          "badge": "Loading",
+          "text": "Reading services…"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "choice",
+            "id": "filter",
+            "label": "Show",
+            "value": "recommended",
+            "choices": [
+              {
+                "id": "recommended",
+                "label": "Recommended"
+              },
+              {
+                "id": "all",
+                "label": "All"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "meter",
+            "id": "ram",
+            "label": "Memory in use",
+            "usedBytes": 20830591386,
+            "totalBytes": 33930000000,
+            "tone": "info"
+          },
+          {
+            "kind": "text",
+            "text": "Protected services are never listed.",
+            "tone": "info",
+            "hint": null
+          }
+        ],
+        "title": "Services",
+        "subtitle": "Reading…",
+        "columns": [
+          {
+            "title": "Service",
+            "kind": "name"
+          },
+          {
+            "title": "Startup",
+            "kind": "cell"
+          },
+          {
+            "title": "State",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "Reading services",
+          "text": "This takes a moment."
+        },
+        "notices": [],
+        "actions": [
+          {
+            "id": "refresh",
+            "label": "Refresh",
+            "key": "r",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "disable",
+            "label": "Disable",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "manual",
+            "label": "Set to Manual",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "restore",
+            "label": "Restore originals",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": {
+          "placeholder": "Filter services",
+          "value": ""
+        },
+        "dialog": null,
+        "report": null,
+        "footer": "Read at 10:42"
+      },
       "loaded": {
         "section": "services",
         "rev": 1,
@@ -850,7 +3514,7 @@
             "lines": []
           }
         ],
-        "bulk": true,
+        "bulk": false,
         "empty": null,
         "notices": [],
         "actions": [
@@ -890,9 +3554,631 @@
         "dialog": null,
         "report": null,
         "footer": "Read at 10:42"
+      },
+      "confirm": {
+        "section": "services",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Loaded",
+          "text": "184 services read · 6 can be trimmed"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "choice",
+            "id": "filter",
+            "label": "Show",
+            "value": "recommended",
+            "choices": [
+              {
+                "id": "recommended",
+                "label": "Recommended"
+              },
+              {
+                "id": "all",
+                "label": "All"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "meter",
+            "id": "ram",
+            "label": "Memory in use",
+            "usedBytes": 20830591386,
+            "totalBytes": 33930000000,
+            "tone": "info"
+          },
+          {
+            "kind": "text",
+            "text": "Protected services are never listed.",
+            "tone": "info",
+            "hint": null
+          }
+        ],
+        "title": "Services",
+        "subtitle": "6 recommended · 184 total",
+        "columns": [
+          {
+            "title": "Service",
+            "kind": "name"
+          },
+          {
+            "title": "Startup",
+            "kind": "cell"
+          },
+          {
+            "title": "State",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          }
+        ],
+        "rows": [
+          {
+            "id": "svc:Fax",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Fax",
+            "sub": "Fax",
+            "level": "recommended",
+            "cells": [
+              "Manual",
+              "Stopped"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Needs a fax modem, which almost no PC has.",
+            "detail": [
+              [
+                "item",
+                "Fax"
+              ],
+              [
+                "service",
+                "Fax"
+              ],
+              [
+                "startup",
+                "Manual"
+              ],
+              [
+                "state",
+                "Stopped"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:DiagTrack",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Connected User Experiences and Telemetry",
+            "sub": "DiagTrack",
+            "level": "recommended",
+            "cells": [
+              "Automatic",
+              "Running"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Sends usage data to Microsoft; Windows works without it.",
+            "detail": [
+              [
+                "item",
+                "Connected User Experiences and Telemetry"
+              ],
+              [
+                "service",
+                "DiagTrack"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:MapsBroker",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Downloaded Maps Manager",
+            "sub": "MapsBroker",
+            "level": "recommended",
+            "cells": [
+              "Automatic (delayed)",
+              "Running"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Only used by the Maps app.",
+            "detail": [
+              [
+                "item",
+                "Downloaded Maps Manager"
+              ],
+              [
+                "service",
+                "MapsBroker"
+              ],
+              [
+                "startup",
+                "Automatic (delayed)"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "level",
+                "recommended"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:WSearch",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Search",
+            "sub": "WSearch",
+            "level": "optional",
+            "cells": [
+              "Automatic (delayed)",
+              "Running"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Indexes files for search; turning it off slows searches.",
+            "detail": [
+              [
+                "item",
+                "Windows Search"
+              ],
+              [
+                "service",
+                "WSearch"
+              ],
+              [
+                "startup",
+                "Automatic (delayed)"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "level",
+                "optional"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:SysMain",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "SysMain",
+            "sub": "SysMain",
+            "level": "caution",
+            "cells": [
+              "Automatic",
+              "Running"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Preloads apps into memory; matters on slow disks.",
+            "detail": [
+              [
+                "item",
+                "SysMain"
+              ],
+              [
+                "service",
+                "SysMain"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "level",
+                "caution"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "refresh",
+            "label": "Refresh",
+            "key": "r",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "disable",
+            "label": "Disable",
+            "key": null,
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "manual",
+            "label": "Set to Manual",
+            "key": null,
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "restore",
+            "label": "Restore originals",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": {
+          "placeholder": "Filter services",
+          "value": ""
+        },
+        "dialog": {
+          "id": "confirm",
+          "title": "Disable 3 services?",
+          "text": [
+            "The selected services stop now and stay off until you restore them."
+          ],
+          "summary": [
+            "3 services"
+          ],
+          "rows": [
+            [
+              "Fax",
+              "Manual"
+            ],
+            [
+              "Connected User Experiences and Telemetry",
+              "Automatic"
+            ],
+            [
+              "Downloaded Maps Manager",
+              "Automatic (delayed)"
+            ]
+          ],
+          "warningsTitle": null,
+          "warnings": [],
+          "cautionTitle": null,
+          "cautions": [],
+          "ack": null,
+          "error": null,
+          "buttons": [
+            {
+              "id": "cancel",
+              "label": "Cancel",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "continue",
+              "label": "Disable",
+              "enabled": true,
+              "primary": true
+            }
+          ]
+        },
+        "report": null,
+        "footer": "Read at 10:42"
       }
     },
     "developers": {
+      "idle": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Ready",
+          "text": "No analysis yet"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": null,
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": null,
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": null,
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "No analysis yet",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "No analysis yet",
+          "text": "Press Analyze to look for build output, old worktrees and archived sessions."
+        },
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": true
+          },
+          {
+            "id": "clean",
+            "label": "Clean 0 folders",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Ready"
+      },
+      "analyzing": {
+        "section": "developers",
+        "rev": 1,
+        "job": {
+          "label": "Looking at projects…",
+          "fraction": 0,
+          "detail": "D:\\Projects"
+        },
+        "status": {
+          "badge": "Analyzing",
+          "text": "Looking at 2 folders"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": null,
+            "bytes": null,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": null,
+            "bytes": null,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": null,
+            "bytes": null,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "No analysis yet",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "No analysis yet",
+          "text": "Press Analyze to look for build output, old worktrees and archived sessions."
+        },
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 0 folders",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel",
+            "key": "Escape",
+            "enabled": true,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Ready"
+      },
       "projects": {
         "section": "developers",
         "rev": 1,
@@ -912,14 +4198,14 @@
           {
             "id": "worktrees",
             "name": "Worktrees",
-            "note": "3 worktrees · 0 selected",
+            "note": "3 worktrees · 2 selected",
             "bytes": 966367642,
             "active": false
           },
           {
             "id": "sessions",
             "name": "Archived sessions",
-            "note": "41 sessions · 0 selected",
+            "note": "8 sessions · 2 selected",
             "bytes": 214748365,
             "active": false
           }
@@ -999,10 +4285,10 @@
             "id": "p:1",
             "kind": "item",
             "parent": null,
-            "check": "on",
+            "check": "mixed",
             "enabled": true,
-            "name": "xiox",
-            "sub": "D:\\Projects\\KKK\\ccleaner64\\app",
+            "name": "acme-api",
+            "sub": "D:\\Projects\\acme-api",
             "level": "recommended",
             "cells": [
               "2026-11-10"
@@ -1014,7 +4300,7 @@
             "detail": [
               [
                 "item",
-                "xiox"
+                "acme-api"
               ],
               [
                 "size",
@@ -1059,7 +4345,7 @@
             "id": "a:2",
             "kind": "child",
             "parent": "p:1",
-            "check": "on",
+            "check": "off",
             "enabled": true,
             "name": "node_modules",
             "sub": "npm packages",
@@ -1134,6 +4420,1769 @@
         "search": null,
         "dialog": null,
         "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "worktrees": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Analysis done",
+          "text": "768.0 MB can be removed from 2 worktrees"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": false
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": true
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Worktrees",
+        "subtitle": "3 worktrees · largest first",
+        "columns": [
+          {
+            "title": "Worktree",
+            "kind": "name"
+          },
+          {
+            "title": "Branch",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "w:1",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "feature-login",
+            "sub": "D:\\Projects\\acme-api-wt\\feature-login",
+            "level": "recommended",
+            "cells": [
+              "feature/login"
+            ],
+            "bytes": 524288000,
+            "sizeText": "500.0 MB",
+            "muted": false,
+            "why": "Merged into main; the branch can be recreated.",
+            "detail": [
+              [
+                "item",
+                "feature-login"
+              ],
+              [
+                "size",
+                "500.0 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "w:2",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "hotfix-cors",
+            "sub": "D:\\Projects\\acme-api-wt\\hotfix-cors",
+            "level": "recommended",
+            "cells": [
+              "hotfix/cors"
+            ],
+            "bytes": 268435456,
+            "sizeText": "256.0 MB",
+            "muted": false,
+            "why": "No changes since the last commit.",
+            "detail": [
+              [
+                "item",
+                "hotfix-cors"
+              ],
+              [
+                "size",
+                "256.0 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "h:others",
+            "kind": "header",
+            "parent": null,
+            "check": "none",
+            "enabled": true,
+            "name": "Other worktrees",
+            "sub": null,
+            "level": null,
+            "cells": [],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [],
+            "lines": []
+          },
+          {
+            "id": "o:1",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "experiment",
+            "sub": "D:\\Work\\scratch\\experiment",
+            "level": "caution",
+            "cells": [
+              "experiment/spike"
+            ],
+            "bytes": 173644186,
+            "sizeText": "165.6 MB",
+            "muted": false,
+            "why": "Not created by an agent: check it before removing.",
+            "detail": [
+              [
+                "item",
+                "experiment"
+              ],
+              [
+                "size",
+                "165.6 MB"
+              ],
+              [
+                "level",
+                "caution"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Remove 2 worktrees",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "sessions": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Analysis done",
+          "text": "103.0 MB can be removed from 2 sessions"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": false
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": true
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Archived sessions",
+        "subtitle": "8 sessions · largest first",
+        "columns": [
+          {
+            "title": "Session",
+            "kind": "name"
+          },
+          {
+            "title": "Agent",
+            "kind": "cell"
+          },
+          {
+            "title": "Last used",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "s:claude:7f3a91",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Refactor the billing module",
+            "sub": "claude · 7f3a91",
+            "level": "recommended",
+            "cells": [
+              "claude",
+              "2026-08-21"
+            ],
+            "bytes": 60000000,
+            "sizeText": "57.2 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Refactor the billing module"
+              ],
+              [
+                "size",
+                "57.2 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:codex:2b19c4",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Fix the flaky CI job",
+            "sub": "codex · 2b19c4",
+            "level": "recommended",
+            "cells": [
+              "codex",
+              "2026-08-30"
+            ],
+            "bytes": 45000000,
+            "sizeText": "42.9 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Fix the flaky CI job"
+              ],
+              [
+                "size",
+                "42.9 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:claude:c04e77",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Add pagination to the orders API",
+            "sub": "claude · c04e77",
+            "level": "recommended",
+            "cells": [
+              "claude",
+              "2026-09-04"
+            ],
+            "bytes": 38000000,
+            "sizeText": "36.2 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Add pagination to the orders API"
+              ],
+              [
+                "size",
+                "36.2 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:opencode:91d2a0",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Draft the migration plan",
+            "sub": "opencode · 91d2a0",
+            "level": "recommended",
+            "cells": [
+              "opencode",
+              "2026-09-12"
+            ],
+            "bytes": 25000000,
+            "sizeText": "23.8 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Draft the migration plan"
+              ],
+              [
+                "size",
+                "23.8 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:pi:e5b608",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Explore the cache layer",
+            "sub": "pi · e5b608",
+            "level": "recommended",
+            "cells": [
+              "pi",
+              "2026-09-18"
+            ],
+            "bytes": 20000000,
+            "sizeText": "19.1 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Explore the cache layer"
+              ],
+              [
+                "size",
+                "19.1 MB"
+              ],
+              [
+                "level",
+                "recommended"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:claude:3a7c15",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Review the auth middleware",
+            "sub": "claude · 3a7c15",
+            "level": "optional",
+            "cells": [
+              "claude",
+              "2026-10-02"
+            ],
+            "bytes": 14000000,
+            "sizeText": "13.4 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Review the auth middleware"
+              ],
+              [
+                "size",
+                "13.4 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:codex:d81f3b",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Rename the config keys",
+            "sub": "codex · d81f3b",
+            "level": "optional",
+            "cells": [
+              "codex",
+              "2026-10-09"
+            ],
+            "bytes": 8000000,
+            "sizeText": "7.6 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Rename the config keys"
+              ],
+              [
+                "size",
+                "7.6 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "s:claude:6e20f9",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Quick question about retries",
+            "sub": "claude · 6e20f9",
+            "level": "optional",
+            "cells": [
+              "claude",
+              "2026-10-15"
+            ],
+            "bytes": 4748365,
+            "sizeText": "4.5 MB",
+            "muted": false,
+            "why": "Archived by the agent; the transcript is not needed to resume work.",
+            "detail": [
+              [
+                "item",
+                "Quick question about retries"
+              ],
+              [
+                "size",
+                "4.5 MB"
+              ],
+              [
+                "level",
+                "optional"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Remove 2 sessions",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "confirm": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Analysis done",
+          "text": "7.5 GB can be removed from 2 projects"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "2 projects · largest first",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "p:1",
+            "kind": "item",
+            "parent": null,
+            "check": "mixed",
+            "enabled": true,
+            "name": "acme-api",
+            "sub": "D:\\Projects\\acme-api",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6549825126,
+            "sizeText": "6.10 GB",
+            "muted": false,
+            "why": "Build output that cargo recreates.",
+            "detail": [
+              [
+                "item",
+                "acme-api"
+              ],
+              [
+                "size",
+                "6.10 GB"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:1",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "on",
+            "enabled": true,
+            "name": "target",
+            "sub": "cargo build output",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6227702579,
+            "sizeText": "5.80 GB",
+            "muted": false,
+            "why": "Rebuilt by the next cargo build.",
+            "detail": [
+              [
+                "item",
+                "target"
+              ],
+              [
+                "size",
+                "5.80 GB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:2",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "off",
+            "enabled": true,
+            "name": "node_modules",
+            "sub": "npm packages",
+            "level": "recommended",
+            "cells": [
+              "2026-11-13"
+            ],
+            "bytes": 322122547,
+            "sizeText": "307.2 MB",
+            "muted": false,
+            "why": "Restored by npm install.",
+            "detail": [
+              [
+                "item",
+                "node_modules"
+              ],
+              [
+                "size",
+                "300 MB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "p:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "old-prototype",
+            "sub": "D:\\Projects\\old-prototype",
+            "level": "optional",
+            "cells": [
+              "2026-03-02"
+            ],
+            "bytes": 1503238554,
+            "sizeText": "1.40 GB",
+            "muted": false,
+            "why": "No activity for more than 30 days.",
+            "detail": [
+              [
+                "item",
+                "old-prototype"
+              ],
+              [
+                "size",
+                "1.40 GB"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 1 folder",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": {
+          "id": "confirm",
+          "title": "Clean 1 folder?",
+          "text": [
+            "These folders will be moved to the Recycle Bin."
+          ],
+          "summary": [
+            "1 project · 5.80 GB"
+          ],
+          "rows": [
+            [
+              "acme-api / target",
+              "5.80 GB"
+            ]
+          ],
+          "warningsTitle": "Warnings",
+          "warnings": [
+            "A project with uncommitted changes is never cleaned."
+          ],
+          "cautionTitle": null,
+          "cautions": [],
+          "ack": false,
+          "error": null,
+          "buttons": [
+            {
+              "id": "cancel",
+              "label": "Cancel",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "clean",
+              "label": "Clean 1 folder",
+              "enabled": false,
+              "primary": true
+            }
+          ]
+        },
+        "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "shortfall": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Analysis done",
+          "text": "7.5 GB can be removed from 2 projects"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "2 projects · largest first",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "p:1",
+            "kind": "item",
+            "parent": null,
+            "check": "mixed",
+            "enabled": true,
+            "name": "acme-api",
+            "sub": "D:\\Projects\\acme-api",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6549825126,
+            "sizeText": "6.10 GB",
+            "muted": false,
+            "why": "Build output that cargo recreates.",
+            "detail": [
+              [
+                "item",
+                "acme-api"
+              ],
+              [
+                "size",
+                "6.10 GB"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:1",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "on",
+            "enabled": true,
+            "name": "target",
+            "sub": "cargo build output",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6227702579,
+            "sizeText": "5.80 GB",
+            "muted": false,
+            "why": "Rebuilt by the next cargo build.",
+            "detail": [
+              [
+                "item",
+                "target"
+              ],
+              [
+                "size",
+                "5.80 GB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:2",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "off",
+            "enabled": true,
+            "name": "node_modules",
+            "sub": "npm packages",
+            "level": "recommended",
+            "cells": [
+              "2026-11-13"
+            ],
+            "bytes": 322122547,
+            "sizeText": "307.2 MB",
+            "muted": false,
+            "why": "Restored by npm install.",
+            "detail": [
+              [
+                "item",
+                "node_modules"
+              ],
+              [
+                "size",
+                "300 MB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "p:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "old-prototype",
+            "sub": "D:\\Projects\\old-prototype",
+            "level": "optional",
+            "cells": [
+              "2026-03-02"
+            ],
+            "bytes": 1503238554,
+            "sizeText": "1.40 GB",
+            "muted": false,
+            "why": "No activity for more than 30 days.",
+            "detail": [
+              [
+                "item",
+                "old-prototype"
+              ],
+              [
+                "size",
+                "1.40 GB"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 1 folder",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": {
+          "id": "shortfall",
+          "title": "Not enough room in the Recycle Bin",
+          "text": [
+            "The Recycle Bin on D: cannot hold 5.80 GB.",
+            "Remove the folders permanently instead?"
+          ],
+          "summary": [],
+          "rows": [],
+          "warningsTitle": null,
+          "warnings": [],
+          "cautionTitle": null,
+          "cautions": [],
+          "ack": null,
+          "error": null,
+          "buttons": [
+            {
+              "id": "cancel",
+              "label": "Cancel",
+              "enabled": true,
+              "primary": false
+            },
+            {
+              "id": "permanent",
+              "label": "Remove permanently",
+              "enabled": true,
+              "primary": true
+            }
+          ]
+        },
+        "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "cleaning": {
+        "section": "developers",
+        "rev": 1,
+        "job": {
+          "label": "Cleaning…",
+          "fraction": 0,
+          "detail": "acme-api / target"
+        },
+        "status": {
+          "badge": "Cleaning",
+          "text": "Removing 1 folder"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "2 projects · largest first",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "p:1",
+            "kind": "item",
+            "parent": null,
+            "check": "mixed",
+            "enabled": true,
+            "name": "acme-api",
+            "sub": "D:\\Projects\\acme-api",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6549825126,
+            "sizeText": "6.10 GB",
+            "muted": false,
+            "why": "Build output that cargo recreates.",
+            "detail": [
+              [
+                "item",
+                "acme-api"
+              ],
+              [
+                "size",
+                "6.10 GB"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:1",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "on",
+            "enabled": true,
+            "name": "target",
+            "sub": "cargo build output",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6227702579,
+            "sizeText": "5.80 GB",
+            "muted": false,
+            "why": "Rebuilt by the next cargo build.",
+            "detail": [
+              [
+                "item",
+                "target"
+              ],
+              [
+                "size",
+                "5.80 GB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:2",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "off",
+            "enabled": true,
+            "name": "node_modules",
+            "sub": "npm packages",
+            "level": "recommended",
+            "cells": [
+              "2026-11-13"
+            ],
+            "bytes": 322122547,
+            "sizeText": "307.2 MB",
+            "muted": false,
+            "why": "Restored by npm install.",
+            "detail": [
+              [
+                "item",
+                "node_modules"
+              ],
+              [
+                "size",
+                "300 MB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "p:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "old-prototype",
+            "sub": "D:\\Projects\\old-prototype",
+            "level": "optional",
+            "cells": [
+              "2026-03-02"
+            ],
+            "bytes": 1503238554,
+            "sizeText": "1.40 GB",
+            "muted": false,
+            "why": "No activity for more than 30 days.",
+            "detail": [
+              [
+                "item",
+                "old-prototype"
+              ],
+              [
+                "size",
+                "1.40 GB"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 1 folder",
+            "key": "Enter",
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "cancel",
+            "label": "Cancel",
+            "key": "Escape",
+            "enabled": true,
+            "primary": false
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": "Scanned 2 folders in 3 s"
+      },
+      "report": {
+        "section": "developers",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Clean finished",
+          "text": "5.80 GB freed"
+        },
+        "nav": [
+          {
+            "id": "projects",
+            "name": "Projects",
+            "note": "2 projects · 1 selected",
+            "bytes": 8053063680,
+            "active": true
+          },
+          {
+            "id": "worktrees",
+            "name": "Worktrees",
+            "note": "3 worktrees · 2 selected",
+            "bytes": 966367642,
+            "active": false
+          },
+          {
+            "id": "sessions",
+            "name": "Archived sessions",
+            "note": "8 sessions · 2 selected",
+            "bytes": 214748365,
+            "active": false
+          }
+        ],
+        "options": [
+          {
+            "kind": "number",
+            "id": "inactiveDays",
+            "label": "Inactive for (days)",
+            "value": 30,
+            "min": 1,
+            "max": 365,
+            "enabled": true
+          },
+          {
+            "kind": "choice",
+            "id": "removeMode",
+            "label": "Remove",
+            "value": "recycle",
+            "choices": [
+              {
+                "id": "recycle",
+                "label": "to the Recycle Bin"
+              },
+              {
+                "id": "permanent",
+                "label": "permanently"
+              }
+            ],
+            "enabled": true
+          },
+          {
+            "kind": "toggle",
+            "id": "scanRoots",
+            "label": "Scan the folders below",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "list",
+            "id": "roots",
+            "label": "Folders",
+            "items": [
+              "D:\\Projects",
+              "D:\\Work"
+            ],
+            "selected": 0,
+            "enabled": true,
+            "addLabel": "Add folder…",
+            "removeLabel": "Remove",
+            "empty": "No folders yet"
+          }
+        ],
+        "title": "Projects",
+        "subtitle": "2 projects · largest first",
+        "columns": [
+          {
+            "title": "Project",
+            "kind": "name"
+          },
+          {
+            "title": "Last activity",
+            "kind": "cell"
+          },
+          {
+            "title": "Level",
+            "kind": "level"
+          },
+          {
+            "title": "Size",
+            "kind": "size"
+          }
+        ],
+        "rows": [
+          {
+            "id": "p:1",
+            "kind": "item",
+            "parent": null,
+            "check": "mixed",
+            "enabled": true,
+            "name": "acme-api",
+            "sub": "D:\\Projects\\acme-api",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6549825126,
+            "sizeText": "6.10 GB",
+            "muted": false,
+            "why": "Build output that cargo recreates.",
+            "detail": [
+              [
+                "item",
+                "acme-api"
+              ],
+              [
+                "size",
+                "6.10 GB"
+              ],
+              [
+                "mode",
+                "to the Recycle Bin"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:1",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "on",
+            "enabled": true,
+            "name": "target",
+            "sub": "cargo build output",
+            "level": "recommended",
+            "cells": [
+              "2026-11-10"
+            ],
+            "bytes": 6227702579,
+            "sizeText": "5.80 GB",
+            "muted": false,
+            "why": "Rebuilt by the next cargo build.",
+            "detail": [
+              [
+                "item",
+                "target"
+              ],
+              [
+                "size",
+                "5.80 GB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "a:2",
+            "kind": "child",
+            "parent": "p:1",
+            "check": "off",
+            "enabled": true,
+            "name": "node_modules",
+            "sub": "npm packages",
+            "level": "recommended",
+            "cells": [
+              "2026-11-13"
+            ],
+            "bytes": 322122547,
+            "sizeText": "307.2 MB",
+            "muted": false,
+            "why": "Restored by npm install.",
+            "detail": [
+              [
+                "item",
+                "node_modules"
+              ],
+              [
+                "size",
+                "300 MB"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "p:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "old-prototype",
+            "sub": "D:\\Projects\\old-prototype",
+            "level": "optional",
+            "cells": [
+              "2026-03-02"
+            ],
+            "bytes": 1503238554,
+            "sizeText": "1.40 GB",
+            "muted": false,
+            "why": "No activity for more than 30 days.",
+            "detail": [
+              [
+                "item",
+                "old-prototype"
+              ],
+              [
+                "size",
+                "1.40 GB"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [],
+        "actions": [
+          {
+            "id": "analyze",
+            "label": "Analyze",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "clean",
+            "label": "Clean 1 folder",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": {
+          "title": "Cleanup finished",
+          "freedBytes": 6227702579,
+          "recycledBytes": 6227702579,
+          "files": 52318,
+          "dirs": 7421,
+          "elapsedMs": 21000,
+          "cancelled": false,
+          "notes": [
+            {
+              "tone": "info",
+              "text": "Moved to the Recycle Bin.",
+              "more": []
+            }
+          ],
+          "byCategory": [
+            [
+              "Projects",
+              6227702579
+            ]
+          ],
+          "skipped": [],
+          "failed": [],
+          "items": [
+            {
+              "name": "acme-api / target",
+              "freedBytes": 6227702579,
+              "removed": 52318,
+              "left": 0,
+              "note": null,
+              "lines": []
+            }
+          ],
+          "canSave": true,
+          "saved": null
+        },
         "footer": "Scanned 2 folders in 3 s"
       }
     }

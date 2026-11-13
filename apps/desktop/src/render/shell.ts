@@ -1,11 +1,37 @@
-// The frame of the window: top bar, status row, the two sidebars and the list header, the footer.
+// The frame of the window: top bar, status row, the two sidebars, the list header, the footer.
 // Everything here comes from the SectionView (Rust writes the sentences); the page adds only
-// the static headings, key hints and number formatting.
+// the static headings, key hints and number formatting. The list, the detail panel and bar 2
+// are drawn by their own modules.
 
 import { button, fill, h, kbd } from '../dom.ts';
-import { formatBytes, ramText } from '../format.ts';
-import { SECTION_ORDER } from '../state.ts';
-import type { ActionView, AppInfo, NavItem, OptionView, SectionId, SectionView } from '../types.ts';
+import { ramText } from '../format.ts';
+import { actionIntent, bulkIntent } from '../intents.ts';
+import { sortRows, visibleRows } from '../rows.ts';
+import { currentFocus, SECTION_ORDER, type UiState } from '../state.ts';
+import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
+import { renderBar2 } from './bar2.ts';
+import { renderDetail } from './detail.ts';
+import { renderList } from './list.ts';
+
+/** What a click or a keystroke can ask of the page; main.ts implements it. */
+export interface Handlers {
+  openSection(id: SectionId): void;
+  /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
+  send(section: SectionId, intent: AnyIntent | null): void;
+  focusRow(id: string): void;
+  toggleExpanded(id: string): void;
+  /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
+  addRoot(): void;
+}
+
+/** What one render needs. */
+export interface Screen {
+  app: AppInfo;
+  view: SectionView;
+  ui: UiState;
+  /** The message of the last failed command, shown above the list until the next one succeeds. */
+  error: string | null;
+}
 
 const SECTION_NAMES: Record<SectionId, string> = {
   cleanup: 'Cleanup', registry: 'Registry', services: 'Services & RAM', developers: 'Developers',
@@ -26,30 +52,36 @@ function ellipsis(text: string, tag: 'span' | 'div' = 'span'): HTMLElement {
   return h(tag, { class: 'ellipsis', title: text }, text);
 }
 
-function actionButton(action: ActionView): HTMLButtonElement {
-  const node = button(
+function actionButton(section: SectionId, action: ActionView, on: Handlers): HTMLButtonElement {
+  return button(
     [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null],
-    { class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, disabled: !action.enabled },
+    {
+      class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
+      onClick: () => on.send(section, actionIntent(section, action.id)),
+    },
   );
-  return node;
 }
 
-function navRow(item: NavItem): HTMLElement {
-  return h('button', { type: 'button', class: item.active ? 'it on' : 'it', 'data-nav': item.id },
-    h('span', { class: 'it-name', 'data-fit': '' }, item.name),
-    item.bytes === null ? null : h('b', { class: 'num', 'data-fit': '' }, formatBytes(item.bytes)),
-    item.note ? h('small', { 'data-fit': '' }, item.note) : null);
+/** A notice line: its text, and the extra lines under it. Errors are announced. */
+export function noticeNode(notice: NoticeView): HTMLElement {
+  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null },
+    h('span', {}, notice.text),
+    ...notice.more.map((line) => h('small', {}, line)));
 }
 
-function optionRow(option: OptionView): HTMLElement {
-  const label = option.kind === 'text' ? option.text : option.label;
-  return h('div', { class: 'it opt' }, h('span', { class: 'it-name' }, ellipsis(label)));
+/** The window when nothing can be drawn (the first command failed): the message, in the notice area. */
+export function renderFailure(message: string): void {
+  byId('badge').textContent = 'Error';
+  fill(byId('status-text'), ellipsis(message));
+  fill(byId('notices'), noticeNode({ tone: 'error', text: message, more: [] }));
 }
 
-export function renderShell(app: AppInfo, view: SectionView): void {
+export function renderShell(screen: Screen, on: Handlers): void {
+  const { app, view, ui } = screen;
+
   // Top bar.
   byId('version').textContent = app.version;
-  fill(byId('actions'), ...view.actions.map(actionButton));
+  fill(byId('actions'), ...view.actions.map((a) => actionButton(view.section, a, on)));
 
   // Status row.
   byId('badge').textContent = view.status.badge;
@@ -62,21 +94,30 @@ export function renderShell(app: AppInfo, view: SectionView): void {
   // Sections bar.
   fill(byId('sections'),
     h('div', { class: 'hd' }, h('span', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
-    ...SECTION_ORDER.map((id, index) => h('button', { type: 'button', class: id === view.section ? 'nv on' : 'nv', 'data-section': id },
-      h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))));
+    ...SECTION_ORDER.map((id, index) => h('button', {
+      type: 'button', class: id === view.section ? 'nv on' : 'nv', 'data-section': id, 'data-key': `section:${id}`,
+      'aria-current': id === view.section ? 'page' : null, onClick: () => on.openSection(id),
+    }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))));
 
-  // Bar 2: the section's categories, or its options.
-  const categories = view.nav.length > 0;
-  fill(byId('bar2'),
-    h('div', { class: 'hd' },
-      h('span', { class: 'hd-title', 'data-fit': '' }, categories ? 'Categories' : 'Options'),
-      h('span', { class: 'count' }, categories ? view.nav.length : view.options.length)),
-    h('div', { class: 'items' }, ...(categories ? view.nav.map(navRow) : view.options.map(optionRow))));
+  // Bar 2: categories and options.
+  renderBar2(byId('bar2'), view, on);
 
-  // List header.
+  // List header: title, subtitle and, where the section has bulk selection, All / None.
+  const bulk = view.bulk && bulkIntent(view.section, true) !== null;
   fill(byId('list-head'),
     h('span', { class: 'hd-title', 'data-fit': '' }, view.title),
-    h('span', { class: 'sub' }, ellipsis(view.subtitle)));
+    h('span', { class: 'hd-right' },
+      h('span', { class: 'sub' }, ellipsis(view.subtitle)),
+      bulk ? button(h('span', { 'data-fit': '' }, 'All'), { class: 'btn sm', 'data-key': 'bulk:all', onClick: () => on.send(view.section, bulkIntent(view.section, true)) }) : null,
+      bulk ? button(h('span', { 'data-fit': '' }, 'None'), { class: 'btn sm', 'data-key': 'bulk:none', onClick: () => on.send(view.section, bulkIntent(view.section, false)) }) : null));
+
+  // Notices, then the list and the detail of the focused row.
+  fill(byId('notices'),
+    ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
+    ...view.notices.map(noticeNode));
+  renderList(byId('rows'), view, ui, on);
+  const focus = currentFocus(ui, view);
+  renderDetail(byId('detail'), visibleRows(sortRows(view.rows), ui.expanded).find((r) => r.id === focus) ?? null);
 
   // Footer.
   fill(byId('foot'),
