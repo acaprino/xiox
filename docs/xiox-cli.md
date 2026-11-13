@@ -772,7 +772,9 @@ You can call `xiox` as a tool. A safe routine:
 
 - **a blocked item** (open agent session, uncommitted changes, commits that exist nowhere else,
   a copy with unsaved work or whose work could not be checked, a locked session), not even with
-  `--include`; and not a folder that holds one, listed or not (see below);
+  `--include`; and not a folder that holds one: listed ones for every folder, and git repositories
+  that are not listed for copies and name-matched folders. A build folder or a worktree that holds
+  an ignored nested repository is not scanned for one (see below);
 - **anything that is not in the analysis**: `--include` takes only paths the listing shows. The
   project's own folder, and any folder that is, contains or overlaps the project or one of its
   worktrees, are refused;
