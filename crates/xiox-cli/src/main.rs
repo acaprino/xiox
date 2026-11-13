@@ -4,8 +4,10 @@
 
 mod args;
 mod json;
+mod observe;
 mod render;
 mod run;
+mod size;
 #[cfg(test)]
 mod testdata;
 

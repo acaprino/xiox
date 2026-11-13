@@ -3453,10 +3453,12 @@ dependencies = [
 name = "xiox-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "embed-resource",
  "serde_json",
  "tempfile",
  "xiox-model",
+ "xiox-observer",
  "xiox-project",
 ]
 

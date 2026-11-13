@@ -10,7 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 xiox-model = { path = "../xiox-model" }
+xiox-observer = { path = "../xiox-observer" }
 xiox-project = { path = "../xiox-project" }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 serde_json = "1"
 
 [build-dependencies]

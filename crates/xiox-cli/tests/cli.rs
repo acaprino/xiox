@@ -461,3 +461,167 @@ fn a_folder_holding_several_repositories_refuses_the_category_flags_with_exit_2(
     assert_eq!(out.status.code(), Some(0), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
     assert!(!target.exists());
 }
+
+// ───────────────────────────────── observe ─────────────────────────────────
+
+/// A running `xiox observe` on a fake project: its stdout lines arrive on a channel (so that no test
+/// waits on a pipe without a deadline) and the process is killed when the value is dropped.
+struct Observer {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+    stdin: Option<std::process::ChildStdin>,
+}
+
+impl Observer {
+    fn spawn(project: &Path, extra: &[&str]) -> Observer {
+        use std::io::BufRead;
+        let mut child = xiox()
+            .arg("observe")
+            .arg(project)
+            .args(extra)
+            .env("XIOX_SEARCH_ROOTS", project.parent().unwrap())
+            .env("GIT_CEILING_DIRECTORIES", project.parent().unwrap().parent().unwrap())
+            .env("XIOX_OBSERVE_INTERVAL_MS", "200")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if tx.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Observer { child, lines, stdin }
+    }
+
+    /// The next stdout line, parsed; panics after `secs` seconds.
+    fn next(&self, secs: u64) -> serde_json::Value {
+        let line = self
+            .lines
+            .recv_timeout(std::time::Duration::from_secs(secs))
+            .unwrap_or_else(|e| panic!("no line on stdout within {secs}s: {e}"));
+        serde_json::from_str(&line).unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {line:?}"))
+    }
+
+    /// Lines until one has this event; returns it with the ones read before it.
+    fn until(&self, event: &str, secs: u64) -> (serde_json::Value, Vec<serde_json::Value>) {
+        let mut before = Vec::new();
+        loop {
+            let v = self.next(secs);
+            if v["event"] == event {
+                return (v, before);
+            }
+            before.push(v);
+        }
+    }
+
+    /// Waits for the process to end on its own; panics (after killing it) past `secs`.
+    fn exit_code(&mut self, secs: u64) -> Option<i32> {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status.code();
+            }
+            if std::time::Instant::now() > end {
+                let _ = self.child.kill();
+                panic!("xiox observe did not exit within {secs}s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for Observer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The fake project as a git repository with one commit (only `Cargo.toml`: the build folder stays
+/// untracked).
+fn repo_project() -> (tempfile::TempDir, PathBuf) {
+    let (t, project) = fake_project();
+    git(&project, &["init", "-q", "-b", "main"]);
+    git(&project, &["add", "Cargo.toml"]);
+    git(&project, &["commit", "-q", "-m", "first"]);
+    (t, project)
+}
+
+#[test]
+fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added() {
+    let (_t, project) = repo_project();
+    let mut o = Observer::spawn(&project, &["--no-drives"]);
+    let started = o.next(60);
+    assert_eq!(started["event"], "started");
+    assert_eq!(started["schema"], 1);
+    assert_eq!(started["project"]["name"], "fakeproj");
+    // The baseline has weights: the 3 MB build folder is counted at the start.
+    assert!(started["totals"]["byCategory"]["builds"].as_u64().unwrap() >= 3 * 1024 * 1024, "{started}");
+
+    let wt = project.parent().unwrap().join("wt");
+    git(&project, &["worktree", "add", "-q", "-b", "side", &wt.to_string_lossy()]);
+
+    let (changed, before) = o.until("changed", 60);
+    assert!(before.is_empty(), "nothing between started and changed: {before:?}");
+    let added = changed["added"].as_array().unwrap();
+    assert_eq!(added.len(), 1, "{changed}");
+    assert_eq!(added[0]["category"], "worktrees");
+    assert_eq!(added[0]["new"], true);
+    assert!(added[0]["path"].as_str().unwrap().ends_with("wt"), "{changed}");
+    assert_eq!(changed["schema"], 1);
+
+    // `report` on stdin answers with the whole list, the worktree marked new and the build folder not.
+    use std::io::Write;
+    o.stdin.as_mut().unwrap().write_all(b"report\n").unwrap();
+    let (report, _) = o.until("report", 60);
+    assert_eq!(report["stale"], false);
+    let items = report["items"].as_array().unwrap();
+    assert!(items.iter().any(|i| i["category"] == "worktrees" && i["new"] == true), "{report}");
+    assert!(items.iter().any(|i| i["category"] == "builds" && i["new"] == false), "{report}");
+
+    // `stop` ends it with 0 and nothing more on stdout.
+    o.stdin.as_mut().unwrap().write_all(b"stop\n").unwrap();
+    assert_eq!(o.exit_code(30), Some(0));
+    assert!(o.lines.recv_timeout(std::time::Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn observe_binary_exits_when_stdin_closes() {
+    let (_t, project) = fake_project();
+    let mut o = Observer::spawn(&project, &["--no-drives"]);
+    assert_eq!(o.next(60)["event"], "started");
+    drop(o.stdin.take());
+    assert_eq!(o.exit_code(30), Some(0));
+    assert!(o.lines.recv_timeout(std::time::Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn observe_binary_interval_below_60_exits_2() {
+    // The debug-only override must not rescue a bad flag: the flag itself is checked first.
+    let out = xiox().args(["observe", "--interval", "30"]).env("XIOX_OBSERVE_INTERVAL_MS", "200").output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--interval"));
+}
+
+#[test]
+fn observe_binary_on_a_missing_project_exits_1_with_empty_stdout() {
+    let (_t, project) = fake_project();
+    let out = xiox()
+        .arg("observe")
+        .arg(project.join("nope"))
+        .env("XIOX_SEARCH_ROOTS", project.parent().unwrap())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("path not found"));
+}

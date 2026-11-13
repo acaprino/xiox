@@ -2,7 +2,7 @@
 //! else (progress, notes, errors, the confirmation question) to `err`.
 
 use crate::args::{self, Command};
-use crate::{json, render};
+use crate::{json, observe, render};
 use xiox_model::RemoveMode;
 use xiox_project::{Category, Chosen, CleanOutcome, CleanRequest, Error, Options, ProjectScan};
 use std::io::{BufRead, IsTerminal, Write};
@@ -22,6 +22,10 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         Ok(Command::Help) => code_of(write_result(out, err, &format!("{}\n", args::help()))),
         Ok(Command::Version) => code_of(write_result(out, err, &format!("xiox {}\n", env!("CARGO_PKG_VERSION")))),
         Ok(Command::Analyze { project, json, no_drives }) => analyze(project, json, no_drives, out, err),
+        Ok(Command::Observe { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp }) => {
+            let cmd = observe::ObserveArgs { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp };
+            observe::run_observe(cmd, out, err)
+        }
         Ok(Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives }) => {
             let flags = CleanFlags { project, categories, include, permanent, yes, dry_run, json, no_drives };
             clean(&flags, out, err)
