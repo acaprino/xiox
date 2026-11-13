@@ -3463,22 +3463,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "xiox-core"
+version = "0.1.0"
+dependencies = [
+ "idna",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winreg",
+ "xiox-cleaner",
+ "xiox-model",
+ "xiox-rules",
+]
+
+[[package]]
 name = "xiox-desktop"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "eframe",
  "embed-resource",
- "idna",
  "image",
  "rfd",
- "rusqlite",
- "serde_json",
  "tempfile",
- "windows-sys 0.61.2",
- "winreg",
  "xiox-app",
  "xiox-cleaner",
+ "xiox-core",
  "xiox-model",
  "xiox-mukade",
  "xiox-rules",

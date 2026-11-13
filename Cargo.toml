@@ -18,40 +18,12 @@ xiox-model = { path = "crates/xiox-model" }
 xiox-mukade = { path = "crates/xiox-mukade" }
 xiox-sessions = { path = "crates/xiox-sessions" }
 xiox-rules = { path = "crates/xiox-rules" }
+xiox-core = { path = "crates/xiox-core" }
 rfd = "0.15"
 # Same version and features as xiox-mukade (already in the build): local dates in the Sviluppatori tables.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-winreg = "0.56"
-# Same version and features as xiox-mukade (already in the build): browser databases (cookies, VACUUM, Firefox history).
-rusqlite = { version = "=0.40.2", features = ["bundled"] }
-# Already in the build: browser `Preferences`. `float_roundtrip` and `preserve_order` keep numbers and key order
-# exactly as the browser wrote them when the file is rewritten.
-serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
-# Already in the build (url): domains of the cookie keep list written in Unicode become punycode, as browsers store them.
-idna = "=1.1.0"
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_UI_Shell",
-    "Win32_System_SystemInformation",
-    "Win32_System_Environment",
-    "Win32_System_RemoteDesktop",
-    "Win32_System_WindowsProgramming",
-    "Win32_System_Registry",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Threading",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_Security_Credentials",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_EventLog",
-    "Win32_System_LibraryLoader",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_IO", "Win32_System_Ioctl",
-] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

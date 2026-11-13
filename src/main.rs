@@ -1,23 +1,9 @@
 #![windows_subsystem = "windows"]
 
-mod account;
-mod browserdb;
-mod cleaner;
 mod dev;
-mod envpath;
-#[cfg(test)]
-mod live_checks;
-mod native;
-mod netcreds;
-mod regbackup;
-mod registry;
-mod rules;
-mod services;
-mod sys;
-mod sysclean;
 mod theme;
-mod winold;
-mod wipe;
+
+use xiox_core::{browserdb, cleaner, native, registry, rules, services, sys, wipe};
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
