@@ -434,11 +434,7 @@ fn size_text(s: &Size) -> String {
     if s.timed_out {
         format!("over {n} (count stopped after {} s)", SIZE_BUDGET.as_secs())
     } else if s.unreadable > 0 {
-        let what = if s.unreadable == 1 {
-            "1 unreadable folder".to_string()
-        } else {
-            format!("{} unreadable folders", s.unreadable)
-        };
+        let what = crate::sys::plural(s.unreadable, "unreadable folder", "unreadable folders");
         format!("at least {n} ({what})")
     } else {
         format!("about {n}")

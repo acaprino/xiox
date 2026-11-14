@@ -152,13 +152,14 @@ pub fn load_with(
             let dropped = report.discarded_protected + report.discarded_missing_var;
             if dropped > 0 {
                 warnings.push(format!(
-                    "Winapp2: {dropped} rules discarded (protected paths or undefined variables)"
+                    "Winapp2: {} discarded (protected paths or undefined variables)",
+                    sys::plural(dropped, "rule", "rules")
                 ));
             }
             if report.skipped_excludes > 0 {
                 warnings.push(format!(
-                    "Winapp2: {} items not offered (unsupported exclusions)",
-                    report.skipped_excludes
+                    "Winapp2: {} not offered (unsupported exclusions)",
+                    sys::plural(report.skipped_excludes, "item", "items")
                 ));
             }
             // Regola 9: vince l'inglobato presente (vedi `covered_by_embedded`).
@@ -169,7 +170,7 @@ pub fn load_with(
                 .collect();
             let hidden = before - winapp.len();
             if hidden > 0 {
-                let what = if hidden == 1 { "1 item".to_string() } else { format!("{hidden} items") };
+                let what = sys::plural(hidden, "item", "items");
                 warnings.push(format!("Winapp2: {what} hidden because already covered by {EMBEDDED_GROUP}"));
             }
             (status_text(Winapp2Status::Loaded(&version)), Some(version))
@@ -490,7 +491,7 @@ pub fn preview_notes(items: &[&NativeItem], shown: &dyn Fn(&NativeItem) -> Optio
         .map(|i| match shown(i) {
             Some(0) => format!("{}: the last Analysis showed nothing to remove, nothing is touched", i.label),
             Some(n) => {
-                let what = if n == 1 { "1 item".to_string() } else { format!("{n} items") };
+                let what = sys::plural(n, "item", "items");
                 format!("{}: only what the last Analysis showed is touched ({what})", i.label)
             }
             None => format!("{}: no Analysis to use, the item will do nothing. {}", i.label, crate::native::NO_PREVIEW),
@@ -769,7 +770,7 @@ pub fn run_options(
             emit(key, label, RuleFound::default(), also_clean.then_some(skipped));
             continue;
         }
-        let tick = |n: u64| progress(k, format!("{verb} – {label} ({n} items)"));
+        let tick = |n: u64| progress(k, format!("{verb} – {label} ({})", sys::plural(n, "item", "items")));
         let ctl = CollectCtl { cancel: run.cancel, tick: &tick };
         let found = analyze_option(o, run.env, run.reg_exists, &ctl);
         let done = also_clean.then(|| {
@@ -865,7 +866,7 @@ pub struct RealRegistry;
 
 impl RuleRegistry for RealRegistry {
     fn backup(&self, items: &[RegItem]) -> Result<Backup, String> {
-        let stem = format!("backup_regole_{}", sys::stamp());
+        let stem = format!("rules-backup-{}", sys::stamp());
         backup_to(&sys::data_dir(), &stem, &regbackup::admin_work_dir, &win::RealBackend, items)
     }
     fn delete(&self, item: &RegItem) -> Result<bool, String> {
@@ -1935,12 +1936,12 @@ mod tests {
         fs::create_dir_all(&work_root).unwrap();
         let be = FakeBackend::new(vec![r"Software\FakeApp\A", r"Software\FakeApp\B"]);
         let work = work_in(&work_root);
-        let first = backup_to(&dest, "backup_regole_20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\A")]).unwrap();
-        let second = backup_to(&dest, "backup_regole_20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\B")]).unwrap();
+        let first = backup_to(&dest, "rules-backup-20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\A")]).unwrap();
+        let second = backup_to(&dest, "rules-backup-20261111_120000", &work, &be, &[key_item(r"Software\FakeApp\B")]).unwrap();
         let (p1, p2) = (first.path.unwrap(), second.path.unwrap());
         assert_ne!(p1, p2);
         assert!(p1.exists() && p2.exists());
-        assert_eq!(p2.file_name().unwrap(), "backup_regole_20261111_120000_2.reg");
+        assert_eq!(p2.file_name().unwrap(), "rules-backup-20261111_120000_2.reg");
         let text = |p: &Path| {
             let b = fs::read(p).unwrap();
             let w: Vec<u16> = b[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
@@ -2285,7 +2286,7 @@ mod tests {
             app_data.join(r"winapp2\Winapp2.ini"),
             app_data.join(r"winapp2\etag.txt"),
             app_data.join(r"winapp2\tmp\xiox-curl-1\body.bin"),
-            backups.join("backup_regole_20261110_120000.reg"),
+            backups.join("rules-backup-20261110_120000.reg"),
             backups.join("servizi_originali.txt"),
             old_app_data.join(r"winapp2\Winapp2.ini"),
             old_backups.join("backup_registro_20261001_090000.reg"),

@@ -165,13 +165,13 @@ mod win {
     pub fn account() -> Result<Account, String> {
         let user = token_user()?;
         let me = sid_of(&user);
-        let name = sid_name(me).unwrap_or_else(|| "account sconosciuto".to_string());
+        let name = sid_name(me).unwrap_or_else(|| "unknown account".to_string());
         let (u, d) = (wts_string(WTSUserName)?, wts_string(WTSDomainName)?);
         if u.is_empty() {
             return Err("no user in the session".into());
         }
         let session = name_sid(&if d.is_empty() { u } else { format!("{d}\\{u}") })?;
-        // SAFETY: due SID validi.
+        // SAFETY: two valid SIDs.
         let same = unsafe { EqualSid(me, session.as_ptr() as *mut _) } != 0;
         Ok(if same { Account::Same(name) } else { Account::Other(name) })
     }

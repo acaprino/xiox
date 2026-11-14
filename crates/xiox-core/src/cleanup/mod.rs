@@ -1,11 +1,11 @@
-//! Stato di Pulizia file senza interfaccia: scelte, lavori in un thread, analisi, pulizia,
-//! resoconto e opzioni dinamiche. Spostato dalla vecchia finestra così com'era; al posto di
-//! un contesto grafico i thread svegliano chi mostra la sezione con un [`SharedNotifier`].
+//! The Cleanup section without a window: choices, the jobs in a thread, analysis, cleaning, the
+//! report and the dynamic options. The threads wake whoever shows the section with a
+//! [`SharedNotifier`].
 //!
-//! Sopra lo stato stanno le intenzioni della pagina (`select_category`, `toggle`, `analyze`,
-//! `request_clean`, `confirm`...): ognuna rifiuta, con una frase in inglese, ciò che la vecchia
-//! interfaccia avrebbe tenuto disattivato, e un rifiuto non cambia nulla. Il lavoro vero gira dietro
-//! [`CleanupWorkers`], così i test arrivano da «Continua» fino all'avvio senza toccare il motore.
+//! On top of the state sit the page's intents (`select_category`, `toggle`, `analyze`,
+//! `request_clean`, `confirm`...): each refuses, with a sentence in English, whatever the page
+//! must not do now, and a refusal changes nothing. The real work runs behind [`CleanupWorkers`],
+//! so the tests go from «Continue» to the start without touching the engine.
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::{browserdb, cleaner, native, rules, sys};
@@ -59,7 +59,7 @@ pub enum CleanEnd {
     Died,
 }
 
-/// Testo per una pulizia fermata da un errore interno (come in Sviluppatori).
+/// What a cleanup stopped by an internal error says (the same as in Developers).
 pub const CLEAN_DIED: &str = "Cleanup stopped by an internal error: some items may already be gone. Press “Analyze” to see what is left.";
 
 /// Le voci scelte all'avvio: le categorie e (chiave, etichetta) delle voci native e delle
@@ -415,7 +415,7 @@ impl CleanupState {
 }
 
 /// What the page asks of Cleanup (`CleanupIntent`). Each intent refuses, with a reason in English
-/// (`Err`), whatever the old window would have kept disabled: the caller (the Tauri command) turns
+/// (`Err`), whatever the page must not do now: the caller (the Tauri command) turns
 /// it into a `CmdError { kind: "refused" }`. A refused intent changes nothing.
 impl CleanupState {
     /// A job runs: nothing may change under it.
@@ -769,8 +769,8 @@ pub fn clean_report(
     }
     let never = if end == CleanEnd::Died { "Not run: cleanup stopped by an internal error" } else { "Cancelled" };
     let counted = |n: u64, notes: &[String]| match notes.first() {
-        Some(first) => format!("{n} items left: {first}"),
-        None => format!("{n} items left (in use or refused)"),
+        Some(first) => format!("{} left: {first}", sys::plural(n, "item", "items")),
+        None => format!("{} left (in use or refused)", sys::plural(n, "item", "items")),
     };
     for (i, c) in cleaned.iter().enumerate() {
         let Some(c) = c else { continue };

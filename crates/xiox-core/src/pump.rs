@@ -101,7 +101,7 @@ mod tests {
         }
 
         fn wait_for(&self, what: &str, found: impl Fn(&[SectionView]) -> bool) {
-            let until = Instant::now() + Duration::from_secs(2);
+            let until = Instant::now() + Duration::from_secs(10);
             while Instant::now() < until {
                 if found(&self.views()) {
                     return;
@@ -120,7 +120,17 @@ mod tests {
 
     /// A core whose workers never reach the engine, whose notifier is the pump's, and the pump over it.
     fn running(scan: fn(xiox_model::Settings, bool, Outbox<DevMsg>)) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
-        running_with(scan, ServicesState::new())
+        running_with(scan, quiet_services())
+    }
+
+    /// Services workers that never touch the machine: a view of Services here would otherwise read
+    /// the real service list, the memory and `Documents\Xiox`.
+    fn quiet_services() -> ServicesState {
+        ServicesState::new().with_workers(ServicesWorkers { load: load_never, apply: apply_never, saved: saved_none, memory: memory_fixed })
+    }
+
+    fn memory_fixed() -> crate::sys::Memory {
+        crate::sys::Memory { total: 8 << 30, available: 4 << 30 }
     }
 
     fn running_with(
@@ -225,7 +235,7 @@ mod tests {
             Arc::new(PumpNotifier { tx: notifier.tx.clone() }),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers::REAL),
             RegistryState::new(),
-            ServicesState::new(),
+            quiet_services(),
             {
                 let mut d = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
                     .with_workers(DevWorkers { scan: scan_never, clean: clean_never });

@@ -555,9 +555,7 @@ fn reason_text(r: Reason) -> &'static str {
     }
 }
 
-fn plural(n: u64, one: &str, many: &str) -> String {
-    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
-}
+use crate::sys::plural;
 
 /// Legge le due chiavi e dice cosa si toglierebbe (tutte le voci, una per
 /// riga: la pulizia toglierà solo queste). Non scrive nulla.

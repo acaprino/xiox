@@ -18,7 +18,8 @@ const WORDS = (
   'il lo gli della delle degli dei di del dal dalla nel nella sono non perché già più nessun nessuna nessuno ' +
   'questa questo cartella cartelle pulizia analisi sessione sessioni elimina eliminati cestino ' +
   'attenzione consigliato facoltativo annulla annullato salva ripara servizio servizi avvio ' +
-  'chiudi errore riuscito trovati'
+  'chiudi errore riuscito trovati sconosciut[aeio] permessi scaricamento aggiornat[aeio] impossibile ' +
+  'disattivat[aeio] riavvi\\w* connessione'
 ).split(' ');
 
 // A word is whole when no letter, digit, underscore or hyphen touches it.

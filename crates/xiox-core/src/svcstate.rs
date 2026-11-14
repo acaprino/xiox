@@ -2,26 +2,26 @@
 //! start types) behind a worker seam, the intents the page can send, and the `SectionView` the page
 //! draws.
 //!
-//! Moved out of the old window's `main.rs`: `SvcMsg`, `send_svc`, the `svc_*` fields,
-//! `load_services`, `apply_services` and the services half of `poll`. The strings of the moved code
-//! are English at the source, like the sentences the view adds.
-//!
-//! The intents refuse what the old window had disabled: a protected row cannot be ticked, an action
+//! The intents refuse what the page must not do now: a protected row cannot be ticked, an action
 //! needs a ticked service (or a saved backup, for «Restore originals»), a confirmation needs its
 //! question open, nothing changes while a job runs or the question is open. A refused intent
 //! changes nothing. Services Xiox never touches (`protected`) are filtered out of every change,
 //! whatever the page ticked.
 
-use crate::dev::{plural, BUSY, DIALOG_OPEN, NOTHING_SELECTED, NO_DIALOG};
+use crate::dev::{BUSY, DIALOG_OPEN, NOTHING_SELECTED, NO_DIALOG};
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::view::*;
+use crate::sys::{fmt_count, plural};
 use crate::{services, sys};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 /// What the services workers tell the state.
 pub enum SvcMsg {
     Loaded(Vec<services::Service>),
+    /// The result of a change that went as asked.
     Message(String),
+    /// The result of a change that did not fully go: some services failed or were left alone.
+    Partial(String),
 }
 
 /// The four calls of the state as plain function pointers: the real ones by default, fake ones in
@@ -50,6 +50,7 @@ pub const UNKNOWN_SERVICE: &str = "That service is not in the list.";
 pub const NOT_SHOWN: &str = "That service is hidden by the filter.";
 pub const NOTHING_SAVED: &str = "No original startup types are saved: there is nothing to restore.";
 pub const UNKNOWN_ACTION: &str = "That action is not offered.";
+pub const APPLY_DIED: &str = "The worker stopped: some services may already have been changed. The list was reloaded.";
 
 pub struct ServicesState {
     services: Vec<services::Service>,
@@ -61,8 +62,11 @@ pub struct ServicesState {
     pub(crate) msg: String,
     /// The question that is open: the start type it would apply (`0`: restore the originals).
     pub(crate) confirm: Option<u32>,
-    /// `msg` reports a failure (a dead worker), not a result.
-    msg_error: bool,
+    /// How `msg` is shown: a result (ok), a partial one (warn) or a failure (a dead worker: error).
+    msg_tone: Tone,
+    /// The running job changes services (not just reads them): a worker that dies mid-way leaves
+    /// the machine in an unknown state.
+    applying: bool,
     workers: ServicesWorkers,
 }
 
@@ -82,7 +86,8 @@ impl ServicesState {
             filter: String::new(),
             msg: String::new(),
             confirm: None,
-            msg_error: false,
+            msg_tone: Tone::Ok,
+            applying: false,
             workers: ServicesWorkers::REAL,
         }
     }
@@ -108,6 +113,7 @@ impl ServicesState {
         let (tx, rx) = channel();
         self.job = Some(rx);
         self.loaded = true;
+        self.applying = false;
         let work = self.workers.load;
         std::thread::spawn(move || work(Outbox::new(tx, n, SectionId::Services)));
     }
@@ -117,6 +123,7 @@ impl ServicesState {
         let chosen: Vec<services::Service> = self.chosen().into_iter().cloned().collect();
         let (tx, rx) = channel();
         self.job = Some(rx);
+        self.applying = true;
         let work = self.workers.apply;
         std::thread::spawn(move || work(chosen, start, Outbox::new(tx, n, SectionId::Services)));
     }
@@ -137,7 +144,12 @@ impl ServicesState {
                 }
                 Ok(SvcMsg::Message(t)) => {
                     self.msg = t;
-                    self.msg_error = false;
+                    self.msg_tone = Tone::Ok;
+                    reload = true;
+                }
+                Ok(SvcMsg::Partial(t)) => {
+                    self.msg = t;
+                    self.msg_tone = Tone::Warn;
                     reload = true;
                 }
                 Err(TryRecvError::Empty) => break,
@@ -155,14 +167,21 @@ impl ServicesState {
             self.load(n);
         } else if gone && !done {
             self.job = None;
-            self.msg = JOB_DIED.into();
-            self.msg_error = true;
+            self.msg_tone = Tone::Error;
+            if self.applying {
+                // Some services may already have been changed: the list is read again so the
+                // Startup column tells the truth.
+                self.msg = APPLY_DIED.into();
+                self.load(n);
+            } else {
+                self.msg = JOB_DIED.into();
+            }
         }
     }
 
     // ---------- intents (page -> Rust) ----------
 
-    /// The old window's filter: the Recommended list or all of them, and the search text (lower case) in the
+    /// The filter: the Recommended list or all of them, and the search text (lower case) in the
     /// display name or in the service name.
     pub fn visible(&self) -> Vec<usize> {
         let filter = self.filter.to_lowercase();
@@ -268,7 +287,7 @@ impl ServicesState {
     /// The section is shown again: the result of the last change goes off the screen (`Core::show`).
     pub fn clear_message(&mut self) {
         self.msg.clear();
-        self.msg_error = false;
+        self.msg_tone = Tone::Ok;
     }
 
     // ---------- the view ----------
@@ -297,7 +316,7 @@ impl ServicesState {
             nav: Vec::new(),
             options: self.options_view(),
             title: "Services & RAM".into(),
-            subtitle: format!("{} of {} services shown", visible.len(), self.services.len()),
+            subtitle: format!("{} of {} shown", fmt_count(visible.len() as u64), plural(self.services.len(), "service", "services")),
             columns: vec![
                 ColumnView { title: "Service".into(), kind: ColumnKind::Name },
                 ColumnView { title: "State".into(), kind: ColumnKind::Cell },
@@ -306,19 +325,33 @@ impl ServicesState {
             ],
             rows: visible.iter().map(|&i| service_row(&self.services[i])).collect(),
             bulk: false,
-            empty: first_load.then(|| EmptyView { title: "Reading services…".into(), text: "This takes a moment.".into() }),
+            empty: if first_load {
+                Some(EmptyView { title: "Reading services…".into(), text: "This takes a moment.".into() })
+            } else {
+                self.loaded.then(|| self.empty_view(&visible)).flatten()
+            },
             notices: self.notices_view(),
             actions: vec![
                 action("refresh", "Refresh".into(), Some("a"), free, false),
                 action("manual", "Set to Manual".into(), None, can_change, false),
-                action("restore", format!("Restore originals ({saved})"), None, free && saved > 0, false),
+                action("restore", format!("Restore originals ({})", fmt_count(saved as u64)), None, free && saved > 0, false),
                 action("disable", "Disable".into(), Some("Enter"), can_change, true),
             ],
             search: Some(SearchView { placeholder: "Search…".into(), value: self.filter.clone() }),
             dialog: self.dialog_view(),
             report: None,
-            footer: Some(format!("Selected: {} · Freeable RAM (estimate): {}", chosen.len(), sys::fmt_size(freeable_kb * 1024))),
+            footer: Some(format!("Selected: {} · Freeable RAM (estimate): {}", fmt_count(chosen.len() as u64), sys::fmt_size(freeable_kb * 1024))),
         }
+    }
+
+    /// Why the list is empty: the search matches nothing, or there is nothing to show.
+    fn empty_view(&self, visible: &[usize]) -> Option<EmptyView> {
+        if !visible.is_empty() {
+            return None;
+        }
+        let search = self.filter.trim();
+        let text = if search.is_empty() { "No services to show.".to_string() } else { format!("Nothing matches “{search}”.") };
+        Some(EmptyView { title: "No services".into(), text })
     }
 
     fn job_view(&self) -> Option<JobView> {
@@ -336,7 +369,7 @@ impl ServicesState {
             ("Ready".to_string(), "Services not read yet".to_string())
         } else {
             let recommended = self.services.iter().filter(|s| s.suggestion.is_some()).count();
-            ("Loaded".to_string(), format!("{} services read · {recommended} recommended to turn off", self.services.len()))
+            ("Loaded".to_string(), format!("{} read · {} recommended to turn off", plural(self.services.len(), "service", "services"), fmt_count(recommended as u64)))
         };
         StatusView { badge, text }
     }
@@ -371,7 +404,7 @@ impl ServicesState {
         if self.msg.is_empty() {
             return Vec::new();
         }
-        vec![NoticeView { tone: if self.msg_error { Tone::Error } else { Tone::Ok }, text: self.msg.clone(), more: Vec::new() }]
+        vec![NoticeView { tone: self.msg_tone, text: self.msg.clone(), more: Vec::new() }]
     }
 
     /// The question. Disable and Set to Manual name what they change: the ticked, not protected
@@ -469,42 +502,54 @@ fn real_saved() -> usize {
     services::read_backup().len()
 }
 
-fn svc_word(n: usize) -> &'static str {
-    if n == 1 { "service" } else { "services" }
-}
-
-/// Il thread dei cambiamenti (il lavoro vero di `ServicesWorkers::REAL`): `start` `None` rimette gli
-/// originali, altrimenti imposta quel tipo di avvio ai servizi scelti. Dice com'è andata e basta:
-/// è lo stato a rileggere l'elenco.
+/// The thread of the changes (the real work of `ServicesWorkers::REAL`): `start` `None` puts the
+/// originals back, otherwise it sets that start type on the chosen services. It says how it went
+/// and nothing else: the state reads the list again.
 pub fn send_svc(chosen: Vec<services::Service>, start: Option<u32>, out: Outbox<SvcMsg>) {
     let msg = match start {
         None => {
             let (ok, bad) = services::restore_all();
             if bad > 0 {
-                format!("Restored {ok} {}, {bad} failed.", svc_word(ok))
+                SvcMsg::Partial(format!("Restored {}, {bad} failed.", plural(ok, "service", "services")))
             } else {
-                format!("Restored {ok} {}.", svc_word(ok))
+                SvcMsg::Message(format!("Restored {}.", plural(ok, "service", "services")))
             }
         }
         Some(s) => {
-            let mut ok = 0;
-            let mut bad = 0;
+            let (mut ok, mut failed, mut unsaved) = (0usize, 0usize, 0usize);
             for svc in &chosen {
-                if services::set_start(svc, s) {
-                    ok += 1;
-                } else {
-                    bad += 1;
+                match services::set_start(svc, s) {
+                    services::Change::Done => ok += 1,
+                    services::Change::Failed => failed += 1,
+                    services::Change::NotSaved => unsaved += 1,
                 }
             }
             let what = if s == services::START_DISABLED { "disabled" } else { "set to Manual" };
-            if bad > 0 {
-                format!("{ok} {} {what}, {bad} failed (administrator rights are needed).", svc_word(ok))
-            } else {
-                format!("{ok} {} {what}.", svc_word(ok))
-            }
+            change_message(ok, failed, unsaved, what)
         }
     };
-    out.send(SvcMsg::Message(msg));
+    out.send(msg);
+}
+
+/// The sentence after a change: how many went, how many failed, how many were left alone because
+/// their original start type could not be saved. Anything but a clean result is a warning.
+fn change_message(ok: usize, failed: usize, unsaved: usize, what: &str) -> SvcMsg {
+    let mut text = format!("{} {what}", plural(ok, "service", "services"));
+    if failed > 0 {
+        text.push_str(&format!(", {} failed (administrator rights are needed)", fmt_count(failed as u64)));
+    }
+    if unsaved > 0 {
+        text.push_str(&format!(
+            ", {} left unchanged: the original startup type could not be saved in Documents\\Xiox",
+            fmt_count(unsaved as u64)
+        ));
+    }
+    text.push('.');
+    if failed + unsaved > 0 {
+        SvcMsg::Partial(text)
+    } else {
+        SvcMsg::Message(text)
+    }
 }
 
 #[cfg(test)]
@@ -807,6 +852,134 @@ mod tests {
         assert!(action(&v, "refresh").enabled, "the user can read again");
     }
 
+    /// A worker that dies in the middle of a change may have changed some services already: the
+    /// list is read again (the Startup column must not lie) and the message says so.
+    static RELOADS: AtomicUsize = AtomicUsize::new(0);
+    fn reloading_load(out: Outbox<SvcMsg>) {
+        RELOADS.fetch_add(1, SeqCst);
+        out.send(SvcMsg::Loaded(list()));
+    }
+    fn dying_apply(_: Vec<services::Service>, _: Option<u32>, _out: Outbox<SvcMsg>) {}
+
+    #[test]
+    fn a_dead_apply_reloads_the_list_and_says_some_services_may_have_changed() {
+        let mut st = state().with_workers(ServicesWorkers { load: reloading_load, apply: dying_apply, ..NEVER });
+        st.services.clear();
+        st.services.extend(list());
+        st.open_confirm(ServiceAction::Disable).unwrap();
+        st.confirm(notifier()).unwrap();
+        drain(&mut st);
+        assert_eq!(RELOADS.load(SeqCst), 1, "the list was read again");
+        assert_eq!(st.services.len(), 4);
+        let v = st.view();
+        assert!(v.job.is_none());
+        assert_eq!(v.notices.len(), 1);
+        assert_eq!(v.notices[0].text, "The worker stopped: some services may already have been changed. The list was reloaded.");
+        assert_eq!(v.notices[0].tone, Tone::Error);
+        assert!(action(&v, "refresh").enabled);
+    }
+
+    // ---- plurals, grouping, tone and the empty list ----
+
+    fn state_of(n: usize) -> ServicesState {
+        let mut st = ServicesState::new().with_workers(NEVER);
+        st.services = (0..n).map(|i| svc(&format!("S{i}"), &format!("Service {i}"), None, false, false)).collect();
+        st.loaded = true;
+        st.set_all(true);
+        st
+    }
+
+    #[test]
+    fn counts_agree_with_their_word_and_are_grouped() {
+        for (n, subtitle, status) in [
+            (0, "0 of 0 services shown", "0 services read · 0 recommended to turn off"),
+            (1, "1 of 1 service shown", "1 service read · 0 recommended to turn off"),
+            (2, "2 of 2 services shown", "2 services read · 0 recommended to turn off"),
+            (1234, "1,234 of 1,234 services shown", "1,234 services read · 0 recommended to turn off"),
+        ] {
+            let v = state_of(n).view();
+            assert_eq!(v.subtitle, subtitle, "{n} services");
+            assert_eq!(v.status.text, status, "{n} services");
+        }
+        let mut st = state_of(1234);
+        st.set_search("Service 12");
+        assert_eq!(st.view().subtitle, "45 of 1,234 services shown");
+        assert_eq!(st.view().footer.as_deref(), Some("Selected: 0 · Freeable RAM (estimate): 0 B"));
+        st.services[5].selected = true;
+        assert!(st.view().footer.unwrap().starts_with("Selected: 1 ·"));
+    }
+
+    #[test]
+    fn a_list_with_no_row_says_why() {
+        // Nothing matches the search: the page gets a title and the search in the text.
+        let mut st = state();
+        st.set_search("zzz");
+        let v = st.view();
+        assert!(v.rows.is_empty());
+        let e = v.empty.expect("an empty list is explained");
+        assert_eq!((e.title.as_str(), e.text.as_str()), ("No services", "Nothing matches “zzz”."));
+        // No search, and still nothing to show (an empty read, or the filter hides everything).
+        let st = state_of(0);
+        let e = st.view().empty.expect("explained too");
+        assert_eq!((e.title.as_str(), e.text.as_str()), ("No services", "No services to show."));
+        let mut st = state();
+        st.set_search("   ");
+        st.set_all(false);
+        for s in &mut st.services {
+            s.suggestion = None;
+        }
+        assert_eq!(st.view().empty.unwrap().text, "No services to show.", "a blank search is no search");
+        // Rows: no empty state. Before the first read: nothing either.
+        assert!(state().view().empty.is_none());
+        let mut fresh = ServicesState::new().with_workers(NEVER);
+        assert!(!fresh.loaded);
+        assert!(fresh.view().empty.is_none(), "not read yet: the page shows its own first state");
+        fresh.loaded = true;
+        assert_eq!(fresh.view().empty.unwrap().text, "No services to show.");
+    }
+
+    /// A change that did not fully go is a warning, a clean one is ok; the words agree with the numbers.
+    #[test]
+    fn the_result_of_a_change_is_ok_or_a_warning() {
+        fn shown(m: SvcMsg) -> (&'static str, String) {
+            match m {
+                SvcMsg::Message(t) => ("ok", t),
+                SvcMsg::Partial(t) => ("warn", t),
+                SvcMsg::Loaded(_) => unreachable!(),
+            }
+        }
+        assert_eq!(shown(change_message(1, 0, 0, "disabled")), ("ok", "1 service disabled.".to_string()));
+        assert_eq!(shown(change_message(0, 0, 0, "disabled")), ("ok", "0 services disabled.".to_string()));
+        assert_eq!(shown(change_message(2, 0, 0, "set to Manual")), ("ok", "2 services set to Manual.".to_string()));
+        assert_eq!(
+            shown(change_message(2, 1, 0, "disabled")),
+            ("warn", "2 services disabled, 1 failed (administrator rights are needed).".to_string())
+        );
+        let (tone, text) = shown(change_message(1, 0, 3, "disabled"));
+        assert_eq!(tone, "warn");
+        assert!(text.starts_with("1 service disabled, 3 left unchanged: the original startup type could not be saved"), "{text}");
+    }
+
+    #[test]
+    fn a_partial_result_reaches_the_page_as_a_warning_and_reloads_the_list() {
+        fn partial_apply(_: Vec<services::Service>, _: Option<u32>, out: Outbox<SvcMsg>) {
+            out.send(SvcMsg::Partial("1 service disabled, 1 failed (administrator rights are needed).".into()));
+        }
+        let mut st = state().with_workers(ServicesWorkers { load: counting_partial_load, apply: partial_apply, ..NEVER });
+        st.open_confirm(ServiceAction::Disable).unwrap();
+        st.confirm(notifier()).unwrap();
+        drain(&mut st);
+        let v = st.view();
+        assert_eq!(v.notices[0].tone, Tone::Warn);
+        assert!(v.notices[0].text.contains("1 failed"));
+        // Showing the section again clears it, tone included.
+        st.clear_message();
+        assert!(st.view().notices.is_empty());
+    }
+    fn counting_partial_load(out: Outbox<SvcMsg>) {
+        out.send(SvcMsg::Loaded(list()));
+    }
+
     // ---- services_view_meter_footer_and_dialog_texts ----
 
     fn memory_of(used_percent: u64) -> sys::Memory {
@@ -947,7 +1120,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/views.json");
         let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let states = doc["views"]["services"].as_object().unwrap();
-        assert_eq!(states.len(), 3, "loading, loaded, confirm");
+        assert_eq!(states.len(), 5, "loading, loaded, confirm, nomatch, partial");
         for (name, view) in states {
             let v: SectionView = serde_json::from_value(view.clone()).unwrap_or_else(|e| panic!("services:{name}: {e}"));
             assert_eq!(v.section, SectionId::Services);

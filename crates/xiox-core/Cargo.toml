@@ -12,7 +12,7 @@ xiox-app = { path = "../xiox-app" }
 xiox-mukade = { path = "../xiox-mukade" }
 xiox-sessions = { path = "../xiox-sessions" }
 serde = { version = "1", features = ["derive"] }
-# Same version and features as xiox-mukade (already in the build): local dates in the Sviluppatori tables.
+# Same version and features as xiox-mukade (already in the build): local dates in the Developers tables.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 winreg = "0.56"
 # Same version and features as xiox-mukade (already in the build): browser databases (cookies, VACUUM, Firefox history).

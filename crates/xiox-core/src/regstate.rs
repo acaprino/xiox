@@ -1,17 +1,14 @@
 //! The Registry section without a window: its state, the two jobs (scan, fix) behind a worker
 //! seam, the intents the page can send, and the `SectionView` the page draws.
 //!
-//! Moved out of the old window's `main.rs`: `RegMsg`, the `reg_*` fields, `start_reg_scan`,
-//! `start_reg_fix` and the registry half of `poll`. The strings of the moved code are English at the
-//! source, like the sentences the view adds.
-//!
-//! The intents refuse what the old window had disabled: registry choices and the scan while a job
+//! The intents refuse what the page must not do now: registry choices and the scan while a job
 //! runs or while the backup question is open (the question describes the selection), a fix without
 //! the question, a question without a selected issue. A refused intent changes nothing.
 
 use crate::dev::{BUSY, DIALOG_OPEN, NOTHING_SELECTED, NO_DIALOG};
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::registry;
+use crate::sys::{fmt_count, plural};
 use crate::view::*;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
@@ -44,6 +41,8 @@ pub const NO_CATEGORY: &str = "Tick at least one category to look through.";
 pub const NO_ISSUES: &str = "There are no issues to choose from: find issues first.";
 pub const UNKNOWN_ISSUE: &str = "That issue is not in the list.";
 pub const UNKNOWN_CATEGORY: &str = "That category does not exist.";
+pub const FIX_DIED: &str = "The worker stopped: some issues may already have been fixed. Scan again to see what is left.";
+
 pub struct RegistryState {
     /// One tick per `registry::CATEGORIES` entry.
     sel: Vec<bool>,
@@ -57,8 +56,9 @@ pub struct RegistryState {
     msg: String,
     /// The running job is a fix (not a scan).
     fixing: bool,
-    /// `msg` reports a failure (a refused backup, a dead worker), not a result.
-    msg_error: bool,
+    /// How `msg` is shown: a result (ok), a partial one (warn) or a failure (a refused backup, a
+    /// dead worker: error).
+    msg_tone: Tone,
     workers: RegistryWorkers,
 }
 
@@ -80,7 +80,7 @@ impl RegistryState {
             confirm: false,
             msg: String::new(),
             fixing: false,
-            msg_error: false,
+            msg_tone: Tone::Ok,
             workers: RegistryWorkers::REAL,
         }
     }
@@ -110,7 +110,7 @@ impl RegistryState {
         let (tx, rx) = channel();
         self.job = Some(rx);
         self.fixing = false;
-        self.msg_error = false;
+        self.msg_tone = Tone::Ok;
         self.text.clear();
         self.progress = 0.0;
         self.issues.clear();
@@ -125,7 +125,7 @@ impl RegistryState {
         let (tx, rx) = channel();
         self.job = Some(rx);
         self.fixing = true;
-        self.msg_error = false;
+        self.msg_tone = Tone::Ok;
         self.text.clear();
         self.progress = 0.0;
         let work = self.workers.fix;
@@ -156,13 +156,13 @@ impl RegistryState {
                 RegMsg::Done => done = true,
                 RegMsg::Fixed { refused: Some(why), .. } => {
                     self.msg = format!("Registry backup failed ({why}): no repair was done.");
-                    self.msg_error = true;
+                    self.msg_tone = Tone::Error;
                     done = true;
                 }
                 RegMsg::Fixed { ok, failed, backup, refused: None } => {
-                    self.msg = format!("Fixed {ok} issues.");
+                    self.msg = format!("Fixed {}.", plural(ok, "issue", "issues"));
                     if failed > 0 {
-                        self.msg.push_str(&format!(" {failed} not fixed (administrator rights are needed)."));
+                        self.msg.push_str(&format!(" {} not fixed (administrator rights are needed).", fmt_count(failed as u64)));
                     }
                     if let Some(b) = backup {
                         self.msg.push_str(&format!("\nBackup saved in: {b}"));
@@ -170,14 +170,15 @@ impl RegistryState {
                     if failed == 0 {
                         self.issues.retain(|i| !i.selected);
                     }
-                    self.msg_error = false;
+                    self.msg_tone = if failed > 0 { Tone::Warn } else { Tone::Ok };
                     done = true;
                 }
             }
         }
         if gone && !done {
-            self.msg = JOB_DIED.into();
-            self.msg_error = true;
+            // A fix that died may have repaired some issues: the list on screen can be stale.
+            self.msg = if self.fixing { FIX_DIED } else { JOB_DIED }.into();
+            self.msg_tone = Tone::Error;
             done = true;
         }
         if done {
@@ -304,7 +305,7 @@ impl RegistryState {
                 },
                 ActionView {
                     id: "fix".into(),
-                    label: format!("Fix selected ({selected})…"),
+                    label: format!("Fix selected ({})…", fmt_count(selected as u64)),
                     key: Some("Enter".into()),
                     enabled: !busy && !self.confirm && selected > 0,
                     primary: true,
@@ -337,7 +338,7 @@ impl RegistryState {
         } else if !self.scanned {
             ("Ready".to_string(), "No scan yet".to_string())
         } else {
-            ("Scan done".to_string(), format!("{} · {selected} selected", issue_count(self.issues.len())))
+            ("Scan done".to_string(), format!("{} · {} selected", issue_count(self.issues.len()), fmt_count(selected as u64)))
         };
         StatusView { badge, text }
     }
@@ -413,7 +414,7 @@ impl RegistryState {
         }
         let mut lines = self.msg.lines().map(str::to_string);
         let text = lines.next().unwrap_or_default();
-        vec![NoticeView { tone: if self.msg_error { Tone::Error } else { Tone::Ok }, text, more: lines.collect() }]
+        vec![NoticeView { tone: self.msg_tone, text, more: lines.collect() }]
     }
 
     fn dialog_view(&self) -> Option<DialogView> {
@@ -443,11 +444,7 @@ impl RegistryState {
 }
 
 fn issue_count(n: usize) -> String {
-    if n == 1 {
-        "1 issue found".into()
-    } else {
-        format!("{n} issues found")
-    }
+    format!("{} found", plural(n, "issue", "issues"))
 }
 
 // ---------- the real jobs ----------
@@ -669,6 +666,67 @@ mod tests {
         assert_eq!(st.issues.len(), 3);
     }
 
+    /// A fix worker that dies may have repaired some issues already: its own message says so, and a
+    /// dead scan keeps the general one.
+    #[test]
+    fn a_dead_fix_says_some_issues_may_already_be_fixed_and_a_dead_scan_does_not() {
+        fn dying_scan(_: Vec<usize>, _out: Outbox<RegMsg>) {}
+        let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix: dying_fix });
+        st.open_fix().unwrap();
+        st.fix(false, notifier()).unwrap();
+        drain(&mut st);
+        let n = &st.view().notices[0];
+        assert_eq!(n.text, "The worker stopped: some issues may already have been fixed. Scan again to see what is left.");
+        assert_eq!(n.tone, Tone::Error);
+
+        let mut st = RegistryState::new().with_workers(RegistryWorkers { scan: dying_scan, fix: never_fix });
+        st.scan(notifier()).unwrap();
+        drain(&mut st);
+        let n = &st.view().notices[0];
+        assert_eq!((n.text.as_str(), n.tone), (JOB_DIED, Tone::Error));
+    }
+
+    fn fixed_one(_: Vec<registry::Issue>, _: bool, out: Outbox<RegMsg>) {
+        out.send(RegMsg::Fixed { ok: 1, failed: 0, backup: None, refused: None });
+    }
+    fn fixed_some(_: Vec<registry::Issue>, _: bool, out: Outbox<RegMsg>) {
+        out.send(RegMsg::Fixed { ok: 1234, failed: 1, backup: Some(r"C:\Users\u\Documents\Xiox\registry-backup-1.reg".into()), refused: None });
+    }
+
+    /// The result of a fix: the word agrees with the count (grouped), a partial result is a warning
+    /// (not green) and a clean one is ok.
+    #[test]
+    fn the_result_of_a_fix_agrees_with_its_count_and_is_a_warning_when_some_failed() {
+        let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix: fixed_one });
+        st.open_fix().unwrap();
+        st.fix(false, notifier()).unwrap();
+        drain(&mut st);
+        let n = st.view().notices.remove(0);
+        assert_eq!((n.text.as_str(), n.tone), ("Fixed 1 issue.", Tone::Ok));
+
+        let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix: fixed_some });
+        st.open_fix().unwrap();
+        st.fix(true, notifier()).unwrap();
+        drain(&mut st);
+        let n = st.view().notices.remove(0);
+        assert_eq!(n.text, "Fixed 1,234 issues. 1 not fixed (administrator rights are needed).");
+        assert_eq!(n.tone, Tone::Warn, "some failed: not green");
+        assert_eq!(n.more, vec![r"Backup saved in: C:\Users\u\Documents\Xiox\registry-backup-1.reg".to_string()]);
+        assert_eq!(st.issues.len(), 3, "a failure keeps the list: the user sees what is left");
+        // A new scan or fix starts from ok again.
+        st.start_scan(notifier());
+        assert_eq!(st.msg_tone, Tone::Ok);
+        drain(&mut st);
+    }
+
+    #[test]
+    fn issue_counts_agree_with_their_word_and_are_grouped() {
+        assert_eq!(issue_count(0), "0 issues found");
+        assert_eq!(issue_count(1), "1 issue found");
+        assert_eq!(issue_count(2), "2 issues found");
+        assert_eq!(issue_count(18_204), "18,204 issues found");
+    }
+
     // ---- registry_view_lists_issues_and_the_backup_dialog ----
 
     #[test]
@@ -809,7 +867,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/views.json");
         let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let states = doc["views"]["registry"].as_object().unwrap();
-        assert_eq!(states.len(), 6, "idle, scanning, analyzed, backup, fixing, fixed");
+        assert_eq!(states.len(), 7, "idle, scanning, analyzed, backup, fixing, fixed, partial");
         for (name, view) in states {
             let v: SectionView = serde_json::from_value(view.clone()).unwrap_or_else(|e| panic!("registry:{name}: {e}"));
             assert_eq!(v.section, SectionId::Registry);

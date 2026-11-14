@@ -138,3 +138,10 @@ test('the CLI skips every file under examples/ and tests/, whatever its kind', a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('knows the words that slipped through once', () => {
+  const yes = ['account sconosciuto', 'Sconosciuta', 'senza permessi', 'scaricamento fallito', 'regole aggiornate', 'Aggiornato', 'impossibile aprire', 'servizi disattivati', 'riavvia il PC', 'Riavvio', 'connessione assente'];
+  const no = ['unknown account', 'permissions', 'Updated', 'disabled', 'restart', 'connection lost'];
+  for (const w of yes) assert.equal(findItalian(`const A: &str = "${w}";`, 'rust', none).length, 1, w);
+  for (const w of no) assert.equal(findItalian(`const A: &str = "${w}";`, 'rust', none).length, 0, w);
+});

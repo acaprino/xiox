@@ -77,7 +77,7 @@ pub const CATEGORIES: &[Category] = &[
     Category { name: "Installer folders", default_on: true },
     Category { name: "Obsolete software", default_on: true },
     Category { name: "Run at startup", default_on: true },
-    Category { name: "Cache MUI", default_on: true },
+    Category { name: "MUI cache", default_on: true },
     Category { name: "Windows services", default_on: false },
 ];
 
@@ -368,13 +368,12 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
     out
 }
 
-/// Backup `.reg` delle chiavi che le riparazioni toccano, in
-/// `Documenti\Xiox\backup_registro_<stamp>.reg` (`_2`, `_3`… se il nome
-/// c'è già), con l'esportazione sicura di [`regbackup`]. `Ok(None)` se nessuna
-/// chiave esiste più. `Err` se anche una sola chiave esistente non si salva:
-/// allora non si ripara nulla (vedi [`fix_all`]).
+/// `.reg` backup of the keys the repairs touch, in `Documents\Xiox\registry-backup-<stamp>.reg`
+/// (`_2`, `_3`… if the name is taken), with the safe export of [`regbackup`]. The app never reads
+/// it back: the user double-clicks it. `Ok(None)` if no key exists any more. `Err` if even one
+/// existing key cannot be saved: then nothing is repaired (see [`fix_all`]).
 pub fn backup(issues: &[&Issue]) -> Result<Option<PathBuf>, String> {
-    let stem = format!("backup_registro_{}", sys::stamp());
+    let stem = format!("registry-backup-{}", sys::stamp());
     backup_to(&sys::data_dir(), &stem, &regbackup::admin_work_dir, &key_exists, &regbackup::reg_exe_export, issues)
 }
 
@@ -552,12 +551,12 @@ mod backup_tests {
         let work = work_in(&work_root);
         let a = issue(Root::Hkcu, r"Software\FakeApp\A", None);
         let b = issue(Root::Hklm, r"SOFTWARE\FakeApp", Some("Mru"));
-        let stem = "backup_registro_20261111_120000";
+        let stem = "registry-backup-20261111_120000";
         let p1 = backup_to(&dest, stem, &work, &all_exist, &fake_export, &[&a]).unwrap().unwrap();
         let p2 = backup_to(&dest, stem, &work, &all_exist, &fake_export, &[&b]).unwrap().unwrap();
         assert_ne!(p1, p2);
-        assert_eq!(p1.file_name().unwrap(), "backup_registro_20261111_120000.reg");
-        assert_eq!(p2.file_name().unwrap(), "backup_registro_20261111_120000_2.reg");
+        assert_eq!(p1.file_name().unwrap(), "registry-backup-20261111_120000.reg");
+        assert_eq!(p2.file_name().unwrap(), "registry-backup-20261111_120000_2.reg");
         assert!(reg_text(&p1).contains(r"[HKCU\Software\FakeApp\A]"));
         assert!(reg_text(&p2).contains(r"[HKLM\SOFTWARE\FakeApp]"));
         // Né cartelle di lavoro né temporanei restano.
@@ -668,12 +667,12 @@ mod backup_tests {
         let backups = Cell::new(0);
         let backup = |_: &[&Issue]| {
             backups.set(backups.get() + 1);
-            Ok(Some(PathBuf::from(r"C:\finto\backup_registro_x.reg")))
+            Ok(Some(PathBuf::from(r"C:\finto\registry-backup-x.reg")))
         };
         let mut n = 0;
         let out = fix_all(&chosen, true, &backup, &mut |_| { n += 1; n == 1 }, &mut |_| {});
         assert_eq!((out.ok, out.failed, out.refused.clone()), (1, 1, None));
-        assert_eq!(out.backup, Some(PathBuf::from(r"C:\finto\backup_registro_x.reg")));
+        assert_eq!(out.backup, Some(PathBuf::from(r"C:\finto\registry-backup-x.reg")));
         assert_eq!(backups.get(), 1);
         // Senza backup chiesto: non si chiama e si ripara come prima.
         let out = fix_all(&chosen, false, &backup, &mut |_| true, &mut |_| {});

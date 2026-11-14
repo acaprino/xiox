@@ -11,8 +11,8 @@ use std::path::Path;
 const MODE: &str = "permanently";
 const MODE_BIN: &str = "empties the Recycle Bin";
 const NEEDS_ADMIN: &str = "Needs administrator: some folders are skipped";
-/// The hover text of the old window's button, as it was.
-const KEEP_LIST_HINT: &str = "Opens Documents\\Xiox\\cookie_da_conservare.txt in Notepad (creates it if missing). \
+/// The hover text of the «keep list» button.
+const KEEP_LIST_HINT: &str = "Opens Documents\\Xiox\\cookie-keep-list.txt in Notepad (creates it if missing). \
                               One domain per line: their cookies stay.";
 
 /// What a nav group holds: its rows, how many of them will run, and what the analysis found there.
@@ -41,10 +41,6 @@ fn level_text(l: LevelView) -> &'static str {
     }
 }
 
-fn count_text(n: usize, one: &str, many: &str) -> String {
-    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
-}
-
 impl CleanupState {
     /// The whole section for the page. `rev` is 0: `Core` numbers the views it publishes. `admin`
     /// is whether the program runs as administrator (what the built-in categories say of it).
@@ -66,8 +62,8 @@ impl CleanupState {
             options: self.options_view(&open),
             subtitle: match (items, analysed) {
                 (0, _) => String::new(),
-                (n, true) => format!("{} · largest first", count_text(n, "item", "items")),
-                (n, false) => count_text(n, "item", "items"),
+                (n, true) => format!("{} · largest first", sys::plural(n, "item", "items")),
+                (n, false) => sys::plural(n, "item", "items"),
             },
             columns: [("Item", ColumnKind::Name), ("Level", ColumnKind::Level), ("Files", ColumnKind::Cell), ("Size", ColumnKind::Size)]
                 .map(|(title, kind)| ColumnView { title: title.into(), kind })
@@ -114,7 +110,7 @@ impl CleanupState {
         let mut item = |id: String, name: String, t: Tally| {
             let shown = self.clean_view == CleanView::Analyzed && (!self.busy() || t.answered);
             nav.push(NavItem {
-                note: Some(format!("{} · {} selected", count_text(t.items, "item", "items"), t.selected)),
+                note: Some(format!("{} · {} selected", sys::plural(t.items, "item", "items"), sys::fmt_count(t.selected as u64))),
                 bytes: shown.then_some(t.bytes),
                 active: id == open,
                 id,
@@ -176,7 +172,7 @@ impl CleanupState {
             let Some(rs) = &self.rules else { return Vec::new() };
             let mut rows = Vec::new();
             for (section, idx) in winapp2_matches(rs, &self.rule_search) {
-                rows.push(RowView { name: format!("{section} ({})", idx.len()), ..blank_row(format!("section:{section}"), RowKind::Header) });
+                rows.push(RowView { name: format!("{section} ({})", sys::fmt_count(idx.len() as u64)), ..blank_row(format!("section:{section}"), RowKind::Header) });
                 rows.extend(idx.iter().flat_map(|&i| rs.cleaners[i].options.iter().map(move |o| (i, o))).map(|(i, o)| self.option_row(&rs.cleaners[i], o)));
             }
             return rows;
@@ -201,20 +197,20 @@ impl CleanupState {
         let mode = if c.kind == cleaner::Kind::RecycleBin { MODE_BIN } else { MODE };
         let mut detail = vec![("item".to_string(), c.name.to_string())];
         if let Some(f) = found {
-            detail.push(("files".into(), f.count.to_string()));
+            detail.push(("files".into(), sys::fmt_count(f.count)));
             detail.push(("size".into(), sys::fmt_size(f.bytes)));
         }
         detail.extend([("level".to_string(), level_text(level).to_string()), ("mode".into(), mode.into()), ("why".into(), c.help.into())]);
         if let Some(f) = found.filter(|f| f.skipped_dirs > 0 && !admin) {
             let n = f.skipped_dirs as usize;
-            detail.push(("skipped".into(), format!("{} skipped: they need administrator rights", count_text(n, "folder", "folders"))));
+            detail.push(("skipped".into(), format!("{} skipped: they need administrator rights", sys::plural(n, "folder", "folders"))));
         }
         RowView {
             check: if self.clean_sel[i] { Check::On } else { Check::Off },
             name: c.name.into(),
             sub: Some(c.help.into()),
             level: Some(level),
-            cells: found.map(|f| vec![f.count.to_string()]).unwrap_or_default(),
+            cells: found.map(|f| vec![sys::fmt_count(f.count)]).unwrap_or_default(),
             bytes: found.map(|f| f.bytes),
             why: (c.needs_admin && !admin).then(|| NEEDS_ADMIN.to_string()),
             detail,
@@ -233,7 +229,7 @@ impl CleanupState {
         let found = self.native_found_of(&key);
         let mut detail = vec![("item".to_string(), item.label.to_string())];
         if let Some(f) = found {
-            detail.push(("files".into(), f.files.to_string()));
+            detail.push(("files".into(), sys::fmt_count(f.files as u64)));
             detail.push(("size".into(), sys::fmt_size(f.bytes)));
         }
         detail.extend([("level".to_string(), level_text(level).to_string()), ("mode".into(), MODE.into()), ("why".into(), item.description.into())]);
@@ -247,7 +243,7 @@ impl CleanupState {
             sub: Some(item.description.into()),
             level: Some(level),
             // Channels, DNS and the clipboard are not files: the number is in the detail.
-            cells: found.map(|f| vec![if f.files > 0 { f.files.to_string() } else { "—".to_string() }]).unwrap_or_default(),
+            cells: found.map(|f| vec![if f.files > 0 { sys::fmt_count(f.files as u64) } else { "—".to_string() }]).unwrap_or_default(),
             bytes: found.map(|f| f.bytes),
             muted: blocked.is_some(),
             why: blocked.or_else(|| item.warning.map(str::to_string)),
@@ -270,7 +266,7 @@ impl CleanupState {
         let found = self.rule_found_of(&key);
         let mut detail = vec![("item".to_string(), name.clone())];
         if let Some(f) = found {
-            detail.push(("files".into(), f.count.to_string()));
+            detail.push(("files".into(), sys::fmt_count(f.count)));
             detail.push(("size".into(), sys::fmt_size(f.bytes)));
         }
         detail.extend([("level".to_string(), level_text(level).to_string()), ("mode".into(), MODE.into())]);
@@ -278,7 +274,7 @@ impl CleanupState {
         detail.extend(o.warning.clone().map(|w| ("warning".to_string(), w)));
         let left = found.filter(|f| f.skipped > 0);
         if let Some(f) = left {
-            detail.push(("left".into(), format!("{} left (protected or unreadable)", count_text(f.skipped as usize, "item", "items"))));
+            detail.push(("left".into(), format!("{} left (protected or unreadable)", sys::plural(f.skipped as usize, "item", "items"))));
         }
         RowView {
             check: if blocked.is_none() && self.rule_sel.contains(&key) { Check::On } else { Check::Off },
@@ -286,7 +282,7 @@ impl CleanupState {
             name,
             sub: description,
             level: Some(level),
-            cells: found.map(|f| vec![f.count.to_string()]).unwrap_or_default(),
+            cells: found.map(|f| vec![sys::fmt_count(f.count)]).unwrap_or_default(),
             bytes: found.map(|f| f.bytes),
             muted: blocked.is_some(),
             why: blocked,
@@ -360,7 +356,7 @@ impl CleanupState {
             CleanView::Analyzed if busy => (if cancelling { "Cancelling" } else { "Analyzing" }.to_string(), String::new()),
             CleanView::Analyzed => {
                 let (bytes, files) = self.found_totals();
-                (analysis_title(false, self.clean_end).0.to_string(), format!("{} to delete ({files} files)", sys::fmt_size(bytes)))
+                (analysis_title(false, self.clean_end).0.to_string(), format!("{} to delete ({})", sys::fmt_size(bytes), sys::plural(files, "file", "files")))
             }
             CleanView::Cleaned if busy => {
                 (if cancelling { "Cancelling" } else { "Cleaning" }.to_string(), format!("{} freed", sys::fmt_size(self.freed_so_far())))
@@ -418,7 +414,7 @@ impl CleanupState {
         }
         let label = match self.clean_count() {
             0 => "Clean".to_string(),
-            n => format!("Clean {}", count_text(n, "item", "items")),
+            n => format!("Clean {}", sys::plural(n, "item", "items")),
         };
         v.push(action("clean", label, "Enter", can && self.clean_view == CleanView::Analyzed, true));
         v

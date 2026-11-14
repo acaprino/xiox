@@ -126,6 +126,8 @@ fn scan_none(_: Settings, _: bool, _: Outbox<DevMsg>) {}
 
 /// What the recording clean worker was asked to do: (mode, plan items).
 static CALLS: Mutex<Vec<(RemoveMode, usize)>> = Mutex::new(Vec::new());
+/// The tests that clear and read `CALLS` run one at a time.
+static CALLS_SERIAL: Mutex<()> = Mutex::new(());
 
 fn clean_recording(job: DevCleanJob, out: Outbox<DevMsg>) {
     CALLS.lock().unwrap().push((job.mode, job.plan.as_ref().map_or(0, |p| p.items.len())));
@@ -363,12 +365,11 @@ fn nothing_changes_while_busy_or_with_the_dialog_open() {
 
 #[test]
 fn settings_intents_clamp_dedupe_and_stay_in_memory_with_only_root() {
-    let settings_file = xiox_app::settings_path();
-    let stamp = || std::fs::metadata(&settings_file).and_then(|m| m.modified()).ok();
-    let before = stamp();
-
+    // The real settings file (`%APPDATA%\Xiox`) is never looked at here: asking where it is could even
+    // move a legacy folder. What keeps it untouched is `persist`, which `only_root` turns off.
     let tmp = tempfile::tempdir().unwrap();
     let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects).with_workers(TEST_WORKERS);
+    assert!(!st.persist, "an --only-root state keeps its settings in memory");
     st.set_inactive_days(0).unwrap();
     assert_eq!(st.settings.inactive_days, 1);
     st.set_inactive_days(999).unwrap();
@@ -399,7 +400,7 @@ fn settings_intents_clamp_dedupe_and_stay_in_memory_with_only_root() {
 
     // `persist` is false: nothing was written and nothing failed to write.
     assert!(st.settings_err.is_none());
-    assert_eq!(stamp(), before, "the real settings file was not touched");
+    assert!(!st.persist);
 }
 
 // ---------- confirmation ----------
@@ -432,6 +433,7 @@ fn confirm_needs_an_open_ready_dialog() {
     assert_eq!(err(st.confirm(notifier(), false)), NO_DIALOG, "a second Enter does nothing");
 
     // The Recycle Bin is too small: only «Permanently» is offered.
+    let _serial = CALLS_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     CALLS.lock().unwrap().clear();
     let mut st = levels_state();
     st.settings.remove_mode = RemoveMode::Recycle;
@@ -444,6 +446,46 @@ fn confirm_needs_an_open_ready_dialog() {
     finish(&mut st);
     assert_eq!(*CALLS.lock().unwrap(), vec![(RemoveMode::Permanent, 1)], "the worker got the permanent plan");
     assert_eq!(st.view, View::Cleaned);
+}
+
+/// The Recycle Bin is too small AND a Caution folder is in the plan: «Permanently» is the only
+/// button, and it still needs the warnings read. The refusal comes BEFORE the plan is switched to
+/// permanent: a dialog that is refused is left exactly as it was (still offering the shortfall,
+/// still in Recycle mode), never silently downgraded to a permanent deletion by a button that did
+/// nothing.
+#[test]
+fn permanently_with_unread_warnings_is_refused_before_the_plan_turns_permanent() {
+    let _serial = CALLS_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    CALLS.lock().unwrap().clear();
+    let mut st = levels_state();
+    st.settings.remove_mode = RemoveMode::Recycle;
+    st.sel_artifacts.insert(dist_id());
+    st.open_confirm_with(xiox_app::now_ms(), |p| vec![('D', p.expected_bytes, 0)]);
+    let c = st.confirm.as_ref().expect("the dialog is open");
+    assert!(!c.shortfall.is_empty() && !c.cautions.is_empty() && !c.ack, "shortfall + caution + warnings not read");
+    assert_eq!(c.mode, RemoveMode::Recycle);
+
+    assert_eq!(err(st.confirm(notifier(), true)), NOT_READY);
+    assert_eq!(err(st.take_ready_confirm(true, xiox_app::now_ms())), NOT_READY);
+    let c = st.confirm.as_ref().expect("the dialog stays open");
+    assert!(!c.shortfall.is_empty(), "the shortfall is still offered: the plan was not made permanent");
+    assert_eq!(c.mode, RemoveMode::Recycle);
+    assert!(!st.busy());
+    assert!(CALLS.lock().unwrap().is_empty(), "nothing ran");
+    let d = st.view(false).dialog.expect("the dialog is still drawn");
+    assert_eq!(d.buttons.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["permanent", "cancel"]);
+    assert!(!button(&d, "permanent").enabled, "the button is off until the warnings are read");
+
+    // The other button is not this dialog's either, and it is refused for the same first reason.
+    assert_eq!(err(st.take_ready_confirm(false, xiox_app::now_ms())), NOT_READY);
+
+    // The warnings read: now «Permanently» runs, as a permanent plan.
+    st.set_ack(true).unwrap();
+    assert_eq!(err(st.take_ready_confirm(false, xiox_app::now_ms())), PERMANENT_ONLY);
+    st.confirm(notifier(), true).unwrap();
+    assert!(st.busy() && st.confirm.is_none());
+    finish(&mut st);
+    assert_eq!(*CALLS.lock().unwrap(), vec![(RemoveMode::Permanent, 2)]);
 }
 
 #[test]

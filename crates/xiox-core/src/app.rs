@@ -301,6 +301,17 @@ impl Core {
         }
         self.view(s)
     }
+
+    /// [`Core::set_saved`] only if the report on screen is still `serialized`, the one that was
+    /// written: the page may have closed it or started another job while the dialog was open.
+    /// Compared and applied under the caller's one lock; otherwise the current view, no notice.
+    pub fn set_saved_if(&mut self, s: SectionId, serialized: &str, text: String, ok: bool) -> SectionView {
+        if self.report_text(s).as_deref() == Some(serialized) {
+            self.set_saved(s, text, ok)
+        } else {
+            self.view(s)
+        }
+    }
 }
 
 #[cfg(test)]

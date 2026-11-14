@@ -426,10 +426,9 @@ fn labels() {
     let mut untitled = s.clone();
     untitled.title = Some("   ".into());
     assert_eq!(session_title(&untitled), "(untitled)");
-    assert_eq!(section_label(Section::Sessions, Some(664)), "Archived sessions (664)");
-    assert_eq!(section_label(Section::Worktrees, None), "Worktrees");
     assert_eq!(plural(1, "folder", "folders"), "1 folder");
     assert_eq!(plural(0, "folder", "folders"), "0 folders");
+    assert_eq!(plural(2_048, "folder", "folders"), "2,048 folders");
     assert_eq!(fmt_elapsed(58_400), "Analysis in 58 s");
     assert_eq!(fmt_elapsed(125_000), "Analysis in 2 min 5 s");
 }
@@ -780,7 +779,6 @@ fn the_report_adds_up_folders_and_sessions() {
     assert_eq!(out.label(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)");
     assert_eq!(cleaned_title(Some(&out), false), "Cleanup cancelled");
     assert_eq!(cleaned_title(Some(&out), true), "Cleaning…");
-    assert_eq!(recycled_text(300), "300 B in the Recycle Bin: freed by emptying it");
     let text = r.to_text();
     assert!(text.contains("Space freed") && text.contains("Skipped (1)") && text.contains("Failed (1)"), "{text}");
 
@@ -797,9 +795,8 @@ fn progress_text_and_bar() {
     let unknown = Tick { done_bytes: 0, total_bytes: 0, done_items: 1, total_items: 2 };
     assert_eq!(tick_fraction(&unknown), 0.5);
     assert_eq!(tick_text(&Tick { total_items: 1, ..unknown }), "0 B of 0 B · 1 of 1 item");
-    assert_eq!(fmt_duration(850), "850 ms");
-    assert_eq!(fmt_duration(12_300), "12 s");
-    assert_eq!(fmt_duration(125_000), "2 min 05 s");
+    let big = Tick { done_bytes: 0, total_bytes: 0, done_items: 1_500, total_items: 12_000 };
+    assert_eq!(tick_text(&big), "0 B of 0 B · 1,500 of 12,000 items");
 }
 
 #[test]

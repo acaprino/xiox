@@ -451,9 +451,7 @@ fn has_column(c: &Connection, table: &str, col: &str) -> bool {
     c.query_row("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2", [table, col], |_| Ok(())).is_ok()
 }
 
-fn plural(n: u64, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
+use crate::sys::plural;
 
 // ---------------------------------------------------------------------------
 // Lista dei cookie da conservare.
@@ -523,12 +521,17 @@ pub fn is_kept(host: &str, keep: &[String]) -> bool {
     keep.iter().any(|d| h == *d || (h.len() > d.len() && h.ends_with(d.as_str()) && h.as_bytes()[h.len() - d.len() - 1] == b'.'))
 }
 
-/// `<documenti>\Xiox\cookie_da_conservare.txt`. Una cartella `<documenti>\PulisciPC` di una
-/// versione precedente si rinomina in `Xiox` (se non si riesce resta in uso quella vecchia:
-/// la lista dell'utente non va mai persa, vedi [`xiox_model::legacy::migrate_legacy_dir`]).
+/// The cookie keep list: `<documents>\Xiox\cookie-keep-list.txt`, or the file an older version
+/// wrote, `cookie_da_conservare.txt`, when that is the one that exists (see [`sys::data_file_in`]:
+/// a plain rename would silently stop keeping the user's cookies). A `<documents>\PulisciPC`
+/// folder of an older version is renamed to `Xiox`, or keeps being used if it cannot be
+/// ([`xiox_model::legacy::migrate_legacy_dir`]): the user's list never goes out of sight.
 pub fn keep_list_in(documents: &Path) -> PathBuf {
-    xiox_model::legacy::app_dir_in(documents).join("cookie_da_conservare.txt")
+    crate::sys::data_file_in(&xiox_model::legacy::app_dir_in(documents), KEEP_LIST_FILE, OLD_KEEP_LIST_FILE)
 }
+
+const KEEP_LIST_FILE: &str = "cookie-keep-list.txt";
+const OLD_KEEP_LIST_FILE: &str = "cookie_da_conservare.txt";
 
 const NOT_SAFE: &str = "cookie list not safe (the Xiox folder or the file is a link or a junction)";
 
@@ -1437,7 +1440,7 @@ pub fn items() -> Vec<NativeItem> {
             group: GROUP,
             label: "Cookies (with a keep list)",
             description: "Deletes the cookies of Chrome, Edge, Firefox and the other browsers, except those of the domains \
-                 written in Documents\\Xiox\\cookie_da_conservare.txt (one domain per line, subdomains included). \
+                 written in Documents\\Xiox\\cookie-keep-list.txt (one domain per line, subdomains included). \
                  The profile of an open browser is skipped.",
             warning: Some(
                 "you are signed out of sites, and in Thunderbird of web mail too: all cookies will be deleted \
@@ -1508,8 +1511,8 @@ pub fn items() -> Vec<NativeItem> {
     ]
 }
 
-/// La lista vera: `Documenti\Xiox\cookie_da_conservare.txt`, dalla
-/// cartella nota Documenti (mai dalle variabili del processo).
+/// The real list: `Documents\Xiox\cookie-keep-list.txt`, from the known Documents folder (never
+/// from the process environment).
 fn keep_list_path() -> Option<PathBuf> {
     crate::sysclean::documents_dir().map(|d| keep_list_in(&d))
 }

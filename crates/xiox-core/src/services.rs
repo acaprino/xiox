@@ -2,6 +2,7 @@
 
 use crate::sys;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -183,12 +184,22 @@ pub fn load() -> Vec<Service> {
     out
 }
 
-fn backup_path() -> std::path::PathBuf {
-    sys::data_dir().join("servizi_originali.txt")
+/// The file with the start type each changed service had. `servizi_originali.txt` is the name
+/// older versions wrote: an existing file keeps being used (see [`sys::data_file_in`]).
+const BACKUP_FILE: &str = "services-original.txt";
+const OLD_BACKUP_FILE: &str = "servizi_originali.txt";
+
+fn backup_path_in(dir: &Path) -> PathBuf {
+    sys::data_file_in(dir, BACKUP_FILE, OLD_BACKUP_FILE)
 }
 
+/// The services Xiox changed, with the start type each had (`name`, start, delayed).
 pub fn read_backup() -> Vec<(String, u32, bool)> {
-    std::fs::read_to_string(backup_path())
+    read_backup_in(&sys::data_dir())
+}
+
+fn read_backup_in(dir: &Path) -> Vec<(String, u32, bool)> {
+    std::fs::read_to_string(backup_path_in(dir))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| {
@@ -201,14 +212,23 @@ pub fn read_backup() -> Vec<(String, u32, bool)> {
         .collect()
 }
 
-fn remember(svc: &Service) {
-    let saved = read_backup();
-    if saved.iter().any(|(n, _, _)| n.eq_ignore_ascii_case(&svc.name)) {
-        return; // keep the very first state
+/// Saves the start type `svc` has now, once (the very first state is the one kept). `true` when
+/// it is on record afterwards (it already was, or it was written and read back); `false` when the
+/// file cannot be read or written: the service must then NOT be changed, because «Restore
+/// originals» could not put it back.
+fn remember_in(dir: &Path, svc: &Service) -> bool {
+    let path = backup_path_in(dir);
+    let mut text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return false, // a list that cannot be read must not be overwritten
+    };
+    let recorded = |text: &str| text.lines().any(|l| l.split('\t').next().is_some_and(|n| n.eq_ignore_ascii_case(&svc.name)));
+    if recorded(&text) {
+        return true;
     }
-    let mut text = std::fs::read_to_string(backup_path()).unwrap_or_default();
     text.push_str(&format!("{}\t{}\t{}\n", svc.name, svc.start, if svc.delayed { 1 } else { 0 }));
-    let _ = std::fs::write(backup_path(), text);
+    std::fs::write(&path, &text).is_ok() && std::fs::read_to_string(&path).is_ok_and(|back| recorded(&back))
 }
 
 fn sc(args: &[&str]) -> bool {
@@ -226,35 +246,164 @@ fn start_word(start: u32, delayed: bool) -> &'static str {
     }
 }
 
-/// Sets the start type (Disattivato or Manuale) and stops the service. Returns true on success.
-pub fn set_start(svc: &Service, start: u32) -> bool {
+/// How a change of one service ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Change {
+    Done,
+    /// `sc` refused (usually: not administrator), or the service is protected.
+    Failed,
+    /// Its original start type could not be saved, so `sc` was NOT run: the service is untouched.
+    NotSaved,
+}
+
+/// Sets the start type (Disabled or Manual) and stops the service.
+pub fn set_start(svc: &Service, start: u32) -> Change {
+    set_start_in(&sys::data_dir(), svc, start, &mut sc)
+}
+
+/// [`set_start`] with the folder of the saved originals and the `sc` call given.
+fn set_start_in(dir: &Path, svc: &Service, start: u32, run: &mut dyn FnMut(&[&str]) -> bool) -> Change {
     if svc.protected {
-        return false;
+        return Change::Failed;
     }
-    remember(svc);
-    let ok = sc(&["config", &svc.name, "start=", start_word(start, false)]);
-    if ok && svc.running {
-        let _ = sc(&["stop", &svc.name]);
+    if !remember_in(dir, svc) {
+        return Change::NotSaved;
     }
-    ok
+    if !run(&["config", &svc.name, "start=", start_word(start, false)]) {
+        return Change::Failed;
+    }
+    if svc.running {
+        let _ = run(&["stop", &svc.name]);
+    }
+    Change::Done
 }
 
 /// Puts every service changed by this app back the way it was. Returns (restored, failed).
 pub fn restore_all() -> (usize, usize) {
+    restore_all_in(&sys::data_dir(), &mut sc)
+}
+
+fn restore_all_in(dir: &Path, run: &mut dyn FnMut(&[&str]) -> bool) -> (usize, usize) {
     let (mut ok, mut bad) = (0, 0);
-    let saved = read_backup();
+    let saved = read_backup_in(dir);
     let mut kept = String::new();
     for (name, start, delayed) in &saved {
-        if sc(&["config", name, "start=", start_word(*start, *delayed)]) {
+        if run(&["config", name, "start=", start_word(*start, *delayed)]) {
             ok += 1;
             if *start == START_AUTO {
-                let _ = sc(&["start", name]);
+                let _ = run(&["start", name]);
             }
         } else {
             bad += 1;
             kept.push_str(&format!("{}\t{}\t{}\n", name, start, if *delayed { 1 } else { 0 }));
         }
     }
-    let _ = std::fs::write(backup_path(), kept);
+    if !saved.is_empty() {
+        let _ = std::fs::write(backup_path_in(dir), kept);
+    }
     (ok, bad)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn svc(name: &str, start: u32, running: bool, protected: bool) -> Service {
+        Service {
+            name: name.into(),
+            display: name.into(),
+            start,
+            delayed: false,
+            running,
+            pid: 0,
+            mem_kb: 0,
+            shared: 1,
+            suggestion: None,
+            protected,
+            selected: true,
+        }
+    }
+
+    type Calls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+    /// Records every `sc` call and answers `ok` to all of them.
+    fn recorder(ok: bool) -> (Calls, impl FnMut(&[&str]) -> bool) {
+        let calls: Calls = Default::default();
+        let seen = calls.clone();
+        (calls, move |args: &[&str]| {
+            seen.borrow_mut().push(args.join(" "));
+            ok
+        })
+    }
+
+    #[test]
+    fn the_original_is_saved_first_and_in_the_english_file() {
+        let t = tempfile::tempdir().unwrap();
+        let (calls, mut run) = recorder(true);
+        assert_eq!(set_start_in(t.path(), &svc("Fax", START_AUTO, true, false), START_DISABLED, &mut run), Change::Done);
+        assert_eq!(*calls.borrow(), vec!["config Fax start= disabled".to_string(), "stop Fax".to_string()]);
+        assert_eq!(std::fs::read_to_string(t.path().join("services-original.txt")).unwrap(), "Fax\t2\t0\n");
+        assert!(!t.path().join("servizi_originali.txt").exists());
+        // The first state is the one kept: a second change records nothing new.
+        let (_, mut run) = recorder(true);
+        set_start_in(t.path(), &svc("fax", START_DISABLED, false, false), START_MANUAL, &mut run);
+        assert_eq!(read_backup_in(t.path()), vec![("Fax".to_string(), START_AUTO, false)]);
+    }
+
+    /// The bug: the original could not be saved and the service was disabled anyway, so
+    /// «Restore originals» could never undo it. Here the backup path is a directory, so no file can
+    /// be written there.
+    #[test]
+    fn a_service_whose_original_cannot_be_saved_is_left_alone() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir(t.path().join("services-original.txt")).unwrap();
+        let (calls, mut run) = recorder(true);
+        assert_eq!(set_start_in(t.path(), &svc("Fax", START_AUTO, true, false), START_DISABLED, &mut run), Change::NotSaved);
+        assert!(calls.borrow().is_empty(), "sc must not run: {:?}", calls.borrow());
+    }
+
+    #[test]
+    fn protected_and_refused_services_report_a_failure() {
+        let t = tempfile::tempdir().unwrap();
+        let (calls, mut run) = recorder(true);
+        assert_eq!(set_start_in(t.path(), &svc("RpcSs", START_AUTO, true, true), START_DISABLED, &mut run), Change::Failed);
+        assert!(calls.borrow().is_empty());
+        let (_, mut run) = recorder(false);
+        assert_eq!(set_start_in(t.path(), &svc("Fax", START_AUTO, false, false), START_DISABLED, &mut run), Change::Failed);
+        // `sc` refused after the original was saved: the record stays (restoring it is harmless).
+        assert_eq!(read_backup_in(t.path()).len(), 1);
+    }
+
+    #[test]
+    fn restore_finds_the_services_file_of_an_older_version_and_keeps_using_it() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("servizi_originali.txt"), "Fax\t2\t0\nSpooler\t3\t0\n").unwrap();
+        assert_eq!(read_backup_in(t.path()).len(), 2);
+        let (calls, mut run) = recorder(true);
+        assert_eq!(restore_all_in(t.path(), &mut run), (2, 0));
+        assert_eq!(*calls.borrow(), vec!["config Fax start= auto", "start Fax", "config Spooler start= demand"]);
+        assert_eq!(std::fs::read_to_string(t.path().join("servizi_originali.txt")).unwrap(), "");
+        assert!(!t.path().join("services-original.txt").exists(), "nothing is copied or created");
+    }
+
+    #[test]
+    fn a_service_that_does_not_go_back_stays_on_the_list_and_both_files_prefer_the_new_one() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("servizi_originali.txt"), "Old\t2\t0\n").unwrap();
+        std::fs::write(t.path().join("services-original.txt"), "Fax\t2\t0\n").unwrap();
+        assert_eq!(read_backup_in(t.path()), vec![("Fax".to_string(), START_AUTO, false)]);
+        let (_, mut run) = recorder(false);
+        assert_eq!(restore_all_in(t.path(), &mut run), (0, 1));
+        assert_eq!(std::fs::read_to_string(t.path().join("services-original.txt")).unwrap(), "Fax\t2\t0\n");
+        assert_eq!(std::fs::read_to_string(t.path().join("servizi_originali.txt")).unwrap(), "Old\t2\t0\n", "the old file is not touched");
+    }
+
+    #[test]
+    fn restoring_with_nothing_saved_creates_no_file() {
+        let t = tempfile::tempdir().unwrap();
+        let (calls, mut run) = recorder(true);
+        assert_eq!(restore_all_in(t.path(), &mut run), (0, 0));
+        assert!(calls.borrow().is_empty());
+        assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 0);
+    }
 }

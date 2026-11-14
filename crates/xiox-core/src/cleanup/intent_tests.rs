@@ -712,3 +712,74 @@ fn winapp2_search_matches_section_cleaner_or_option() {
     assert_eq!(v.nav.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows"]);
     assert!(st.select_category("winapp2").is_err());
 }
+
+// ---------- «Save as text…» ----------
+
+/// The outcome of a save lands on the report that was written and on no other: if the report on
+/// screen changed while the dialog was open, the person gets the current view and no notice. The
+/// comparison and the write are one call, so they happen under one lock.
+#[test]
+fn a_saved_notice_lands_only_on_the_report_that_was_written() {
+    use crate::app::{Core, CoreOptions};
+    let mut st = state();
+    st.clean_view = CleanView::Cleaned;
+    st.clean_report = Some(Default::default());
+    let tmp = tempfile::tempdir().unwrap();
+    let options = CoreOptions { version: "t".into(), admin: false, only_root: None, load_rules: false, update_rules: false };
+    let dev = crate::dev::DevState::only_root(tmp.path().to_path_buf(), crate::dev::Section::Projects);
+    let mut core = Core::with_states(
+        options,
+        std::sync::Arc::new(crate::notify::NoNotifier),
+        st,
+        crate::regstate::RegistryState::new(),
+        crate::svcstate::ServicesState::new(),
+        dev,
+    );
+    let written = core.report_text(SectionId::Cleanup).expect("a report on screen can be saved");
+
+    let v = core.set_saved_if(SectionId::Cleanup, "the text of another report", "Saved to x".into(), true);
+    assert!(v.report.expect("the report is still shown").saved.is_none(), "a notice for another report is dropped");
+    let v = core.set_saved_if(SectionId::Cleanup, &written, "Saved to y".into(), true);
+    assert_eq!(v.report.unwrap().saved, Some(SavedView { text: "Saved to y".into(), ok: true }));
+    // No report in the section: nothing to put a notice on.
+    let v = core.set_saved_if(SectionId::Registry, &written, "Saved to z".into(), true);
+    assert!(v.report.is_none());
+}
+
+// ---------- counts the user reads ----------
+
+/// Every file count that reaches the page is grouped with commas (`18,204`) and the word agrees
+/// with it (`1 file`, `0`, `2 items`): in the list cell, the detail box, the status line, the
+/// nav note, the subtitle and the Clean button. Sizes keep their own format.
+#[test]
+fn cleanup_counts_are_grouped_and_agree_with_their_word() {
+    let mut st = state();
+    st.clean_view = CleanView::Analyzed;
+    st.found[0] = Some(cleaner::Found { count: 18_204, bytes: 1_536_000_000, ..Default::default() });
+    st.found[1] = Some(cleaner::Found { count: 1, bytes: 10, ..Default::default() });
+    let v = view(&st, false);
+    let bin = row(&v, "cat:0");
+    assert_eq!(bin.cells, ["18,204".to_string()]);
+    assert_eq!(detail(bin, "files"), Some("18,204"));
+    assert_eq!(detail(bin, "size"), Some(sys::fmt_size(1_536_000_000).as_str()));
+    assert_eq!(v.status.text, format!("{} to delete (18,205 files)", sys::fmt_size(1_536_000_010)));
+
+    // One file: the singular.
+    let mut one = state();
+    one.clean_view = CleanView::Analyzed;
+    one.found[0] = Some(cleaner::Found { count: 1, bytes: 5, ..Default::default() });
+    assert_eq!(view(&one, false).status.text, format!("{} to delete (1 file)", sys::fmt_size(5)));
+    // Nothing found: zero files, plural.
+    let mut none = state();
+    none.clean_view = CleanView::Analyzed;
+    none.found[0] = Some(cleaner::Found::default());
+    assert_eq!(view(&none, false).status.text, format!("{} to delete (0 files)", sys::fmt_size(0)));
+
+    // The words of the nav note and the subtitle.
+    let v = view(&state(), false);
+    let items = v.rows.iter().filter(|r| r.kind != RowKind::Header).count();
+    assert_eq!(v.subtitle, sys::plural(items, "item", "items"));
+    let one_row = sys::plural(1usize, "item", "items");
+    assert_eq!(one_row, "1 item");
+    assert!(v.nav.iter().all(|n| n.note.as_deref().is_some_and(|t| t.contains(" selected"))));
+}

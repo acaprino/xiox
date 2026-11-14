@@ -69,7 +69,13 @@ impl DevState {
                 let how = if scan.backend == "mft" { "sizes from the disk MFT" } else { "folders measured one by one" };
                 (
                     "Analysis done".to_string(),
-                    format!("{} to free · {selected} of {total} selected · {} · {how}", sys::fmt_size(bytes), fmt_elapsed(scan.elapsed_ms)),
+                    format!(
+                        "{} to free · {} of {} selected · {} · {how}",
+                        sys::fmt_size(bytes),
+                        sys::fmt_count(selected as u64),
+                        sys::fmt_count(total as u64),
+                        fmt_elapsed(scan.elapsed_ms)
+                    ),
                 )
             }
             (View::Scanned, None, _) => ("Analysis done".to_string(), String::new()),

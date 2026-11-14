@@ -1,11 +1,11 @@
-//! Voce «Sviluppatori»: Progetti, Worktree degli agenti e Sessioni archiviate.
+//! The Developers section: Projects, agent Worktrees and archived Sessions.
 //!
-//! Analisi e pulizia girano in un thread e parlano alla UI con [`DevMsg`] su `mpsc`, come
-//! `start_clean`/`poll` della vecchia finestra: la UI non si blocca mai. L'ultima analisi ([`DevScan`])
-//! è anche l'elenco di ciò che si può cancellare: `xiox_app` rifiuta tutto il resto.
-//! I dati dell'analisi si liberano con [`DevState::release`] (uscendo dalla voce) o rianalizzando.
+//! Analysis and cleaning run in a thread and talk to the UI with [`DevMsg`] over `mpsc`: the UI
+//! never blocks. The last analysis ([`DevScan`]) is also the list of what can be deleted:
+//! `xiox_app` refuses everything else. The analysis data is freed with [`DevState::release`]
+//! (leaving the section) or by analysing again.
 //!
-//! Qui sta lo stato senza disegno; la finestra Tauri lo disegna da `apps/desktop`.
+//! This is the state without any drawing; the Tauri window draws it from `apps/desktop`.
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::sys;
@@ -102,7 +102,7 @@ pub enum View {
     Cleaned,
 }
 
-/// Il dialogo di conferma: il piano esatto che verrà eseguito, solo per la sezione visibile.
+/// The confirmation dialog: the exact plan that will run, for the visible section only.
 pub struct Confirm {
     /// L'analisi da cui è nato il piano: la pulizia gira su questa, non su `DevState::scan`.
     pub scan: Arc<DevScan>,
@@ -526,8 +526,7 @@ impl DevState {
     }
 }
 
-/// The intents of the page. Every one of them refuses what the old window would have shown as
-/// disabled, with a reason in English (`Err`): the caller (the Tauri command) turns it into a
+/// The intents of the page. Every one of them refuses what the page must not do now, with a reason in English (`Err`): the caller (the Tauri command) turns it into a
 /// `CmdError { kind: "refused" }`. A refused intent changes nothing.
 impl DevState {
     /// The same state with other workers (tests; `DevWorkers::REAL` is the default).
@@ -884,11 +883,7 @@ pub fn confirm_ready(c: &Confirm) -> bool {
 }
 
 pub fn caution_title(n: usize) -> String {
-    if n == 1 {
-        "1 folder at the Caution level:".into()
-    } else {
-        format!("{n} folders at the Caution level:")
-    }
+    format!("{} at the Caution level:", plural(n, "folder", "folders"))
 }
 
 /// L'avviso sul Cestino troppo piccolo, una frase per unità e poi la domanda.
@@ -1268,10 +1263,6 @@ pub fn cleaned_title(c: Option<&DevCleaned>, busy: bool) -> &'static str {
     }
 }
 
-pub fn recycled_text(bytes: u64) -> String {
-    format!("{} in the Recycle Bin: freed by emptying it", sys::fmt_size(bytes))
-}
-
 /// Avanzamento della barra: a byte, o a voci quando i byte non si conoscono.
 pub fn tick_fraction(t: &Tick) -> f32 {
     if t.total_bytes > 0 {
@@ -1289,22 +1280,10 @@ pub fn tick_text(t: &Tick) -> String {
         "{} of {} · {} of {} {}",
         sys::fmt_size(t.done_bytes),
         sys::fmt_size(t.total_bytes),
-        t.done_items,
-        t.total_items,
+        sys::fmt_count(t.done_items as u64),
+        sys::fmt_count(t.total_items as u64),
         if t.total_items == 1 { "item" } else { "items" }
     )
-}
-
-/// Durata del resoconto: «850 ms», «12 s», «2 min 05 s».
-pub fn fmt_duration(ms: u64) -> String {
-    let s = ms / 1000;
-    if ms < 1000 {
-        format!("{ms} ms")
-    } else if s < 60 {
-        format!("{s} s")
-    } else {
-        format!("{} min {:02} s", s / 60, s % 60)
-    }
 }
 
 /// `--only-root`: solo la cartella data, niente sessioni né altri dischi.
@@ -1350,16 +1329,7 @@ pub fn empty_text(section: Section, failed: bool) -> &'static str {
     }
 }
 
-pub fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
-pub fn section_label(s: Section, count: Option<usize>) -> String {
-    match count {
-        Some(n) => format!("{} ({n})", s.name()),
-        None => s.name().to_string(),
-    }
-}
+pub use crate::sys::plural;
 
 pub fn agent_label(a: Agent) -> &'static str {
     match a {

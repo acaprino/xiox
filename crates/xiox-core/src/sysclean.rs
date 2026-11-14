@@ -817,9 +817,7 @@ fn is_reparse(md: &std::fs::Metadata) -> bool {
     md.file_type().is_symlink() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-fn plural(n: u64, one: &str, many: &str) -> String {
-    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
-}
+use crate::sys::plural;
 
 // ---------------------------------------------------------------------------
 // Implementazioni vere (Win32). Mai chiamate dai test.

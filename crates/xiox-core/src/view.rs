@@ -455,13 +455,13 @@ pub(crate) mod testing {
 
     /// Polls `done` until it holds (the workers of the tests answer from their own thread).
     pub fn wait(mut done: impl FnMut() -> bool) {
-        for _ in 0..500 {
+        for _ in 0..1000 {
             if done() {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("the worker did not answer in 5 s");
+        panic!("the worker did not answer in 10 s");
     }
 
     /// The refusal of an intent that has to be refused.

@@ -175,6 +175,46 @@ pub fn data_dir_in(documents: &Path) -> std::path::PathBuf {
     d
 }
 
+/// The path of a data file in `dir` whose name changed from `old` to `new` (English): the file
+/// that exists wins (both exist: the new one), otherwise the NEW name. Readers and writers both go
+/// through it, so a user's old file keeps being the one that is read and written and nothing is
+/// ever copied, renamed or deleted.
+pub fn data_file_in(dir: &Path, new: &str, old: &str) -> std::path::PathBuf {
+    // A link counts as present too (even a dangling one): its owner decides what to do with it.
+    let present = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    let new_path = dir.join(new);
+    if present(&new_path) {
+        return new_path;
+    }
+    let old_path = dir.join(old);
+    if present(&old_path) {
+        old_path
+    } else {
+        new_path
+    }
+}
+
+/// A count for the user, grouped with commas (en-US): `18204` is `18,204`. Sizes keep their own
+/// format ([`fmt_size`]). Every file / item / issue count that reaches a view goes through this.
+pub fn fmt_count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// `1 item`, `0 items`, `18,204 items`: the count (grouped, see [`fmt_count`]) and the word that
+/// agrees with it. Any unsigned count type works.
+pub fn plural<N: TryInto<u64>>(n: N, one: &str, many: &str) -> String {
+    let n = n.try_into().unwrap_or(u64::MAX);
+    format!("{} {}", fmt_count(n), if n == 1 { one } else { many })
+}
+
 /// Local date and time as "AAAAMMGG_HHMMSS" (from the system clock, UTC offset ignored).
 pub fn stamp() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -227,6 +267,37 @@ mod tests {
         assert_eq!(data_dir_in(t.path()), t.path().join("Xiox"));
         assert!(t.path().join("Xiox").is_dir());
         assert!(!t.path().join("PulisciPC").exists());
+    }
+
+    #[test]
+    fn a_renamed_data_file_keeps_the_users_old_one() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        // Neither: the new English name.
+        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
+        // Only the old one: it is used (read and written), nothing is created.
+        std::fs::write(d.join("vecchio.txt"), "x").unwrap();
+        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("vecchio.txt"));
+        assert!(!d.join("new.txt").exists());
+        // Both: the new one wins.
+        std::fs::write(d.join("new.txt"), "y").unwrap();
+        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
+        // Only the new one.
+        std::fs::remove_file(d.join("vecchio.txt")).unwrap();
+        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
+    }
+
+    #[test]
+    fn counts_are_grouped_and_agree_with_their_word() {
+        assert_eq!(fmt_count(0), "0");
+        assert_eq!(fmt_count(999), "999");
+        assert_eq!(fmt_count(1_000), "1,000");
+        assert_eq!(fmt_count(18_204), "18,204");
+        assert_eq!(fmt_count(1_234_567), "1,234,567");
+        assert_eq!(plural(0usize, "item", "items"), "0 items");
+        assert_eq!(plural(1u64, "item", "items"), "1 item");
+        assert_eq!(plural(2u32, "item", "items"), "2 items");
+        assert_eq!(plural(18_204usize, "file", "files"), "18,204 files");
     }
 
     #[test]
