@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The Xiox window: the app's own commands and its view events. No shell, filesystem, HTTP or dialog permissions for the page: folder and save dialogs open from Rust.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}
