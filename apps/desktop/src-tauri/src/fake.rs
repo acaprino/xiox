@@ -757,6 +757,18 @@ mod tests {
         assert!(m.set_saved(SectionId::Services, "x".into(), true).report.is_none());
     }
 
+    /// The save notice lands only if the report on screen is the one that was written.
+    #[test]
+    fn fake_save_if_needs_the_same_report() {
+        let mut m = model();
+        m.go(SectionId::Cleanup, "report");
+        let written = m.report_text(SectionId::Cleanup).unwrap();
+        let v = m.set_saved_if(SectionId::Cleanup, "another report", "Report saved.".into(), true);
+        assert!(v.report.unwrap().saved.is_none(), "a notice for another report is dropped");
+        let v = m.set_saved_if(SectionId::Cleanup, &written, "Report saved.".into(), true);
+        assert_eq!(v.report.unwrap().saved, Some(SavedView { text: "Report saved.".into(), ok: true }));
+    }
+
     /// The fake is a stand-in: nothing in this file may name the engine.
     #[test]
     fn fake_never_reaches_the_engine() {

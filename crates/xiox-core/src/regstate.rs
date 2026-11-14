@@ -860,6 +860,39 @@ mod tests {
         out.send(RegMsg::Done);
     }
 
+    /// Builder-vs-fixture drift (see `crate::drift`): the static strings of the view against the fixture state `name`.
+    fn drift_check(doc: &serde_json::Value, st: &RegistryState, name: &str, out: &mut Vec<String>, seen: &mut std::collections::BTreeSet<String>) {
+        out.extend(crate::drift::diff(&format!("registry:{name}"), &st.view(), &crate::drift::fixture_view(doc, "registry", name), crate::drift::Opts::all()));
+        out.extend(crate::drift::view_problems(&format!("real registry:{name}"), &serde_json::to_value(st.view()).unwrap()));
+        seen.insert(name.to_string());
+    }
+
+    fn fix_one_failed(_: Vec<registry::Issue>, _: bool, out: Outbox<RegMsg>) {
+        out.send(RegMsg::Fixed { ok: 1, failed: 1, backup: Some(r"C:\Users\<you>\Documents\Xiox\registry-backup-20261114_103000.reg".into()), refused: None });
+    }
+    fn fix_all_fixed(_: Vec<registry::Issue>, _: bool, out: Outbox<RegMsg>) {
+        out.send(RegMsg::Fixed { ok: 2, failed: 0, backup: Some(r"C:\Users\<you>\Documents\Xiox\registry-backup-20261114_103000.reg".into()), refused: None });
+    }
+
+    /// The `fixed` and `partial` fixture states, built by the real state with a fix that ends so:
+    /// the notice text, its tone and the backup line are the builder's, and the fixture shows the same.
+    #[test]
+    fn the_fixed_and_partial_states_are_what_the_builder_says() {
+        let doc = crate::drift::document();
+        let (mut drift, mut seen) = (Vec::new(), Default::default());
+        for (name, fix) in [("partial", fix_one_failed as fn(Vec<registry::Issue>, bool, Outbox<RegMsg>)), ("fixed", fix_all_fixed)] {
+            let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix });
+            st.open_fix().unwrap();
+            st.fix(true, notifier()).unwrap();
+            drain(&mut st);
+            drift_check(&doc, &st, name, &mut drift, &mut seen);
+            let n = &st.view().notices[0];
+            assert_eq!(n.tone, if name == "partial" { Tone::Warn } else { Tone::Ok }, "{name}");
+            assert!(n.more[0].starts_with("Backup saved in: "), "{name}");
+        }
+        assert!(drift.is_empty(), "{}", drift.join("\n"));
+    }
+
     /// Every Registry state of the shared fixture reads through the Rust types (no missing key,
     /// no unknown one) and round-trips.
     #[test]
@@ -958,11 +991,19 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
         let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let mut st = script_state("idle");
+        let doc = crate::drift::document();
+        let (mut drift, mut seen) = (Vec::<String>::new(), std::collections::BTreeSet::<String>::new());
+        drift_check(&doc, &st, "idle", &mut drift, &mut seen);
         let (mut compared, mut landed) = (0, 0);
         for step in script["steps"].as_array().unwrap() {
             let note = step["note"].as_str().unwrap_or("");
             match step["op"].as_str().unwrap() {
-                "go" if step["section"] == "registry" => st = script_state(step["state"].as_str().unwrap()),
+                "go" if step["section"] == "registry" => {
+                    st = script_state(step["state"].as_str().unwrap());
+                    if shape(&st) == step["state"].as_str().unwrap() {
+                        drift_check(&doc, &st, shape(&st), &mut drift, &mut seen);
+                    }
+                }
                 "tick" => {
                     for pushed in step["pushed"].as_array().unwrap().iter().filter(|p| p["section"] == "registry") {
                         match (shape(&st), pushed["state"].as_str().unwrap()) {
@@ -995,10 +1036,15 @@ mod tests {
                     }
                     assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                     assert_eq!(v.dialog.is_some(), expect == "backup", "{note}: dialog");
+                    drift_check(&doc, &st, expect, &mut drift, &mut seen);
                     compared += 1;
                 }
                 _ => {}
             }
+        }
+        assert!(crate::drift::unknown(&drift).is_empty(), "the views the builders make differ from the fixture:\n{}", crate::drift::unknown(&drift).join("\n"));
+        for want in ["idle", "scanning", "analyzed", "backup", "fixing"] {
+            assert!(seen.contains(want), "registry:{want} was compared with the fixture (compared: {seen:?})");
         }
         assert!(compared >= 9, "{compared} registry intents compared");
         assert_eq!(landed, 2, "jobs landed: the scan and the fix");

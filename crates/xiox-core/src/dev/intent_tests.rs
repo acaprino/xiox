@@ -900,6 +900,23 @@ fn dev_view_options_report_the_settings_and_the_save_error() {
 
 // ---------- the shared script ----------
 
+/// Builder-vs-fixture drift (see `crate::drift`): the static strings of the view against the fixture state `name`.
+fn drift_check(doc: &serde_json::Value, st: &DevState, name: &str, out: &mut Vec<String>, seen: &mut std::collections::BTreeSet<String>) {
+    // The notices are the scan's warnings (an agent whose sessions could not be read): data, not text.
+    let fixture = crate::drift::fixture_view(doc, "developers", name);
+    // The job label is the worker's progress text, a cleanup of nothing (the replay's) has a report of its
+    // own, and the fixture's dialogs and jobs are on Projects: a replay that is on another list is not it.
+    let opts = crate::drift::Opts { notices: false, job: false, report: false, ..crate::drift::Opts::all() };
+    let same_list = fixture["title"] == serde_json::to_value(st.view(false).title).unwrap();
+    if !same_list && !["projects", "worktrees", "sessions"].contains(&name) {
+        seen.insert(name.to_string());
+        return;
+    }
+    out.extend(crate::drift::diff(&format!("developers:{name}"), &st.view(false), &fixture, opts));
+    out.extend(crate::drift::view_problems(&format!("real developers:{name}"), &serde_json::to_value(st.view(false)).unwrap()));
+    seen.insert(name.to_string());
+}
+
 /// The scan the replay runs on: the ids the script names (`p:1`, `w:3`, `h:others`...).
 fn script_scan() -> DevScan {
     let mut p1 = report("1", ProjectStatus::Inactive, true, 100);
@@ -1047,12 +1064,20 @@ fn replays_the_developers_steps_of_the_shared_script() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
     let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let mut st = script_state("idle");
+    let doc = crate::drift::document();
+    let (mut drift, mut seen) = (Vec::<String>::new(), std::collections::BTreeSet::<String>::new());
+    drift_check(&doc, &st, "idle", &mut drift, &mut seen);
     // Compared intents; scans that landed; cleanups that finished by themselves; cleanups cancelled.
     let (mut compared, mut landed, mut finished, mut cancelled) = (0, 0, 0, 0);
     for step in script["steps"].as_array().unwrap() {
         let note = step["note"].as_str().unwrap_or("");
         match step["op"].as_str().unwrap() {
-            "go" if step["section"] == "developers" => st = script_state(step["state"].as_str().unwrap()),
+            "go" if step["section"] == "developers" => {
+                st = script_state(step["state"].as_str().unwrap());
+                if shape(&st) == step["state"].as_str().unwrap() {
+                    drift_check(&doc, &st, shape(&st), &mut drift, &mut seen);
+                }
+            }
             "tick" => {
                 for pushed in step["pushed"].as_array().unwrap().iter().filter(|p| p["section"] == "developers") {
                     match (shape(&st), pushed["state"].as_str().unwrap()) {
@@ -1070,6 +1095,7 @@ fn replays_the_developers_steps_of_the_shared_script() {
                             finish(&mut st);
                             FINISH_CLEAN.store(false, SeqCst);
                             assert_eq!(shape(&st), "report", "{note}");
+                            drift_check(&doc, &st, "report", &mut drift, &mut seen);
                             finished += 1;
                         }
                         _ => {}
@@ -1088,6 +1114,7 @@ fn replays_the_developers_steps_of_the_shared_script() {
                 }
                 assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                 let v = st.view(false);
+                drift_check(&doc, &st, expect, &mut drift, &mut seen);
                 if let Some(checks) = step["expect"]["checks"].as_object() {
                     for (id, want) in checks {
                         let got = serde_json::to_value(row(&v, id).check).unwrap();
@@ -1111,6 +1138,10 @@ fn replays_the_developers_steps_of_the_shared_script() {
             }
             _ => {}
         }
+    }
+    assert!(crate::drift::unknown(&drift).is_empty(), "the views the builders make differ from the fixture:\n{}", crate::drift::unknown(&drift).join("\n"));
+    for want in ["idle", "analyzing", "projects", "worktrees", "sessions", "confirm", "shortfall", "cleaning", "report", "cancelled"] {
+        assert!(seen.contains(want), "developers:{want} was compared with the fixture (compared: {seen:?})");
     }
     assert!(compared >= 20, "most of the script's intents were compared: {compared}");
     assert_eq!((landed, finished, cancelled), (2, 1, 1), "scans landed, cleanups finished, cleanups cancelled");

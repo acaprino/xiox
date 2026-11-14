@@ -10,6 +10,8 @@ pub mod dev;
 pub mod envpath;
 #[cfg(test)]
 mod live_checks;
+#[cfg(test)]
+mod drift;
 pub mod native;
 pub mod notify;
 pub mod netcreds;

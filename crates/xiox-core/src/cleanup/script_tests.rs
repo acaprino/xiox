@@ -106,6 +106,16 @@ fn apply(st: &mut CleanupState, intent: CleanupIntent) -> Result<(), String> {
     }
 }
 
+/// Builder-vs-fixture drift: the static strings of the view the state builds against the fixture
+/// state `name` (see `crate::drift`). The nav groups that come from the rules on the machine and the
+/// title (it follows the open category) are not compared.
+fn drift_check(doc: &serde_json::Value, st: &CleanupState, name: &str, out: &mut Vec<String>, seen: &mut std::collections::BTreeSet<String>) {
+    let opts = crate::drift::Opts { nav: |id| id.starts_with("builtin:") || id == "winapp2", heading: false, ..crate::drift::Opts::all() };
+    out.extend(crate::drift::diff(&format!("cleanup:{name}"), &st.view(false), &crate::drift::fixture_view(doc, "cleanup", name), opts));
+    out.extend(crate::drift::view_problems(&format!("real cleanup:{name}"), &serde_json::to_value(st.view(false)).unwrap()));
+    seen.insert(name.to_string());
+}
+
 /// The check of a category row as the script names it (the list lives in `clean_sel`, whatever
 /// category is open).
 fn check_of(st: &CleanupState, id: &str) -> &'static str {
@@ -126,6 +136,8 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
     let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let mut st = script_state("idle");
+    let doc = crate::drift::document();
+    let (mut drift, mut drift_states) = (Vec::<String>::new(), std::collections::BTreeSet::<String>::new());
     let mut compared = 0;
     let (mut landed, mut finished, mut cancelled_clean, mut cancelled_analysis) = (0, 0, 0, 0);
     let (mut copy_checks, mut interrupted) = (0, 0);
@@ -141,6 +153,9 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
                 }
                 st = script_state(step["state"].as_str().unwrap());
                 st.nav = nav;
+                if shape(&st) == step["state"].as_str().unwrap() {
+                    drift_check(&doc, &st, shape(&st), &mut drift, &mut drift_states);
+                }
             }
             "tick" => {
                 for pushed in step["pushed"].as_array().unwrap().iter().filter(|p| p["section"] == "cleanup") {
@@ -172,6 +187,7 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
                 }
                 assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                 let v = st.view(false);
+                drift_check(&doc, &st, expect, &mut drift, &mut drift_states);
                 if expect == "interrupted" {
                     // What was analysed stays, with the error notice and Clean still on.
                     assert_eq!(v.notices.iter().map(|n| n.tone).collect::<Vec<_>>(), vec![Tone::Error], "{note}: the interrupted notice");
@@ -202,6 +218,12 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
             }
             _ => {}
         }
+    }
+    assert!(drift.is_empty(), "the views the builders make differ from the fixture:
+{}", drift.join("
+"));
+    for want in ["idle", "analyzing", "analyzed", "confirm", "cleaning", "report", "cancelled", "interrupted"] {
+        assert!(drift_states.contains(want), "cleanup:{want} was compared with the fixture (compared: {drift_states:?})");
     }
     assert!(compared >= 25, "most of the script's intents were compared: {compared}");
     assert_eq!((landed, finished, cancelled_clean, cancelled_analysis), (1, 1, 1, 1), "analyses landed, cleanups finished, cleanups cancelled, analyses cancelled");

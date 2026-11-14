@@ -453,6 +453,11 @@ mod tests {
         assert_eq!(about.winapp2, "Winapp2: version 260915");
         assert_eq!(about.version, "9.9.9");
         assert!(about.attribution.contains("Winapp2") && about.attribution.contains("CC-BY-SA-4.0"), "{}", about.attribution);
+        // Builder-vs-fixture: the window the page draws from the fixture must say what this says (the
+        // licence line is mandatory; a fixture that lied about it once ended up in a screenshot).
+        let doc = crate::drift::document();
+        assert_eq!(crate::drift::norm(&about.winapp2), crate::drift::norm(doc["about"]["winapp2"].as_str().unwrap()), "About: the Winapp2 line");
+        assert_eq!(about.attribution, doc["about"]["attribution"].as_str().unwrap(), "About: the attribution");
         // The window's own facts.
         let info = c.app_info(true);
         assert_eq!((info.version.as_str(), info.admin, info.fake, info.profile_mismatch.clone()), ("9.9.9", false, true, None));

@@ -713,6 +713,7 @@ mod tests {
     /// change to the system under a confirmation that says something else.
     #[test]
     fn each_action_sends_its_own_start_type_to_the_worker() {
+        let _serial = SENT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         for (action_kind, want) in [
             (ServiceAction::Disable, Some(services::START_DISABLED)),
             (ServiceAction::Manual, Some(services::START_MANUAL)),
@@ -727,10 +728,14 @@ mod tests {
         }
     }
 
+    /// The tests that read `SENT` run one at a time.
+    static SENT_SERIAL: Mutex<()> = Mutex::new(());
+
     /// A start type the page could not have produced (`confirm` was a public field of the old
     /// window) is refused: it is never read as Disable, and no question is drawn for it.
     #[test]
     fn an_unknown_start_type_in_the_question_is_refused() {
+        let _serial = SENT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut st = state().with_workers(ServicesWorkers { apply: start_recording_apply, ..NEVER });
         st.confirm = Some(services::START_AUTO);
         assert!(st.view().dialog.is_none(), "no question text for a start type nobody offers");
@@ -980,6 +985,108 @@ mod tests {
         out.send(SvcMsg::Loaded(list()));
     }
 
+    // ---- builder-vs-fixture drift ----
+
+    /// The static strings of the view against the fixture state `name` (see `crate::drift`). The
+    /// notices are a replay's own, and the dialog is compared only when it is the fixture's one.
+    fn drift_check(doc: &serde_json::Value, st: &ServicesState, name: &str, dialog: bool, out: &mut Vec<String>, seen: &mut std::collections::BTreeSet<String>) {
+        let opts = crate::drift::Opts { notices: false, dialog, ..crate::drift::Opts::all() };
+        out.extend(crate::drift::diff(&format!("services:{name}"), &st.view(), &crate::drift::fixture_view(doc, "services", name), opts));
+        out.extend(crate::drift::view_problems(&format!("real services:{name}"), &serde_json::to_value(st.view()).unwrap()));
+        seen.insert(name.to_string());
+    }
+
+    fn fixture_load(out: Outbox<SvcMsg>) {
+        out.send(SvcMsg::Loaded(script_list()));
+    }
+    fn partial_apply(_: Vec<services::Service>, _: Option<u32>, out: Outbox<SvcMsg>) {
+        out.send(change_message(2, 1, 0, "disabled"));
+    }
+    static FIRST_LOAD_GATE: AtomicUsize = AtomicUsize::new(0);
+    fn gated_load(out: Outbox<SvcMsg>) {
+        while FIRST_LOAD_GATE.load(SeqCst) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        out.send(SvcMsg::Loaded(script_list()));
+    }
+
+    /// The states the script does not visit: `loading` (the first read), `nomatch` (a search that
+    /// matches nothing; the search is the fixture's own) and `partial` (a change that did not fully
+    /// go, through the real sentence builder and the state's own tone).
+    #[test]
+    fn the_loading_nomatch_and_partial_states_are_what_the_builder_says() {
+        let doc = crate::drift::document();
+        let (mut drift, mut seen) = (Vec::new(), Default::default());
+
+        // loading: nothing read yet, the worker is at its gate.
+        let mut st = ServicesState::new().with_workers(ServicesWorkers { load: gated_load, apply: never_apply, saved: saved_none, memory: memory_half });
+        st.load(notifier());
+        FIRST_LOAD_GATE.store(0, SeqCst);
+        drift_check(&doc, &st, "loading", true, &mut drift, &mut seen);
+        FIRST_LOAD_GATE.store(1, SeqCst);
+        drain(&mut st);
+        FIRST_LOAD_GATE.store(0, SeqCst);
+
+        // nomatch: the fixture's search term, on a list that has rows.
+        let term = doc["views"]["services"]["nomatch"]["search"]["value"].as_str().unwrap().to_string();
+        let mut st = ServicesState::new().with_workers(ServicesWorkers { load: fixture_load, apply: never_apply, saved: saved_none, memory: memory_half });
+        st.services = vec![svc("Beta", "Beta", Some("why"), false, true), svc("Gamma", "Gamma", Some("why"), false, false)];
+        st.loaded = true;
+        st.set_all(true);
+        st.set_search(&term);
+        assert!(st.view().rows.is_empty(), "the fixture's search `{term}` matches none of the services");
+        drift_check(&doc, &st, "nomatch", true, &mut drift, &mut seen);
+
+        // partial: 2 disabled, 1 failed.
+        let mut st = ServicesState::new().with_workers(ServicesWorkers { load: fixture_load, apply: partial_apply, saved: saved_none, memory: memory_half });
+        st.services = script_list();
+        st.loaded = true;
+        st.open_confirm(ServiceAction::Disable).unwrap();
+        st.confirm(notifier()).unwrap();
+        drain(&mut st);
+        drift.extend(crate::drift::diff("services:partial", &st.view(), &crate::drift::fixture_view(&doc, "services", "partial"), crate::drift::Opts::all()));
+        assert_eq!(st.view().notices[0].tone, Tone::Warn);
+        assert!(drift.is_empty(), "the views the builders make differ from the fixture:\n{}", drift.join("\n"));
+    }
+
+    /// What the real sentence builder says after a change, against what the script pins in its
+    /// `expect.notices`. The mock writes `Selected services disabled.`; the engine says how many
+    /// (`2 services disabled.`): a known difference, reported, pinned here so a new one shows.
+    #[test]
+    fn the_result_sentences_are_compared_with_the_ones_the_script_pins() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
+        let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut pinned = std::collections::BTreeSet::new();
+        for step in script["steps"].as_array().unwrap() {
+            if step["section"] == "services" {
+                for n in step["expect"]["notices"].as_array().into_iter().flatten() {
+                    pinned.insert(n.as_str().unwrap().to_string());
+                }
+            }
+        }
+        assert!(!pinned.is_empty(), "the script pins some result sentences");
+        let text = |m: SvcMsg| match m {
+            SvcMsg::Message(t) | SvcMsg::Partial(t) => t,
+            SvcMsg::Loaded(_) => unreachable!(),
+        };
+        let mut differing = Vec::new();
+        for script_text in &pinned {
+            let what = if script_text.contains("Manual") { "set to Manual" } else { "disabled" };
+            let real = text(change_message(3, 0, 0, what));
+            if crate::drift::norm(&real) != crate::drift::norm(script_text) {
+                differing.push((script_text.clone(), real));
+            }
+        }
+        assert_eq!(
+            differing,
+            vec![
+                ("Selected services disabled.".to_string(), "3 services disabled.".to_string()),
+                ("Selected services set to Manual.".to_string(), "3 services set to Manual.".to_string()),
+            ],
+            "the script pins `Selected services ...`, the engine says how many: reported to the owner of the script"
+        );
+    }
+
     // ---- services_view_meter_footer_and_dialog_texts ----
 
     fn memory_of(used_percent: u64) -> sys::Memory {
@@ -1216,6 +1323,9 @@ mod tests {
         st.services = script_list();
         st.loaded = true;
         let (mut compared, mut landed, mut shows, mut texts) = (0, 0, 0, 0);
+        let doc = crate::drift::document();
+        let (mut drift, mut seen) = (Vec::<String>::new(), std::collections::BTreeSet::<String>::new());
+        drift_check(&doc, &st, "loaded", true, &mut drift, &mut seen);
         // The action the open question was opened with, and the start types the worker was given.
         let (mut opened, mut sent) = (None, Vec::new());
         for step in script["steps"].as_array().unwrap() {
@@ -1270,6 +1380,11 @@ mod tests {
                     }
                     assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                     let v = st.view();
+                    // The refresh of a list already read is not the fixture's first-load `loading` view
+                    // (that one is built below); the fixture's one question is Disable's.
+                    if expect != "loading" {
+                        drift_check(&doc, &st, expect, st.confirm == Some(services::START_DISABLED) || expect != "confirm", &mut drift, &mut seen);
+                    }
                     if let Some(notices) = step["expect"]["notices"].as_array() {
                         assert_eq!(v.notices.len(), notices.len(), "{note}: notices");
                         for n in &v.notices {
@@ -1287,6 +1402,10 @@ mod tests {
         }
         assert_eq!(*SCRIPT_SENT.lock().unwrap(), sent, "each change reached the worker with the start type of its action");
         assert_eq!(sent, vec![Some(services::START_MANUAL), Some(services::START_DISABLED), Some(services::START_DISABLED)]);
+        assert!(crate::drift::unknown(&drift).is_empty(), "the views the builders make differ from the fixture:\n{}", crate::drift::unknown(&drift).join("\n"));
+        for want in ["loaded", "confirm"] {
+            assert!(seen.contains(want), "services:{want} was compared with the fixture (compared: {seen:?})");
+        }
         assert!(compared >= 9, "{compared} services intents compared");
         assert_eq!((landed, shows, texts), (1, 1, 3), "jobs landed, notices cleared by `show`, notices compared without their text");
     }
