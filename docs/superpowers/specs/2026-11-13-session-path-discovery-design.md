@@ -1,276 +1,312 @@
 # Copie e cartelle di prova scoperte dalle sessioni degli agenti
 
-Data: 2026-11-13. Stato: da approvare.
+Data: 2026-11-13. Revisione 2: aggiornata alle decisioni dell'utente; implementazione da pianificare.
 
-Dipende da `2026-11-13-project-cleanup-cli-design.md` (analisi mirata, `xiox analyze` / `xiox clean`).
-Ricerca di base: `reports/Estrazione path da transcript agenti.md`.
+Dipende da [analisi mirata e pulizia CLI](2026-11-13-project-cleanup-cli-design.md).
+Si integra con [l'osservatore di progetto](2026-11-13-project-observer-mcp-design.md).
+La [revisione tecnica](../../../reports/2026-11-13-session-path-discovery-review.md) conserva
+le verifiche precedenti e indica come sono state recepite o superate.
 
-## Perché
+## Obiettivo
 
-Chi lavora con molti agenti insieme, senza controllarli, si ritrova con due tipi di residui che
-oggi Xiox non vede:
+Trovare copie del repository, worktree e cartelle di lavoro lasciate dagli agenti anche fuori
+dai percorsi raggiunti dalla ricerca attuale: benchmark, test, prove, esecuzioni e backup,
+compresi quelli senza `.git` e con nomi diversi dal progetto.
 
-- **cloni e copie del repository** in posti che non ricorda (a sei livelli di profondità, su un
-  altro disco, con un nome qualsiasi): il walk di oggi arriva a 3 livelli;
-- **cartelle create senza criterio dalle sessioni**: benchmark, prove, esecuzioni, backup, copie
-  fatte con `cp -r`. Spesso senza `.git` e con un nome che non c'entra con il progetto.
-
-Le sessioni degli agenti sanno dove gli agenti hanno lavorato e cosa hanno creato. Xiox le
-elenca già, ma usa solo la cartella di lavoro (`cwd`), e solo per attribuire le sessioni al
-progetto.
-
-Lo stesso profilo d'uso rende la pulizia più pericolosa: agenti accesi mentre Xiox gira, lavoro
-mai committato, e spesso è un agente a lanciare `xiox clean --yes`. Più potenza nella scoperta
-va insieme a più guardie.
-
-## I due principi
-
-**Per le copie: una menzione propone, l'identità git decide.** Un percorso trovato in una
-sessione è un candidato in più per `classify()`. È una copia solo se ha lo stesso commit radice
-o lo stesso origin.
-
-**Per le cartelle senza identità: Xiox le mostra, la persona le controlla.** Dove non c'è git a
-decidere, la voce entra in elenco con il livello nuovo `danger` («da controllare a mano») e con
-la prova scritta: quale sessione, quale comando, quando. Non si toglie senza un gesto in più
-(sezione «Il livello `danger`»).
+La nuova fonte di candidati è la cronologia delle sessioni letta tramite Mukade. Xiox collega
+ogni candidato alle operazioni che lo hanno fatto emergere, verifica cosa esiste sul disco e
+lo presenta con un motivo e un livello di rischio. La ricerca già esistente per Git e nome
+continua a funzionare: questa specifica aggiunge una fonte, non sostituisce le altre.
 
 ## Decisioni dell'utente
 
-- Vanno trovate anche le cartelle create dalle sessioni **senza git**: benchmark, test, prove,
-  esecuzioni, copie, backup.
-- Quelle identificate con prova debole **si elencano**, segnate come pericolose e da controllare
-  a mano. Stesso segno per le cartelle **senza git** e per quelle **più recenti di 24 ore**.
+- **Mukade trova e legge le sessioni. Xiox interpreta le operazioni e trova i residui.**
+- La provenienza da una sessione si ricava esclusivamente dalla sua cronologia: messaggi,
+  tool call, argomenti, esiti e contesto disponibile attraverso Mukade.
+- Le date del filesystem non provano creazione, autore o appartenenza a un progetto. Non
+  generano candidati e non confermano né annullano un'associazione ricavata dalla cronologia.
+- Si elencano anche candidati senza Git e con evidenza debole, rendendo esplicita l'incertezza.
+- `danger` è un avviso di rischio con conferma esplicita. La conferma può arrivare da una
+  persona nella UI, dalla CLI o da un agente, anche per conto dell'utente.
+- Non si cerca di certificare che il confermante sia umano. Non si promette che `danger`
+  impedisca ogni rimozione di una cartella ancora in uso: chi conferma decide sul rischio mostrato.
 
-## Cosa si costruisce
+La parte C della prima versione, basata sulle coincidenze temporali NTFS, è eliminata dalla
+scoperta e dall'attribuzione.
 
-| Parte | Cosa legge | Cosa trova | Attiva |
-|---|---|---|---|
-| A. `cwd` | La cartella di lavoro di ogni sessione, di ogni agente (già in memoria) | Copie del repository ovunque un agente abbia lavorato | Sempre |
-| B. Chiamate ai tool | L'input di ogni chiamata ai tool, nelle sessioni del progetto e delle sue copie: percorsi dei tool di scrittura e lettura, comandi shell, patch | Altre copie; cartelle create dalle sessioni | Sempre, con cache; la prima lettura può essere lenta |
-| C. Data di creazione | La data di creazione NTFS delle cartelle, confrontata con inizio e fine delle sessioni | Conferma di B; cartelle nate durante una sessione e non nominate da nessun comando | Sempre |
+## Responsabilità e codice
 
-La prosa della chat (messaggi, output dei tool, prompt di sistema) non si legge: quello che un
-agente crea passa sempre da una chiamata a un tool.
+| Componente | Responsabilità |
+|---|---|
+| Mukade | Enumerare e leggere le sessioni dei diversi harness; restituire contenuto, metadati e record disponibili |
+| `crates/xiox-mukade` | Adattare le API Mukade a Xiox, conservando identità e provenienza delle singole sessioni |
+| `crates/xiox-project` | Interpretare comandi, patch e operazioni; estrarre percorsi; associare candidati; verificare Git, contenuti e rischio |
+| CLI e UI Xiox | Mostrare motivi e limiti; raccogliere le scelte; eseguire la pulizia con i controlli del motore |
 
-## Fase 0: verifiche su Windows, prima di scrivere il resto
+Si parte dalle API Mukade già esistenti, `Reader::list_all` e `Reader::read`, e dal modello
+`Session` / `Entry`, compresi i record `raw` quando servono per ricostruire il contesto.
+L'adapter deve esporre i descrittori prima dell'aggregazione per cartella: il record aggregato
+oggi usato da Xiox non basta per leggere tutte le sessioni o contarne la provenienza.
 
-Il contenitore di sviluppo è Linux e la ricerca è fatta su documenti: quello che conta va
-misurato sul PC vero. Si costruisce per prima una **sonda in sola lettura**
-(`cargo run -p xiox-project --example session_probe -- <progetto>`), che stampa solo conteggi e
-tempi: nessun percorso, nessun testo di sessione, così l'uscita si può incollare in una chat. La
-lancia l'utente, a mano. Non scrive niente, nemmeno la cache.
+Non si costruisce un secondo reader degli store nativi in Xiox. L'interpretazione delle
+operazioni di filesystem resta invece in Xiox, anche quando usa campi dei record restituiti
+da Mukade. Non si trasferiscono a Mukade categorie, rischio o logiche di pulizia.
 
-| # | Verifica | Cosa decide |
-|---|---|---|
-| V1 | Per agente: sessioni, `cwd` distinti, quanti esistono ancora, radici di repository distinte | Quanto rende la parte A |
-| V2 | Quante di quelle radici il walk di oggi **non** raggiunge | Il guadagno della parte A sulle copie |
-| V3 | Forme dei percorsi visti: `C:\`, `c:\`, `C:/`, `\\?\`, UNC, `\\wsl.localhost\`, `/c/`, `/mnt/c/`, POSIX; con spazi, non ASCII, oltre 260 caratteri | Quali forme normalizzare e quali scartare |
-| V4 | Per agente: file, GB, file più grande, data della sessione più vecchia, presenza di `.jsonl.zst` | Costo della parte B; quanto indietro vedono le sessioni |
-| V5 | Nomi dei campi realmente presenti: chiavi dei tool di Claude Code, forma di `arguments` di Codex, tabelle e colonne di `opencode.db`, header di Pi | La parte B si scrive sui nomi veri |
-| V6 | Tempo per leggere tutti i transcript del progetto, a freddo e a caldo, con Defender attivo | Se serve un avviso di attesa o un parametro per saltare la parte B |
-| V7 | Leggere un transcript mentre l'agente ci scrive, e `opencode.db` mentre OpenCode è acceso: l'agente continua a scrivere, rinominare, troncare? | Modo di apertura dei file |
-| V8 | Tempo di una chiamata `git.exe`; quante volte git risponde `dubious ownership`, da terminale normale ed elevato | Il tetto ai candidati per esecuzione |
-| V9 | Quanti percorsi cadono in cartelle cloud o su unità non fisse | Conferma dei filtri |
-| V10 | **Per tipo di prova** (tool di scrittura, `mkdir`, `cp`, `git clone`, redirezione, solo data): quante cartelle escono, quante esistono ancora, quante hanno la data di creazione dentro la sessione | Quali comandi vale la pena interpretare; quanto filtra la parte C |
-| V11 | La data di creazione NTFS è affidabile? Dopo una copia, uno spostamento tra dischi, un ripristino, un `git clone` | Se la parte C può fare da conferma o solo da indizio |
-| V12 | L'utente guarda a mano un campione delle cartelle uscite da V10: quante sono davvero residui, quante no | **Il tasso di falsi positivi.** Decide cosa entra in elenco |
+Una modifica di Mukade non è un prerequisito funzionale. Un'eventuale API generica per lettura
+progressiva o selettiva sarà valutata se le misure ne dimostrano la necessità; non deve
+conoscere `scratch`, `danger`, cartelle residue o regole di appartenenza Xiox.
 
-Criteri: la parte A si costruisce se V2 > 0 su almeno un progetto reale. La parte B e la
-categoria `scratch` si costruiscono se in V12 la maggioranza netta del campione è fatta di
-residui veri; i tipi di prova che in V12 danno soprattutto falsi positivi non si costruiscono.
+## Parte A: candidati dai percorsi di lavoro
 
-## Parte A: i `cwd` di tutte le sessioni
+1. Enumerare tramite Mukade le sessioni disponibili di tutti gli harness supportati,
+   conservando agente, ID, sorgente, parentela e metadati disponibili. Uno store assente è
+   diverso da uno store illeggibile; un descrittore può sopravvivere al suo transcript.
+2. Raccogliere i `cwd` dei descrittori e gli ulteriori cambi di contesto osservati nelle
+   sessioni lette nella parte B. Un listing con un solo `cwd` non dimostra tutti i percorsi
+   usati durante la sessione.
+3. Filtrare i percorsi prima di accedervi e risalire alle radici di repository esistenti con
+   la logica di `xiox_scanner::project_roots_from_sessions`, applicando le guardie sotto.
+4. Aggiungere le radici ai candidati della ricerca. `classify()` mantiene la verifica Git:
+   commit radice condiviso oppure origin normalizzato comune. Questo identifica una relazione
+   fra repository, non prova che una copia sia inutile; i controlli sul lavoro proprio restano.
+5. Deduplicare con i risultati del walk, dell'indice MFT e dei worktree già noti.
 
-1. Si raccolgono i `cwd` di tutte le sessioni (vive e archiviate, tutti gli agenti), con agente
-   e data dell'ultima attività.
-2. Ogni `cwd` passa il filtro dei percorsi (G1) prima di qualunque accesso al disco.
-3. Si risale alla radice del repository con la logica di
-   `xiox_scanner::project_roots_from_sessions` (cartella mancante, cloud, cartelle «larghe»).
-4. Le radici si aggiungono ai candidati di `search()`; `classify()` decide. Le radici che non
-   sono copie del progetto si scartano in silenzio.
+La provenienza conserva le sessioni distinte e l'ultima attività osservata. Il conteggio non
+si ricostruisce dai soli aggregati. Le radici non pertinenti al progetto non entrano nel suo
+elenco; fonti saltate o limiti di copertura sono invece riportati.
 
-Ogni copia porta la **provenienza** (agenti, numero di sessioni, data dell'ultima), in
-`Why::SameRepository` e nella riga stampata. `SCHEMA` sale di uno.
+## Parte B: operazioni della cronologia
 
-## Parte B: le chiamate ai tool
+Si leggono tramite Mukade le sessioni associate al progetto, ai suoi worktree e alle copie
+verificate. Durante la lettura, l'associazione degli eventi segue il contesto effettivo del
+turno o della chiamata: il `cwd` iniziale non attribuisce automaticamente tutta la sessione.
+Se il contesto necessario a risolvere un percorso relativo manca, il percorso resta irrisolto.
 
-Si leggono le sessioni **del progetto** (il cui `cwd` è nel progetto, in un suo worktree o in
-una sua copia). Da ogni chiamata si ricava una **prova**: percorso, tipo, sessione, istante.
+La coda delle sessioni può ampliarsi quando viene verificata una nuova copia. Si deduplicano
+sessioni e radici e si prosegue fino a esaurimento della coda o al budget della scansione.
+Il raggiungimento di un limite è visibile. Le sessioni iniziate altrove e mai collegate al
+progetto dai dati letti possono sfuggire: non si dichiara copertura universale.
 
-| Tipo di prova | Da dove | Forza |
-|---|---|---|
-| Scrittura | `file_path`/`path` dei tool che scrivono; `modifiedFiles` di Pi; righe `*** Add File:` di `apply_patch` | Forte |
-| Creazione da comando | `mkdir`, `New-Item`, `cp -r`, `Copy-Item`, `robocopy`, `git clone`, `git worktree add`, `cargo new`/`init`, `npm create`, redirezioni `>` | Forte se il percorso è scritto per intero |
-| Lettura | tool che leggono o cercano | Solo per trovare copie del repository; non crea voci `scratch` |
+### Evidenze e loro significato
 
-| Agente | Dove stanno | Note |
-|---|---|---|
-| Pi | header, `toolCall.arguments`, `details.readFiles`/`modifiedFiles` | Il più pulito |
-| Codex | `turn_context.payload.cwd`, `function_call.arguments` | `arguments` è JSON in una stringa: due decodifiche. `workdir` relativo al `cwd`. Rollout vecchi in `.jsonl.zst` |
-| Claude Code | `cwd` di ogni record, input dei `tool_use` | Formato non documentato: nomi da V5 |
-| OpenCode | `session.directory`, `project.worktree`, parti dei tool | Colonne controllate a runtime; se mancano, si salta con una nota |
+| Evidenza nella cronologia | Uso in Xiox |
+|---|---|
+| `cwd`, percorso di lettura o ricerca | Candidato per la ricerca di repository; non dimostra creazione |
+| Destinazione esplicita di creazione o copia | Candidato con operazione e riferimento alla sessione |
+| Scrittura o modifica di un file | Associazione di lavoro; da sola non dimostra che la directory sia stata creata dalla sessione |
+| Esito del tool associabile alla chiamata | Distingue successo, fallimento e risultato sconosciuto; il successo di una scrittura non implica directory nuova |
+| Percorso citato in messaggi o risultati | Contesto o menzione debole; non viene promosso automaticamente a operazione eseguita |
 
-Comandi shell: si spezzano in parole con le regole della shell (bash e PowerShell), si
-riconosce solo l'elenco di comandi qui sopra, i percorsi relativi si risolvono sul `cwd` della
-chiamata. Variabili, sostituzioni di comando e cicli non si espandono: un comando che non si
-capisce per intero non dà nessuna prova.
+Un'operazione fallita non è una creazione riuscita. Un esito mancante resta sconosciuto.
+Una menzione può far cercare una copia Git; per proporre `scratch` deve esserci un riferimento
+alla sua funzione di cartella di lavoro, copia, prova o destinazione di artefatti nella
+cronologia. Il semplice elenco di percorsi in un prompt o nell'output di `ls` non basta.
 
-Lettura dei file: aperti con condivisione completa, letti a blocchi, **mai mmap**; righe separate
-con `memchr`, interpretate solo se contengono una delle chiavi cercate; la riga incompleta in
-fondo si lascia alla prossima lettura; una riga che non si interpreta si salta.
+La prima implementazione usa regole deterministiche sulle operazioni riconosciute. Messaggi
+e risultati sono disponibili come contesto da consultare; non si introduce un LLM né si
+considera una frase della chat prova automatica del successo di un comando.
 
-Cache in `xiox_app::cache_dir()`, per file: dimensione, data, impronta del primo KiB, offset
-dopo l'ultima riga completa, prove estratte. File invariato: si salta. Cresciuto con la stessa
-impronta: si riprende dall'offset. **La cache contiene percorsi, tipo di prova, sessione e
-istante: mai il testo dei comandi o delle chat.** Ha un numero di versione.
+### Operazioni riconosciute
 
-## Parte C: la data di creazione
+- Tool di scrittura/modifica, con i loro parametri percorso e gli esiti disponibili.
+- Patch: creazione, modifica, spostamento ed eliminazione di file mantengono significati
+  distinti. Una modifica non diventa creazione; una cancellazione non genera una nuova cartella.
+- Comandi espliciti: `mkdir`, `New-Item`, `cp -r`, `Copy-Item`, `robocopy`, `git clone`,
+  `git worktree add`, `cargo new`/`init`, `npm create` e redirezioni supportate.
 
-Di ogni sessione si conoscono inizio e fine (primo e ultimo record). Di ogni cartella NTFS dà
-la data di creazione.
+Xiox distingue sorgente e destinazione delle copie e applica la grammatica della shell
+indicata dalla chiamata. Non esegue comandi letti dalla cronologia. Variabili, cicli,
+sostituzioni e script non interpretati non producono percorsi inventati. Le forme non
+supportate sono conteggiate; il comportamento di ciascun parser è provato su fixture.
 
-- **Conferma.** Una cartella con una prova della parte B entra in elenco solo se è stata creata
-  durante quella sessione (con un margine). Se esisteva già, la sessione ci ha solo scritto
-  dentro: non è sua e resta fuori. È il filtro principale contro i falsi positivi.
-- **Recupero.** Una cartella nata durante una sessione del progetto, senza nessuna prova della
-  parte B, entra in elenco solo se è **accanto** al progetto (figlia della stessa cartella
-  madre) oppure è una cartella non tracciata e non ignorata **dentro** il progetto. Copre lo
-  script che crea da solo le sue cartelle. È la prova più debole.
+Per ogni evidenza si conservano: percorso, progetto associato e motivo dell'associazione,
+agente, ID sessione, ID/posizione dell'evento, timestamp se disponibile, `cwd` effettivo,
+tipo di operazione, esito e forza dell'evidenza. Un timestamp assente non elimina da solo
+l'evidenza. I riferimenti distinguono anche store diversi e pagine della stessa sessione.
 
 ## La categoria `scratch`
 
-Voce nuova dell'elenco: una cartella che una sessione del progetto ha creato e che non è una
-copia del repository (quelle restano `copies`) né ha il nome del progetto (quelle restano
-`named`). La voce è la cartella creata più in alto: se la sessione ha creato `D:\runs\a\b`, la
-voce è la prima di quelle tre che è nata durante la sessione.
+`scratch` è una cartella candidata alla revisione emersa dalle operazioni della sessione,
+che non è già un worktree, una copia Git del progetto o una voce `named`. Può essere senza
+Git. Il motivo distingue una creazione documentata da una destinazione di lavoro osservata
+con evidenza più debole; non tutte le voci sono descritte come "create dalla sessione".
 
-Ogni voce porta il motivo (`Why::SessionMade`): tipo di prova, agente, sessione, data, e se la
-data di creazione conferma.
+Il candidato è la directory indicata dall'evidenza, o il contenitore diretto di un artefatto
+quando è quello individuabile. Non si sale automaticamente all'antenato più alto. Se una
+sessione scrive in `D:\agent-runs\batch\phazly`, questo non attribuisce anche `batch` al progetto.
 
-Non è mai una voce `scratch`:
+Non si propone come `scratch` una radice di disco, una cartella protetta o larga, il progetto
+stesso, un suo worktree o un loro contenitore. Per un candidato dentro il progetto serve una
+verifica Git del sottoalbero: contenuti tracciati, controllo impossibile o repository annidati
+non rimovibili ne impediscono la rimozione. Serve una policy dedicata; non si allenta il guard
+esistente di `ProjectFolder` per tutte le categorie.
 
-- una cartella «larga» o protetta (radice di disco, home, Desktop, Documenti, cartelle di
-  sistema, `AppData`), o una cartella che contiene il progetto o un suo worktree;
-- una cartella che esisteva prima della sessione;
-- una cartella dentro il progetto che git traccia.
+Se la cronologia documenta che una cartella esisteva già, il motivo può indicare che vi si è
+lavorato, ma non che sia stata creata. Le date NTFS non decidono questa distinzione.
 
-## Il livello `danger`
+### Esempio
 
-Livello nuovo sopra `caution`. Nell'elenco è marcato in modo evidente
-(`danger  check by hand`) con il motivo accanto. Sono `danger`:
+Una sessione di Phazly registra la creazione di `D:\agent-runs\planner-benchmark-42` e la
+scrittura di `benchmark.py`. Xiox verifica che la cartella esista, la propone come `scratch`
+con livello `danger` e collega il motivo alla sessione e alle operazioni.
 
-- ogni voce `scratch` o `named` **senza git** (nessun repository che ne provi l'identità);
-- ogni voce `scratch` trovata con la sola data di creazione;
-- ogni voce `worktrees`, `copies`, `named` o `scratch` **creata o modificata nelle ultime 24
-  ore**, o in cui una sessione ha lavorato nelle ultime 24 ore.
+Una cartella accanto, creata alla stessa ora ma senza evidenze nella cronologia letta, non
+viene attribuita a quella sessione. Una data NTFS diversa non scarta invece il primo candidato.
 
-Come si toglie una voce `danger`:
+## Rischio, attività e conferma
 
-- mai con un parametro di categoria;
-- solo nominandola con `--include <path>`;
-- **mai con il solo `--yes`**: serve la conferma a mano, voce per voce, da terminale. Senza un
-  terminale serve `--confirm-danger <path>` ripetuto per ogni voce. Un agente che lancia
-  `xiox clean --yes --include …` su una voce `danger` non cancella niente ed esce con errore;
-- sempre nel Cestino: `--permanent` non vale per le voci `danger`.
+Sono `danger` le voci senza Git, quelle con evidenza debole, quelle con copertura insufficiente
+per valutare un rischio rilevante e quelle create/modificate o usate da sessioni nelle ultime
+24 ore. Le date del filesystem possono contribuire a questo indicatore di recenza, mai alla
+provenienza. L'attività recente osservata dentro un sottoalbero si riflette sul suo contenitore;
+il solo `mtime` della directory non descrive tutte le modifiche dei figli.
 
-## Guardie
+Il testo è `danger: explicit confirmation required`, con motivi leggibili e strutturati.
+Lo stato di attività osservato distingue attivo, non attivo verificato e sconosciuto.
+Recenza e vitalità sconosciuta non sono nuovi blocchi assoluti: il rischio è mostrato e la
+scelta resta a chi conferma. I blocchi già certi del motore, compresa una sessione verificata
+viva, restano validi; questa feature non promette di riconoscere ogni attività in corso.
 
-**G1. Filtro dei percorsi, prima di toccare il disco.** Il contenuto di un transcript non è
-fidato. Un percorso si accetta solo se: è assoluto con lettera di unità su un disco fisso;
-**non è UNC né un percorso di dispositivo** (solo guardare se esiste un percorso di rete fa
-partire un'autenticazione verso quel server); non ha caratteri di controllo o vietati; non
-supera una lunghezza massima; non è in una cartella cloud; **nessun antenato è un link o una
-junction**. Il resto si scarta e si conta in una nota.
+La conferma riguarda l'operazione, non l'identità di chi la fornisce:
 
-**G2. Sessione viva.** Resta il blocco di oggi (sessione verificata viva: non si toglie). Per
-gli agenti la cui vitalità non è verificabile (Codex, OpenCode, Pi) oggi non c'è niente: una
-copia in cui Codex sta lavorando adesso non è bloccata. Con questa spec l'attività nelle ultime
-24 ore porta la voce a `danger`.
+- Una categoria non seleziona implicitamente voci `danger`.
+- La CLI richiede `--include <path>` e una conferma per quella voce: risposta al prompt oppure
+  `--confirm-danger <path>`. Il parametro è valido anche per un agente; `--yes` da solo non basta.
+- La UI permette la selezione e conferma esplicita delle voci, con rischi e metodo di rimozione.
+- Il percorso confermato deve essere un candidato dell'analisi. Non abilita la rimozione di
+  percorsi arbitrari e non supera i blocchi del motore.
+- La rimozione di un contenitore deve rispettare i blocchi e le conferme richieste anche dai
+  candidati discendenti. Non è possibile eluderli includendo solo il genitore.
+- Se la riconvalida cambia bersaglio, contenuti rilevanti, rischio o metodo rispetto al piano
+  confermato, la voce viene saltata e richiede una nuova scelta.
 
-**G3. Blocchi delle voci senza git.** Una voce `scratch` è bloccata (non si toglie nemmeno con
-la conferma) se:
+**Cartelle ordinarie `danger`: Cestino.** Una richiesta `--permanent` che le includa viene
+rifiutata prima della rimozione; non si cambia metodo in silenzio.
 
-- contiene un file modificato **dopo** la fine dell'ultima sessione che l'ha toccata e fuori da
-  ogni altra sessione: ci ha messo mano una persona;
-- contiene un repository git con lavoro non salvato, o che git non riesce a leggere (regola di
-  oggi per `named`);
-- sessioni di **un altro progetto** ci hanno scritto: non è solo di questo progetto;
-- è troppo grande per essere controllata dentro.
+**Worktree: eccezione esplicita.** Si mantiene `git worktree remove`, mai `--force`, anche
+quando il worktree è `danger`. La UI, il riepilogo CLI e il JSON dichiarano che la rimozione
+è definitiva e non passa dal Cestino. La conferma include questa informazione. Questa è
+un'eccezione documentata, non una promessa di ripristino dei worktree dal Cestino.
 
-**G4. Tetto e ordine.** I candidati si controllano dal più recente fino a un tetto (da V8).
-Oltre: nota, mai un silenzio.
+## Controlli e copertura
 
-**G5. Le sessioni non lette non allargano niente.** Se la lettura fallisce, l'analisi prosegue
-senza quelle voci e lo dice.
+1. **Percorsi:** scarto lessicale di UNC, dispositivi, percorsi non assoluti, componenti
+   vietate e forme non supportate prima dell'accesso. Accesso solo a dischi locali fissi;
+   controllo degli antenati dall'alto prima di attraversarli, senza seguire link/junction o
+   accedere a cartelle cloud. Le destinazioni indirette di Git (`gitdir`, directory comuni,
+   object store alternativi e configurazioni esterne) richiedono la stessa policy prima di
+   interrogare il repository; un riferimento non validabile impedisce quella verifica.
+2. **Stato attuale:** esistenza, identità, contenuti Git e blocchi vengono ricontrollati prima
+   della rimozione. Il riferimento storico non autorizza automaticamente un altro oggetto
+   comparso in seguito allo stesso percorso.
+3. **Contenuti:** lavoro Git non salvato, repository illeggibili, cartelle protette e scansioni
+   del sottoalbero incomplete impediscono la rimozione secondo la policy applicabile. Non si
+   conclude che una persona abbia modificato un file dal confronto con la fine di una sessione.
+4. **Condivisione:** scritture di altri progetti documentate dalla cronologia sono riportate
+   e bloccano la pulizia della cartella condivisa come residuo esclusivo di un progetto.
+   Xiox può leggere tramite Mukade altre sessioni per cercare conflitti sui candidati, entro
+   il budget dichiarato. Non leggere tutte le sessioni non dimostra assenza di conflitti:
+   la copertura parziale è indicata come rischio, senza pretendere un inventario storico completo.
+5. **Errori:** sorgente assente, transcript eliminato, lettura fallita, schema non supportato
+   e limite raggiunto restano distinti. Non generano nuove prove; i candidati già verificabili
+   possono essere mostrati con copertura e rischio. Non si riutilizza una prova obsoleta come
+   se fosse stata appena riconfermata.
+6. **Categorie:** i controlli dipendono da contenuti ed evidenze, non solo dall'etichetta.
+   Diventare `named` invece di `scratch` non elimina una restrizione applicabile.
 
-Non cambia: riconvalida di ogni voce subito prima di cancellare (comprese data di creazione e
-G3), nessun link seguito, cartelle protette rifiutate.
+`--no-drives` conserva il limite della ricerca esterna al genitore del progetto anche per i
+candidati ricavati dalle sessioni. I percorsi esterni esclusi sono conteggiati senza accedervi.
+La lettura degli store Mukade configurati rimane separata dall'ambito della ricerca di cartelle.
 
-## Decisioni mie (l'utente non le ha discusse: da controllare)
+## Lettura, cache e limiti
 
-- **`danger` è un livello nuovo e chiede la conferma a mano**, non un semplice testo di avviso:
-  altrimenti un agente con `--yes` lo salta. È un cambio di contratto per chi usa la riga di
-  comando (`--confirm-danger`, `SCHEMA`).
-- **Le voci recenti (24 ore) passano a `danger` anche se trovate dal walk di oggi**: una copia
-  oggi `caution` e toglibile con `--include --yes` non lo sarà più senza conferma.
-- **Solo le sessioni del progetto e delle sue copie.** Le cartelle create da sessioni aperte
-  nella home, sul Desktop o in cartelle di prova non appartengono a nessun progetto e qui non
-  si vedono. Servirebbe una vista non legata a un progetto, che la spec precedente esclude: la
-  propongo come spec a parte, da costruire sopra questa.
-- **La prosa della chat non si legge**, nemmeno per le voci `danger`.
-- **Dove sta il codice della parte B.** `vendor/mukade` non si tocca. Propongo
-  `crates/xiox-mukade`, e di portarlo a monte in mukade dopo.
-- **Dipendenze nuove**: `memchr`, `zstd`, un crate per spezzare i comandi shell (da scegliere);
-  `typed-path` solo nei test.
-- **Elenco chiuso di comandi riconosciuti.** Niente tentativo di capire script o comandi
-  composti: meno voci trovate, ma nessuna inventata.
+La prima versione usa i reader Mukade esistenti entro budget finiti di sorgenti, dimensioni,
+memoria e durata. Si legge una sessione alla volta e la si libera dopo l'estrazione. Le
+operazioni non interrompibili devono essere contenute da un limite effettivo o escluse con
+una nota: un timeout solo nominale non basta. La prova tecnica determina limiti iniziali e
+modalità di isolamento necessarie, senza richiedere in anticipo una riscrittura di Mukade.
 
-## Vincoli
+La cache dei listing esistente resta distinta dalle prove estratte. Nella prima versione le
+prove sono riutilizzate nella singola analisi, con deduplicazione; non si introduce la ripresa
+persistente basata su primo KiB e offset. Una successiva cache persistente deve legarsi a una
+versione verificata dell'intera sorgente e dell'estrattore, compreso il contesto di ripresa.
+SQLite, file compressi, pagine e rotazioni richiedono contratti specifici: non ereditano
+automaticamente la semantica append-only di un JSONL.
 
-- Quelli della spec dell'analisi mirata: testi in inglese, `analyze` non scrive niente tranne la
-  cache, mai provare sui progetti veri (la sonda è l'unica eccezione: la lancia l'utente e
-  stampa solo conteggi), `cargo -j 1`.
-- Niente viene scritto negli store degli agenti. `opencode.db` si apre in sola lettura.
-- I test costruiscono store finti per i quattro agenti sotto `tempfile::tempdir()`.
+La pulizia rilegge tramite Mukade le evidenze rilevanti e rivaluta il candidato. La sola
+coincidenza di percorso, dimensione o prefisso del transcript non certifica l'attualità.
 
-## Non si fa
+Si definiscono limiti anche per numero di eventi, percorsi estratti, profondità di parsing,
+scansione dei sottoalberi e interrogazioni Git. I candidati sono ordinati per attività
+osservata, con ordinamento stabile per quelli senza data. Ogni troncamento è riportato.
 
-- Niente lettura di messaggi, output dei tool, prompt di sistema.
-- Niente ricerca per contenuto dei file.
-- Niente vista di tutti i progetti, niente sessioni senza progetto (spec a parte).
-- Niente percorsi WSL o di rete.
-- Niente cancellazione definitiva delle voci `danger`.
+Xiox non modifica i dati delle sessioni, non esegue migrazioni o pulizie degli store e non
+scrive SQL applicativo. I reader SQLite sono usati in sola lettura con transazioni brevi;
+si verifica la loro gestione di WAL e sidecar. Non si confonde read-only con l'assenza di
+qualsiasi effetto fisico dei file ausiliari e non si dichiara immutabile un database attivo.
 
-## Sarebbe un fallimento se
+Cache ed elenco standard contengono evidenze sintetiche e riferimenti, non copie delle chat,
+script, comandi o output completi. Un dettaglio locale richiesto esplicitamente può recuperare
+il contesto tramite Mukade. I testi degli errori non devono riversare contenuto delle sessioni.
 
-- una cartella che esisteva prima della sessione venisse elencata come creata dalla sessione;
-- una voce `danger` venisse tolta senza che una persona l'abbia confermata, una per una;
-- una cartella in cui una persona ha lavorato dopo la sessione venisse tolta;
-- una copia o una cartella in cui un agente sta lavorando venisse tolta;
-- un percorso preso da una sessione facesse toccare a Xiox la rete, un link o una cartella cloud;
-- un transcript illeggibile, enorme o scritto apposta facesse fallire o bloccare `analyze`;
-- la lettura di Xiox facesse fallire una scrittura dell'agente;
-- testo di una sessione finisse nella cache, nell'uscita o nel JSON.
+## Verifiche prima e durante la costruzione
 
-## Limiti noti
+I test usano repository e store finti sotto `tempfile::tempdir()`. `cargo` gira con `-j 1`;
+non si avviano build concorrenti. Non si eseguono pulizie su progetti reali.
 
-- Claude Code cancella i transcript dopo 30 giorni (impostazione predefinita): per le cartelle
-  più vecchie la prova non c'è più. Per quelle future c'è `xiox observe`.
-- Uno script che crea cartelle lontano dal progetto non lascia prova: non si trova.
-- La data di creazione può non essere quella vera dopo uno spostamento o un ripristino (V11).
+Si aggiunge una sonda di sola analisi, `session_probe`, che usa le stesse API Mukade. La modalità
+predefinita restituisce conteggi, copertura e tempi; una modalità locale `--sample` mostra
+percorsi, tipo di evidenza e riferimenti alle sessioni, così il campione è verificabile.
+Non si esporta automaticamente il testo delle conversazioni. La sonda non scrive la cache
+Xiox; il contratto dei reader SQLite è quello descritto sopra.
 
-## Ordine di costruzione
+Le misure su store reali vengono eseguite dall'utente o su sua richiesta esplicita. Non sono
+un prerequisito per implementare e verificare le parti su fixture. Si misurano per harness e
+tipo di evidenza: copertura rispetto alla ricerca attuale, costo della lettura, falsi
+collegamenti, percorsi non risolti e fonti saltate. Il campione include casi negativi e
+sessioni concorrenti. I risultati servono a tarare supporto e limiti, non a trasformare una
+"maggioranza di residui" in una garanzia di cancellazione sicura.
 
-1. **Sonda** (fase 0). L'utente la lancia su Windows e riporta i numeri, compreso il campione
-   guardato a mano (V12).
-2. **Livello `danger`** e guardie G1 e G2, con i loro test: utili anche senza il resto.
-3. **Parte A** con la provenienza.
-4. **Parte B** per i soli tipi di prova che V12 ha promosso, con la parte C e la categoria
-   `scratch`.
+| Caso di accettazione | Risultato richiesto |
+|---|---|
+| Copia profonda presente nel `cwd` di una sessione | Candidata aggiunta e relazione Git verificata |
+| Tool crea una cartella fuori dal progetto | Evidenza con sessione/operazione; `scratch` se pertinente |
+| Cartella coeva senza evidenze nella cronologia | Nessuna attribuzione alla sessione tramite la data |
+| Timestamp NTFS diverso dalla cronologia | Non invalida da solo il candidato |
+| Scrittura in directory preesistente; creazione fallita | Il motivo non afferma una creazione riuscita |
+| Cambio `cwd`, percorsi relativi, pagine, sessioni figlie | Contesto e provenienza conservati, oppure limite esplicito |
+| Agente conferma una voce `danger` alla CLI | Conferma accettata se piano e controlli lo consentono |
+| Solo `--yes`, oppure conferma di un altro percorso | Nessuna rimozione della voce `danger` |
+| Attività recente con vitalità sconosciuta | `danger` e motivazione; nessuna promessa di inattività |
+| Contenitore con discendente bloccato o non confermato | Restrizioni non aggirabili dal contenitore |
+| Worktree `danger` confermato | Metodo Git definitivo esplicito; mai `--force` |
+| Sorgente riscritta con stesso prefisso | Nessun riuso delle vecchie prove senza validazione |
+| Lettura enorme, parziale o fallita | Limite rispettato, risultato parziale dichiarato |
+| UNC, junction, riferimento Git esterno vietato | Nessun attraversamento del bersaglio vietato |
+| Cartella condivisa documentata da due progetti | Conflitto visibile e blocco applicato |
 
-## Lasciato al builder
+## Ordine di implementazione
 
-- I nomi dei campi JSON nuovi e il testo esatto delle righe `danger`.
-- Il formato della cache.
-- I valori del tetto, del margine sulla data di creazione e della lunghezza massima, a partire
-  dai numeri della fase 0.
+1. **Adapter e prova tecnica:** esporre sessioni non aggregate e leggere fixture attraverso
+   Mukade; misurare costi e limiti. Preparare la sonda locale.
+2. **Parte A:** aggiungere candidati dai `cwd`, deduplicazione e provenienza.
+3. **Analisi Xiox della cronologia:** operazioni riconosciute, contesto, evidenze e `scratch`;
+   includere rischio e copertura nel risultato di `analyze`.
+4. **Selezione e pulizia:** `danger`, conferme CLI/UI, propagazione ai contenitori, riconvalida
+   ed eccezione esplicita dei worktree; incrementare lo schema JSON e aggiornare le guide.
+5. **Verifica integrata:** casi della tabella, osservatore e prove Windows controllate. Solo
+   dopo le misure valutare ottimizzazioni o estensioni generiche della lettura Mukade.
+
+Il piano di implementazione deve assegnare i test insieme alle rispettive funzionalità.
+Questa specifica non avvia la costruzione né modifica il codice applicativo.
+
+## Limiti dichiarati
+
+- Cronologie eliminate, store non supportati e sessioni non collegate al progetto riducono
+  la copertura; una prova mai registrata o non leggibile non viene ricostruita dalle date.
+- Uno script può creare percorsi che non compaiono nei dati leggibili della sessione.
+- Una menzione o una scrittura non dimostrano che il contenuto sia inutile.
+- La conferma può essere automatizzata da un agente. `danger` rende esplicita la decisione,
+  non certifica un intervento umano o l'assenza di attività concorrente.
+- L'osservatore segnala ciò che compare mentre è in funzione; non sostituisce automaticamente
+  la provenienza delle sessioni né costituisce, da solo, un archivio storico persistente.
