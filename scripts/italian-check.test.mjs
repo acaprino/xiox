@@ -113,3 +113,28 @@ test('the CLI prints path:line: "literal", exits 1 on a hit and skips tests.rs a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the CLI skips every file under examples/ and tests/, whatever its kind', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const cli = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), 'italian-check.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'italian-skip-'));
+  const xml = '<cleaner><option><label>Pulizia completata</label></option></cleaner>\n';
+  const rs = 'fn a() { let x = "Pulizia completata"; }\n';
+  fs.mkdirSync(path.join(dir, 'examples'));
+  fs.mkdirSync(path.join(dir, 'tests', 'fixtures'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'examples', 'peak.rs'), rs);
+  fs.writeFileSync(path.join(dir, 'tests', 'fixtures', 'sample.xml'), xml);
+  fs.writeFileSync(path.join(dir, 'tests', 'data.json'), '{"a": "Pulizia completata"}\n');
+  try {
+    let run = spawnSync(process.execPath, [cli, dir], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stdout);
+    fs.writeFileSync(path.join(dir, 'sample.xml'), xml);
+    run = spawnSync(process.execPath, [cli, dir], { encoding: 'utf8' });
+    assert.equal(run.status, 1, 'the same file outside tests/ is still checked');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

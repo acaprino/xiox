@@ -3,7 +3,8 @@
 //   node scripts/italian-check.mjs <path>...
 //
 // Prints `path:line: "literal"` for every hit and exits with 1 when there is one.
-// Rust: string literals outside comments, `#[cfg(test)]` items, `tests.rs` and `tests/`.
+// Rust: string literals outside comments, `#[cfg(test)]` items and `tests.rs`.
+// Any file under an `examples/` or a `tests/` directory is skipped, whatever its kind.
 // XML: the text of <label>, <description> and <warning>.  TS / JSON: string literals.
 // `scripts/italian-allow.txt` lists the literals that are data, not text for the user.
 import fs from 'node:fs';
@@ -261,10 +262,12 @@ function* walk(target) {
   }
 }
 
+// Developer examples, tests and their fixtures are not text for the user.
 function skipped(file, kind) {
-  if (kind !== 'rust') return false;
   const parts = file.split(/[\\/]/);
-  return parts.at(-1) === 'tests.rs' || parts.slice(0, -1).includes('tests');
+  const dirs = parts.slice(0, -1);
+  if (dirs.includes('examples') || dirs.includes('tests')) return true;
+  return kind === 'rust' && parts.at(-1) === 'tests.rs';
 }
 
 function main(args) {
