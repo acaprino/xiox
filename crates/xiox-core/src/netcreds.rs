@@ -49,10 +49,10 @@ pub const FTP_ACCOUNTS: &str = r"Software\Microsoft\Ftp\Accounts";
 /// «vecchio stile».
 pub const EXCLUDED_PREFIXES: [&str; 4] = ["MicrosoftAccount:", "WindowsLive:", "virtualapp/didlogical", "LegacyGeneric:"];
 /// Avviso della conferma (§2.6, brief Fase 3b).
-pub const WARNING: &str = "Elimina le password salvate per unità di rete, condivisioni, Desktop remoto e gli account \
-     FTP di Esplora file: dovrai reinserirle. Anche altre app che usano queste password (per esempio Outlook con un \
-     server Exchange aziendale, o le connessioni Desktop remoto salvate) le chiederanno di nuovo. Pulizia elimina solo \
-     ciò che ha mostrato l'ultima Analisi. Le password dei browser e degli account Microsoft non si toccano.";
+pub const WARNING: &str = "Deletes the saved passwords for network drives, shares, Remote Desktop and the FTP accounts \
+     of File Explorer: you will have to enter them again. Other apps that use these passwords (for example Outlook with a \
+     company Exchange server, or saved Remote Desktop connections) will ask for them again too. Cleanup deletes only \
+     what the last Analysis showed. Browser passwords and Microsoft accounts are not touched.";
 
 /// Una credenziale come la dà Windows, **senza** il segreto: tipo, nome di
 /// destinazione e utente. `None` = testo non valido in UTF-16 (o nome
@@ -106,13 +106,13 @@ pub fn items() -> Vec<NativeItem> {
     vec![NativeItem {
         id: ID,
         group: "Windows",
-        label: "Password di rete",
-        description: "Elimina da Gestione credenziali di Windows le password salvate per unità di rete, cartelle \
-             condivise e Desktop remoto, e gli account FTP salvati da Esplora file. Le credenziali generiche (app, \
-             Git, browser) e gli account Microsoft non si toccano. Pulizia elimina solo ciò che ha mostrato l'ultima \
-             Analisi. Le credenziali eliminate non hanno copia; le chiavi degli account FTP si salvano prima in un \
-             file .reg (con le password FTP cifrate) in AppData\\Local\\Xiox\\backup, leggibile solo da te e \
-             dagli amministratori.",
+        label: "Network passwords",
+        description: "Deletes from the Windows Credential Manager the saved passwords for network drives, shared \
+             folders and Remote Desktop, and the FTP accounts saved by File Explorer. Generic credentials (apps, \
+             Git, browsers) and Microsoft accounts are not touched. Cleanup deletes only what the last \
+             Analysis showed. Deleted credentials have no copy; the FTP account keys are first saved in a \
+             .reg file (with the encrypted FTP passwords) in AppData\\Local\\Xiox\\backup, readable only by you and \
+             the administrators.",
         warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
@@ -151,8 +151,8 @@ impl RuleRegistry for PrivateRegistry {
 fn account_refusal(account: &Account) -> Option<String> {
     match account {
         Account::Same(_) => None,
-        Account::Other(name) => Some(format!("Credenziali di un altro account: non toccate (il programma gira come {name})")),
-        Account::Unknown(e) => Some(format!("Account della sessione non verificato ({e}): credenziali non toccate")),
+        Account::Other(name) => Some(format!("Credentials of another account: not touched (the program runs as {name})")),
+        Account::Unknown(e) => Some(format!("Session account not verified ({e}): credentials not touched")),
     }
 }
 
@@ -211,7 +211,7 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts, account: &Account
                 }
             }
         }
-        Err(e) => errors.push(format!("Credenziali di Windows non leggibili: {e}")),
+        Err(e) => errors.push(format!("Windows credentials not readable: {e}")),
     }
     let mut servers: Vec<FtpServer> = Vec::new();
     match ftp.servers() {
@@ -228,7 +228,7 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts, account: &Account
                 }
             }
         }
-        Err(e) => errors.push(format!("Account FTP non leggibili: {e}")),
+        Err(e) => errors.push(format!("FTP accounts not readable: {e}")),
     }
     let count = (found_creds.len() + servers.len()) as u64;
     if count == 0 && errors.is_empty() && skipped == 0 {
@@ -236,19 +236,19 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts, account: &Account
     }
     let mut parts: Vec<String> = Vec::new();
     if !found_creds.is_empty() {
-        parts.push(format!("{} password di rete", found_creds.len()));
+        parts.push(format!("{} network {}", found_creds.len(), if found_creds.len() == 1 { "password" } else { "passwords" }));
     }
     if !servers.is_empty() {
-        parts.push(format!("{} account FTP", servers.len()));
+        parts.push(format!("{} FTP {}", servers.len(), if servers.len() == 1 { "account" } else { "accounts" }));
     }
-    let mut detail = vec![if parts.is_empty() { "Nessuna password di rete da eliminare".to_string() } else { parts.join(", ") }];
+    let mut detail = vec![if parts.is_empty() { "No network passwords to delete".to_string() } else { parts.join(", ") }];
     detail.extend(errors);
     if skipped > 0 {
-        detail.push(format!("{skipped} lasciati: nome non leggibile o collegamento del registro"));
+        detail.push(format!("{skipped} left alone: unreadable name or registry link"));
     }
     let lines = found_creds
         .iter()
-        .map(|(t, u)| if u.is_empty() { format!("Rete: {t}") } else { format!("Rete: {t} (utente {u})") })
+        .map(|(t, u)| if u.is_empty() { format!("Rete: {t}") } else { format!("Network: {t} (user {u})") })
         .chain(servers.iter().map(|s| {
             let mut users = s.users.iter().take(MAX_SHOWN_USERS).cloned().collect::<Vec<_>>().join(", ");
             if s.users.len() > MAX_SHOWN_USERS {
@@ -257,7 +257,7 @@ pub fn analyze(creds: &dyn Credentials, ftp: &dyn FtpAccounts, account: &Account
             if users.is_empty() {
                 format!("FTP: {}", s.name)
             } else {
-                format!("FTP: {} (utenti: {users})", s.name)
+                format!("FTP: {} (users: {users})", s.name)
             }
         }));
     // Tutte le righe: la pulizia agisce solo su ciò che l'utente ha visto qui.
@@ -294,7 +294,7 @@ pub fn clean(
     let mut ftp: Vec<(&str, Vec<&str>)> = Vec::new();
     for raw in &found.items {
         if cancel.load(Ordering::Relaxed) {
-            out.note("Pulizia interrotta".to_string());
+            out.note("Cleanup interrupted".to_string());
             return out;
         }
         match parse_item(raw) {
@@ -303,17 +303,17 @@ pub fn clean(
                 let path = ftp_key_path(server);
                 if !valid_server_name(server) {
                     out.failed += 1;
-                    out.note(format!("Account FTP non ammesso, lasciato: {}", server.replace(SEP, " ")));
+                    out.note(format!("FTP account not allowed, left alone: {}", server.replace(SEP, " ")));
                 } else if let Err(why) = xiox_rules::reg_allowed(RegRoot::Hkcu, &path, None) {
                     out.failed += 1;
-                    out.note(format!("Account FTP {server} non toccato ({why})"));
+                    out.note(format!("FTP account {server} not touched ({why})"));
                 } else {
                     ftp.push((server, users));
                 }
             }
             None => {
                 out.failed += 1;
-                out.note("Elemento non riconosciuto, lasciato".to_string());
+                out.note("Item not recognized, left alone".to_string());
             }
         }
     }
@@ -321,12 +321,12 @@ pub fn clean(
         return out;
     }
     if cancel.load(Ordering::Relaxed) {
-        out.note("Pulizia interrotta".to_string());
+        out.note("Cleanup interrupted".to_string());
         return out;
     }
     let creds_done = out.removed;
     let creds_part = if found.items.len() > ftp.len() {
-        format!("; password di rete eliminate: {creds_done}")
+        format!("; network passwords deleted: {creds_done}")
     } else {
         String::new()
     };
@@ -336,14 +336,14 @@ pub fn clean(
         Ok(l) => l.servers,
         Err(e) => {
             out.failed += ftp.len() as u64;
-            out.note(format!("Account FTP non riletti ({e}): nessun account FTP eliminato{creds_part}"));
+            out.note(format!("FTP accounts not read back ({e}): no FTP account deleted{creds_part}"));
             return out;
         }
     };
     let mut keys: Vec<(&str, RegItem)> = Vec::new();
     for (server, users) in ftp {
         let Some(cur) = now.iter().find(|s| s.name.eq_ignore_ascii_case(server)) else {
-            out.note(format!("Già assente: account FTP {server}"));
+            out.note(format!("Already gone: FTP account {server}"));
             continue;
         };
         let mut a: Vec<&str> = cur.users.iter().map(String::as_str).collect();
@@ -351,7 +351,7 @@ pub fn clean(
         a.sort_unstable();
         b.sort_unstable();
         if a != b {
-            out.note(format!("Account FTP {server}: cambiato dopo l'analisi, lasciato (rifai l'analisi)"));
+            out.note(format!("FTP account {server}: changed after the analysis, left alone (analyze again)"));
             continue;
         }
         keys.push((server, RegItem::Key { root: RegRoot::Hkcu, path: ftp_key_path(server) }));
@@ -364,36 +364,36 @@ pub fn clean(
         Ok(b) => b,
         Err(e) => {
             out.failed += keys.len() as u64;
-            out.note(format!("Backup degli account FTP non riuscito ({e}): nessun account FTP eliminato{creds_part}"));
+            out.note(format!("FTP accounts backup failed ({e}): no FTP account deleted{creds_part}"));
             return out;
         }
     };
     if let Some(p) = &backup.path {
         out.note(format!(
-            "Backup degli account FTP: {}. Contiene le password FTP cifrate: eliminalo quando tutto funziona",
+            "FTP accounts backup: {}. It contains the encrypted FTP passwords: delete it when everything works",
             p.display()
         ));
     }
     for (i, (name, item)) in keys.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
-            out.note("Pulizia interrotta".to_string());
+            out.note("Cleanup interrupted".to_string());
             break;
         }
         // Una chiave che non c'era al backup non si cancella (potrebbe
         // nascere dopo, senza copia).
         if !backup.present.get(i).copied().unwrap_or(false) {
-            out.note(format!("Già assente: account FTP {name}"));
+            out.note(format!("Already gone: FTP account {name}"));
             continue;
         }
         match reg.delete(item) {
             Ok(true) => {
                 out.removed += 1;
-                out.done.push(format!("Eliminato: account FTP {name}"));
+                out.done.push(format!("Deleted: FTP account {name}"));
             }
-            Ok(false) => out.note(format!("Già assente: account FTP {name}")),
+            Ok(false) => out.note(format!("Already gone: FTP account {name}")),
             Err(e) => {
                 out.failed += 1;
-                out.note(format!("Account FTP {name}: {e}"));
+                out.note(format!("FTP account {name}: {e}"));
             }
         }
     }
@@ -404,17 +404,17 @@ pub fn clean(
 fn clean_cred(creds: &dyn Credentials, target: &str, user: &str, out: &mut NativeCleaned) {
     if !is_network_password(CRED_TYPE_DOMAIN_PASSWORD, target) {
         out.failed += 1;
-        out.note(format!("Credenziale non ammessa, lasciata: {}", target.replace(SEP, " ")));
+        out.note(format!("Credential not allowed, left alone: {}", target.replace(SEP, " ")));
         return;
     }
     match creds.read(target) {
         Ok(None) => {
-            out.note(format!("Già assente: {target}"));
+            out.note(format!("Already gone: {target}"));
             return;
         }
         Err(e) => {
             out.failed += 1;
-            out.note(format!("{target}: non si rilegge ({e}), lasciata"));
+            out.note(format!("{target}: does not read back ({e}), left alone"));
             return;
         }
         Ok(Some(c)) => {
@@ -422,7 +422,7 @@ fn clean_cred(creds: &dyn Credentials, target: &str, user: &str, out: &mut Nativ
                 && c.target.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(target))
                 && c.user.as_deref() == Some(user);
             if !same {
-                out.note(format!("{target}: cambiata dopo l'analisi, lasciata (rifai l'analisi)"));
+                out.note(format!("{target}: changed after the analysis, left alone (analyze again)"));
                 return;
             }
         }
@@ -430,9 +430,9 @@ fn clean_cred(creds: &dyn Credentials, target: &str, user: &str, out: &mut Nativ
     match creds.delete(target) {
         Ok(true) => {
             out.removed += 1;
-            out.done.push(format!("Eliminata: {target}"));
+            out.done.push(format!("Deleted: {target}"));
         }
-        Ok(false) => out.note(format!("Già assente: {target}")),
+        Ok(false) => out.note(format!("Already gone: {target}")),
         Err(e) => {
             out.failed += 1;
             out.note(format!("{target}: {e}"));
@@ -591,7 +591,7 @@ mod win {
             }
             let _buf = CredBuf(p as *const c_void);
             if p.is_null() {
-                return Err("CredReadW senza risultato".into());
+                return Err("CredReadW returned no result".into());
             }
             Ok(Some(info(p)))
         }
@@ -649,7 +649,7 @@ mod win {
         match rc {
             ERROR_FILE_NOT_FOUND => Ok(false),
             ERROR_SUCCESS => Ok(ty == REG_LINK),
-            rc => Err(format!("collegamento illeggibile (errore {rc})")),
+            rc => Err(format!("unreadable link (error {rc})")),
         }
     }
 
@@ -663,10 +663,10 @@ mod win {
             let key = match open_one(parent, &name, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS) {
                 Ok(k) => k,
                 Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
-                Err(rc) => return Err(format!("{comp}: non si apre (errore {rc})")),
+                Err(rc) => return Err(format!("{comp}: cannot be opened (error {rc})")),
             };
             if is_link(&key)? {
-                return Err(format!("{comp}: collegamento del registro, non si segue"));
+                return Err(format!("{comp}: registry link, not followed"));
             }
             cur = Some(key);
         }
@@ -686,7 +686,7 @@ mod win {
             match rc {
                 ERROR_SUCCESS => out.push(buf[..len as usize].to_vec()),
                 ERROR_NO_MORE_ITEMS => break,
-                rc => return Err(format!("elenco degli account non leggibile (errore {rc})")),
+                rc => return Err(format!("account list not readable (error {rc})")),
             }
         }
         Ok(out)

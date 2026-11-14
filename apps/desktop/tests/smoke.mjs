@@ -7,6 +7,7 @@ import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { findItalian } from '../../../scripts/italian-check.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = `${here}out/`;
@@ -962,6 +963,21 @@ async function motionFlows(page, size) {
   return failures;
 }
 
+/** The window speaks English: before every screenshot, the visible text of the page is scanned for Italian. */
+export function watchLanguage(page, label, failures) {
+  const shoot = page.screenshot.bind(page);
+  const seen = new Set();
+  page.screenshot = async (options) => {
+    const lines = await page.evaluate(() => document.body.innerText.split('\n').map((line) => line.trim()).filter(Boolean));
+    for (const line of lines) {
+      if (findItalian(JSON.stringify(line), 'json').length === 0 || seen.has(line)) continue;
+      seen.add(line);
+      failures.push(`${label}: Italian text on screen: ${JSON.stringify(line)} (${options && options.path ? options.path.replace(/^.*[\\/]/, '') : 'screenshot'})`);
+    }
+    return shoot(options);
+  };
+}
+
 const server = await createServer({ configFile: `${here}../vite.config.ts`, server: { port: 1432, strictPort: false }, logLevel: 'error' });
 await server.listen();
 const url = server.resolvedUrls.local[0];
@@ -974,6 +990,7 @@ try {
   // A failing first command leaves an error in the window, not a blank page.
   {
     const page = await browser.newPage({ viewport: { width: 1000, height: 640 } });
+    watchLanguage(page, 'failure page', failures);
     page.on('pageerror', (error) => failures.push(`failure page: page error ${error}`));
     await page.addInitScript(() => {
       window.__TAURI_INTERNALS__ = { invoke: () => Promise.reject({ kind: 'failed', message: 'the core did not answer' }), transformCallback: () => 0 };
@@ -988,6 +1005,7 @@ try {
   for (const [width, height] of VIEWPORTS) {
     const page = await browser.newPage({ viewport: { width, height } });
     const size = `${width}x${height}`;
+    watchLanguage(page, size, failures);
     page.on('pageerror', (error) => failures.push(`${size}: page error ${error}`));
     page.on('console', (message) => { if (message.type() === 'error') failures.push(`${size}: console error ${message.text()}`); });
     await page.goto(url);
@@ -1026,9 +1044,9 @@ try {
     // Cleanup: a category click goes through the model and moves aria-current; a row click moves the selection.
     await page.locator('#sections [data-section="cleanup"]').click();
     await page.evaluate(() => window.__xioxMock.go('cleanup', 'analyzed'));
-    await page.locator('#bar2 [data-key="nav:rules:Sviluppo e AI"]').click();
+    await page.locator('#bar2 [data-key="nav:rules:Development & AI"]').click();
     try {
-      await page.locator('#bar2 [data-key="nav:rules:Sviluppo e AI"][aria-current="true"]').waitFor({ timeout: 2000 });
+      await page.locator('#bar2 [data-key="nav:rules:Development & AI"][aria-current="true"]').waitFor({ timeout: 2000 });
       expect(await page.locator('#bar2 .it[aria-current]').count() === 1, `${size}: more than one category is marked current`);
     } catch { failures.push(`${size}: the clicked category did not become current`); }
     await page.locator('#rows [data-row="cat:3"] .nm').click();

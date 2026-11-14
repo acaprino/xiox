@@ -1,8 +1,7 @@
 //! The Developers section as a `SectionView`: what the page draws, built from the state.
 //!
 //! The strings that come from the moved helpers (`clean_button`, `confirm_text`, `locked_why`,
-//! `fmt_size`, the engine's reasons...) are Italian until Task 18 translates them at the source;
-//! the sentences written here are English.
+//! `fmt_size`, the engine's reasons...) are English at the source, like the sentences written here.
 
 use super::*;
 use crate::view::*;

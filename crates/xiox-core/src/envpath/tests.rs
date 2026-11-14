@@ -428,10 +428,10 @@ fn analysis_reads_both_keys_and_reports_entries_without_writing() {
     assert_eq!(found.count, 2);
     assert_eq!(found.files, 0);
     assert_eq!(found.items.len(), 2);
-    assert!(found.detail[0].contains("2 cartelle"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("2 folders"), "{:?}", found.detail);
     let all = found.detail.join("\n");
-    assert!(all.contains(r"Sistema: D:\gone") && all.contains("non esiste più"), "{all}");
-    assert!(all.contains(r"Utente: C:\Users\me\bin") && all.contains("doppione"), "{all}");
+    assert!(all.contains(r"System: D:\gone") && all.contains("no longer exists"), "{all}");
+    assert!(all.contains(r"User: C:\Users\me\bin") && all.contains("duplicate"), "{all}");
     assert!(fake.log().is_empty(), "l'analisi non scrive: {:?}", fake.log());
 }
 
@@ -441,7 +441,7 @@ fn analysis_notes_unreadable_keys_and_goes_on() {
     *fake.hklm.borrow_mut() = Err("accesso negato".to_string());
     let found = analyze_path(&fake, &env());
     assert_eq!(found.count, 1);
-    assert!(found.detail.iter().any(|d| d.contains("Sistema") && d.contains("accesso negato")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("System") && d.contains("accesso negato")), "{:?}", found.detail);
 }
 
 #[test]
@@ -493,14 +493,14 @@ fn double_semicolons_go_only_with_a_real_change() {
 #[test]
 fn backup_failure_means_no_write_at_all() {
     let mut fake = Fake::new(Some(sz(r"C:\Windows;D:\gone")), Some(sz(r"D:\old"))).with_missing(&[r"D:\gone", r"D:\old"]);
-    fake.backup_err = Some("reg.exe terminato con codice 1".to_string());
+    fake.backup_err = Some("reg.exe ended with code 1".to_string());
     let found = analyze_path(&fake, &env());
     let out = clean_path(&fake, &env(), &found, &no_cancel());
     assert_eq!(out.removed, 0);
     assert_eq!(out.failed, 2);
     assert!(fake.writes().is_empty());
     assert!(!fake.log().contains(&"broadcast".to_string()));
-    assert!(out.notes.iter().any(|n| n.contains("Backup") && n.contains("codice 1")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("backup") && n.contains("code 1")), "{:?}", out.notes);
     assert_eq!(fake.value(RegRoot::Hklm), Some(sz(r"C:\Windows;D:\gone")));
 }
 
@@ -513,7 +513,7 @@ fn a_path_changed_since_the_analysis_stops_the_whole_item() {
     let out = clean_path(&fake, &env(), &found, &no_cancel());
     assert_eq!(out.removed, 0);
     assert_eq!(out.failed, 2);
-    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato dopo l'analisi")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("PATH changed after the analysis")), "{:?}", out.notes);
     assert!(fake.log().is_empty(), "niente backup né scrittura: {:?}", fake.log());
     assert_eq!(fake.value(RegRoot::Hkcu), Some(ex(r"D:\old;C:\a;C:\new")));
     assert_eq!(fake.value(RegRoot::Hklm), Some(sz(r"C:\Windows;D:\gone")));
@@ -548,7 +548,7 @@ fn clean_without_a_preview_writes_nothing() {
     crate::native::run_natives(&[item], true, &ctx, &|_| None, &Vec::new, &|_, _| {}, &mut |_, f, c| got.push((f, c)));
     assert_eq!(got.len(), 1);
     let c = got[0].1.as_ref().unwrap();
-    assert_eq!(c.notes, vec!["Esegui prima Analisi per vedere le voci da togliere".to_string()]);
+    assert_eq!(c.notes, vec!["Run Analyze first to see the items to remove".to_string()]);
     assert_eq!(c.removed, 0);
 }
 
@@ -558,7 +558,7 @@ fn another_account_skips_the_user_path_but_not_the_system_one() {
     fake.account = Account::Other(r"PC\admin".into());
     let found = analyze_path(&fake, &env());
     assert_eq!(found.count, 1);
-    assert!(found.detail.iter().any(|d| d.contains("PATH utente di un altro account: non toccato")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("user PATH of another account: not touched")), "{:?}", found.detail);
     let out = clean_path(&fake, &env(), &found, &no_cancel());
     assert_eq!(out.removed, 1);
     assert_eq!(*fake.backed_up.borrow(), vec![RegRoot::Hklm]);
@@ -573,7 +573,7 @@ fn another_account_skips_the_user_path_but_not_the_system_one() {
         let out = clean_path(&fake, &env(), &found, &no_cancel());
         assert_eq!((out.removed, out.failed), (0, 1));
         assert!(fake.writes().is_empty());
-        assert!(out.notes.iter().any(|n| n.contains("PATH utente")), "{:?}", out.notes);
+        assert!(out.notes.iter().any(|n| n.contains("user PATH")), "{:?}", out.notes);
     }
 }
 
@@ -586,10 +586,10 @@ fn without_admin_the_system_path_is_shown_but_never_proposed() {
     assert_eq!(found.count, 1, "{:?}", found.detail);
     assert_eq!(found.items.len(), 1);
     assert!(found.items[0].starts_with("HKCU"), "{:?}", found.items);
-    assert!(found.detail[0].contains("1 cartella"), "{:?}", found.detail);
-    let line = found.detail.iter().find(|d| d.starts_with("Sistema:")).expect("riga di sistema");
+    assert!(found.detail[0].contains("1 folder"), "{:?}", found.detail);
+    let line = found.detail.iter().find(|d| d.starts_with("System:")).expect("riga di sistema");
     assert!(line.contains(r"D:\gone") && line.contains(ADMIN_ONLY), "{line}");
-    assert_eq!(ADMIN_ONLY, "solo con diritti di amministratore: non verrà modificato");
+    assert_eq!(ADMIN_ONLY, "only with administrator rights: it will not be changed");
     // La pulizia scrive solo HKCU, con il backup solo di HKCU.
     let out = clean_path(&fake, &env(), &found, &no_cancel());
     assert_eq!((out.removed, out.failed), (1, 0), "{:?}", out.notes);
@@ -602,7 +602,7 @@ fn without_admin_the_system_path_is_shown_but_never_proposed() {
     fake.admin = false;
     let found = analyze_path(&fake, &env());
     assert_eq!((found.count, found.items.len()), (0, 0));
-    assert!(found.detail[0].contains("senza diritti di amministratore"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("without administrator rights"), "{:?}", found.detail);
     assert!(found.detail.iter().any(|d| d.contains(ADMIN_ONLY)), "{:?}", found.detail);
 
     // Elementi di HKLM (da un'analisi elevata) con un processo non elevato: rifiutati.
@@ -651,7 +651,7 @@ fn a_change_during_the_backup_is_caught_by_the_reread_before_writing() {
     assert_eq!(out.removed, 0);
     assert!(fake.writes().is_empty());
     assert!(!fake.log().contains(&"broadcast".to_string()));
-    assert!(out.notes.iter().any(|n| n.contains("PATH cambiato dopo l'analisi")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("PATH changed after the analysis")), "{:?}", out.notes);
 }
 
 #[test]
@@ -662,7 +662,7 @@ fn a_folder_that_came_back_is_kept_and_nothing_else_is_written() {
     let out = clean_path(&fake, &env(), &found, &no_cancel());
     assert_eq!(out.removed, 0);
     assert!(fake.log().is_empty(), "niente backup né scrittura: {:?}", fake.log());
-    assert!(out.notes.iter().any(|n| n.contains(r"D:\old") && n.contains("lasciata")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains(r"D:\old") && n.contains("left alone")), "{:?}", out.notes);
 }
 
 #[test]
@@ -722,12 +722,12 @@ fn item_is_off_by_default_with_the_agreed_warning() {
     assert_eq!(items.len(), 1);
     let i = &items[0];
     assert_eq!(i.id, "env_path");
-    assert_eq!(i.label, "Percorso ambiente");
+    assert_eq!(i.label, "Environment PATH");
     assert_eq!(i.group, "Windows");
     assert!(!i.default_on && i.needs_admin);
     assert!(i.needs_preview);
     let w = i.warning.unwrap();
-    for part in ["installato dopo", "lettera", "strumenti e build", "solo le voci mostrate dall'ultima Analisi", r"Documenti\Xiox"] {
+    for part in ["installed afterwards", "letter", "tools and builds", "only the entries shown by the last Analysis", r"Documents\Xiox"] {
         assert!(w.contains(part), "{part}: {w}");
     }
     let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap());

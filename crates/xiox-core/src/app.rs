@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn showing_services_again_clears_the_last_result() {
         let mut c = core_with(ServicesWorkers { load: load_empty, apply: apply_never, saved: saved_none, memory });
-        c.services.msg = "2 servizi disattivati.".into();
+        c.services.msg = "2 services disabled.".into();
         assert_eq!(c.view(SectionId::Services).notices.len(), 1);
         assert!(c.show(SectionId::Services).notices.is_empty());
     }

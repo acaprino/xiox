@@ -127,11 +127,11 @@
    "section": "cleanup",
    "intent": {
     "kind": "select",
-    "category": "rules:Sviluppo e AI"
+    "category": "rules:Development & AI"
    },
    "expect": {
     "state": "analyzed",
-    "active": "rules:Sviluppo e AI",
+    "active": "rules:Development & AI",
     "rev": 10
    }
   },
@@ -183,11 +183,11 @@
    "section": "cleanup",
    "intent": {
     "kind": "select",
-    "category": "rules:Sviluppo e AI"
+    "category": "rules:Development & AI"
    },
    "expect": {
     "state": "analyzed",
-    "active": "rules:Sviluppo e AI",
+    "active": "rules:Development & AI",
     "rev": 14
    }
   },
@@ -230,7 +230,7 @@
    },
    "expect": {
     "state": "confirm",
-    "active": "rules:Sviluppo e AI",
+    "active": "rules:Development & AI",
     "rev": 17
    }
   },
@@ -258,7 +258,7 @@
     "checks": {
      "cat:4": "on"
     },
-    "active": "rules:Sviluppo e AI",
+    "active": "rules:Development & AI",
     "dialog": false,
     "rev": 19
    }
@@ -1579,7 +1579,7 @@
    },
    "expect": {
     "state": "interrupted",
-    "active": "rules:Sviluppo e AI",
+    "active": "rules:Development & AI",
     "rev": 45
    }
   },

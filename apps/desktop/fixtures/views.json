@@ -23,21 +23,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": null,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": null,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": null,
@@ -58,7 +58,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": null,
@@ -346,21 +346,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": null,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": null,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": null,
@@ -381,7 +381,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": null,
@@ -672,21 +672,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": 12126571725,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": 0,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": 0,
@@ -707,7 +707,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": 0,
@@ -1031,21 +1031,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": 7623566951,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": 0,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": 0,
@@ -1066,7 +1066,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": 0,
@@ -1376,21 +1376,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": 12126571725,
             "active": false
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": 0,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": 0,
@@ -1411,7 +1411,7 @@
             "active": true
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": 0,
@@ -1439,7 +1439,7 @@
             "id": "keepList",
             "label": "Edit cookie keep list",
             "enabled": true,
-            "hint": "Opens Documents\\Xiox\\cookie_keep_list.txt in Notepad (it is created if missing). One domain per line: its cookies stay."
+            "hint": "Opens Documents\\Xiox\\cookie_da_conservare.txt in Notepad (creates it if missing). One domain per line: their cookies stay."
           }
         ],
         "title": "Browser",
@@ -1729,21 +1729,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": 12126571725,
             "active": false
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": 0,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": 0,
@@ -1764,7 +1764,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": 0,
@@ -2236,21 +2236,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": 12126571725,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": 0,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": 0,
@@ -2271,7 +2271,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": 0,
@@ -2631,21 +2631,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": null,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": null,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": null,
@@ -2666,7 +2666,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": null,
@@ -2957,21 +2957,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": null,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": null,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": null,
@@ -2992,7 +2992,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": null,
@@ -3404,21 +3404,21 @@
         },
         "nav": [
           {
-            "id": "builtin:Sistema",
+            "id": "builtin:System",
             "name": "System",
             "note": "6 items · 4 selected",
             "bytes": null,
             "active": true
           },
           {
-            "id": "builtin:Esplora file",
+            "id": "builtin:Explorer",
             "name": "Explorer",
             "note": "1 item · 0 selected",
             "bytes": null,
             "active": false
           },
           {
-            "id": "builtin:Avanzate",
+            "id": "builtin:Advanced",
             "name": "Advanced",
             "note": "2 items · 0 selected",
             "bytes": null,
@@ -3439,7 +3439,7 @@
             "active": false
           },
           {
-            "id": "rules:Sviluppo e AI",
+            "id": "rules:Development & AI",
             "name": "Development & AI",
             "note": "12 items · 0 selected",
             "bytes": null,

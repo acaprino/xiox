@@ -147,8 +147,8 @@ test('toggle flips one row only', () => {
 test('select moves the active category, or the Developers state', () => {
   const model = fresh();
   model.go('cleanup', 'analyzed');
-  const after = model.intent('cleanup', { kind: 'select', category: 'rules:Sviluppo e AI' });
-  assert.deepEqual(after.nav.filter((n) => n.active).map((n) => n.id), ['rules:Sviluppo e AI']);
+  const after = model.intent('cleanup', { kind: 'select', category: 'rules:Development & AI' });
+  assert.deepEqual(after.nav.filter((n) => n.active).map((n) => n.id), ['rules:Development & AI']);
   assert.equal(model.stateOf('cleanup'), 'analyzed');
   model.go('developers', 'projects');
   assert.equal(model.intent('developers', { kind: 'select', category: 'worktrees' }).title, fixture.views.developers.worktrees?.title);
@@ -333,10 +333,10 @@ test('selecting Applications shows its sections and the search box', () => {
   const open = apps.rows.find((r) => r.kind === 'item' && r.enabled && r.check === 'off')!;
   assert.equal(checks(model.intent('cleanup', { kind: 'toggle', row: open.id }))[open.id], 'on');
   // Another category goes back to the plain analysis; the Browser category has a state too (keep list button).
-  const back = model.intent('cleanup', { kind: 'select', category: 'builtin:Sistema' });
+  const back = model.intent('cleanup', { kind: 'select', category: 'builtin:System' });
   assert.equal(model.stateOf('cleanup'), 'analyzed');
   assert.equal(back.search, null);
-  assert.deepEqual(back.nav.filter((n) => n.active).map((n) => n.id), ['builtin:Sistema']);
+  assert.deepEqual(back.nav.filter((n) => n.active).map((n) => n.id), ['builtin:System']);
   const browser = model.intent('cleanup', { kind: 'select', category: 'rules:Browser' });
   assert.equal(model.stateOf('cleanup'), 'browser');
   assert.ok(browser.options.some((o) => o.kind === 'button' && o.id === 'keepList'));

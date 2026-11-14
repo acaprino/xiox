@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 pub use crate::notify::SectionId;
 
 /// What a section tells when its worker ends without an answer (it died): the job is over and
-/// the page is told, never left with a spinner. (Italian until Task 18, like the worker strings.)
-pub const JOB_DIED: &str = "Il lavoro si è interrotto per un errore interno.";
+/// the page is told, never left with a spinner.
+pub const JOB_DIED: &str = "The job was interrupted by an internal error.";
 
 /// `T | null` in the contract: the key has to be there. (serde takes a missing `Option` for
 /// `null` unless a field says how to read it.)

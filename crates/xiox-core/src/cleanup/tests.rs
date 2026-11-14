@@ -28,7 +28,7 @@ fn clean_report_merges_categories_natives_and_rules() {
             removed: 12,
             files: 10,
             failed: 2,
-            notes: vec!["2 file in uso".into()],
+            notes: vec!["2 files in use".into()],
             ..Default::default()
         },
     )];
@@ -46,9 +46,9 @@ fn clean_report_merges_categories_natives_and_rules() {
     assert_eq!(r.failed.len(), 2);
     assert_eq!(r.failed[0], (locked, "in uso".to_string()));
     assert_eq!(r.failed[1].0, PathBuf::from("Chrome – Cache"));
-    assert!(r.failed[1].1.contains("2 elementi lasciati: 2 file in uso"));
-    assert_eq!(r.skipped, vec![(PathBuf::from(cleaner::CATEGORIES[3].name), "Annullato".to_string())]);
-    assert!(r.to_text().contains("Spazio liberato"));
+    assert!(r.failed[1].1.contains("2 items left: 2 files in use"));
+    assert_eq!(r.skipped, vec![(PathBuf::from(cleaner::CATEGORIES[3].name), "Cancelled".to_string())]);
+    assert!(r.to_text().contains("Space freed"));
 }
 
 /// Voci native e dinamiche saltate o interrotte senza fallimenti, e voci scelte che non
@@ -58,12 +58,12 @@ fn clean_report_lists_skipped_interrupted_and_never_started_items() {
     let mut cleaned = vec![None; cleaner::CATEGORIES.len()];
     cleaned[1] = Some(cleaner::Cleaned { freed: 10, removed: 1, ..Default::default() });
     let mut chrome = native::NativeCleaned::default();
-    chrome.note("Saltata: Chrome in esecuzione".into());
+    chrome.note("Skipped: Chrome is running".into());
     let natives = vec![("native:chrome".to_string(), "Chrome – Cronologia".to_string(), chrome)];
     let rules = vec![(
         "c/o".to_string(),
         "Firefox – Cache".to_string(),
-        rules::RuleCleaned { freed: 2048, removed: 3, files: 3, notes: vec!["Pulizia interrotta".into()], ..Default::default() },
+        rules::RuleCleaned { freed: 2048, removed: 3, files: 3, notes: vec!["Cleanup interrupted".into()], ..Default::default() },
     )];
     let chosen = Chosen {
         cats: vec![1, 2],
@@ -81,17 +81,17 @@ fn clean_report_lists_skipped_interrupted_and_never_started_items() {
     assert_eq!(
         skipped,
         vec![
-            (cleaner::CATEGORIES[2].name.to_string(), "Annullato".to_string()),
-            ("Chrome – Cronologia".to_string(), "Saltata: Chrome in esecuzione".to_string()),
-            ("Firefox – Cache".to_string(), "Pulizia interrotta: liberati 2 KB".to_string()),
-            ("Cache DNS".to_string(), "Annullato".to_string()),
-            ("Edge – Cache".to_string(), "Annullato".to_string()),
+            (cleaner::CATEGORIES[2].name.to_string(), "Cancelled".to_string()),
+            ("Chrome – Cronologia".to_string(), "Skipped: Chrome is running".to_string()),
+            ("Firefox – Cache".to_string(), "Cleanup interrupted: 2 KB freed".to_string()),
+            ("Cache DNS".to_string(), "Cancelled".to_string()),
+            ("Edge – Cache".to_string(), "Cancelled".to_string()),
         ]
     );
     let text = r.to_text();
-    assert!(text.contains("Saltati (5):"), "{text}");
-    assert!(text.contains("Chrome – Cronologia: Saltata: Chrome in esecuzione"), "{text}");
-    assert!(text.contains("Edge – Cache: Annullato"), "{text}");
+    assert!(text.contains("Skipped (5):"), "{text}");
+    assert!(text.contains("Chrome – Cronologia: Skipped: Chrome is running"), "{text}");
+    assert!(text.contains("Edge – Cache: Cancelled"), "{text}");
 }
 
 /// Thread della pulizia morto (panic) prima di `Done`: il job si chiude, il resoconto
@@ -117,13 +117,13 @@ fn dead_cleaning_thread_still_builds_the_report() {
     let r = app.clean_report.as_ref().expect("resoconto");
     assert!(r.cancelled);
     assert_eq!((r.freed_bytes, r.files), (100, 2));
-    assert_eq!(r.failed, vec![(PathBuf::from("Pulizia"), CLEAN_DIED.to_string())]);
-    let never = "Non eseguito: pulizia interrotta da un errore interno".to_string();
+    assert_eq!(r.failed, vec![(PathBuf::from("Cleanup"), CLEAN_DIED.to_string())]);
+    let never = "Not run: cleanup stopped by an internal error".to_string();
     assert_eq!(
         r.skipped,
         vec![(PathBuf::from(cleaner::CATEGORIES[3].name), never.clone()), (PathBuf::from("Cache DNS"), never)]
     );
-    assert!(r.to_text().contains("Pulizia interrotta da un errore interno"));
+    assert!(r.to_text().contains("Cleanup stopped by an internal error"));
 }
 
 /// Analisi: thread morto o «Annulla» chiudono il job e il titolo dice che non è completa.
@@ -138,7 +138,7 @@ fn dead_or_cancelled_analysis_is_marked_interrupted() {
     assert!(app.clean_job.is_none());
     assert!(app.clean_report.is_none());
     assert_eq!(app.clean_end, Some(CleanEnd::Died));
-    assert_eq!(analysis_title(false, app.clean_end).0, "Analisi interrotta");
+    assert_eq!(analysis_title(false, app.clean_end).0, "Analysis interrupted");
 
     let (tx, rx) = channel();
     app.clean_job = Some(rx);
@@ -150,8 +150,8 @@ fn dead_or_cancelled_analysis_is_marked_interrupted() {
     assert!(app.clean_job.is_none());
     assert_eq!(app.clean_end, Some(CleanEnd::Cancelled));
     let (title, note) = analysis_title(false, app.clean_end);
-    assert_eq!(title, "Analisi annullata");
-    assert!(note.unwrap().contains("le voci mancanti non sono state analizzate"));
-    assert_eq!(analysis_title(false, Some(CleanEnd::Done)), ("Analisi completata", None));
-    assert_eq!(analysis_title(true, None).0, "Analisi in corso…");
+    assert_eq!(title, "Analysis cancelled");
+    assert!(note.unwrap().contains("the missing items were not analyzed"));
+    assert_eq!(analysis_title(false, Some(CleanEnd::Done)), ("Analysis done", None));
+    assert_eq!(analysis_title(true, None).0, "Analysis in progress…");
 }

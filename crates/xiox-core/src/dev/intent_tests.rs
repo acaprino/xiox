@@ -111,7 +111,7 @@ fn levels_project() -> ProjectReport {
         "Build JavaScript (dist)",
         xiox_model::Class::Build,
         Level::Caution,
-        "Potrebbe contenere sorgenti: git non la ignora",
+        "May contain sources: git does not ignore it",
         20,
     ));
     r.artifacts[1].kind = ArtifactKind::NodeModules;
@@ -198,7 +198,7 @@ fn finish(st: &mut DevState) {
 fn toggles_follow_the_tables() {
     let mut scan = three_sections();
     // A blocked session next to the free ones: Claude's «1» (the codex «1» is free).
-    scan.archived.push(ArchivedSession { agent: Agent::Claude, ..session("1", Some("sessione in uso"), true, 9) });
+    scan.archived.push(ArchivedSession { agent: Agent::Claude, ..session("1", Some("session in use"), true, 9) });
     let mut st = with_scan(scan);
     assert_eq!(st.sel_artifacts, ids(&["a"]), "the engine preselects the free project's folder");
 
@@ -225,7 +225,7 @@ fn toggles_follow_the_tables() {
     assert_eq!(st.sel_worktrees, vec![false]);
 
     // Sessions: the blocked one is refused with its own reason, the free ones flip.
-    assert_eq!(err(st.toggle("s:claude:1")), "sessione in uso");
+    assert_eq!(err(st.toggle("s:claude:1")), "session in use");
     assert_eq!(st.sel_sessions, vec![false, false, false]);
     st.toggle("s:codex:2").unwrap();
     assert_eq!(st.sel_sessions, vec![false, true, false]);
@@ -248,7 +248,7 @@ fn a_worktree_that_cannot_be_removed_cannot_be_ticked() {
     let mut in_use = report("u", ProjectStatus::InUse, false, 5);
     in_use.is_agent_worktree = true;
     let mut st = with_scan(DevScan { worktrees: vec![dirty, in_use], scanned_at_ms: xiox_app::now_ms(), ..Default::default() });
-    assert_eq!(err(st.toggle("w:d")), "Modifiche non salvate: il worktree resta");
+    assert_eq!(err(st.toggle("w:d")), "Unsaved changes: the worktree stays");
     assert_eq!(err(st.toggle("w:u")), locked_why(&st.scan.as_ref().unwrap().worktrees[1]));
     assert_eq!(st.sel_worktrees, vec![false, false]);
     // «All» skips them too.
@@ -451,12 +451,12 @@ fn a_plan_that_did_not_build_is_not_run() {
     // The dialog carries an error: not ready, and the reason is not the warnings'.
     let mut st = levels_state();
     st.open_confirm_with(xiox_app::now_ms(), |_| vec![]);
-    st.confirm.as_mut().unwrap().error = Some("Piano rifiutato: prova".into());
+    st.confirm.as_mut().unwrap().error = Some("Plan refused: test".into());
     assert_eq!(err(st.take_ready_confirm(false, xiox_app::now_ms())), NOTHING_TO_RUN);
     assert!(st.confirm.is_some());
     let v = st.view(false);
     assert!(!button(v.dialog.as_ref().unwrap(), "clean").enabled);
-    assert_eq!(v.dialog.as_ref().unwrap().error.as_deref(), Some("Piano rifiutato: prova"));
+    assert_eq!(v.dialog.as_ref().unwrap().error.as_deref(), Some("Plan refused: test"));
 }
 
 #[test]
@@ -537,7 +537,7 @@ fn cancel_stops_a_running_cleanup_and_never_leaves_the_old_analysis_to_clean() {
     assert!(!st.can_clean(), "no Clean button over an analysis a partial cleanup has changed");
     assert_eq!(err(st.request_clean()), NOTHING_SELECTED);
     let v = st.view(false);
-    assert_eq!(v.status.badge, "Pulizia annullata");
+    assert_eq!(v.status.badge, "Cleanup cancelled");
     let report = v.report.as_ref().expect("the report of the partial cleanup");
     assert!(report.cancelled);
     assert!(report.notes.iter().any(|n| n.text == "Cancelled: the items not yet started stayed where they were."));
@@ -569,7 +569,7 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     assert_eq!(v.section, SectionId::Developers);
     assert_eq!(v.rev, 0, "Core numbers the revisions");
     assert_eq!(v.status.badge, "Analysis done");
-    assert!(v.status.text.starts_with(&format!("{} to free · 1 of 2 selected · Analisi in ", sys::fmt_size(100))), "{}", v.status.text);
+    assert!(v.status.text.starts_with(&format!("{} to free · 1 of 2 selected · Analysis in ", sys::fmt_size(100))), "{}", v.status.text);
     assert!(v.status.text.ends_with("folders measured one by one"), "{}", v.status.text);
     assert!(v.job.is_none());
 
@@ -579,7 +579,7 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     assert_eq!(
         nav,
         vec![
-            ("projects", true, Some("1 cartella selezionata"), Some(150)),
+            ("projects", true, Some("1 folder selected"), Some(150)),
             ("worktrees", false, None, Some(30)),
             ("sessions", false, None, Some(4)),
         ]
@@ -621,7 +621,7 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     assert!(v.actions.iter().all(|a| a.id != "cancel"), "nothing to cancel");
     assert!(v.bulk);
     assert!(v.empty.is_none() && v.dialog.is_none() && v.report.is_none());
-    let footer = format!("Selected in {}: {} · {}", Section::Projects.name(), sys::fmt_size(100), "1 cartella");
+    let footer = format!("Selected in {}: {} · {}", Section::Projects.name(), sys::fmt_size(100), "1 folder");
     assert_eq!(v.footer.as_deref(), Some(footer.as_str()));
     assert!(v.options.iter().any(|o| matches!(o, OptionView::Number { id, value, min: 1, max: 365, enabled: true, .. } if id == "inactiveDays" && *value == st.settings.inactive_days)));
 
@@ -639,7 +639,7 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     st.select_category(DevCategory::Sessions).unwrap();
     let v = st.view(false);
     let s1 = row(&v, "s:codex:1");
-    assert_eq!((s1.bytes, s1.size_text.as_deref()), (None, Some("solo riga nel database")), "no file: the text, not a size");
+    assert_eq!((s1.bytes, s1.size_text.as_deref()), (None, Some("database row only")), "no file: the text, not a size");
     let s2 = row(&v, "s:codex:2");
     assert_eq!((s2.bytes, s2.size_text.as_deref()), (Some(4), None));
     assert_eq!(s2.cells.len(), 3, "harness, project folder, date");
@@ -664,9 +664,9 @@ fn dev_view_without_a_scan_and_while_scanning() {
     assert_eq!(v.options.len(), 5, "days, deletion, the Recycle Bin note, scan roots, folders: no error text");
 
     // A failure to start leaves the reason on screen.
-    st.error = Some("Il lavoro si è interrotto per un errore interno.".into());
+    st.error = Some("The job was interrupted by an internal error.".into());
     let v = st.view(false);
-    assert!(v.notices.iter().any(|n| n.tone == Tone::Error && n.text.starts_with("Il lavoro si è interrotto")));
+    assert!(v.notices.iter().any(|n| n.tone == Tone::Error && n.text.starts_with("The job was interrupted")));
 
     // Scanning: a job without a tick shows the worker's own text and progress; options are locked.
     st.error = None;
@@ -675,7 +675,7 @@ fn dev_view_without_a_scan_and_while_scanning() {
     let v = st.view(false);
     assert_eq!(v.status.badge, "Analyzing");
     let job = v.job.as_ref().unwrap();
-    assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Avvio dell'analisi…", 0.0, None));
+    assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Starting the analysis…", 0.0, None));
     let e = v.empty.as_ref().unwrap();
     assert_eq!(e.title, "Analyzing");
     assert_eq!(e.text, "The analysis can take a minute: meanwhile you can use the other sections.");
@@ -737,7 +737,7 @@ fn dev_view_dialog_shows_cautions_ack_and_shortfall() {
     assert_eq!(d.buttons.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["permanent", "cancel"]);
     assert_eq!(button(d, "permanent").label, "Permanently");
     assert!(button(d, "permanent").enabled && button(d, "permanent").primary);
-    assert!(d.text.last().unwrap().ends_with("Eliminare definitivamente questa volta?"));
+    assert!(d.text.last().unwrap().ends_with("Delete permanently this time?"));
     assert_eq!(d.text[0], confirm_text(Section::Projects, RemoveMode::Permanent), "the text describes what the button does");
 }
 
@@ -755,13 +755,13 @@ fn dev_view_report_after_cleaning_and_save_text() {
     out.report.by_category = vec![("Progetti".into(), 10)];
     out.report.skipped = vec![(PathBuf::from(r"D:\p\a\target"), "in uso".into())];
     out.labels.insert(xiox_model::path_key(Path::new(r"D:\p\a\target")), "a · Build Rust (target)".into());
-    out.errors = vec!["Piano rifiutato: prova".into()];
+    out.errors = vec!["Plan refused: test".into()];
     tx.send(DevMsg::Cleaned(out)).unwrap();
     st.poll();
     assert!(!st.busy() && st.scan.is_none());
 
     let v = st.view(false);
-    assert_eq!(v.status.badge, "Pulizia completata");
+    assert_eq!(v.status.badge, "Cleanup done");
     assert_eq!(v.status.text, format!("Space freed: {}", sys::fmt_size(10)));
     assert!(v.rows.is_empty() && !v.bulk && v.empty.is_none() && v.footer.is_none());
     let r = v.report.as_ref().expect("the report");
@@ -771,12 +771,12 @@ fn dev_view_report_after_cleaning_and_save_text() {
     assert_eq!(r.skipped, vec![ReportLine { item: "a · Build Rust (target)".into(), why: "in uso".into(), path: r"D:\p\a\target".into() }]);
     assert!(r.notes.is_empty());
     // A refused request is an error with what to do next.
-    assert!(v.notices.iter().any(|n| n.tone == Tone::Error && n.text == "Piano rifiutato: prova"));
+    assert!(v.notices.iter().any(|n| n.tone == Tone::Error && n.text == "Plan refused: test"));
     assert!(v.notices.iter().any(|n| n.text == "That part was not touched. Press “Analyze” to analyze again before retrying."));
     assert!(!action(&v, "clean").enabled, "nothing to clean from a report");
 
     let text = st.report_text().expect("a non-empty result");
-    assert!(text.starts_with("Resoconto della pulizia"), "{text}");
+    assert!(text.starts_with("Cleanup report"), "{text}");
     st.set_saved("x".into(), true);
     assert_eq!(st.view(false).report.unwrap().saved, Some(SavedView { text: "x".into(), ok: true }));
     st.set_saved("no".into(), false);
@@ -808,7 +808,7 @@ fn dev_view_report_notes_for_an_empty_or_interrupted_cleanup() {
     let v = st.view(false);
     assert!(v.notices.iter().any(|n| n.tone == Tone::Error && n.text.starts_with("An internal error stopped the cleanup")));
     assert!(v.report.unwrap().notes.is_empty());
-    assert_eq!(v.status.badge, "Pulizia interrotta");
+    assert_eq!(v.status.badge, "Cleanup interrupted");
 }
 
 #[test]
@@ -840,13 +840,13 @@ fn dev_view_options_report_the_settings_and_the_save_error() {
     st.settings.roots = vec![PathBuf::from(r"D:\Work")];
     st.settings.scan_roots = true;
     st.root_sel = Some(0);
-    st.settings_err = Some("accesso negato".into());
+    st.settings_err = Some("access denied".into());
     let v = st.view(false);
     assert!(v.options.iter().any(|o| matches!(o, OptionView::Number { value: 45, .. })));
     assert!(v.options.iter().any(|o| matches!(o, OptionView::Choice { id, value, choices, .. } if id == "removeMode" && value == "permanent" && choices.len() == 2)));
     assert!(v.options.iter().any(|o| matches!(o, OptionView::Toggle { id, on: true, .. } if id == "scanRoots")));
     assert!(v.options.iter().any(|o| matches!(o, OptionView::List { id, items, selected: Some(0), .. } if id == "roots" && items == &vec![r"D:\Work".to_string()])));
-    assert!(v.options.iter().any(|o| matches!(o, OptionView::Text { text, tone: Tone::Error, .. } if text == "Settings not saved: accesso negato")));
+    assert!(v.options.iter().any(|o| matches!(o, OptionView::Text { text, tone: Tone::Error, .. } if text == "Settings not saved: access denied")));
     let detail_mode = |st: &DevState| {
         let v = st.view(false);
         row(&v, &format!("a:{}", tid("a"))).detail.iter().find(|(k, _)| k == "mode").map(|(_, m)| m.clone())

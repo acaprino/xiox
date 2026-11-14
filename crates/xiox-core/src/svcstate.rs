@@ -4,7 +4,7 @@
 //!
 //! Moved out of `src/main.rs` (the egui window): `SvcMsg`, `send_svc`, the `svc_*` fields,
 //! `load_services`, `apply_services` and the services half of `poll`. The strings of the moved code
-//! are Italian until Task 18 translates them at the source; the sentences the view adds are English.
+//! are English at the source, like the sentences the view adds.
 //!
 //! The intents refuse what the egui window had disabled: a protected row cannot be ticked, an action
 //! needs a ticked service (or a saved backup, for «Restore originals»), a confirmation needs its
@@ -469,6 +469,10 @@ fn real_saved() -> usize {
     services::read_backup().len()
 }
 
+fn svc_word(n: usize) -> &'static str {
+    if n == 1 { "service" } else { "services" }
+}
+
 /// Il thread dei cambiamenti (il lavoro vero di `ServicesWorkers::REAL`): `start` `None` rimette gli
 /// originali, altrimenti imposta quel tipo di avvio ai servizi scelti. Dice com'è andata e basta:
 /// è lo stato a rileggere l'elenco.
@@ -477,9 +481,9 @@ pub fn send_svc(chosen: Vec<services::Service>, start: Option<u32>, out: Outbox<
         None => {
             let (ok, bad) = services::restore_all();
             if bad > 0 {
-                format!("Ripristinati {ok} servizi, {bad} non riusciti.")
+                format!("Restored {ok} {}, {bad} failed.", svc_word(ok))
             } else {
-                format!("Ripristinati {ok} servizi.")
+                format!("Restored {ok} {}.", svc_word(ok))
             }
         }
         Some(s) => {
@@ -492,11 +496,11 @@ pub fn send_svc(chosen: Vec<services::Service>, start: Option<u32>, out: Outbox<
                     bad += 1;
                 }
             }
-            let what = if s == services::START_DISABLED { "disattivati" } else { "impostati su Manuale" };
+            let what = if s == services::START_DISABLED { "disabled" } else { "set to Manual" };
             if bad > 0 {
-                format!("{ok} servizi {what}, {bad} non riusciti (servono i diritti di amministratore).")
+                format!("{ok} {} {what}, {bad} failed (administrator rights are needed).", svc_word(ok))
             } else {
-                format!("{ok} servizi {what}.")
+                format!("{ok} {} {what}.", svc_word(ok))
             }
         }
     };
@@ -886,7 +890,7 @@ mod tests {
         // The three questions. Fax and Spooler are ticked and RpcSs (protected, ticked by a bad page) is
         // not counted; Spooler is hidden by the Recommended filter and is still changed, so it is listed.
         assert!(!st.visible().contains(&2), "Spooler is hidden by the filter");
-        let two = vec![("Fax".to_string(), "Automatico".to_string()), ("Print Spooler".to_string(), "Automatico".to_string())];
+        let two = vec![("Fax".to_string(), "Automatic".to_string()), ("Print Spooler".to_string(), "Automatic".to_string())];
         for (action_kind, title, text, rows) in [
             (ServiceAction::Restore, "Restore the services?", "Every service Xiox changed goes back to how it was.", Vec::new()),
             (ServiceAction::Manual, "Set 2 services to Manual?", "The services stop now and Windows starts them only when needed.", two.clone()),
@@ -920,9 +924,9 @@ mod tests {
         assert!(st.view().job.is_none());
 
         // The result of a change is a notice.
-        st.msg = "2 servizi disattivati.".into();
+        st.msg = "2 services disabled.".into();
         let v = st.view();
-        assert_eq!((v.notices[0].tone, v.notices[0].text.as_str()), (Tone::Ok, "2 servizi disattivati."));
+        assert_eq!((v.notices[0].tone, v.notices[0].text.as_str()), (Tone::Ok, "2 services disabled."));
     }
 
     fn saved_two() -> usize {
@@ -977,7 +981,7 @@ mod tests {
 
     fn script_apply(_: Vec<services::Service>, start: Option<u32>, out: Outbox<SvcMsg>) {
         SCRIPT_SENT.lock().unwrap().push(start);
-        out.send(SvcMsg::Message("2 servizi impostati su Manuale.".into()));
+        out.send(SvcMsg::Message("2 services set to Manual.".into()));
     }
 
     fn script_saved() -> usize {
@@ -1028,8 +1032,9 @@ mod tests {
     /// counted: exactly TWO (below). When the script changes, re-count.
     ///   * `show` "the notice goes when the section is shown again": `ServicesState` has no `show`;
     ///     `Core::show` calls `clear_message()` and so does the replay (counted).
-    ///   * the notice TEXT ("Selected services set to Manual."): the moved worker writes Italian
-    ///     until Task 18, so the replay compares the notice COUNT and tone, not the text.
+    ///   * the notice TEXT ("Selected services set to Manual."): the moved worker names the count
+    ///     ("2 services set to Manual.") where the mock's notice is generic, so the replay compares
+    ///     the notice COUNT and tone, not the text.
     #[test]
     fn replays_the_services_steps_of_the_shared_script() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");

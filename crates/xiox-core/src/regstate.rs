@@ -2,8 +2,8 @@
 //! seam, the intents the page can send, and the `SectionView` the page draws.
 //!
 //! Moved out of `src/main.rs` (the egui window): `RegMsg`, the `reg_*` fields, `start_reg_scan`,
-//! `start_reg_fix` and the registry half of `poll`. The strings of the moved code are Italian until
-//! Task 18 translates them at the source; the sentences the view adds are English.
+//! `start_reg_fix` and the registry half of `poll`. The strings of the moved code are English at the
+//! source, like the sentences the view adds.
 //!
 //! The intents refuse what the egui window had disabled: registry choices and the scan while a job
 //! runs or while the backup question is open (the question describes the selection), a fix without
@@ -155,17 +155,17 @@ impl RegistryState {
                 RegMsg::Found(v) => self.issues.extend(v),
                 RegMsg::Done => done = true,
                 RegMsg::Fixed { refused: Some(why), .. } => {
-                    self.msg = format!("Backup del registro non riuscito ({why}): nessuna riparazione eseguita.");
+                    self.msg = format!("Registry backup failed ({why}): no repair was done.");
                     self.msg_error = true;
                     done = true;
                 }
                 RegMsg::Fixed { ok, failed, backup, refused: None } => {
-                    self.msg = format!("Riparati {ok} problemi.");
+                    self.msg = format!("Fixed {ok} issues.");
                     if failed > 0 {
-                        self.msg.push_str(&format!(" {failed} non riparati (servono i diritti di amministratore)."));
+                        self.msg.push_str(&format!(" {failed} not fixed (administrator rights are needed)."));
                     }
                     if let Some(b) = backup {
-                        self.msg.push_str(&format!("\nBackup salvato in: {b}"));
+                        self.msg.push_str(&format!("\nBackup saved in: {b}"));
                     }
                     if failed == 0 {
                         self.issues.retain(|i| !i.selected);
@@ -457,7 +457,7 @@ pub fn real_scan(cats: Vec<usize>, out: Outbox<RegMsg>) {
     let total = cats.len().max(1) as f32;
     for (k, &i) in cats.iter().enumerate() {
         let name = registry::CATEGORIES[i].name;
-        out.send(RegMsg::Progress(format!("Controllo: {name}"), k as f32 / total));
+        out.send(RegMsg::Progress(format!("Checking: {name}"), k as f32 / total));
         let found = registry::scan(i, &|_| {});
         out.send(RegMsg::Found(found));
     }
@@ -468,12 +468,12 @@ pub fn real_scan(cats: Vec<usize>, out: Outbox<RegMsg>) {
 /// riuscito: non si ripara nulla.
 pub fn real_fix(chosen: Vec<registry::Issue>, with_backup: bool, out: Outbox<RegMsg>) {
     if with_backup {
-        out.send(RegMsg::Progress("Salvataggio del backup…".into(), 0.0));
+        out.send(RegMsg::Progress("Saving the backup…".into(), 0.0));
     }
     let total = chosen.len().max(1) as f32;
     let res = registry::fix_all(&chosen, with_backup, &registry::backup, &mut registry::apply, &mut |k| {
         if k % 20 == 0 {
-            out.send(RegMsg::Progress("Riparazione in corso…".into(), k as f32 / total));
+            out.send(RegMsg::Progress("Fixing…".into(), k as f32 / total));
         }
     });
     let backup = res.backup.map(|p| p.to_string_lossy().to_string());
@@ -739,7 +739,7 @@ mod tests {
 
     static HOLD2: AtomicU8 = AtomicU8::new(0);
     fn progress_scan(_: Vec<usize>, out: Outbox<RegMsg>) {
-        out.send(RegMsg::Progress("Controllo: x".into(), 0.5));
+        out.send(RegMsg::Progress("Checking: x".into(), 0.5));
         while HOLD2.load(SeqCst) == 0 {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -756,7 +756,7 @@ mod tests {
         });
         let v = st.view();
         let j = v.job.as_ref().unwrap();
-        assert_eq!((j.label.as_str(), j.fraction), ("Controllo: x", 0.5));
+        assert_eq!((j.label.as_str(), j.fraction), ("Checking: x", 0.5));
         assert!(v.options.iter().all(|o| !matches!(o, OptionView::Toggle { enabled: true, .. })));
         assert!(!action(&v, "scan").enabled && !action(&v, "fix").enabled);
         assert_eq!(v.status.badge, "Scanning");
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn a_new_job_does_not_inherit_the_last_progress() {
         let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix: gated_fix });
-        st.text = "Controllo: old".into();
+        st.text = "Checking: old".into();
         st.progress = 0.9;
         st.open_fix().unwrap();
         st.fix(false, notifier()).unwrap();
@@ -786,7 +786,7 @@ mod tests {
         HOLD3.store(1, SeqCst);
         drain(&mut st);
         let mut st = st.with_workers(RegistryWorkers { scan: progress_scan_after_reset, fix: never_fix });
-        st.text = "Riparazione in corso…".into();
+        st.text = "Fixing…".into();
         st.progress = 0.8;
         st.scan(notifier()).unwrap();
         assert_eq!((st.text.as_str(), st.progress), ("", 0.0), "a scan starts from zero too");

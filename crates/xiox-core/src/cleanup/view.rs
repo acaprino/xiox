@@ -1,8 +1,8 @@
 //! The Cleanup section as a `SectionView`: what the page draws, built from the state.
 //!
 //! The strings that come from the moved helpers (`analysis_title`, the engine's reasons, the warnings
-//! of the options, the native items' labels and the group names of `cleaner::CATEGORIES`) are Italian
-//! until Task 18 translates them at the source; the sentences written here are English.
+//! of the options, the native items' labels and the group names of `cleaner::CATEGORIES`) are English
+//! at the source, like the sentences written here.
 
 use super::*;
 use crate::view::*;
@@ -12,8 +12,8 @@ const MODE: &str = "permanently";
 const MODE_BIN: &str = "empties the Recycle Bin";
 const NEEDS_ADMIN: &str = "Needs administrator: some folders are skipped";
 /// The hover text of the egui button, as it was.
-const KEEP_LIST_HINT: &str = "Apre Documenti\\Xiox\\cookie_da_conservare.txt nel Blocco note (lo crea se manca). \
-                              Un dominio per riga: i suoi cookie restano.";
+const KEEP_LIST_HINT: &str = "Opens Documents\\Xiox\\cookie_da_conservare.txt in Notepad (creates it if missing). \
+                              One domain per line: their cookies stay.";
 
 /// What a nav group holds: its rows, how many of them will run, and what the analysis found there.
 #[derive(Default)]

@@ -16,7 +16,7 @@ use xiox_rules::{Env, Guard};
 const MAX_NOTES: usize = 20;
 
 /// Nota di una voce `needs_preview` pulita senza un'analisi prima.
-pub const NO_PREVIEW: &str = "Esegui prima Analisi per vedere le voci da togliere";
+pub const NO_PREVIEW: &str = "Run Analyze first to see the items to remove";
 
 /// Ciò che serve a una voce nativa: l'ambiente delle regole (cartelle fidate),
 /// l'annullamento e il `Guard` unico della pulizia (lo usa chi cancella file).
@@ -124,7 +124,7 @@ pub fn run_natives(
     progress: &dyn Fn(usize, String),
     emit: &mut dyn FnMut(&NativeItem, NativeFound, Option<NativeCleaned>),
 ) {
-    let verb = if also_clean { "Pulizia" } else { "Analisi" };
+    let verb = if also_clean { "Cleaning" } else { "Analyzing" };
     for (k, item) in chosen.iter().enumerate() {
         if ctx.cancel.load(Ordering::Relaxed) {
             return;
@@ -132,7 +132,7 @@ pub fn run_natives(
         progress(k, format!("{verb} – {}", item.label));
         if let Some(why) = crate::rules::native_blocked(item, &processes()) {
             let mut skipped = NativeCleaned::default();
-            skipped.note(format!("Saltata: {why}"));
+            skipped.note(format!("Skipped: {why}"));
             emit(item, NativeFound::default(), also_clean.then_some(skipped));
             continue;
         }
@@ -147,7 +147,7 @@ pub fn run_natives(
                 NativeCleaned::default()
             } else if ctx.cancel.load(Ordering::Relaxed) {
                 let mut stopped = NativeCleaned::default();
-                stopped.note("Pulizia interrotta".to_string());
+                stopped.note("Cleanup interrupted".to_string());
                 stopped
             } else {
                 (item.clean)(ctx, &found)
@@ -159,7 +159,7 @@ pub fn run_natives(
         let done = also_clean.then(|| {
             if let Some(why) = crate::rules::native_blocked(item, &processes()) {
                 let mut skipped = NativeCleaned::default();
-                skipped.note(format!("Saltata: {why}"));
+                skipped.note(format!("Skipped: {why}"));
                 return skipped;
             }
             if found.items.is_empty() {
@@ -167,7 +167,7 @@ pub fn run_natives(
             }
             if ctx.cancel.load(Ordering::Relaxed) {
                 let mut stopped = NativeCleaned::default();
-                stopped.note("Pulizia interrotta".to_string());
+                stopped.note("Cleanup interrupted".to_string());
                 return stopped;
             }
             (item.clean)(ctx, &found)
@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(out[0].1.count, 0);
         let c = out[0].2.as_ref().unwrap();
         assert_eq!(c.removed, 0);
-        assert!(c.notes[0].contains("Chiudi Safari.exe per pulire"), "{:?}", c.notes);
+        assert!(c.notes[0].contains("Close Safari.exe to clean"), "{:?}", c.notes);
         SEEN.with(|s| assert!(s.borrow().is_empty()));
     }
 

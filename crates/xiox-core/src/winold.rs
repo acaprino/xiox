@@ -29,10 +29,10 @@ use crate::native::{NativeCleaned, NativeCtx, NativeFound, NativeItem};
 
 /// Id della voce (selezione `native:windows_old`).
 pub const ID: &str = "windows_old";
-pub const LABEL: &str = "Vecchia installazione di Windows";
-pub const WARNING: &str = "Elimina i file della versione precedente di Windows: dopo non potrai più tornare indietro \
-     alla versione di prima. Elimina anche i file personali rimasti in Windows.old\\Users (documenti non trasferiti \
-     dall'aggiornamento): controlla l'Analisi e copiali prima, se ti servono.";
+pub const LABEL: &str = "Old Windows installation";
+pub const WARNING: &str = "Deletes the files of the previous version of Windows: afterwards you will not be able to go back \
+     to the earlier version. It also deletes the personal files left in Windows.old\\Users (documents not moved \
+     by the upgrade): check the Analysis and copy them first, if you need them.";
 /// Nome della cartella nella radice del disco di sistema.
 pub const FOLDER: &str = "Windows.old";
 /// Chiave dei gestori di Pulizia disco (HKLM, vista a 64 bit).
@@ -198,9 +198,9 @@ pub fn items() -> Vec<NativeItem> {
         id: ID,
         group: crate::sysclean::GROUP,
         label: LABEL,
-        description: "Elimina la cartella Windows.old, cioè la copia della versione precedente di Windows che resta \
-             dopo un aggiornamento. La elimina Pulizia disco di Windows (cleanmgr), mai una cancellazione a mano; la \
-             dimensione mostrata è una stima. Pulizia agisce solo se l'ultima Analisi ha mostrato la cartella.",
+        description: "Deletes the Windows.old folder, that is the copy of the previous version of Windows that stays \
+             after an upgrade. Windows Disk Cleanup (cleanmgr) deletes it, never a manual deletion; the \
+             size shown is an estimate. Cleanup acts only if the last Analysis showed the folder.",
         warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
@@ -312,7 +312,7 @@ pub fn analyze(fs: &dyn Files, clock: &dyn Fn() -> Duration, cancel: &AtomicBool
         Kind::Dir => {}
         k => {
             return NativeFound {
-                detail: vec![format!("{shown} {}: non si tocca", kind_text(k))],
+                detail: vec![format!("{shown} {}: left alone", kind_text(k))],
                 skipped: 1,
                 ..Default::default()
             };
@@ -324,13 +324,13 @@ pub fn analyze(fs: &dyn Files, clock: &dyn Fn() -> Duration, cancel: &AtomicBool
     }
     let mut detail = vec![
         format!("{shown}: {}", size_text(&size)),
-        "Si elimina con Pulizia disco di Windows (cleanmgr), mai a mano; la dimensione è una stima.".to_string(),
+        "It is deleted with Windows Disk Cleanup (cleanmgr), never by hand; the size is an estimate.".to_string(),
     ];
     detail.extend(personal_files_text(fs, &path, clock, cancel));
     let others = numbered_copies(fs, &path);
     if !others.is_empty() {
         detail.push(format!(
-            "Ci sono anche {}: copie di installazioni ancora più vecchie, che Pulizia disco può eliminare insieme.",
+            "There are also {}: copies of even older installations, which Disk Cleanup can delete together.",
             others.join(", ")
         ));
     }
@@ -373,9 +373,10 @@ pub fn personal_files_text(fs: &dyn Files, win_old: &Path, clock: &dyn Fn() -> D
         }
         if total.files > 0 {
             found.push(format!(
-                "{} ({} file, {})",
+                "{} ({} {}, {})",
                 name.to_string_lossy(),
                 total.files,
+                if total.files == 1 { "file" } else { "files" },
                 crate::sys::fmt_size(total.bytes)
             ));
         }
@@ -386,15 +387,15 @@ pub fn personal_files_text(fs: &dyn Files, win_old: &Path, clock: &dyn Fn() -> D
     }
     if found.is_empty() {
         return if partial {
-            vec![format!("File personali in {}: conteggio non completato, controlla a mano.", users.display())]
+            vec![format!("Personal files in {}: count not completed, check by hand.", users.display())]
         } else {
             Vec::new()
         };
     }
-    let more = if partial { " (conteggio parziale)" } else { "" };
+    let more = if partial { " (partial count)" } else { "" };
     vec![format!(
-        "Attenzione: in {} ci sono file personali (Desktop, Documenti, Download, Immagini…){more}: {}. Con la \
-         pulizia si perdono: copiali prima, se ti servono.",
+        "Caution: {} holds personal files (Desktop, Documents, Downloads, Pictures…){more}: {}. The \
+         cleanup loses them: copy them first, if you need them.",
         users.display(),
         found.join(", ")
     )]
@@ -420,27 +421,27 @@ pub fn numbered_copies(fs: &dyn Files, win_old: &Path) -> Vec<String> {
 
 fn kind_text(k: Kind) -> &'static str {
     match k {
-        Kind::Reparse => "è un collegamento (punto di reparse)",
-        Kind::Other => "non è una cartella",
-        Kind::Unreadable => "non si riesce a leggere",
-        Kind::Missing => "non esiste",
-        Kind::Dir => "è una cartella",
+        Kind::Reparse => "is a link (reparse point)",
+        Kind::Other => "is not a folder",
+        Kind::Unreadable => "cannot be read",
+        Kind::Missing => "does not exist",
+        Kind::Dir => "is a folder",
     }
 }
 
 fn size_text(s: &Size) -> String {
     let n = crate::sys::fmt_size(s.bytes);
     if s.timed_out {
-        format!("oltre {n} (conteggio fermato dopo {} s)", SIZE_BUDGET.as_secs())
+        format!("over {n} (count stopped after {} s)", SIZE_BUDGET.as_secs())
     } else if s.unreadable > 0 {
         let what = if s.unreadable == 1 {
-            "1 cartella non leggibile".to_string()
+            "1 unreadable folder".to_string()
         } else {
-            format!("{} cartelle non leggibili", s.unreadable)
+            format!("{} unreadable folders", s.unreadable)
         };
-        format!("almeno {n} ({what})")
+        format!("at least {n} ({what})")
     } else {
-        format!("circa {n}")
+        format!("about {n}")
     }
 }
 
@@ -527,24 +528,24 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
     match d.fs.kind(&path) {
         Kind::Dir => {}
         Kind::Missing => {
-            out.note(format!("{shown}: già assente"));
+            out.note(format!("{shown}: already gone"));
             return out;
         }
         k => {
             out.failed = 1;
-            out.note(format!("{shown} {}: non si tocca", kind_text(k)));
+            out.note(format!("{shown} {}: left alone", kind_text(k)));
             return out;
         }
     }
     if let Err(e) = d.cleanmgr.available() {
         out.failed = 1;
-        out.note(format!("Pulizia disco non disponibile: {e}"));
+        out.note(format!("Disk Cleanup not available: {e}"));
         return out;
     }
     match d.reg.flagged() {
         Err(e) => {
             out.failed = 1;
-            out.note(format!("Impostazioni di Pulizia disco non leggibili ({e}): non si procede"));
+            out.note(format!("Disk Cleanup settings not readable ({e}): not proceeding"));
             return out;
         }
         Ok(keys) if keys.len() == 1 && keys[0].eq_ignore_ascii_case(HANDLER) && d.reg.has_marker() == Ok(true) => {
@@ -552,19 +553,19 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
             if let Err(e) = remove_flag_and_marker(d.reg) {
                 out.failed = 1;
                 out.note(format!(
-                    "{FLAG_NAME} rimasto da una pulizia interrotta di Xiox, ma non si toglie ({e}). Toglilo a \
-                     mano da HKLM\\{VOLUME_CACHES}\\{HANDLER} con l'Editor del Registro."
+                    "{FLAG_NAME} left over from an interrupted cleanup of Xiox, but it cannot be removed ({e}). Remove it \
+                     by hand from HKLM\\{VOLUME_CACHES}\\{HANDLER} with the Registry Editor."
                 ));
                 return out;
             }
-            out.note(format!("Tolto {FLAG_NAME} rimasto da una pulizia interrotta di Xiox."));
+            out.note(format!("Removed {FLAG_NAME} left over from an interrupted cleanup of Xiox."));
         }
         Ok(keys) if !keys.is_empty() => {
             out.failed = 1;
             out.note(format!(
-                "{FLAG_NAME} è già impostato da un altro programma in: {}. Non si procede, per non avviare pulizie \
-                 che non hai scelto. Se non serve più, toglilo con l'Editor del Registro da \
-                 HKLM\\{VOLUME_CACHES}\\<chiave>.",
+                "{FLAG_NAME} is already set by another program in: {}. Not proceeding, to avoid starting cleanups \
+                 you did not choose. If it is no longer needed, remove it with the Registry Editor from \
+                 HKLM\\{VOLUME_CACHES}\\<key>.",
                 keys.join(", ")
             ));
             return out;
@@ -578,11 +579,11 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
     let ran = d
         .reg
         .set_marker()
-        .map_err(|e| format!("{MARKER_NAME} non scritto: {e}"))
-        .and_then(|()| d.reg.set_flag().map_err(|e| format!("{FLAG_NAME} non scritto: {e}")))
-        .and_then(|()| d.cleanmgr.start().map_err(|e| format!("cleanmgr.exe non avviato: {e}")))
+        .map_err(|e| format!("{MARKER_NAME} not written: {e}"))
+        .and_then(|()| d.reg.set_flag().map_err(|e| format!("{FLAG_NAME} not written: {e}")))
+        .and_then(|()| d.cleanmgr.start().map_err(|e| format!("cleanmgr.exe not started: {e}")))
         .and_then(|mut child| {
-            wait_cleanmgr(child.as_mut(), cancel, MAX_WAIT, d.sleep).map_err(|e| format!("attesa di cleanmgr.exe interrotta: {e}"))
+            wait_cleanmgr(child.as_mut(), cancel, MAX_WAIT, d.sleep).map_err(|e| format!("wait for cleanmgr.exe interrupted: {e}"))
         });
     let removed = flag.finish();
     match ran {
@@ -591,11 +592,11 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
             out.note(e);
         }
         Ok(Waited::Cancelled) => out.note(
-            "Annullato: si è smesso di aspettare Pulizia disco (cleanmgr), che può continuare da sola fino alla fine."
+            "Cancelled: stopped waiting for Disk Cleanup (cleanmgr), which may keep going on its own to the end."
                 .to_string(),
         ),
         Ok(Waited::TimedOut) => out.note(format!(
-            "Pulizia disco non ha finito entro {} ore: si è smesso di aspettare (può continuare da sola).",
+            "Disk Cleanup did not finish within {} hours: stopped waiting (it may keep going on its own).",
             MAX_WAIT.as_secs() / 3600
         )),
         Ok(Waited::Exited(code)) => after_exit(d, &path, found, code, cancel, &mut out),
@@ -603,7 +604,7 @@ pub fn clean(d: &Deps, found: &NativeFound, cancel: &AtomicBool) -> NativeCleane
     if let Err(e) = removed {
         out.failed = 1;
         out.note(format!(
-            "{FLAG_NAME} non tolto da HKLM\\{VOLUME_CACHES}\\{HANDLER}: {e}. Toglilo a mano con l'Editor del Registro."
+            "{FLAG_NAME} not removed from HKLM\\{VOLUME_CACHES}\\{HANDLER}: {e}. Remove it by hand with the Registry Editor."
         ));
     }
     out
@@ -621,7 +622,7 @@ fn after_exit(d: &Deps, path: &Path, found: &NativeFound, code: i32, cancel: &At
     if kind == Kind::Missing {
         out.removed = 1;
         out.freed = found.bytes;
-        out.done.push(format!("{shown} (eliminata da Pulizia disco)"));
+        out.done.push(format!("{shown} (deleted by Disk Cleanup)"));
         return;
     }
     let mut left = String::new();
@@ -634,19 +635,19 @@ fn after_exit(d: &Deps, path: &Path, found: &NativeFound, code: i32, cancel: &At
         }
         left = format!(" ({})", size_text(&after));
     }
-    let code = if code != 0 { format!(" con codice {code}") } else { String::new() };
+    let code = if code != 0 { format!(" with code {code}") } else { String::new() };
     if shrank {
         out.note(format!(
-            "Pulizia disco ha terminato{code}: controlla lo spazio. {shown} c'è ancora ma è più piccola{left}; \
-             Pulizia disco può continuare da sola per qualche minuto."
+            "Disk Cleanup finished{code}: check the space. {shown} is still there but smaller{left}; \
+             Disk Cleanup may keep going on its own for a few minutes."
         ));
         return;
     }
     out.failed = 1;
     out.note(format!(
-        "Pulizia disco è terminata{code} ma {shown} è ancora presente{left}: se Pulizia disco continua in un'altra \
-         finestra controlla lo spazio fra qualche minuto, altrimenti riprova dopo un riavvio oppure da \
-         Impostazioni > Sistema > Archiviazione > File temporanei."
+        "Disk Cleanup ended{code} but {shown} is still there{left}: if Disk Cleanup keeps going in another \
+         window check the space in a few minutes, otherwise try again after a restart or from \
+         Settings > System > Storage > Temporary files."
     ));
 }
 
@@ -886,7 +887,7 @@ mod win {
                     break;
                 }
                 if rc != ERROR_SUCCESS {
-                    return Err(format!("sottochiavi di VolumeCaches: {}", os_error(rc)));
+                    return Err(format!("VolumeCaches subkeys: {}", os_error(rc)));
                 }
                 let sub = String::from_utf16_lossy(&name[..len as usize]);
                 let key = open(root.0, &sub, 0, KEY_QUERY_VALUE).map_err(|rc| format!("{sub}: {}", os_error(rc)))?;
@@ -955,13 +956,13 @@ mod win {
         let path = handler_path();
         let key = open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_SET_VALUE | KEY_QUERY_VALUE).map_err(|rc| {
             if rc == ERROR_FILE_NOT_FOUND {
-                format!("gestore «{HANDLER}» di Pulizia disco assente")
+                format!("Disk Cleanup handler “{HANDLER}” missing")
             } else {
                 format!("HKLM\\{path}: {}", os_error(rc))
             }
         })?;
         if is_link(&key) {
-            return Err(format!("HKLM\\{path} è un collegamento del registro: non si scrive"));
+            return Err(format!("HKLM\\{path} is a registry link: not written"));
         }
         let w = wide(name);
         // SAFETY: chiave aperta in scrittura, nome terminato da zero, `data`
@@ -983,7 +984,7 @@ mod win {
             Err(rc) => return Err(format!("HKLM\\{path}: {}", os_error(rc))),
         };
         if is_link(&key) {
-            return Err(format!("HKLM\\{path} è un collegamento del registro: non si tocca"));
+            return Err(format!("HKLM\\{path} is a registry link: left alone"));
         }
         let w = wide(name);
         // SAFETY: chiave aperta in scrittura, nome terminato da zero.
@@ -1008,7 +1009,7 @@ mod win {
                 .as_ref()
                 .map(|d| d.join("cleanmgr.exe"))
                 .filter(|p| p.is_file())
-                .ok_or_else(|| "cleanmgr.exe non trovato nella cartella di sistema".to_string())
+                .ok_or_else(|| "cleanmgr.exe not found in the system folder".to_string())
         }
     }
 

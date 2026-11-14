@@ -72,13 +72,13 @@ fn only_free_projects_are_selectable() {
         let mut r = report("x", st, false, 1);
         r.reason = "modifiche non salvate".into();
         let why = locked_why(&r);
-        assert!(why.starts_with("Il progetto "), "{why}");
+        assert!(why.starts_with("The project "), "{why}");
         assert_eq!(why.contains("modifiche non salvate"), st != ProjectStatus::InUse, "{why}");
     }
     let mut empty = report("e", ProjectStatus::Inactive, false, 0);
     empty.artifacts.clear();
     assert!(!selectable(&empty), "un progetto senza artefatti non ha nulla da togliere");
-    assert_eq!(nothing_to_remove(&empty), Some("Nulla da togliere"));
+    assert_eq!(nothing_to_remove(&empty), Some("Nothing to remove"));
     empty.is_agent_worktree = true;
     empty.git.main_worktree = Some(PathBuf::from(r"D:\repo"));
     empty.git.dirty = Some(false);
@@ -105,8 +105,8 @@ fn a_worktree_with_nothing_to_remove_is_greyed_out_with_the_reason() {
         assert_eq!(selectable(r), want, "{}", r.id);
         assert_eq!(plan > 0, want, "{}", r.id);
     }
-    assert_eq!(nothing_to_remove(&dirty), Some("Modifiche non salvate: il worktree resta"));
-    assert_eq!(nothing_to_remove(&unknown), Some("Stato di git non leggibile: il worktree resta"));
+    assert_eq!(nothing_to_remove(&dirty), Some("Unsaved changes: the worktree stays"));
+    assert_eq!(nothing_to_remove(&unknown), Some("Git status not readable: the worktree stays"));
     // Un worktree in uso lo dice già il suo stato.
     let mut busy = dirty.clone();
     busy.status = ProjectStatus::InUse;
@@ -136,7 +136,7 @@ fn preselection_follows_the_engine_but_never_a_blocked_row() {
 
 #[test]
 fn sessions_start_unticked_and_blocked_never_chosen() {
-    let ss = vec![session("1", None, false, 0), session("2", Some("sessione in uso"), true, 10), session("3", None, true, 7)];
+    let ss = vec![session("1", None, false, 0), session("2", Some("session in use"), true, 10), session("3", None, true, 7)];
     let mut st = state();
     st.set_scan(DevScan { archived: ss.clone(), ..Default::default() });
     assert_eq!(st.sel_sessions, vec![false, false, false], "dopo l'analisi nessuna sessione è spuntata");
@@ -194,7 +194,7 @@ fn an_old_analysis_does_not_clean_projects_or_worktrees() {
         assert!(st.confirm.is_none(), "{section:?}: nessun dialogo");
         assert_eq!(st.notice.as_deref(), Some(STALE_SCAN));
     }
-    assert_eq!(STALE_SCAN, "L'analisi è troppo vecchia: premi «Analizza» di nuovo.");
+    assert_eq!(STALE_SCAN, "The analysis is too old: press “Analyze” again.");
 
     // Entro la mezz'ora la conferma si apre e l'avviso sparisce.
     st.section = Section::Projects;
@@ -256,10 +256,10 @@ fn stats_count_only_the_selectable_rows_of_one_section() {
     assert_eq!(section_stats(&scan, Section::Worktrees, &sp, &sw, &ss), (1, 1, 30));
     assert_eq!(section_stats(&scan, Section::Sessions, &sp, &sw, &ss), (2, 2, 4));
     assert_eq!(section_stats(&scan, Section::Projects, &ids(&["b"]), &sw, &ss), (0, 2, 0));
-    assert_eq!(selection_text(Section::Projects, 1), "1 cartella");
-    assert_eq!(selection_text(Section::Projects, 2), "2 cartelle");
-    assert_eq!(selection_text(Section::Worktrees, 3), "3 worktree");
-    assert_eq!(selection_text(Section::Sessions, 665), "665 sessioni");
+    assert_eq!(selection_text(Section::Projects, 1), "1 folder");
+    assert_eq!(selection_text(Section::Projects, 2), "2 folders");
+    assert_eq!(selection_text(Section::Worktrees, 3), "3 worktrees");
+    assert_eq!(selection_text(Section::Sessions, 665), "665 sessions");
 }
 
 #[test]
@@ -293,8 +293,8 @@ fn the_confirmation_names_the_section_and_lists_only_its_items() {
     assert!(c.plan.is_none(), "nessun progetto né worktree nella conferma delle sessioni");
     assert_eq!(c.sessions.len(), 2);
     assert!(c.rows.iter().all(|(label, _)| label.starts_with("Codex · ")), "{:?}", c.rows);
-    assert_eq!(confirm_title(c.section), "Cancellare le sessioni archiviate selezionate?");
-    assert_eq!(confirm_button(&c), "Cancella 2 sessioni");
+    assert_eq!(confirm_title(c.section), "Delete the selected archived sessions?");
+    assert_eq!(confirm_button(&c), "Delete 2 sessions");
 
     st.section = Section::Projects;
     st.open_confirm();
@@ -303,8 +303,8 @@ fn the_confirmation_names_the_section_and_lists_only_its_items() {
     let plan = c.plan.as_ref().unwrap();
     assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
     assert_eq!(c.rows.len(), plan.items.len());
-    assert_eq!(confirm_title(c.section), "Pulire le cartelle selezionate?");
-    assert_eq!(confirm_button(&c), "Pulisci 1 cartella");
+    assert_eq!(confirm_title(c.section), "Clean the selected folders?");
+    assert_eq!(confirm_button(&c), "Clean 1 folder");
 
     st.section = Section::Worktrees;
     st.open_confirm();
@@ -312,26 +312,26 @@ fn the_confirmation_names_the_section_and_lists_only_its_items() {
     assert!(c.sessions.is_empty());
     let plan = c.plan.as_ref().unwrap();
     assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "w"), "{:?}", plan.items);
-    assert_eq!(confirm_title(c.section), "Rimuovere i worktree selezionati?");
+    assert_eq!(confirm_title(c.section), "Remove the selected worktrees?");
 }
 
 #[test]
 fn confirmation_texts_follow_section_and_mode() {
     assert_eq!(
         confirm_text(Section::Sessions, RemoveMode::Recycle),
-        "Una copia viene messa nel Cestino prima della cancellazione, quando il file esiste."
+        "A copy is put in the Recycle Bin before deletion, when the file exists."
     );
-    assert_eq!(confirm_text(Section::Sessions, RemoveMode::Permanent), "Le sessioni vengono cancellate definitivamente.");
+    assert_eq!(confirm_text(Section::Sessions, RemoveMode::Permanent), "The sessions are deleted permanently.");
     assert_eq!(
         confirm_text(Section::Worktrees, RemoveMode::Recycle),
-        "I worktree vengono rimossi definitivamente con git, anche con «Nel Cestino»; le cartelle di build dentro un worktree vanno nel Cestino."
+        "Worktrees are removed permanently with git, even with “To the Recycle Bin”; the build folders inside a worktree go to the Recycle Bin."
     );
-    assert_eq!(confirm_text(Section::Worktrees, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
+    assert_eq!(confirm_text(Section::Worktrees, RemoveMode::Permanent), "The selected items will be deleted permanently.");
     assert_eq!(
         confirm_text(Section::Projects, RemoveMode::Recycle),
-        "Gli elementi selezionati vanno nel Cestino."
+        "The selected items go to the Recycle Bin."
     );
-    assert_eq!(confirm_text(Section::Projects, RemoveMode::Permanent), "Gli elementi selezionati verranno eliminati definitivamente.");
+    assert_eq!(confirm_text(Section::Projects, RemoveMode::Permanent), "The selected items will be deleted permanently.");
     let one = Confirm {
         scan: Arc::new(DevScan::default()),
         section: Section::Sessions,
@@ -348,29 +348,29 @@ fn confirmation_texts_follow_section_and_mode() {
         selected: 1,
         others: None,
     };
-    assert_eq!(confirm_button(&one), "Cancella 1 sessione");
+    assert_eq!(confirm_button(&one), "Delete 1 session");
     let three = Confirm { section: Section::Projects, sessions: vec![], selected: 3, ..one };
-    assert_eq!(confirm_button(&three), "Pulisci 3 cartelle");
+    assert_eq!(confirm_button(&three), "Clean 3 folders");
 }
 
 #[test]
 fn selected_text_and_clean_button_name_the_section() {
-    assert_eq!(selected_text(Section::Projects, 1), "1 cartella selezionata");
-    assert_eq!(selected_text(Section::Projects, 3), "3 cartelle selezionate");
-    assert_eq!(selected_text(Section::Worktrees, 1), "1 worktree selezionato");
-    assert_eq!(selected_text(Section::Worktrees, 2), "2 worktree selezionati");
-    assert_eq!(selected_text(Section::Sessions, 1), "1 sessione selezionata");
-    assert_eq!(selected_text(Section::Sessions, 5), "5 sessioni selezionate");
+    assert_eq!(selected_text(Section::Projects, 1), "1 folder selected");
+    assert_eq!(selected_text(Section::Projects, 3), "3 folders selected");
+    assert_eq!(selected_text(Section::Worktrees, 1), "1 worktree selected");
+    assert_eq!(selected_text(Section::Worktrees, 2), "2 worktrees selected");
+    assert_eq!(selected_text(Section::Sessions, 1), "1 session selected");
+    assert_eq!(selected_text(Section::Sessions, 5), "5 sessions selected");
 
-    assert_eq!(clean_button(Section::Projects, 0), "Pulisci");
-    assert_eq!(clean_button(Section::Worktrees, 0), "Rimuovi");
-    assert_eq!(clean_button(Section::Sessions, 0), "Cancella");
-    assert_eq!(clean_button(Section::Projects, 1), "Pulisci 1 cartella");
-    assert_eq!(clean_button(Section::Projects, 3), "Pulisci 3 cartelle");
-    assert_eq!(clean_button(Section::Worktrees, 1), "Rimuovi 1 worktree");
-    assert_eq!(clean_button(Section::Worktrees, 2), "Rimuovi 2 worktree");
-    assert_eq!(clean_button(Section::Sessions, 1), "Cancella 1 sessione");
-    assert_eq!(clean_button(Section::Sessions, 5), "Cancella 5 sessioni");
+    assert_eq!(clean_button(Section::Projects, 0), "Clean");
+    assert_eq!(clean_button(Section::Worktrees, 0), "Remove");
+    assert_eq!(clean_button(Section::Sessions, 0), "Delete");
+    assert_eq!(clean_button(Section::Projects, 1), "Clean 1 folder");
+    assert_eq!(clean_button(Section::Projects, 3), "Clean 3 folders");
+    assert_eq!(clean_button(Section::Worktrees, 1), "Remove 1 worktree");
+    assert_eq!(clean_button(Section::Worktrees, 2), "Remove 2 worktrees");
+    assert_eq!(clean_button(Section::Sessions, 1), "Delete 1 session");
+    assert_eq!(clean_button(Section::Sessions, 5), "Delete 5 sessions");
 }
 
 #[test]
@@ -385,9 +385,9 @@ fn the_confirmation_says_what_it_leaves_out() {
     st.set_section(Section::Projects);
     st.open_confirm();
     let c = st.confirm.take().unwrap();
-    assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 worktree selezionato e 2 sessioni selezionate."));
+    assert_eq!(c.others.as_deref(), Some("Does not touch the other sections: 1 worktree selected and 2 sessions selected."));
     assert_eq!(c.selected, 1);
-    assert_eq!(confirm_button(&c), "Pulisci 1 cartella");
+    assert_eq!(confirm_button(&c), "Clean 1 folder");
     let plan = c.plan.as_ref().unwrap();
     assert!(!plan.items.is_empty() && plan.items.iter().all(|i| i.project_id == "a"), "{:?}", plan.items);
     assert!(c.sessions.is_empty());
@@ -396,16 +396,16 @@ fn the_confirmation_says_what_it_leaves_out() {
     st.set_section(Section::Sessions);
     st.open_confirm();
     let c = st.confirm.take().unwrap();
-    assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 cartella selezionata e 1 worktree selezionato."));
-    assert_eq!(confirm_button(&c), "Cancella 2 sessioni");
+    assert_eq!(c.others.as_deref(), Some("Does not touch the other sections: 1 folder selected and 1 worktree selected."));
+    assert_eq!(confirm_button(&c), "Delete 2 sessions");
 
     // Una sola altra sezione con qualcosa di scelto: una sola voce.
     st.set_section(Section::Worktrees);
     st.sel_sessions = vec![false, false];
     st.open_confirm();
     let c = st.confirm.take().unwrap();
-    assert_eq!(c.others.as_deref(), Some("Non tocca le altre sezioni: 1 cartella selezionata."));
-    assert_eq!(confirm_button(&c), "Rimuovi 1 worktree");
+    assert_eq!(c.others.as_deref(), Some("Does not touch the other sections: 1 folder selected."));
+    assert_eq!(confirm_button(&c), "Remove 1 worktree");
 
     // Le altre sezioni vuote: nessuna nota.
     st.sel_artifacts.clear();
@@ -421,17 +421,17 @@ fn labels() {
     let s = session("abc", None, false, 0);
     assert_eq!(session_title(&s), "titolo abc");
     assert_eq!(session_label(&s), "Codex · titolo abc");
-    assert_eq!(session_size(&s), "solo riga nel database");
+    assert_eq!(session_size(&s), "database row only");
     assert_eq!(session_size(&session("x", None, true, 2048)), "2 KB");
     let mut untitled = s.clone();
     untitled.title = Some("   ".into());
-    assert_eq!(session_title(&untitled), "(senza titolo)");
-    assert_eq!(section_label(Section::Sessions, Some(664)), "Sessioni archiviate (664)");
-    assert_eq!(section_label(Section::Worktrees, None), "Worktree");
-    assert_eq!(plural(1, "cartella", "cartelle"), "1 cartella");
-    assert_eq!(plural(0, "cartella", "cartelle"), "0 cartelle");
-    assert_eq!(fmt_elapsed(58_400), "Analisi in 58 s");
-    assert_eq!(fmt_elapsed(125_000), "Analisi in 2 min 5 s");
+    assert_eq!(session_title(&untitled), "(untitled)");
+    assert_eq!(section_label(Section::Sessions, Some(664)), "Archived sessions (664)");
+    assert_eq!(section_label(Section::Worktrees, None), "Worktrees");
+    assert_eq!(plural(1, "folder", "folders"), "1 folder");
+    assert_eq!(plural(0, "folder", "folders"), "0 folders");
+    assert_eq!(fmt_elapsed(58_400), "Analysis in 58 s");
+    assert_eq!(fmt_elapsed(125_000), "Analysis in 2 min 5 s");
 }
 
 #[test]
@@ -449,29 +449,29 @@ fn plan_labels_name_the_project_and_the_artifact() {
     };
     assert_eq!(plan_label(&scan, &item(r"D:\p\app\target", "app", PlanAction::RemoveDir)), "app · Build Rust (target)");
     let remove_wt = PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"D:\repo") };
-    assert_eq!(plan_label(&scan, &item(r"D:\p\wt", "wt", remove_wt)), "wt · worktree intero");
+    assert_eq!(plan_label(&scan, &item(r"D:\p\wt", "wt", remove_wt)), "wt · whole worktree");
     assert_eq!(plan_label(&scan, &item(r"D:\x\node_modules", "?", PlanAction::RemoveDir)), "node_modules · node_modules");
 }
 
 #[test]
-fn dates_are_day_month_year() {
+fn dates_are_iso() {
     // Mezzogiorno UTC: lo stesso giorno in ogni fuso tra -11 e +11.
-    assert_eq!(fmt_date(1_762_776_000_000), "10/11/2025");
-    assert_eq!(fmt_date(1_709_208_000_000), "29/02/2024");
+    assert_eq!(fmt_date(1_762_776_000_000), "2025-11-10");
+    assert_eq!(fmt_date(1_709_208_000_000), "2024-02-29");
 }
 
 #[test]
 fn a_failed_analysis_is_not_an_empty_one() {
     let ok = DevScan { warnings: vec!["Sessioni di Pi illeggibili".into()], ..Default::default() };
     assert!(!analysis_failed(&ok));
-    assert_eq!(empty_text(Section::Projects, false), "Nessun progetto trovato.");
+    assert_eq!(empty_text(Section::Projects, false), "No project found.");
     let failed = DevScan { warnings: vec!["altro".into(), ANALYSIS_FAILED.into()], ..Default::default() };
     assert!(analysis_failed(&failed));
     assert_eq!(ordered_warnings(&failed.warnings), vec![ANALYSIS_FAILED, "altro"]);
     for s in [Section::Projects, Section::Worktrees] {
-        assert!(empty_text(s, true).contains("non riuscita"), "{s:?}");
+        assert!(empty_text(s, true).contains("failed"), "{s:?}");
     }
-    assert_eq!(empty_text(Section::Sessions, true), "Nessuna sessione archiviata.");
+    assert_eq!(empty_text(Section::Sessions, true), "No archived session.");
 }
 
 #[test]
@@ -502,7 +502,7 @@ fn scan_result_preselects_and_release_frees_it() {
 
     let scan = DevScan {
         projects: vec![report("a", ProjectStatus::Inactive, true, 10), report("b", ProjectStatus::Recent, false, 5)],
-        archived: vec![session("1", None, false, 0), session("2", Some("sessione in uso"), true, 3)],
+        archived: vec![session("1", None, false, 0), session("2", Some("session in use"), true, 3)],
         ..Default::default()
     };
     tx.send(DevMsg::Scanned(scan)).unwrap();
@@ -527,7 +527,7 @@ fn a_dead_job_is_reported_not_left_spinning() {
     drop(tx);
     st.poll();
     assert!(!st.busy());
-    assert_eq!(st.error.as_deref(), Some("Il lavoro si è interrotto per un errore interno."));
+    assert_eq!(st.error.as_deref(), Some("The job was interrupted by an internal error."));
     assert_eq!(st.view, View::Empty);
 }
 
@@ -548,7 +548,7 @@ fn a_dead_cleanup_discards_the_scan_and_disables_the_button() {
     assert!(st.sel_artifacts.is_empty() && st.sel_worktrees.is_empty() && st.sel_sessions.is_empty());
     assert!(!st.can_clean());
     assert_eq!(st.error.as_deref(), Some(CLEANUP_DIED));
-    assert!(CLEANUP_DIED.contains("potrebbero essere già stati rimossi"));
+    assert!(CLEANUP_DIED.contains("may already have been removed"));
     assert_eq!(st.view, View::Empty);
 }
 
@@ -566,7 +566,7 @@ fn a_panic_keeps_the_outcomes_collected_so_far() {
     assert!(out.interrupted);
     assert_eq!(out.report.skipped.len(), 1);
     assert_eq!(out.report.freed_bytes, 7);
-    assert_eq!(cleaned_title(Some(&out), false), "Pulizia interrotta");
+    assert_eq!(cleaned_title(Some(&out), false), "Cleanup interrupted");
 }
 
 #[test]
@@ -644,7 +644,7 @@ fn levels_project() -> ProjectReport {
         "Build JavaScript (dist)",
         xiox_model::Class::Build,
         Level::Caution,
-        "Potrebbe contenere sorgenti: git non la ignora",
+        "May contain sources: git does not ignore it",
         20,
     ));
     r.artifacts[1].kind = ArtifactKind::NodeModules;
@@ -698,9 +698,9 @@ fn the_total_follows_each_folder() {
 
 #[test]
 fn levels_have_their_words() {
-    assert_eq!(level_word(Level::Recommended), "Consigliato");
-    assert_eq!(level_word(Level::Optional), "Facoltativo");
-    assert_eq!(level_word(Level::Caution), "Attenzione");
+    assert_eq!(level_word(Level::Recommended), "Recommended");
+    assert_eq!(level_word(Level::Optional), "Optional");
+    assert_eq!(level_word(Level::Caution), "Caution");
 }
 
 fn levels_state() -> DevState {
@@ -724,12 +724,12 @@ fn a_caution_folder_needs_the_warnings_read() {
     st.open_confirm_with(xiox_app::now_ms(), |_| vec![]);
     let mut c = st.confirm.take().unwrap();
     assert_eq!(c.plan.as_ref().unwrap().items.len(), 2);
-    assert_eq!(c.cautions, vec![("web · Build JavaScript (dist)".to_string(), "Potrebbe contenere sorgenti: git non la ignora".to_string())]);
+    assert_eq!(c.cautions, vec![("web · Build JavaScript (dist)".to_string(), "May contain sources: git does not ignore it".to_string())]);
     assert!(!confirm_ready(&c));
     c.ack = true;
     assert!(confirm_ready(&c));
-    assert_eq!(caution_title(1), "1 cartella al livello Attenzione:");
-    assert_eq!(caution_title(2), "2 cartelle al livello Attenzione:");
+    assert_eq!(caution_title(1), "1 folder at the Caution level:");
+    assert_eq!(caution_title(2), "2 folders at the Caution level:");
 }
 
 #[test]
@@ -741,12 +741,12 @@ fn a_small_recycle_bin_offers_permanent_deletion() {
     assert_eq!(c.shortfall, vec![('D', 100, 0)]);
     assert_eq!(
         shortfall_text(&c.shortfall),
-        "Il Cestino di D: ha 0 byte liberi, la pulizia ne sposta 100 byte. Eliminare definitivamente questa volta?"
+        "The Recycle Bin of D: has 0 B free, the cleanup moves 100 B. Delete permanently this time?"
     );
     // Il pulsante è «Definitiva»: il testo non parla del Cestino.
     assert_eq!(c.mode, RemoveMode::Recycle);
     assert_eq!(shown_mode(&c), RemoveMode::Permanent);
-    assert_eq!(confirm_text(c.section, shown_mode(&c)), "Gli elementi selezionati verranno eliminati definitivamente.");
+    assert_eq!(confirm_text(c.section, shown_mode(&c)), "The selected items will be deleted permanently.");
     make_permanent(&mut c).unwrap();
     assert_eq!(c.mode, RemoveMode::Permanent);
     assert_eq!(c.plan.as_ref().unwrap().mode, RemoveMode::Permanent);
@@ -755,7 +755,7 @@ fn a_small_recycle_bin_offers_permanent_deletion() {
     let two = [('C', 10 << 30, 2 << 30), ('E', 3 << 20, 0)];
     assert_eq!(
         shortfall_text(&two),
-        "Il Cestino di C: ha 2,00 GB liberi, la pulizia ne sposta 10,00 GB. Il Cestino di E: ha 0 byte liberi, la pulizia ne sposta 3,0 MB. Eliminare definitivamente questa volta?"
+        "The Recycle Bin of C: has 2.00 GB free, the cleanup moves 10.00 GB. The Recycle Bin of E: has 0 B free, the cleanup moves 3.0 MB. Delete permanently this time?"
     );
 }
 
@@ -763,7 +763,7 @@ fn a_small_recycle_bin_offers_permanent_deletion() {
 fn the_report_adds_up_folders_and_sessions() {
     let mut out = DevCleaned::new();
     assert!(out.is_empty());
-    assert_eq!(cleaned_title(Some(&out), false), "Pulizia completata");
+    assert_eq!(cleaned_title(Some(&out), false), "Cleanup done");
     merge_report(
         &mut out.report,
         CleanReport {
@@ -772,39 +772,39 @@ fn the_report_adds_up_folders_and_sessions() {
             dirs: 2,
             elapsed_ms: 1500,
             by_category: vec![("Build Rust (target)".into(), 100)],
-            skipped: vec![(PathBuf::from(r"D:\p\web\dist"), "Annullato".into())],
+            skipped: vec![(PathBuf::from(r"D:\p\web\dist"), "Cancelled".into())],
             cancelled: true,
             ..Default::default()
         },
     );
     out.labels.insert(path_key(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)".into());
     add_session_outcome(&mut out.report, "Codex · x", &ItemOutcome::Removed { bytes_freed: 300 }, RemoveMode::Recycle);
-    let f = ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe".into()] };
+    let f = ItemOutcome::Failed { error: "locked".into(), locked_by: vec!["code.exe".into()] };
     add_session_outcome(&mut out.report, "Codex · y", &f, RemoveMode::Recycle);
     let r = &out.report;
     assert_eq!((r.freed_bytes, r.recycled_bytes, r.files, r.dirs), (100, 300, 5, 2));
     assert_eq!(r.by_category, vec![(SESSIONS_CATEGORY.to_string(), 300), ("Build Rust (target)".to_string(), 100)]);
-    assert_eq!(r.failed, vec![(PathBuf::from("Codex · y"), "bloccato (in uso da: code.exe)".to_string())]);
+    assert_eq!(r.failed, vec![(PathBuf::from("Codex · y"), "locked (in use by: code.exe)".to_string())]);
     assert_eq!(out.label(Path::new(r"D:\p\web\dist")), "web · Build JavaScript (dist)");
-    assert_eq!(cleaned_title(Some(&out), false), "Pulizia annullata");
-    assert_eq!(cleaned_title(Some(&out), true), "Pulizia in corso…");
-    assert_eq!(recycled_text(300), "300 byte nel Cestino: si liberano svuotandolo");
+    assert_eq!(cleaned_title(Some(&out), false), "Cleanup cancelled");
+    assert_eq!(cleaned_title(Some(&out), true), "Cleaning…");
+    assert_eq!(recycled_text(300), "300 B in the Recycle Bin: freed by emptying it");
     let text = r.to_text();
-    assert!(text.contains("Spazio liberato") && text.contains("Saltati (1)") && text.contains("Non riusciti (1)"), "{text}");
+    assert!(text.contains("Space freed") && text.contains("Skipped (1)") && text.contains("Failed (1)"), "{text}");
 
     let mut refused = DevCleaned::new();
-    refused.errors.push("Piano rifiutato".into());
-    assert_eq!(cleaned_title(Some(&refused), false), "Pulizia non eseguita");
+    refused.errors.push("Plan refused".into());
+    assert_eq!(cleaned_title(Some(&refused), false), "Cleanup not run");
 }
 
 #[test]
 fn progress_text_and_bar() {
     let t = Tick { done_bytes: 512, total_bytes: 2048, done_items: 1, total_items: 4 };
-    assert_eq!(tick_text(&t), "512 byte di 2 KB · 1 di 4 voci");
+    assert_eq!(tick_text(&t), "512 B of 2 KB · 1 of 4 items");
     assert_eq!(tick_fraction(&t), 0.25);
     let unknown = Tick { done_bytes: 0, total_bytes: 0, done_items: 1, total_items: 2 };
     assert_eq!(tick_fraction(&unknown), 0.5);
-    assert_eq!(tick_text(&Tick { total_items: 1, ..unknown }), "0 byte di 0 byte · 1 di 1 voce");
+    assert_eq!(tick_text(&Tick { total_items: 1, ..unknown }), "0 B of 0 B · 1 of 1 item");
     assert_eq!(fmt_duration(850), "850 ms");
     assert_eq!(fmt_duration(12_300), "12 s");
     assert_eq!(fmt_duration(125_000), "2 min 05 s");

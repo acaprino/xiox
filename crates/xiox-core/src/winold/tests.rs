@@ -220,14 +220,14 @@ fn item_is_off_with_warning_needs_admin_and_waits_for_cleanmgr() {
     let i = &v[0];
     assert_eq!(i.id, "windows_old");
     assert_eq!(i.group, "Windows");
-    assert_eq!(i.label, "Vecchia installazione di Windows");
+    assert_eq!(i.label, "Old Windows installation");
     assert!(!i.default_on);
     assert!(i.needs_admin);
     // Si elimina solo dopo aver visto Windows.old e la sua dimensione nell'Analisi.
     assert!(i.needs_preview);
     assert_eq!(i.warning, Some(WARNING));
-    assert!(WARNING.contains("tornare indietro"));
-    assert!(WARNING.contains(r"Windows.old\Users") && WARNING.contains("file personali"), "{WARNING}");
+    assert!(WARNING.contains("go back"));
+    assert!(WARNING.contains(r"Windows.old\Users") && WARNING.contains("personal files"), "{WARNING}");
     assert!(i.running.iter().any(|p| p.eq_ignore_ascii_case("cleanmgr.exe")), "{:?}", i.running);
     assert!(!i.description.contains("BleachBit") && !i.description.is_empty());
 }
@@ -270,7 +270,7 @@ fn analysis_never_proposes_a_link_a_file_or_an_unreadable_path() {
         assert_eq!(found.count, 0, "{k:?}");
         assert!(found.items.is_empty(), "{k:?}");
         assert_eq!(found.skipped, 1, "{k:?}");
-        assert!(found.detail[0].contains("non si tocca"), "{:?}", found.detail);
+        assert!(found.detail[0].contains("left alone"), "{:?}", found.detail);
         assert!(f.listed().is_empty(), "{k:?}");
     }
 }
@@ -293,8 +293,8 @@ fn analysis_sums_files_and_never_enters_reparse_dirs() {
     assert_eq!(found.files, 0);
     assert_eq!(found.bytes, 157);
     assert_eq!(found.items, vec![r"C:\Windows.old".to_string()]);
-    assert!(found.detail[0].starts_with(r"C:\Windows.old: circa"), "{:?}", found.detail);
-    assert!(found.detail.iter().any(|l| l.contains("Pulizia disco")), "{:?}", found.detail);
+    assert!(found.detail[0].starts_with(r"C:\Windows.old: about"), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|l| l.contains("Disk Cleanup")), "{:?}", found.detail);
     assert!(!f.listed().iter().any(|p| p.contains("Documents and Settings")), "{:?}", f.listed());
 }
 
@@ -309,7 +309,7 @@ fn analysis_stops_after_the_time_budget_and_says_oltre() {
     let found = analyze(&f, &ticking(Duration::from_secs(6)), &cancel);
     assert_eq!(found.bytes, 100);
     assert_eq!(found.count, 1, "la cartella c'è: si propone anche con la stima parziale");
-    assert!(found.detail[0].contains("oltre"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("over"), "{:?}", found.detail);
     assert!(found.detail[0].contains("10 s"), "{:?}", found.detail);
     // Si legge solo la radice (più Users e la radice del disco, fuori dal conto della dimensione).
     let measured: Vec<_> = f.listed().into_iter().filter(|p| !p.ends_with("Users") && p != r"C:\").collect();
@@ -322,8 +322,8 @@ fn unreadable_folders_make_the_size_a_minimum() {
     f.tree.insert(win_old().join("Windows"), Err("accesso negato".into()));
     let found = analyze_fake(&f);
     assert_eq!(found.bytes, 100);
-    assert!(found.detail[0].contains("almeno"), "{:?}", found.detail);
-    assert!(found.detail[0].contains("1 cartella non leggibile"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("at least"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("1 unreadable folder"), "{:?}", found.detail);
 }
 
 #[test]
@@ -442,7 +442,7 @@ fn cancel_stops_waiting_without_killing_cleanmgr_and_removes_the_flag() {
     assert_eq!(out.removed, 0);
     assert_eq!(out.failed, 0);
     assert_eq!(out.freed, 0);
-    assert!(out.notes.join("\n").contains("smesso di aspettare"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("stopped waiting"), "{:?}", out.notes);
 }
 
 #[test]
@@ -476,7 +476,7 @@ fn folder_already_gone_is_reported_and_nothing_runs() {
     let out = clean_fake(&f, &forced(&[r"C:\Windows.old"]));
     assert!(f.calls().is_empty(), "{:?}", f.calls());
     assert_eq!(out.removed + out.failed, 0);
-    assert!(out.notes.join("\n").contains("già assente"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("already gone"), "{:?}", out.notes);
 }
 
 #[test]
@@ -503,7 +503,7 @@ fn folder_shrunk_after_cleanmgr_says_check_the_space_not_a_failure() {
     assert_eq!(out.failed, 0, "{:?}", out.notes);
     assert_eq!(out.freed, 120);
     let n = out.notes.join("\n");
-    assert!(n.contains("Pulizia disco ha terminato") && n.contains("controlla lo spazio"), "{n}");
+    assert!(n.contains("Disk Cleanup finished") && n.contains("check the space"), "{n}");
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn folder_unchanged_after_cleanmgr_is_a_failure() {
     let out = clean_fake(&f, &found);
     assert_eq!(out.failed, 1);
     assert_eq!(out.freed, 0);
-    assert!(out.notes.join("\n").contains("ancora presente"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("is still there"), "{:?}", out.notes);
 }
 
 #[test]
@@ -534,7 +534,7 @@ fn leftover_flag_of_xiox_is_recognised_removed_and_the_clean_proceeds() {
     );
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0, "{:?}", out.notes);
-    assert!(out.notes.join("\n").contains("rimasto da una pulizia interrotta di Xiox"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("left over from an interrupted cleanup of Xiox"), "{:?}", out.notes);
 }
 
 #[test]
@@ -545,7 +545,7 @@ fn flag_under_previous_installations_without_our_marker_is_not_ours() {
     let out = clean_fake(&f, &found);
     assert_eq!(f.calls(), ["available", "flagged", "has_marker"]);
     assert_eq!(out.failed, 1);
-    assert!(out.notes.join("\n").contains("altro programma"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("another program"), "{:?}", out.notes);
     // Con il compagno ma anche un'altra chiave con il flag: non è solo nostro.
     let mut f = base();
     f.flagged = Ok(vec!["Previous Installations".into(), "Temporary Files".into()]);
@@ -601,7 +601,7 @@ fn analysis_shows_personal_files_left_in_users_and_numbered_copies() {
     );
     let found = analyze_fake(&f);
     let d = found.detail.join("\n");
-    assert!(d.contains("file personali") && d.contains("Mario (1 file, "), "{d}");
+    assert!(d.contains("personal files") && d.contains("Mario (1 file, "), "{d}");
     assert!(!d.contains("Default (") && !d.contains("Public ("), "{d}");
     assert!(d.contains(r"C:\Windows.old.000") && d.contains(r"C:\windows.old.12"), "{d}");
     assert!(!d.contains("Windows.old.bak") && !d.contains("Windows.old.001"), "{d}");
@@ -626,7 +626,7 @@ fn exit_code_is_reported_when_the_folder_stays() {
     let out = clean_fake(&f, &found);
     assert_eq!(out.freed, 0);
     assert_eq!(out.failed, 1);
-    assert!(out.notes.join("\n").contains("codice 5"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("code 5"), "{:?}", out.notes);
 }
 
 #[test]
@@ -638,7 +638,7 @@ fn failing_to_remove_the_flag_is_an_error_with_instructions() {
     assert_eq!(out.removed, 1, "Windows.old è stata eliminata comunque");
     assert_eq!(out.failed, 1);
     let n = out.notes.join("\n");
-    assert!(n.contains("StateFlags0099") && n.contains("non tolto") && n.contains("accesso negato"), "{n}");
+    assert!(n.contains("StateFlags0099") && n.contains("not removed") && n.contains("accesso negato"), "{n}");
 }
 
 #[test]
@@ -664,7 +664,7 @@ fn timeout_in_clean_is_a_note_and_the_flag_is_removed() {
     let out = clean_fake(&f, &found);
     assert_eq!(f.calls().last().map(String::as_str), Some("remove_marker"));
     assert_eq!(out.removed, 0);
-    assert!(out.notes.join("\n").contains("non ha finito"), "{:?}", out.notes);
+    assert!(out.notes.join("\n").contains("did not finish"), "{:?}", out.notes);
 }
 
 // ---------------------------------------------------------------------------

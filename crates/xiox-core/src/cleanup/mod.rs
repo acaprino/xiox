@@ -60,7 +60,7 @@ pub enum CleanEnd {
 }
 
 /// Testo per una pulizia fermata da un errore interno (come in Sviluppatori).
-pub const CLEAN_DIED: &str = "Pulizia interrotta da un errore interno: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
+pub const CLEAN_DIED: &str = "Cleanup stopped by an internal error: some items may already be gone. Press “Analyze” to see what is left.";
 
 /// Le voci scelte all'avvio: le categorie e (chiave, etichetta) delle voci native e delle
 /// opzioni dinamiche, per elencare nel resoconto quelle che non hanno mai risposto.
@@ -238,7 +238,7 @@ impl CleanupState {
                 .collect(),
         };
         self.clean_end = None;
-        // «Pulisci spazio libero» gira dopo tutto il resto (anche le opzioni
+        // «Clean free space» gira dopo tutto il resto (anche le opzioni
         // dinamiche), perché sovrascriva anche ciò che le altre voci cancellano.
         let (natives, natives_last) = native::split_last(natives);
         let (tx, rx) = channel();
@@ -660,7 +660,7 @@ pub fn winapp2_matches(rs: &rules::RuleSet, needle: &str) -> Vec<(String, Vec<us
 /// avvisa la UI a ogni messaggio e, se il thread muore, alla fine.
 fn real_job(job: CleanJob, outbox: Outbox<CleanMsg>) {
     let CleanJob { cats, natives, natives_last, dynamic, env, previews, only_old, also_clean, files_cancel, cancel } = job;
-    let verb = if also_clean { "Pulizia" } else { "Analisi" };
+    let verb = if also_clean { "Cleaning" } else { "Analyzing" };
     let total = (cats.len() + natives.len() + dynamic.len() + natives_last.len()).max(1) as f32;
     for (k, &i) in cats.iter().enumerate() {
         let name = cleaner::CATEGORIES[i].name;
@@ -728,22 +728,22 @@ fn real_job(job: CleanJob, outbox: Outbox<CleanMsg>) {
 /// Titolo dell'analisi e, se non è arrivata in fondo, la nota che lo dice.
 pub fn analysis_title(busy: bool, end: Option<CleanEnd>) -> (&'static str, Option<&'static str>) {
     match (busy, end) {
-        (true, _) => ("Analisi in corso…", None),
+        (true, _) => ("Analysis in progress…", None),
         (false, Some(CleanEnd::Cancelled)) => {
-            ("Analisi annullata", Some("Analisi annullata: le voci mancanti non sono state analizzate."))
+            ("Analysis cancelled", Some("Analysis cancelled: the missing items were not analyzed."))
         }
         (false, Some(CleanEnd::Died)) => (
-            "Analisi interrotta",
-            Some("Un errore interno ha fermato l'analisi: le voci mancanti non sono state analizzate."),
+            "Analysis interrupted",
+            Some("An internal error stopped the analysis: the missing items were not analyzed."),
         ),
-        (false, _) => ("Analisi completata", None),
+        (false, _) => ("Analysis done", None),
     }
 }
 
 /// La nota di una voce nativa o dinamica che dice che non è stata pulita del tutto
 /// (saltata, interrotta, non supportata), se c'è.
 pub fn stop_note(notes: &[String]) -> Option<&String> {
-    notes.iter().find(|n| n.starts_with("Saltata") || n.contains("interrotta") || n.starts_with("Opzione non supportata"))
+    notes.iter().find(|n| n.starts_with("Skipped") || n.contains("interrupted") || n.starts_with("Option not supported"))
 }
 
 /// Il resoconto di Pulizia file: categorie (nome di `CATEGORIES`), voci native e opzioni
@@ -765,12 +765,12 @@ pub fn clean_report(
 ) -> xiox_model::CleanReport {
     let mut r = xiox_model::CleanReport { elapsed_ms, cancelled: end != CleanEnd::Done, ..Default::default() };
     if end == CleanEnd::Died {
-        r.failed.push((PathBuf::from("Pulizia"), CLEAN_DIED.to_string()));
+        r.failed.push((PathBuf::from("Cleanup"), CLEAN_DIED.to_string()));
     }
-    let never = if end == CleanEnd::Died { "Non eseguito: pulizia interrotta da un errore interno" } else { "Annullato" };
+    let never = if end == CleanEnd::Died { "Not run: cleanup stopped by an internal error" } else { "Cancelled" };
     let counted = |n: u64, notes: &[String]| match notes.first() {
-        Some(first) => format!("{n} elementi lasciati: {first}"),
-        None => format!("{n} elementi lasciati (in uso o rifiutati)"),
+        Some(first) => format!("{n} items left: {first}"),
+        None => format!("{n} items left (in use or refused)"),
     };
     for (i, c) in cleaned.iter().enumerate() {
         let Some(c) = c else { continue };
@@ -789,9 +789,9 @@ pub fn clean_report(
         }
         if c.cancelled {
             let why = if c.removed == 0 && c.failed == 0 {
-                "Annullato".to_string()
+                "Cancelled".to_string()
             } else {
-                format!("Annullato: liberati {}", sys::fmt_size(c.freed))
+                format!("Cancelled: {} freed", sys::fmt_size(c.freed))
             };
             r.skipped.push((PathBuf::from(name), why));
         }
@@ -815,7 +815,7 @@ pub fn clean_report(
             r.failed.push((PathBuf::from(label), counted(failed, notes)));
         }
         if let Some(why) = stop_note(notes) {
-            let why = if freed > 0 { format!("{why}: liberati {}", sys::fmt_size(freed)) } else { why.clone() };
+            let why = if freed > 0 { format!("{why}: {} freed", sys::fmt_size(freed)) } else { why.clone() };
             r.skipped.push((PathBuf::from(label), why));
         }
     }

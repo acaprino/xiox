@@ -54,18 +54,18 @@ impl Section {
     /// Valore di `--dev-section`.
     pub fn parse(s: &str) -> Option<Section> {
         match s {
-            "projects" | "progetti" => Some(Section::Projects),
+            "projects" => Some(Section::Projects),
             "worktree" | "worktrees" => Some(Section::Worktrees),
-            "sessions" | "sessioni" => Some(Section::Sessions),
+            "sessions" => Some(Section::Sessions),
             _ => None,
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            Section::Projects => "Progetti",
-            Section::Worktrees => "Worktree",
-            Section::Sessions => "Sessioni archiviate",
+            Section::Projects => "Projects",
+            Section::Worktrees => "Worktrees",
+            Section::Sessions => "Archived sessions",
         }
     }
 }
@@ -233,7 +233,7 @@ impl Demo {
 /// Progetti e worktree non si puliscono da un'analisi più vecchia di `xiox_app::MAX_SCAN_AGE_MS`.
 pub const STALE_SCAN: &str = xiox_app::STALE_ANALYSIS;
 /// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
-pub const CLEANUP_DIED: &str = "Un errore interno ha fermato la pulizia: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
+pub const CLEANUP_DIED: &str = "An internal error stopped the cleanup: some items may already have been removed. Press “Analyze” to see what is left.";
 
 // Why an intent is refused (English: the page shows them as they are).
 /// Un lavoro è in corso: tutto resta fermo tranne «Annulla».
@@ -386,7 +386,7 @@ impl DevState {
             // «Avvia pulizia» resta spento fino a una nuova analisi.
             let cleaning = self.view == View::Cleaned;
             self.drop_data();
-            let text = if cleaning { CLEANUP_DIED } else { "Il lavoro si è interrotto per un errore interno." };
+            let text = if cleaning { CLEANUP_DIED } else { "The job was interrupted by an internal error." };
             self.error = Some(text.into());
             self.view = View::Empty;
             done = true;
@@ -421,7 +421,7 @@ impl DevState {
         self.drop_data();
         self.error = None;
         self.view = View::Empty;
-        self.text = "Avvio dell'analisi…".into();
+        self.text = "Starting the analysis…".into();
         self.progress = 0.0;
         let (tx, rx) = channel();
         self.job = Some(rx);
@@ -503,8 +503,8 @@ impl DevState {
                     }
                     if !p.items.is_empty() {
                         summary.push(format!(
-                            "{} su disco: {}",
-                            plural(p.items.len(), "cartella", "cartelle"),
+                            "{} on disk: {}",
+                            plural(p.items.len(), "folder", "folders"),
                             sys::fmt_size(p.expected_bytes)
                         ));
                     }
@@ -519,7 +519,7 @@ impl DevState {
             let bytes: u64 = sessions.iter().map(|s| s.bytes).sum();
             summary.push(format!(
                 "{}: {}",
-                plural(sessions.len(), "sessione archiviata", "sessioni archiviate"),
+                plural(sessions.len(), "archived session", "archived sessions"),
                 sys::fmt_size(bytes)
             ));
             for s in &sessions {
@@ -564,7 +564,7 @@ impl DevState {
         self.error = None;
         self.saved = None;
         self.view = View::Cleaned;
-        self.text = "Pulizia in corso…".into();
+        self.text = "Cleaning…".into();
         self.progress = 0.0;
         // La barra e «Annulla» ci sono da subito, prima del primo avanzamento.
         self.tick = plan.as_ref().map(|p| Tick {
@@ -926,7 +926,7 @@ pub fn real_clean(job: DevCleanJob, outbox: Outbox<DevMsg>) {
     out.labels = plan_labels;
     guarded(&mut out, |out| {
         if let Some(plan) = &plan {
-            step("Eliminazione di cartelle e worktree…", 0.1);
+            step("Deleting folders and worktrees…", 0.1);
             match xiox_app::execute_plan(&scan, plan, &tick, &cancel) {
                 Ok(res) => merge_report(&mut out.report, xiox_app::report(&scan, plan, &res)),
                 Err(e) => out.errors.push(e),
@@ -941,14 +941,14 @@ pub fn real_clean(job: DevCleanJob, outbox: Outbox<DevMsg>) {
                     .unwrap_or_else(|| format!("{} · {id}", agent_label(agent)))
             };
             // L'analisi può avere ore: si cancella solo ciò che è ANCORA archiviato e libero.
-            step("Controllo delle sessioni archiviate…", 0.5);
+            step("Checking the archived sessions…", 0.5);
             match xiox_app::revalidate_archived(&scan, &sessions, &xiox_app::fresh_archived) {
                 Ok(checked) => {
                     for o in checked.skipped {
                         add_session_outcome(&mut out.report, &label(o.agent, &o.id), &o.outcome, mode);
                     }
                     if !checked.keep.is_empty() {
-                        step("Cancellazione delle sessioni archiviate…", 0.6);
+                        step("Deleting the archived sessions…", 0.6);
                         let cli = SystemCli::locate();
                         match xiox_app::delete_archived(&scan, &checked.keep, mode, &cli, &SystemTrash) {
                             Ok(done) => {
@@ -995,9 +995,9 @@ pub fn confirm_ready(c: &Confirm) -> bool {
 
 pub fn caution_title(n: usize) -> String {
     if n == 1 {
-        "1 cartella al livello Attenzione:".into()
+        "1 folder at the Caution level:".into()
     } else {
-        format!("{n} cartelle al livello Attenzione:")
+        format!("{n} folders at the Caution level:")
     }
 }
 
@@ -1006,30 +1006,30 @@ pub fn shortfall_text(short: &[(char, u64, u64)]) -> String {
     let mut parts: Vec<String> = short
         .iter()
         .map(|(d, need, room)| {
-            format!("Il Cestino di {d}: ha {} liberi, la pulizia ne sposta {}.", sys::fmt_size(*room), sys::fmt_size(*need))
+            format!("The Recycle Bin of {d}: has {} free, the cleanup moves {}.", sys::fmt_size(*room), sys::fmt_size(*need))
         })
         .collect();
-    parts.push("Eliminare definitivamente questa volta?".into());
+    parts.push("Delete permanently this time?".into());
     parts.join(" ")
 }
 
 pub fn confirm_title(section: Section) -> &'static str {
     match section {
-        Section::Projects => "Pulire le cartelle selezionate?",
-        Section::Worktrees => "Rimuovere i worktree selezionati?",
-        Section::Sessions => "Cancellare le sessioni archiviate selezionate?",
+        Section::Projects => "Clean the selected folders?",
+        Section::Worktrees => "Remove the selected worktrees?",
+        Section::Sessions => "Delete the selected archived sessions?",
     }
 }
 
 pub fn confirm_text(section: Section, mode: RemoveMode) -> &'static str {
     match (section, mode) {
-        (Section::Sessions, RemoveMode::Recycle) => "Una copia viene messa nel Cestino prima della cancellazione, quando il file esiste.",
-        (Section::Sessions, RemoveMode::Permanent) => "Le sessioni vengono cancellate definitivamente.",
+        (Section::Sessions, RemoveMode::Recycle) => "A copy is put in the Recycle Bin before deletion, when the file exists.",
+        (Section::Sessions, RemoveMode::Permanent) => "The sessions are deleted permanently.",
         (Section::Worktrees, RemoveMode::Recycle) => {
-            "I worktree vengono rimossi definitivamente con git, anche con «Nel Cestino»; le cartelle di build dentro un worktree vanno nel Cestino."
+            "Worktrees are removed permanently with git, even with “To the Recycle Bin”; the build folders inside a worktree go to the Recycle Bin."
         }
-        (_, RemoveMode::Recycle) => "Gli elementi selezionati vanno nel Cestino.",
-        (_, RemoveMode::Permanent) => "Gli elementi selezionati verranno eliminati definitivamente.",
+        (_, RemoveMode::Recycle) => "The selected items go to the Recycle Bin.",
+        (_, RemoveMode::Permanent) => "The selected items will be deleted permanently.",
     }
 }
 
@@ -1043,10 +1043,10 @@ pub fn confirm_button(c: &Confirm) -> String {
 pub fn locked_why(r: &ProjectReport) -> String {
     match r.status {
         ProjectStatus::InUse => {
-            "Il progetto è in uso da un agente: le sue cartelle si puliscono quando la sessione è chiusa.".into()
+            "The project is in use by an agent: its folders are cleaned when the session is closed.".into()
         }
-        ProjectStatus::Unreachable => format!("Il progetto non è raggiungibile e non si pulisce: {}", r.reason),
-        _ => format!("Il progetto è bloccato e non si pulisce: {}", r.reason),
+        ProjectStatus::Unreachable => format!("The project is not reachable and is not cleaned: {}", r.reason),
+        _ => format!("The project is locked and is not cleaned: {}", r.reason),
     }
 }
 
@@ -1069,9 +1069,9 @@ pub fn nothing_to_remove(r: &ProjectReport) -> Option<&'static str> {
         return None;
     }
     Some(match (r.is_agent_worktree, r.git.dirty) {
-        (true, Some(true)) => "Modifiche non salvate: il worktree resta",
-        (true, None) => "Stato di git non leggibile: il worktree resta",
-        _ => "Nulla da togliere",
+        (true, Some(true)) => "Unsaved changes: the worktree stays",
+        (true, None) => "Git status not readable: the worktree stays",
+        _ => "Nothing to remove",
     })
 }
 
@@ -1170,27 +1170,27 @@ pub fn section_action(scan: &DevScan, section: Section, sa: &HashSet<String>, sw
 /// Seconda riga della barra in basso: il conteggio della sola sezione visibile.
 pub fn selection_text(section: Section, n: usize) -> String {
     match section {
-        Section::Projects => plural(n, "cartella", "cartelle"),
-        Section::Worktrees => plural(n, "worktree", "worktree"),
-        Section::Sessions => plural(n, "sessione", "sessioni"),
+        Section::Projects => plural(n, "folder", "folders"),
+        Section::Worktrees => plural(n, "worktree", "worktrees"),
+        Section::Sessions => plural(n, "session", "sessions"),
     }
 }
 
 /// Cosa c'è di scelto in una sezione, con il nome della cosa: «3 cartelle selezionate».
 pub fn selected_text(section: Section, n: usize) -> String {
     match section {
-        Section::Projects => plural(n, "cartella selezionata", "cartelle selezionate"),
-        Section::Worktrees => plural(n, "worktree selezionato", "worktree selezionati"),
-        Section::Sessions => plural(n, "sessione selezionata", "sessioni selezionate"),
+        Section::Projects => plural(n, "folder selected", "folders selected"),
+        Section::Worktrees => plural(n, "worktree selected", "worktrees selected"),
+        Section::Sessions => plural(n, "session selected", "sessions selected"),
     }
 }
 
 /// Il pulsante che pulisce la sezione visibile: il verbo della sezione e, se c'è una scelta, quanto.
 pub fn clean_button(section: Section, n: usize) -> String {
     let verb = match section {
-        Section::Projects => "Pulisci",
-        Section::Worktrees => "Rimuovi",
-        Section::Sessions => "Cancella",
+        Section::Projects => "Clean",
+        Section::Worktrees => "Remove",
+        Section::Sessions => "Delete",
     };
     if n == 0 {
         verb.into()
@@ -1211,8 +1211,8 @@ pub fn others_note(scan: &DevScan, section: Section, sa: &HashSet<String>, sw: &
         .collect();
     match parts.as_slice() {
         [] => None,
-        [a] => Some(format!("Non tocca le altre sezioni: {a}.")),
-        [a, b] => Some(format!("Non tocca le altre sezioni: {a} e {b}.")),
+        [a] => Some(format!("Does not touch the other sections: {a}.")),
+        [a, b] => Some(format!("Does not touch the other sections: {a} and {b}.")),
         _ => None,
     }
 }
@@ -1294,9 +1294,9 @@ pub fn artifact_stats(reports: &[ProjectReport], sel: &HashSet<String>) -> (usiz
 
 pub fn level_word(level: Level) -> &'static str {
     match level {
-        Level::Recommended => "Consigliato",
-        Level::Optional => "Facoltativo",
-        Level::Caution => "Attenzione",
+        Level::Recommended => "Recommended",
+        Level::Optional => "Optional",
+        Level::Caution => "Caution",
     }
 }
 
@@ -1310,7 +1310,7 @@ pub fn plan_cautions(scan: &DevScan, plan: &CleanPlan) -> Vec<(String, String)> 
         .filter_map(|i| {
             let a = artifacts.get(&path_key(&i.path))?;
             (a.level == Level::Caution).then(|| {
-                let note = if a.note.is_empty() { "Controlla che cosa contiene prima di cancellarla." } else { a.note.as_str() };
+                let note = if a.note.is_empty() { "Check what it contains before deleting it." } else { a.note.as_str() };
                 (plan_label(scan, i), note.to_string())
             })
         })
@@ -1335,7 +1335,7 @@ pub fn merge_report(into: &mut CleanReport, r: CleanReport) {
 }
 
 /// Categoria delle sessioni archiviate nel resoconto.
-pub const SESSIONS_CATEGORY: &str = "Sessioni archiviate";
+pub const SESSIONS_CATEGORY: &str = "Archived sessions";
 
 /// L'esito di una sessione nel resoconto: il file conta tra i file eliminati, i byte tra
 /// liberati o nel Cestino secondo il modo.
@@ -1354,7 +1354,7 @@ pub fn add_session_outcome(into: &mut CleanReport, label: &str, outcome: &ItemOu
         ItemOutcome::Skipped { reason } => into.skipped.push((PathBuf::from(label), reason.clone())),
         ItemOutcome::Failed { error, locked_by } if locked_by.is_empty() => into.failed.push((PathBuf::from(label), error.clone())),
         ItemOutcome::Failed { error, locked_by } => {
-            into.failed.push((PathBuf::from(label), format!("{error} (in uso da: {})", locked_by.join(", "))))
+            into.failed.push((PathBuf::from(label), format!("{error} (in use by: {})", locked_by.join(", "))))
         }
     }
 }
@@ -1370,16 +1370,16 @@ pub fn add_category(into: &mut CleanReport, label: &str, bytes: u64) {
 
 pub fn cleaned_title(c: Option<&DevCleaned>, busy: bool) -> &'static str {
     match c {
-        _ if busy => "Pulizia in corso…",
-        Some(c) if c.interrupted => "Pulizia interrotta",
-        Some(c) if c.is_empty() && !c.errors.is_empty() => "Pulizia non eseguita",
-        Some(c) if c.report.cancelled => "Pulizia annullata",
-        _ => "Pulizia completata",
+        _ if busy => "Cleaning…",
+        Some(c) if c.interrupted => "Cleanup interrupted",
+        Some(c) if c.is_empty() && !c.errors.is_empty() => "Cleanup not run",
+        Some(c) if c.report.cancelled => "Cleanup cancelled",
+        _ => "Cleanup done",
     }
 }
 
 pub fn recycled_text(bytes: u64) -> String {
-    format!("{} nel Cestino: si liberano svuotandolo", sys::fmt_size(bytes))
+    format!("{} in the Recycle Bin: freed by emptying it", sys::fmt_size(bytes))
 }
 
 /// Avanzamento della barra: a byte, o a voci quando i byte non si conoscono.
@@ -1393,15 +1393,15 @@ pub fn tick_fraction(t: &Tick) -> f32 {
     }
 }
 
-/// «1,2 GB di 3,4 GB · 2 di 5 voci».
+/// «1.2 GB di 3.4 GB · 2 di 5 voci».
 pub fn tick_text(t: &Tick) -> String {
     format!(
-        "{} di {} · {} di {} {}",
+        "{} of {} · {} of {} {}",
         sys::fmt_size(t.done_bytes),
         sys::fmt_size(t.total_bytes),
         t.done_items,
         t.total_items,
-        if t.total_items == 1 { "voce" } else { "voci" }
+        if t.total_items == 1 { "item" } else { "items" }
     )
 }
 
@@ -1447,22 +1447,22 @@ pub const DEMO_MARKER: &str = ".xiox-demo";
 /// radice dentro la cartella temporanea di sistema o con [`DEMO_MARKER`] alla radice.
 #[cfg(debug_assertions)]
 pub fn demo_allowed(persist: bool, roots: &[PathBuf]) -> Result<(), String> {
-    let refuse = |why: &str| Err(format!("Dimostrazione rifiutata: {why}"));
+    let refuse = |why: &str| Err(format!("Demo refused: {why}"));
     let [root] = roots else {
-        return refuse("serve --only-root con una sola cartella.");
+        return refuse("--only-root with a single folder is required.");
     };
     if persist {
-        return refuse("serve --only-root.");
+        return refuse("--only-root is required.");
     }
     let Ok(root) = std::fs::canonicalize(root) else {
-        return refuse("la cartella di --only-root non esiste.");
+        return refuse("the --only-root folder does not exist.");
     };
     let in_temp = std::fs::canonicalize(std::env::temp_dir()).is_ok_and(|t| root.starts_with(&t) && root != t);
     if in_temp || root.join(DEMO_MARKER).is_file() {
         Ok(())
     } else {
         refuse(&format!(
-            "{} non è un albero finto (né nella cartella temporanea né con il file {DEMO_MARKER}).",
+            "{} is not a fake tree (neither in the temporary folder nor with the {DEMO_MARKER} file).",
             root.display()
         ))
     }
@@ -1482,10 +1482,10 @@ pub fn ordered_warnings(warnings: &[String]) -> Vec<&String> {
 /// Cosa dire in una sezione vuota: dopo un'analisi fallita le liste vuote non significano «niente».
 pub fn empty_text(section: Section, failed: bool) -> &'static str {
     match section {
-        Section::Projects | Section::Worktrees if failed => "Analisi dei progetti non riuscita: premi «Analizza» per riprovare.",
-        Section::Projects => "Nessun progetto trovato.",
-        Section::Worktrees => "Nessun worktree creato da un agente.",
-        Section::Sessions => "Nessuna sessione archiviata.",
+        Section::Projects | Section::Worktrees if failed => "Analysis of the projects failed: press “Analyze” to try again.",
+        Section::Projects => "No project found.",
+        Section::Worktrees => "No worktree created by an agent.",
+        Section::Sessions => "No archived session.",
     }
 }
 
@@ -1512,7 +1512,7 @@ pub fn agent_label(a: Agent) -> &'static str {
 pub fn session_title(s: &ArchivedSession) -> String {
     let t = s.title.as_deref().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
     if t.is_empty() {
-        "(senza titolo)".into()
+        "(untitled)".into()
     } else {
         t
     }
@@ -1524,7 +1524,7 @@ pub fn session_label(s: &ArchivedSession) -> String {
 
 pub fn session_size(s: &ArchivedSession) -> String {
     if s.file.is_none() {
-        "solo riga nel database".into()
+        "database row only".into()
     } else {
         sys::fmt_size(s.bytes)
     }
@@ -1535,7 +1535,7 @@ pub fn plan_label(scan: &DevScan, item: &PlanItem) -> String {
     let report = scan.projects.iter().chain(&scan.worktrees).find(|r| r.id == item.project_id);
     let name = report.map_or_else(|| folder_name(&item.path), |r| r.name.clone());
     match item.action {
-        PlanAction::GitWorktreeRemove { .. } => format!("{name} · worktree intero"),
+        PlanAction::GitWorktreeRemove { .. } => format!("{name} · whole worktree"),
         PlanAction::RemoveDir => {
             let key = path_key(&item.path);
             let what = report
@@ -1553,15 +1553,15 @@ pub fn folder_name(p: &Path) -> String {
 /// Data locale `gg/mm/aaaa` da millisecondi epoch.
 pub fn fmt_date(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
-        .map(|d| d.with_timezone(&chrono::Local).format("%d/%m/%Y").to_string())
+        .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| "—".into())
 }
 
 pub fn fmt_elapsed(ms: u64) -> String {
     let s = (ms + 500) / 1000;
     if s < 60 {
-        format!("Analisi in {s} s")
+        format!("Analysis in {s} s")
     } else {
-        format!("Analisi in {} min {} s", s / 60, s % 60)
+        format!("Analysis in {} min {} s", s / 60, s % 60)
     }
 }

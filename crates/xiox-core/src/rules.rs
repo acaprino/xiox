@@ -24,16 +24,16 @@ use crate::native::NativeItem;
 use crate::{regbackup, sys};
 
 /// Titolo del gruppo dei cleaner inglobati.
-pub const EMBEDDED_GROUP: &str = "Sviluppo e AI";
+pub const EMBEDDED_GROUP: &str = "Development & AI";
 /// Titolo del gruppo delle voci di Winapp2.
-pub const WINAPP2_GROUP: &str = "Applicazioni";
+pub const WINAPP2_GROUP: &str = "Applications";
 /// Ordine dei gruppi dei cleaner inglobati nel pannello; un gruppo fuori
 /// elenco va dopo questi, in ordine alfabetico. "Applicazioni" (Winapp2) viene
 /// sempre per ultimo.
 pub const GROUP_ORDER: [&str; 3] = ["Windows", "Browser", EMBEDDED_GROUP];
 /// Attribuzione delle regole nella finestra Informazioni.
-pub const ABOUT_RULES: &str = "Le regole di pulizia delle applicazioni vengono da Winapp2 \
-     (https://github.com/MoscaDotTo/Winapp2), licenza CC-BY-SA-4.0, scaricate a ogni avvio.";
+pub const ABOUT_RULES: &str = "The cleaning rules for applications come from Winapp2 \
+     (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every start.";
 
 /// Note tenute per un'opzione nel resoconto.
 const MAX_NOTES: usize = 20;
@@ -152,12 +152,12 @@ pub fn load_with(
             let dropped = report.discarded_protected + report.discarded_missing_var;
             if dropped > 0 {
                 warnings.push(format!(
-                    "Winapp2: {dropped} regole scartate (percorsi protetti o variabili non definite)"
+                    "Winapp2: {dropped} rules discarded (protected paths or undefined variables)"
                 ));
             }
             if report.skipped_excludes > 0 {
                 warnings.push(format!(
-                    "Winapp2: {} voci non offerte (esclusioni non supportate)",
+                    "Winapp2: {} items not offered (unsupported exclusions)",
                     report.skipped_excludes
                 ));
             }
@@ -169,14 +169,14 @@ pub fn load_with(
                 .collect();
             let hidden = before - winapp.len();
             if hidden > 0 {
-                let what = if hidden == 1 { "1 voce".to_string() } else { format!("{hidden} voci") };
-                warnings.push(format!("Winapp2: {what} nascoste perché già coperte da {EMBEDDED_GROUP}"));
+                let what = if hidden == 1 { "1 item".to_string() } else { format!("{hidden} items") };
+                warnings.push(format!("Winapp2: {what} hidden because already covered by {EMBEDDED_GROUP}"));
             }
             (status_text(Winapp2Status::Loaded(&version)), Some(version))
         }
         // `read_valid` lo dice così quando il file non c'è ancora.
-        Err(e) if e == "nessuna copia locale" => ("Winapp2 non ancora scaricato".to_string(), None),
-        Err(e) => (format!("Winapp2 non letto: {}", reason_it(&e)), None),
+        Err(e) if e == "no local copy" => ("Winapp2 not downloaded yet".to_string(), None),
+        Err(e) => (format!("Winapp2 not read: {}", &e), None),
     };
     let first = cleaners.len();
     let groups = embedded_groups(&cleaners);
@@ -230,11 +230,11 @@ pub enum Winapp2Status<'a> {
 /// Testo della riga di stato sopra "Applicazioni".
 pub fn status_text(s: Winapp2Status) -> String {
     match s {
-        Winapp2Status::Loaded(version) => format!("Winapp2 {version} caricato"),
-        Winapp2Status::Outcome(UpdateOutcome::Updated { version }) => format!("Winapp2 {version} aggiornato"),
-        Winapp2Status::Outcome(UpdateOutcome::UpToDate) => "Winapp2 già aggiornato".to_string(),
-        Winapp2Status::Outcome(UpdateOutcome::KeptOld(why)) => format!("Winapp2 non aggiornato: {}", reason_it(why)),
-        Winapp2Status::Outcome(UpdateOutcome::NoCopyYet(_)) => "Winapp2 non ancora scaricato".to_string(),
+        Winapp2Status::Loaded(version) => format!("Winapp2 {version} loaded"),
+        Winapp2Status::Outcome(UpdateOutcome::Updated { version }) => format!("Winapp2 {version} updated"),
+        Winapp2Status::Outcome(UpdateOutcome::UpToDate) => "Winapp2 already up to date".to_string(),
+        Winapp2Status::Outcome(UpdateOutcome::KeptOld(why)) => format!("Winapp2 not updated: {why}"),
+        Winapp2Status::Outcome(UpdateOutcome::NoCopyYet(_)) => "Winapp2 not downloaded yet".to_string(),
     }
 }
 
@@ -248,18 +248,9 @@ pub fn status_line(rs: &RuleSet, outcome: Option<&UpdateOutcome>) -> (String, Op
         Some(UpdateOutcome::Updated { version }) if rs.winapp2_version.as_deref() != Some(version.as_str()) => {
             (rs.status.clone(), None)
         }
-        Some(o @ UpdateOutcome::NoCopyYet(why)) => (status_text(Winapp2Status::Outcome(o)), Some(reason_it(why))),
+        Some(o @ UpdateOutcome::NoCopyYet(why)) => (status_text(Winapp2Status::Outcome(o)), Some(why.clone())),
         Some(o) => (status_text(Winapp2Status::Outcome(o)), None),
     }
-}
-
-/// Parti dei motivi di `xiox_rules::updater` che non sono in italiano: tabella
-/// chiusa (i motivi sono già in italiano, tranne queste).
-const REASON_IT: &[(&str, &str)] = &[("header senza riga di stato", "risposta del server senza riga di stato")];
-
-/// Un motivo di `updater` per la UI, senza parti in inglese.
-pub fn reason_it(reason: &str) -> String {
-    REASON_IT.iter().fold(reason.to_string(), |s, (en, it)| s.replace(en, it))
 }
 
 /// `false` in modalità prova (`--screenshot`): niente rete, niente scritture
@@ -414,13 +405,13 @@ pub fn blocked(cleaner: &Cleaner, opt: &Opt, processes: &[String]) -> Option<Str
         if let Some(first) = s.get(..1).map(str::to_uppercase) {
             s.replace_range(..1, &first);
         }
-        return Some(format!("{s}: questa opzione non si può usare"));
+        return Some(format!("{s}: this option cannot be used"));
     }
     let active = running(cleaner, processes);
     if active.is_empty() {
         None
     } else {
-        Some(format!("Chiudi {} per pulire", active.join(", ")))
+        Some(format!("Close {} to clean", active.join(", ")))
     }
 }
 
@@ -444,7 +435,7 @@ pub fn native_defaults(items: &[NativeItem]) -> HashSet<String> {
 /// processo di `running` è attivo (nomi senza maiuscole, `.exe` facoltativo).
 pub fn native_blocked(item: &NativeItem, processes: &[String]) -> Option<String> {
     let hits = running_among(item.running, processes);
-    (!hits.is_empty()).then(|| format!("Chiudi {} per pulire", hits.join(", ")))
+    (!hits.is_empty()).then(|| format!("Close {} to clean", hits.join(", ")))
 }
 
 /// I nomi di `wanted` che sono fra i `processes` attivi, confrontati senza
@@ -497,12 +488,12 @@ pub fn preview_notes(items: &[&NativeItem], shown: &dyn Fn(&NativeItem) -> Optio
         .iter()
         .filter(|i| i.needs_preview)
         .map(|i| match shown(i) {
-            Some(0) => format!("{}: l'ultima Analisi non ha mostrato nulla da togliere, non si tocca nulla", i.label),
+            Some(0) => format!("{}: the last Analysis showed nothing to remove, nothing is touched", i.label),
             Some(n) => {
-                let what = if n == 1 { "1 elemento".to_string() } else { format!("{n} elementi") };
-                format!("{}: si tocca solo ciò che ha mostrato l'ultima Analisi ({what})", i.label)
+                let what = if n == 1 { "1 item".to_string() } else { format!("{n} items") };
+                format!("{}: only what the last Analysis showed is touched ({what})", i.label)
             }
-            None => format!("{}: nessuna Analisi da usare, la voce non farà nulla. {}", i.label, crate::native::NO_PREVIEW),
+            None => format!("{}: no Analysis to use, the item will do nothing. {}", i.label, crate::native::NO_PREVIEW),
         })
         .collect()
 }
@@ -597,22 +588,22 @@ pub fn clean_option(
 ) -> RuleCleaned {
     let mut out = RuleCleaned::default();
     if opt.unsupported.is_some() {
-        out.note("Opzione non supportata: non pulita".to_string());
+        out.note("Option not supported: not cleaned".to_string());
         return out;
     }
     if found.cancelled {
-        out.note("Analisi interrotta: niente pulito".to_string());
+        out.note("Analysis interrupted: nothing cleaned".to_string());
         return out;
     }
     let bases = rule_bases(opt, env);
     for (path, size) in &found.files {
         if cancel.load(Ordering::Relaxed) {
-            out.note("Pulizia interrotta".to_string());
+            out.note("Cleanup interrupted".to_string());
             return out;
         }
         if !under_any(path, &bases) {
             out.failed += 1;
-            out.note(format!("Non toccato, fuori dalle cartelle della regola: {}", path.display()));
+            out.note(format!("Not touched, outside the rule's folders: {}", path.display()));
             continue;
         }
         match delete_path(path, guard) {
@@ -629,11 +620,11 @@ pub fn clean_option(
     }
     for dir in &found.dirs_to_remove {
         if cancel.load(Ordering::Relaxed) {
-            out.note("Pulizia interrotta".to_string());
+            out.note("Cleanup interrupted".to_string());
             return out;
         }
         if !under_any(dir, &bases) {
-            out.note(format!("Non toccata, fuori dalle cartelle della regola: {}", dir.display()));
+            out.note(format!("Not touched, outside the rule's folders: {}", dir.display()));
             continue;
         }
         // Una cartella che non si è svuotata (file in uso) resta: non è un errore.
@@ -646,7 +637,7 @@ pub fn clean_option(
             Ok(()) => items.push(item.clone()),
             Err(why) => {
                 out.failed += 1;
-                out.note(format!("Registro non toccato: {} ({why})", reg_text(item)));
+                out.note(format!("Registry not touched: {} ({why})", reg_text(item)));
             }
         }
     }
@@ -658,7 +649,7 @@ pub fn clean_option(
         Err(e) => {
             out.failed += items.len() as u64;
             out.note(format!(
-                "Backup del registro non riuscito ({e}): nessuna voce di registro eliminata"
+                "Registry backup failed ({e}): no registry item deleted"
             ));
             return out;
         }
@@ -668,12 +659,12 @@ pub fn clean_option(
         // Una voce che non c'era al backup non si cancella (potrebbe nascere
         // dopo, senza copia).
         if !backup.present.get(i).copied().unwrap_or(false) {
-            out.note(format!("Già assente: {}", reg_text(item)));
+            out.note(format!("Already gone: {}", reg_text(item)));
             continue;
         }
         match reg.delete(item) {
             Ok(true) => out.removed += 1,
-            Ok(false) => out.note(format!("Già assente: {}", reg_text(item))),
+            Ok(false) => out.note(format!("Already gone: {}", reg_text(item))),
             Err(e) => {
                 out.failed += 1;
                 out.note(format!("{}: {e}", reg_text(item)));
@@ -735,7 +726,7 @@ pub fn clean_checked(
 ) -> RuleCleaned {
     if let Some(why) = blocked(cleaner, opt, processes) {
         let mut out = RuleCleaned::default();
-        out.note(format!("Saltata: {why}"));
+        out.note(format!("Skipped: {why}"));
         return out;
     }
     clean_option(found, opt, env, guard, reg, cancel)
@@ -764,7 +755,7 @@ pub fn run_options(
     progress: &(dyn Fn(usize, String) + Sync),
     emit: &mut dyn FnMut(String, String, RuleFound, Option<RuleCleaned>),
 ) {
-    let verb = if also_clean { "Pulizia" } else { "Analisi" };
+    let verb = if also_clean { "Cleaning" } else { "Analyzing" };
     for (k, (c, o)) in chosen.iter().enumerate() {
         if run.cancel.load(Ordering::Relaxed) {
             return;
@@ -774,11 +765,11 @@ pub fn run_options(
         let key = key(c, o);
         if let Some(why) = blocked(c, o, &(run.processes)()) {
             let mut skipped = RuleCleaned::default();
-            skipped.note(format!("Saltata: {why}"));
+            skipped.note(format!("Skipped: {why}"));
             emit(key, label, RuleFound::default(), also_clean.then_some(skipped));
             continue;
         }
-        let tick = |n: u64| progress(k, format!("{verb} – {label} ({n} voci)"));
+        let tick = |n: u64| progress(k, format!("{verb} – {label} ({n} items)"));
         let ctl = CollectCtl { cancel: run.cancel, tick: &tick };
         let found = analyze_option(o, run.env, run.reg_exists, &ctl);
         let done = also_clean.then(|| {
@@ -1006,7 +997,7 @@ mod win {
             return Ok(None);
         }
         if rc != ERROR_SUCCESS {
-            return Err(format!("collegamento illeggibile (errore {rc})"));
+            return Err(format!("unreadable link (error {rc})"));
         }
         if ty != REG_LINK {
             return Ok(None);
@@ -1015,7 +1006,7 @@ mod win {
         // SAFETY: buffer della lunghezza appena letta.
         let rc = unsafe { RegQueryValueExW(key.0, name.as_ptr(), std::ptr::null(), &mut ty, buf.as_mut_ptr(), &mut len) };
         if rc != ERROR_SUCCESS || ty != REG_LINK {
-            return Err(format!("collegamento illeggibile (errore {rc})"));
+            return Err(format!("unreadable link (error {rc})"));
         }
         let words: Vec<u16> = buf[..len as usize].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         let s = String::from_utf16_lossy(&words);
@@ -1078,7 +1069,7 @@ mod win {
     fn open_chain(root: RegRoot, path: &str, last_access: u32) -> Result<Option<Key>, String> {
         let comps: Vec<&str> = path.split('\\').filter(|c| !c.is_empty()).collect();
         if comps.is_empty() {
-            return Err("percorso di registro vuoto".into());
+            return Err("empty registry path".into());
         }
         let mut cur: Option<Key> = None;
         for (i, comp) in comps.iter().enumerate() {
@@ -1091,7 +1082,7 @@ mod win {
             let key = match open_one(parent, comp, access) {
                 Ok(k) => k,
                 Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
-                Err(rc) => return Err(format!("non si apre (errore {rc})")),
+                Err(rc) => return Err(format!("cannot be opened (error {rc})")),
             };
             let key = match link_target(&key)? {
                 None => key,
@@ -1101,14 +1092,14 @@ mod win {
                     let k = match open_one(HKEY_USERS, &classes, access) {
                         Ok(k) => k,
                         Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
-                        Err(rc) => return Err(format!("non si apre (errore {rc})")),
+                        Err(rc) => return Err(format!("cannot be opened (error {rc})")),
                     };
                     if link_target(&k)?.is_some() {
-                        return Err("collegamento del registro: non si segue".into());
+                        return Err("registry link: not followed".into());
                     }
                     k
                 }
-                Some(_) => return Err("collegamento del registro: non si segue".into()),
+                Some(_) => return Err("registry link: not followed".into()),
             };
             cur = Some(key);
         }
@@ -1135,7 +1126,7 @@ mod win {
         match rc {
             ERROR_SUCCESS => Ok(true),
             ERROR_FILE_NOT_FOUND => Ok(false),
-            rc => Err(format!("valore illeggibile (errore {rc})")),
+            rc => Err(format!("unreadable value (error {rc})")),
         }
     }
 
@@ -1196,22 +1187,22 @@ mod win {
                 match rc {
                     ERROR_SUCCESS => Ok(true),
                     ERROR_FILE_NOT_FOUND => Ok(false),
-                    rc => Err(format!("valore non eliminato (errore {rc})")),
+                    rc => Err(format!("value not deleted (error {rc})")),
                 }
             }
             None => {
-                let (parent_path, name) = split_parent(path).ok_or("chiave senza padre")?;
+                let (parent_path, name) = split_parent(path).ok_or("key without a parent")?;
                 let Some(parent) = open_chain(root, &parent_path, KEY_READ | KEY_SET_VALUE | DELETE)? else {
                     return Ok(false);
                 };
                 let target = match open_one(parent.0, &name, KEY_READ) {
                     Ok(k) => k,
                     Err(ERROR_FILE_NOT_FOUND) => return Ok(false),
-                    Err(rc) => return Err(format!("non si apre (errore {rc})")),
+                    Err(rc) => return Err(format!("cannot be opened (error {rc})")),
                 };
                 let mut budget = TREE_BUDGET;
                 if !matches!(link_target(&target), Ok(None)) || tree_has_link(&target, &mut budget) {
-                    return Err("contiene un collegamento del registro o è troppo grande: non toccata".into());
+                    return Err("contains a registry link or is too large: not touched".into());
                 }
                 drop(target);
                 let w = wide(&name);
@@ -1220,7 +1211,7 @@ mod win {
                 match rc {
                     ERROR_SUCCESS => Ok(true),
                     ERROR_FILE_NOT_FOUND => Ok(false),
-                    rc => Err(format!("chiave non eliminata (errore {rc})")),
+                    rc => Err(format!("key not deleted (error {rc})")),
                 }
             }
         }
@@ -1296,7 +1287,7 @@ mod tests {
     }
 
     fn no_copy(_: &Path) -> Result<(String, String), String> {
-        Err("nessuna copia locale".to_string())
+        Err("no local copy".to_string())
     }
 
     fn opt(actions: Vec<Action>) -> Opt {
@@ -1386,7 +1377,7 @@ mod tests {
         fs::create_dir_all(t.path().join("profile").join("AppData").join("Local").join("Temp")).unwrap();
         let rs = load_with(&t.path().join("rules"), &env, &no_copy, &never);
         assert!(rs.cleaners.is_empty(), "{:?}", ids(&rs));
-        assert_eq!(rs.status, "Winapp2 non ancora scaricato");
+        assert_eq!(rs.status, "Winapp2 not downloaded yet");
         assert_eq!(rs.winapp2_version, None);
         // Cargo installato: compare solo lui.
         write(&t.path().join(r"profile\.cargo\registry\cache\index\a.crate"), "x");
@@ -1457,10 +1448,10 @@ mod tests {
         let read = |_: &Path| Ok((ini.to_string(), "260915".to_string()));
         let rs = load_with(&t.path().join("rules"), &env, &read, &never);
         assert_eq!(ids(&rs), vec!["bbag_cargo", "winapp2:Other App"]);
-        assert_eq!(rs.status, "Winapp2 260915 caricato");
+        assert_eq!(rs.status, "Winapp2 260915 loaded");
         assert_eq!(rs.winapp2_version.as_deref(), Some("260915"));
         assert_eq!(rs.sections, vec![("Utilities".to_string(), vec![1])]);
-        assert!(rs.warnings.iter().any(|w| w.contains("1 voce")), "{:?}", rs.warnings);
+        assert!(rs.warnings.iter().any(|w| w.contains("1 item")), "{:?}", rs.warnings);
     }
 
     #[test]
@@ -1519,7 +1510,7 @@ mod tests {
         let done = clean_option(&found, &o, &env, &guard, &reg, &AtomicBool::new(false));
         assert_eq!(*reg.log.lock().unwrap(), vec!["backup:2"]);
         assert_eq!((done.removed, done.failed), (0, 2));
-        assert!(done.notes.iter().any(|n| n.contains("Backup del registro non riuscito")), "{:?}", done.notes);
+        assert!(done.notes.iter().any(|n| n.contains("Registry backup failed")), "{:?}", done.notes);
     }
 
     #[test]
@@ -1533,7 +1524,7 @@ mod tests {
         assert_eq!(blocked(&c, &o, &["explorer.exe".into()]), None);
         assert_eq!(
             blocked(&c, &o, &["Claude.EXE".into()]).as_deref(),
-            Some("Chiudi claude.exe per pulire")
+            Some("Close claude.exe to clean")
         );
         // Spuntata prima, il processo parte prima della pulizia: si salta.
         let found = ctl_run(&o, &env);
@@ -1551,7 +1542,7 @@ mod tests {
         );
         assert_eq!(done.removed, 0);
         assert!(dir.join("a.tmp").exists());
-        assert!(done.notes.iter().any(|n| n.contains("Chiudi claude.exe")), "{:?}", done.notes);
+        assert!(done.notes.iter().any(|n| n.contains("Close claude.exe")), "{:?}", done.notes);
     }
 
     #[test]
@@ -1647,7 +1638,7 @@ mod tests {
         let mut winapp: Vec<String> = ids(&rs).into_iter().filter(|i| i.starts_with("winapp2:")).collect();
         winapp.sort();
         assert_eq!(winapp, vec!["winapp2:Cargo Whole", "winapp2:Mixed", "winapp2:Windows Temp"]);
-        assert!(rs.warnings.iter().any(|w| w.contains("1 voce")), "{:?}", rs.warnings);
+        assert!(rs.warnings.iter().any(|w| w.contains("1 item")), "{:?}", rs.warnings);
     }
 
     /// Una voce con chiavi di registro non si nasconde: l'inglobato non le copre.
@@ -1759,7 +1750,7 @@ mod tests {
             vec!["backup:3", r"delete:Software\FakeApp\A", r"delete:Software\FakeApp\C"]
         );
         assert_eq!((done.removed, done.failed), (1, 0), "{:?}", done.notes);
-        assert_eq!(done.notes.iter().filter(|n| n.starts_with("Già assente")).count(), 2, "{:?}", done.notes);
+        assert_eq!(done.notes.iter().filter(|n| n.starts_with("Already gone")).count(), 2, "{:?}", done.notes);
     }
 
     /// M10: nessuna chiave esistente → niente file di backup, niente nota.
@@ -1802,7 +1793,7 @@ mod tests {
         assert!(sibling.exists());
         assert!(t.path().join(r"profile\Documents").exists());
         assert_eq!((done.removed, done.failed), (1, 2), "{:?}", done.notes);
-        assert!(done.notes.iter().any(|n| n.contains("fuori dalle cartelle")), "{:?}", done.notes);
+        assert!(done.notes.iter().any(|n| n.contains("outside the rule's folders")), "{:?}", done.notes);
     }
 
     /// I4: la lista dei processi si rilegge subito prima dell'analisi e subito
@@ -1838,7 +1829,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         let b_done = rows[1].2.as_ref().unwrap();
         assert_eq!(b_done.removed, 0);
-        assert!(b_done.notes.iter().any(|n| n.contains("Chiudi b.exe")), "{:?}", b_done.notes);
+        assert!(b_done.notes.iter().any(|n| n.contains("Close b.exe")), "{:?}", b_done.notes);
         // Solo analisi: una lettura per opzione.
         calls.store(0, Ordering::SeqCst);
         let mut rows = Vec::new();
@@ -2136,16 +2127,11 @@ mod tests {
     #[test]
     fn status_text_for_each_outcome() {
         let text = |o: UpdateOutcome| status_text(Winapp2Status::Outcome(&o));
-        assert_eq!(text(UpdateOutcome::Updated { version: "261001".into() }), "Winapp2 261001 aggiornato");
-        assert_eq!(text(UpdateOutcome::UpToDate), "Winapp2 già aggiornato");
-        assert_eq!(text(UpdateOutcome::KeptOld("tempo scaduto".into())), "Winapp2 non aggiornato: tempo scaduto");
-        assert_eq!(text(UpdateOutcome::NoCopyYet("tempo scaduto".into())), "Winapp2 non ancora scaricato");
-        assert_eq!(status_text(Winapp2Status::Loaded("260915")), "Winapp2 260915 caricato");
-        // Motivi con termini inglesi: tradotti con la tabella chiusa.
-        assert_eq!(
-            text(UpdateOutcome::KeptOld("header senza riga di stato".into())),
-            "Winapp2 non aggiornato: risposta del server senza riga di stato"
-        );
+        assert_eq!(text(UpdateOutcome::Updated { version: "261001".into() }), "Winapp2 261001 updated");
+        assert_eq!(text(UpdateOutcome::UpToDate), "Winapp2 already up to date");
+        assert_eq!(text(UpdateOutcome::KeptOld("timed out".into())), "Winapp2 not updated: timed out");
+        assert_eq!(text(UpdateOutcome::NoCopyYet("timed out".into())), "Winapp2 not downloaded yet");
+        assert_eq!(status_text(Winapp2Status::Loaded("260915")), "Winapp2 260915 loaded");
     }
 
     #[test]
@@ -2155,25 +2141,25 @@ mod tests {
         let old = load_with(&t.path().join("rules"), &env, &ini_reader("260915"), &never);
         let none = load_with(&t.path().join("rules"), &env, &no_copy, &never);
         // Aggiornamento in corso: la copia caricata.
-        assert_eq!(status_line(&old, None), ("Winapp2 260915 caricato".to_string(), None));
-        assert_eq!(status_line(&none, None).0, "Winapp2 non ancora scaricato");
+        assert_eq!(status_line(&old, None), ("Winapp2 260915 loaded".to_string(), None));
+        assert_eq!(status_line(&none, None).0, "Winapp2 not downloaded yet");
         // Scaricato ma non ancora ricaricato: resta "caricato" finché non arriva il nuovo RuleSet.
         let updated = UpdateOutcome::Updated { version: "261001".into() };
-        assert_eq!(status_line(&old, Some(&updated)).0, "Winapp2 260915 caricato");
+        assert_eq!(status_line(&old, Some(&updated)).0, "Winapp2 260915 loaded");
         let new = load_with(&t.path().join("rules"), &env, &ini_reader("261001"), &never);
-        assert_eq!(status_line(&new, Some(&updated)).0, "Winapp2 261001 aggiornato");
-        assert_eq!(status_line(&old, Some(&UpdateOutcome::UpToDate)).0, "Winapp2 già aggiornato");
+        assert_eq!(status_line(&new, Some(&updated)).0, "Winapp2 261001 updated");
+        assert_eq!(status_line(&old, Some(&UpdateOutcome::UpToDate)).0, "Winapp2 already up to date");
         // Nessuna copia: il motivo al passaggio del mouse.
-        let (text, hover) = status_line(&none, Some(&UpdateOutcome::NoCopyYet("tempo scaduto".into())));
-        assert_eq!(text, "Winapp2 non ancora scaricato");
-        assert_eq!(hover.as_deref(), Some("tempo scaduto"));
+        let (text, hover) = status_line(&none, Some(&UpdateOutcome::NoCopyYet("timed out".into())));
+        assert_eq!(text, "Winapp2 not downloaded yet");
+        assert_eq!(hover.as_deref(), Some("timed out"));
     }
 
     #[test]
     fn about_text_is_the_winapp2_attribution() {
         assert_eq!(
             ABOUT_RULES,
-            "Le regole di pulizia delle applicazioni vengono da Winapp2 (https://github.com/MoscaDotTo/Winapp2), licenza CC-BY-SA-4.0, scaricate a ogni avvio."
+            "The cleaning rules for applications come from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every start."
         );
         assert!(!ABOUT_RULES.to_lowercase().contains("bleachbit"));
     }
@@ -2205,8 +2191,8 @@ mod tests {
         // Gli altri esiti: solo il messaggio, nessun ricaricamento.
         for o in [
             UpdateOutcome::UpToDate,
-            UpdateOutcome::KeptOld("tempo scaduto".into()),
-            UpdateOutcome::NoCopyYet("tempo scaduto".into()),
+            UpdateOutcome::KeptOld("timed out".into()),
+            UpdateOutcome::NoCopyYet("timed out".into()),
         ] {
             msgs.borrow_mut().clear();
             after_update(o.clone(), || panic!("nessun ricaricamento per {o:?}"), &notify);
@@ -2536,7 +2522,7 @@ mod tests {
         let again = clean_real(&found, &o, &env, &mut cleanup);
         eprintln!("(d) di nuovo {again:?}");
         assert_eq!((again.removed, again.failed), (0, 0), "(d) di nuovo {:?}", again.notes);
-        assert!(again.notes.iter().any(|n| n.starts_with("Già assente")), "(d) di nuovo {:?}", again.notes);
+        assert!(again.notes.iter().any(|n| n.starts_with("Already gone")), "(d) di nuovo {:?}", again.notes);
         assert_eq!(again.backup, None, "(d) backup di una chiave assente");
 
         // (e) due pulizie di fila: due backup diversi.
@@ -2611,11 +2597,11 @@ mod tests {
         assert_eq!(native_blocked(&item, &["explorer.exe".to_string()]), None);
         assert_eq!(
             native_blocked(&item, &["firefox.EXE".to_string()]),
-            Some("Chiudi Firefox.exe per pulire".to_string())
+            Some("Close Firefox.exe to clean".to_string())
         );
         assert_eq!(
             native_blocked(&item, &["Thunderbird.exe".to_string(), "firefox.exe".to_string()]),
-            Some("Chiudi Firefox.exe, thunderbird per pulire".to_string())
+            Some("Close Firefox.exe, thunderbird to clean".to_string())
         );
         // Bloccata = non abilita «Avvia pulizia» e non dà avvisi.
         let items = [item, native("acceso", "Windows", &[])];
@@ -2645,9 +2631,9 @@ mod tests {
         };
         let notes = preview_notes(&[&plain, &seen, &never, &empty], &shown);
         assert_eq!(notes.len(), 3, "{notes:?}");
-        assert!(notes[0].starts_with("Vista:") && notes[0].contains("3 elementi"), "{notes:?}");
+        assert!(notes[0].starts_with("Vista:") && notes[0].contains("3 items"), "{notes:?}");
         assert!(notes[1].starts_with("Mai vista:") && notes[1].contains(crate::native::NO_PREVIEW), "{notes:?}");
-        assert!(notes[2].starts_with("Vuota:") && notes[2].contains("non si tocca nulla"), "{notes:?}");
+        assert!(notes[2].starts_with("Vuota:") && notes[2].contains("nothing is touched"), "{notes:?}");
     }
 
     #[test]

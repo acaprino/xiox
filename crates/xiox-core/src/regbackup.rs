@@ -84,7 +84,7 @@ fn export_all(
         let tmp = dir.join(format!("{n}.reg"));
         tmp_files.push(tmp.clone());
         let full = format!("{}\\{path}", root_name(*root));
-        export(*root, path, &tmp).map_err(|e| format!("{full} non esportata: {e}"))?;
+        export(*root, path, &tmp).map_err(|e| format!("{full} not exported: {e}"))?;
         let bytes = std::fs::read(&tmp).map_err(|e| format!("{full}: {e}"))?;
         let words: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         let s = String::from_utf16_lossy(&words);
@@ -99,9 +99,9 @@ fn export_all(
 fn check_real_dir(dir: &Path) -> Result<(), String> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let md = std::fs::symlink_metadata(dir).map_err(|e| format!("cartella dei backup {}: {e}", dir.display()))?;
+    let md = std::fs::symlink_metadata(dir).map_err(|e| format!("backup folder {}: {e}", dir.display()))?;
     if md.file_type().is_symlink() || md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !md.is_dir() {
-        return Err(format!("cartella dei backup non valida (collegamento?): {}", dir.display()));
+        return Err(format!("backup folder not valid (link?): {}", dir.display()));
     }
     Ok(())
 }
@@ -123,7 +123,7 @@ fn write_new(dir: &Path, stem: &str, data: &[u8]) -> Result<PathBuf, String> {
             Err(e) => return Err(format!("{}: {e}", path.display())),
         }
     }
-    Err("troppi backup con lo stesso nome".into())
+    Err("too many backups with the same name".into())
 }
 
 /// `%SystemRoot%\System32` da `GetSystemDirectoryW`.
@@ -138,7 +138,7 @@ fn system_dir() -> Option<PathBuf> {
 /// L'esportazione vera: `reg.exe` di sistema (percorso assoluto), senza
 /// finestra né shell, vista a 64 bit.
 pub fn reg_exe_export(root: RegRoot, path: &str, out: &Path) -> Result<(), String> {
-    let reg = system_dir().map(|d| d.join("reg.exe")).filter(|p| p.is_file()).ok_or("reg.exe non trovato")?;
+    let reg = system_dir().map(|d| d.join("reg.exe")).filter(|p| p.is_file()).ok_or("reg.exe not found")?;
     let full = format!("{}\\{path}", root_name(root));
     let mut cmd = std::process::Command::new(&reg);
     {
@@ -157,7 +157,7 @@ pub fn reg_exe_export(root: RegRoot, path: &str, out: &Path) -> Result<(), Strin
     if st.success() {
         Ok(())
     } else {
-        Err(format!("reg.exe terminato con codice {}", st.code().unwrap_or(-1)))
+        Err(format!("reg.exe ended with code {}", st.code().unwrap_or(-1)))
     }
 }
 
@@ -167,13 +167,13 @@ pub fn reg_exe_export(root: RegRoot, path: &str, out: &Path) -> Result<(), Strin
 /// il backup fallisce: niente esportazioni in una cartella dell'utente.
 pub fn admin_work_dir() -> Result<PathBuf, String> {
     let app = xiox_rules::updater::data_dir();
-    let base = app.parent().ok_or("cartella dati senza padre")?.join("tmp");
-    xiox_rules::updater::secure_dir(&base).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+    let base = app.parent().ok_or("data folder without a parent")?.join("tmp");
+    xiox_rules::updater::secure_dir(&base).map_err(|e| format!("work folder not protected: {e}"))?;
     let dir = base.join(random_name());
     if dir.exists() {
-        return Err("cartella di lavoro già esistente".into());
+        return Err("work folder already exists".into());
     }
-    xiox_rules::updater::secure_dir(&dir).map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+    xiox_rules::updater::secure_dir(&dir).map_err(|e| format!("work folder not protected: {e}"))?;
     Ok(dir)
 }
 
@@ -195,7 +195,7 @@ pub fn work_dir() -> Result<PathBuf, String> {
 /// nuova, senza collegamenti nel percorso. Solo per un processo **non**
 /// elevato (vedi [`work_dir`]).
 pub fn user_work_dir() -> Result<PathBuf, String> {
-    let local = crate::sysclean::local_app_data_dir().ok_or("cartella AppData\\Local non trovata")?;
+    let local = crate::sysclean::local_app_data_dir().ok_or("AppData\\Local folder not found")?;
     user_work_dir_in(&local)
 }
 
@@ -204,13 +204,13 @@ pub fn user_work_dir() -> Result<PathBuf, String> {
 pub fn user_work_dir_in(local: &Path) -> Result<PathBuf, String> {
     let base = xiox_model::legacy::app_dir_in(local).join("tmp");
     if has_link_in_chain(&base) {
-        return Err("cartella di lavoro dietro un collegamento".into());
+        return Err("work folder behind a link".into());
     }
-    std::fs::create_dir_all(&base).map_err(|e| format!("cartella di lavoro {}: {e}", base.display()))?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("work folder {}: {e}", base.display()))?;
     check_real_dir(&base)?;
     let dir = base.join(random_name());
     // `create_dir` (non `_all`): fallisce se esiste già.
-    std::fs::create_dir(&dir).map_err(|e| format!("cartella di lavoro {}: {e}", dir.display()))?;
+    std::fs::create_dir(&dir).map_err(|e| format!("work folder {}: {e}", dir.display()))?;
     check_real_dir(&dir)?;
     Ok(dir)
 }
@@ -220,7 +220,7 @@ pub fn user_work_dir_in(local: &Path) -> Result<PathBuf, String> {
 /// sincronizzata con OneDrive) e non sincronizzata, con l'ACL ristretta
 /// all'utente `user_sid`, a SYSTEM e agli amministratori ([`private_dir`]).
 pub fn private_backup_dir(user_sid: &str) -> Result<PathBuf, String> {
-    let local = crate::sysclean::local_app_data_dir().ok_or("cartella AppData\\Local non trovata")?;
+    let local = crate::sysclean::local_app_data_dir().ok_or("AppData\\Local folder not found")?;
     let dir = private_backup_path_in(&local);
     private_dir(&dir, user_sid)?;
     Ok(dir)
@@ -250,14 +250,14 @@ pub fn private_icacls_args(dir: &Path, user_sid: &str) -> Vec<std::ffi::OsString
 /// `icacls` non riesce: `Err` (il backup non si fa).
 pub fn private_dir(dir: &Path, user_sid: &str) -> Result<(), String> {
     if user_sid.is_empty() || !user_sid.starts_with("S-1-") || !user_sid.bytes().all(|b| b.is_ascii_digit() || b == b'-' || b == b'S') {
-        return Err(format!("SID dell'utente non valido: {user_sid}"));
+        return Err(format!("invalid user SID: {user_sid}"));
     }
     if has_link_in_chain(dir) {
-        return Err(format!("cartella dei backup dietro un collegamento: {}", dir.display()));
+        return Err(format!("backup folder behind a link: {}", dir.display()));
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("cartella dei backup {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("backup folder {}: {e}", dir.display()))?;
     check_real_dir(dir)?;
-    let icacls = system_dir().map(|d| d.join("icacls.exe")).filter(|p| p.is_file()).ok_or("icacls.exe non trovato")?;
+    let icacls = system_dir().map(|d| d.join("icacls.exe")).filter(|p| p.is_file()).ok_or("icacls.exe not found")?;
     let mut cmd = std::process::Command::new(&icacls);
     {
         use std::os::windows::process::CommandExt;
@@ -271,7 +271,7 @@ pub fn private_dir(dir: &Path, user_sid: &str) -> Result<(), String> {
         .status()
         .map_err(|e| format!("icacls.exe: {e}"))?;
     if !st.success() {
-        return Err(format!("permessi della cartella dei backup non impostati (icacls, codice {})", st.code().unwrap_or(-1)));
+        return Err(format!("backup folder permissions not set (icacls, code {})", st.code().unwrap_or(-1)));
     }
     check_real_dir(dir)
 }

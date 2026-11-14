@@ -72,9 +72,9 @@ fn analyze_native(id: &str) -> NativeFound {
     let item = crate::native::all()
         .into_iter()
         .find(|i| i.id == id)
-        .unwrap_or_else(|| panic!("voce nativa {id} assente"));
+        .unwrap_or_else(|| panic!("native item {id} missing"));
     println!(
-        "voce {id}: «{}», default_on={}, needs_admin={}",
+        "item {id}: “{}”, default_on={}, needs_admin={}",
         item.label, item.default_on, item.needs_admin
     );
     (item.analyze)(&ctx)
@@ -195,7 +195,7 @@ impl Drop for Apartment {
 
 /// Destinazioni di un `.lnk` (`GetPath` normale e `SLGP_RAWPATH`).
 fn shell_targets(lnk: &Path) -> Result<Vec<OsString>, String> {
-    let _apt = Apartment::enter().ok_or("CoInitializeEx non riuscito")?;
+    let _apt = Apartment::enter().ok_or("CoInitializeEx failed")?;
     let mut raw: *mut c_void = null_mut();
     // SAFETY: CLSID e IID validi; `raw` riceve un IShellLinkW (rilasciato da `Com`).
     let hr = unsafe { CoCreateInstance(&ShellLink, null_mut(), CLSCTX_INPROC_SERVER, &IID_ISHELLLINKW, &mut raw) };
@@ -356,7 +356,7 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
         return c;
     }
     let Some(flags) = header_flags(lnk) else {
-        c.note = "intestazione non leggibile".into();
+        c.note = "header not readable".into();
         return c;
     };
     c.flags = Some(flags);
@@ -384,14 +384,14 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
     for t in &raw {
         let Some(s) = t.to_str() else {
             c.kind = Kind::NonGiudicabile;
-            c.note = "destinazione non Unicode".into();
+            c.note = "target is not Unicode".into();
             return c;
         };
         c.targets.push(s.to_string());
         let s = s.trim();
         if s.encode_utf16().count() >= MAX_TARGET_LEN {
             c.kind = Kind::NonGiudicabile;
-            c.note = "destinazione lunga".into();
+            c.note = "long target".into();
             return c;
         }
         let low = s.to_lowercase();
@@ -401,12 +401,12 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
                 .any(|v| low.contains(v))
         {
             c.kind = Kind::ComunePerUtente;
-            c.note = "variabile per utente in cartella comune".into();
+            c.note = "per-user variable in a common folder".into();
             return c;
         }
         let Some(e) = expand(s, env) else {
             c.kind = Kind::NonGiudicabile;
-            c.note = "variabile sconosciuta".into();
+            c.note = "unknown variable".into();
             return c;
         };
         let e = e.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(e);
@@ -422,7 +422,7 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
         let in_other_profile = users.as_ref().is_some_and(|u| under(u) && !under(&u.join("Public")));
         if common && in_other_profile {
             c.kind = Kind::ComunePerUtente;
-            c.note = "destinazione nel profilo di un utente, in cartella comune".into();
+            c.note = "target in a user profile, in a common folder".into();
             return c;
         }
         expanded.push(p);
@@ -438,13 +438,13 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
             Walk::Reparse(at) => {
                 all_missing = false;
                 c.kind = Kind::Reparse;
-                c.note = format!("punto di reparse in {}", at.display());
+                c.note = format!("reparse point in {}", at.display());
             }
             Walk::Error(code) => {
                 all_missing = false;
                 if c.kind != Kind::Reparse {
                     c.kind = Kind::Errore;
-                    c.note = format!("errore {code:?}");
+                    c.note = format!("error {code:?}");
                 }
             }
         }
@@ -457,7 +457,7 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
             .filter(|t| std::fs::symlink_metadata(t).is_ok())
             .collect();
         if !found_twin.is_empty() {
-            c.note = format!("gemella WOW64 presente: {}", found_twin.join(" | "));
+            c.note = format!("WOW64 twin present: {}", found_twin.join(" | "));
         }
     }
     c
@@ -467,7 +467,7 @@ fn classify(lnk: &Path, common: bool, env: &Env, guard: &Guard) -> Classified {
 // N4: collegamenti non validi.
 
 #[test]
-#[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
+#[ignore = "live, read only: cargo test live_ -- --ignored --nocapture"]
 fn live_broken_shortcuts_analysis() {
     let found = analyze_native("broken_shortcuts");
     print_found(&found);
@@ -480,7 +480,7 @@ fn live_broken_shortcuts_analysis() {
     let guard = Guard::new(&env);
     let (dirs, notes) = sysclean::shortcut_dirs(&env, &common_dirs());
     for n in notes {
-        println!("nota cartelle: {n}");
+        println!("folders note: {n}");
     }
     let mut counts: std::collections::BTreeMap<Kind, u64> = Default::default();
     let mut missing: Vec<(String, Classified)> = Vec::new();
@@ -488,7 +488,7 @@ fn live_broken_shortcuts_analysis() {
     for d in &dirs {
         let lnks = sysclean::list_lnk(&d.path, d.recursive);
         println!(
-            "cartella {} (ricorsiva={}, comune={}): {} .lnk",
+            "folder {} (recursive={}, common={}): {} .lnk",
             d.path.display(),
             d.recursive,
             d.common,
@@ -514,7 +514,7 @@ fn live_broken_shortcuts_analysis() {
             }
         }
     }
-    println!("totale .lnk: {total}");
+    println!("total .lnk: {total}");
     for (k, n) in &counts {
         println!("  {k:?}: {n}");
     }
@@ -527,14 +527,14 @@ fn live_broken_shortcuts_analysis() {
         .collect();
     for (t, c) in &missing {
         if !proposed.contains(&t.to_lowercase()) {
-            println!("mancante ma non proposto (atteso con gemella WOW64): {t} [{}]", c.note);
+            println!("missing but not proposed (expected with a WOW64 twin): {t} [{}]", c.note);
         }
     }
     let unexpected: Vec<&String> = found.items.iter().filter(|p| !mine.contains(&p.to_lowercase())).collect();
     for p in &unexpected {
-        println!("DIFETTO: proposto ma non mancante per la verifica indipendente: {p}");
+        println!("DEFECT: proposed but not missing for the independent check: {p}");
     }
-    assert!(unexpected.is_empty(), "collegamenti proposti senza conferma: {unexpected:?}");
+    assert!(unexpected.is_empty(), "shortcuts proposed without confirmation: {unexpected:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -558,7 +558,7 @@ fn channel_info(name: &str) -> String {
     // SAFETY: sessione locale, nome terminato da zero; chiuso da `Evt`.
     let cfg = Evt(unsafe { EvtOpenChannelConfig(0, w.as_ptr(), 0) });
     if cfg.0 == 0 {
-        out.push(format!("config non aperta: {}", last_error()));
+        out.push(format!("config not opened: {}", last_error()));
     } else {
         let mut v = EVT_VARIANT::default();
         let mut used = 0u32;
@@ -568,15 +568,15 @@ fn channel_info(name: &str) -> String {
         };
         if ok != 0 && v.Type == EvtVarTypeUInt32 as u32 {
             // SAFETY: il tipo dice UInt32.
-            out.push(format!("tipo={}", unsafe { v.Anonymous.UInt32Val }));
+            out.push(format!("type={}", unsafe { v.Anonymous.UInt32Val }));
         } else {
-            out.push(format!("tipo non letto: {}", last_error()));
+            out.push(format!("type not read: {}", last_error()));
         }
     }
     // SAFETY: come sopra.
     let log = Evt(unsafe { EvtOpenLog(0, w.as_ptr(), EvtOpenChannelPath) });
     if log.0 == 0 {
-        out.push(format!("registro non aperto: {}", last_error()));
+        out.push(format!("registry not opened: {}", last_error()));
         return out.join(", ");
     }
     for (label, prop) in [("eventi", EvtLogNumberOfLogRecords), ("byte", EvtLogFileSize)] {
@@ -588,14 +588,14 @@ fn channel_info(name: &str) -> String {
             // SAFETY: il tipo dice UInt64.
             out.push(format!("{label}={}", unsafe { v.Anonymous.UInt64Val }));
         } else {
-            out.push(format!("{label} non letto: {}", last_error()));
+            out.push(format!("{label} not read: {}", last_error()));
         }
     }
     out.join(", ")
 }
 
 #[test]
-#[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
+#[ignore = "live, read only: cargo test live_ -- --ignored --nocapture"]
 fn live_event_channels_analysis() {
     let found = analyze_native("event_logs");
     print_found(&found);
@@ -603,10 +603,10 @@ fn live_event_channels_analysis() {
         println!("CANALE\t{c}");
     }
     for name in ["Application", "System", "Setup", "Security"] {
-        println!("lettura diretta {name}: {}", channel_info(name));
+        println!("direct read {name}: {}", channel_info(name));
     }
     let bad: Vec<&String> = found.items.iter().filter(|c| !sysclean::is_clearable_channel(c)).collect();
-    assert!(bad.is_empty(), "canali non ammessi proposti: {bad:?}");
+    assert!(bad.is_empty(), "channels not allowed were proposed: {bad:?}");
     assert_eq!(found.count as usize, found.items.len());
 }
 
@@ -614,24 +614,24 @@ fn live_event_channels_analysis() {
 // N1 e N2: Appunti e DNS (nessuna azione).
 
 #[test]
-#[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
+#[ignore = "live, read only: cargo test live_ -- --ignored --nocapture"]
 fn live_clipboard_and_dns_probe() {
     // SAFETY: nessun argomento; non apre gli Appunti.
     let formats = unsafe { CountClipboardFormats() };
     println!("CountClipboardFormats = {formats}");
     let found = analyze_native("clipboard");
     print_found(&found);
-    assert_eq!(found.count, u64::from(formats > 0), "l'analisi degli Appunti non segue CountClipboardFormats");
+    assert_eq!(found.count, u64::from(formats > 0), "the clipboard analysis does not follow CountClipboardFormats");
 
     let found = analyze_native("dns_cache");
     print_found(&found);
     let name = wide("dnsapi.dll");
     // SAFETY: nome terminato da zero, solo System32, nessun file; liberato sotto.
     let module = unsafe { LoadLibraryExW(name.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
-    assert!(!module.is_null(), "dnsapi.dll non caricata: {}", last_error());
+    assert!(!module.is_null(), "dnsapi.dll not loaded: {}", last_error());
     // SAFETY: modulo valido, nome ANSI terminato da zero. Il puntatore NON si chiama.
     let proc = unsafe { GetProcAddress(module, c"DnsFlushResolverCache".as_ptr().cast()) };
-    println!("DnsFlushResolverCache risolta (non chiamata): {}", proc.map(|f| format!("{:p}", f as *const ())).unwrap_or("assente".into()));
+    println!("DnsFlushResolverCache resolved (not called): {}", proc.map(|f| format!("{:p}", f as *const ())).unwrap_or("missing".into()));
     // SAFETY: libera il modulo caricato sopra.
     unsafe { FreeLibrary(module) };
     let mut buf = [0u16; 520];
@@ -639,15 +639,15 @@ fn live_clipboard_and_dns_probe() {
     let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
     let sys = PathBuf::from(String::from_utf16_lossy(&buf[..n]));
     let ipconfig = sys.join("ipconfig.exe");
-    println!("ripiego {} presente: {}", ipconfig.display(), ipconfig.is_file());
-    assert!(proc.is_some() || ipconfig.is_file(), "né DnsFlushResolverCache né ipconfig.exe");
+    println!("fallback {} present: {}", ipconfig.display(), ipconfig.is_file());
+    assert!(proc.is_some() || ipconfig.is_file(), "neither DnsFlushResolverCache nor ipconfig.exe");
 }
 
 // ---------------------------------------------------------------------------
 // Cartelle note dei collegamenti.
 
 #[test]
-#[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
+#[ignore = "live, read only: cargo test live_ -- --ignored --nocapture"]
 fn live_known_folders() {
     for (name, id) in [
         ("StartMenu (utente)", &FOLDERID_StartMenu),
@@ -656,8 +656,8 @@ fn live_known_folders() {
         ("PublicDesktop", &FOLDERID_PublicDesktop),
     ] {
         match known_folder(id) {
-            Ok(p) => println!("{name}: {} (esiste: {})", p.display(), p.is_dir()),
-            Err(e) => println!("{name}: non risolta ({e})"),
+            Ok(p) => println!("{name}: {} (exists: {})", p.display(), p.is_dir()),
+            Err(e) => println!("{name}: not resolved ({e})"),
         }
     }
     let env = Env::for_rules();
@@ -667,7 +667,7 @@ fn live_known_folders() {
     let common = common_dirs();
     let (dirs, notes) = sysclean::shortcut_dirs(&env, &common);
     for d in &dirs {
-        println!("cartella usata da N4: {} (ricorsiva={}, comune={})", d.path.display(), d.recursive, d.common);
+        println!("folder used by N4: {} (recursive={}, common={})", d.path.display(), d.recursive, d.common);
     }
     for n in &notes {
         println!("nota: {n}");
@@ -676,18 +676,18 @@ fn live_known_folders() {
     let user_desktop = known_folder(&FOLDERID_Desktop).ok();
     let same = |a: &Path, b: &Path| a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy());
     for (label, kf, recursive, is_common) in [
-        ("Menu Start dell'utente", user_start, true, false),
-        ("Desktop dell'utente", user_desktop, false, false),
-        ("Menu Start comune", common.start_menu.clone(), true, true),
-        ("Desktop pubblico", common.public_desktop.clone(), false, true),
+        ("User Start menu", user_start, true, false),
+        ("User Desktop", user_desktop, false, false),
+        ("Common Start menu", common.start_menu.clone(), true, true),
+        ("Public Desktop", common.public_desktop.clone(), false, true),
     ] {
         let used = dirs.iter().find(|d| d.recursive == recursive && d.common == is_common);
         match (kf, used) {
-            (Some(k), Some(u)) if same(&k, &u.path) => println!("OK {label}: cartella nota = cartella usata"),
-            (k, u) => println!("DIVERSA {label}: nota {k:?}, usata {:?}", u.map(|d| &d.path)),
+            (Some(k), Some(u)) if same(&k, &u.path) => println!("OK {label}: known folder = folder used"),
+            (k, u) => println!("DIFFERENT {label}: known {k:?}, used {:?}", u.map(|d| &d.path)),
         }
     }
-    assert_eq!(dirs.len(), 4, "N4 non usa tutte e quattro le cartelle: {notes:?}");
+    assert_eq!(dirs.len(), 4, "N4 does not use all four folders: {notes:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -709,25 +709,25 @@ fn hkcu_key_info(path: &str) -> Option<(usize, usize)> {
 }
 
 #[test]
-#[ignore = "dal vivo, sola lettura: cargo test live_ -- --ignored --nocapture"]
+#[ignore = "live, read only: cargo test live_ -- --ignored --nocapture"]
 fn live_windows_extra_registry_analysis() {
     let env = Env::for_rules();
     let (all, warnings) = xiox_rules::embedded(&env);
     for w in &warnings {
-        println!("avviso embedded: {w}");
+        println!("embedded warning: {w}");
     }
     let cancel = AtomicBool::new(false);
     let tick = |_: u64| {};
     let ctl = CollectCtl { cancel: &cancel, tick: &tick };
     let mut found_reg: Vec<RegItem> = Vec::new();
     for id in ["windows_extra", "safari"] {
-        let cleaner = all.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("cleaner {id} assente"));
+        let cleaner = all.iter().find(|c| c.id == id).unwrap_or_else(|| panic!("cleaner {id} missing"));
         let present = xiox_rules::present(cleaner, &env, &crate::rules::reg_exists);
-        println!("== {id} «{}» (gruppo {}, presente su questo PC: {present})", cleaner.label, cleaner.group);
+        println!("== {id} “{}” (group {}, present on this PC: {present})", cleaner.label, cleaner.group);
         for opt in &cleaner.options {
             let f = crate::rules::analyze_option(opt, &env, &crate::rules::reg_exists, &ctl);
             println!(
-                "OPZIONE {id}/{}: file={} byte={} cartelle={} registro={} saltati={} non_supportata={:?}",
+                "OPTION {id}/{}: files={} bytes={} folders={} registry={} skipped={} unsupported={:?}",
                 opt.id,
                 f.files.len(),
                 f.bytes,
@@ -740,13 +740,13 @@ fn live_windows_extra_registry_analysis() {
                 println!("    file: {} ({size} byte)", p.display());
             }
             if f.files.len() > 5 {
-                println!("    … e altri {} file", f.files.len() - 5);
+                println!("    … and {} more file", f.files.len() - 5);
             }
             for r in &f.reg {
-                println!("    registro: {}", reg_text(r));
+                println!("    registry: {}", reg_text(r));
             }
             for why in &f.skipped_reasons {
-                println!("    saltato: {why}");
+                println!("    skipped: {why}");
             }
             found_reg.extend(f.reg);
         }
@@ -770,13 +770,13 @@ fn live_windows_extra_registry_analysis() {
         println!(
             "CONTROLLO HKCU\\{path}: {} — nell'anteprima: {in_preview}",
             match info {
-                Some((k, v)) => format!("esiste ({k} sottochiavi, {v} valori)"),
-                None => "non esiste".to_string(),
+                Some((k, v)) => format!("exists ({k} subkeys, {v} values)"),
+                None => "does not exist".to_string(),
             }
         );
         if info.is_some() && !in_preview {
             missed.push(path);
         }
     }
-    assert!(missed.is_empty(), "chiavi esistenti non trovate dall'anteprima: {missed:?}");
+    assert!(missed.is_empty(), "existing keys not found by the preview: {missed:?}");
 }

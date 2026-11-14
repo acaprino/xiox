@@ -105,24 +105,24 @@ pub trait Fill {
 // ---------------------------------------------------------------------------
 // Voce.
 
-pub const DESCRIPTION: &str = "Sovrascrive con zeri lo spazio libero del solo disco di sistema (C:) perché i file già \
-     cancellati non si possano recuperare. Copertura parziale: non si toccano gli altri dischi, né la MFT (i file \
-     piccolissimi cancellati possono restare), né le copie shadow dei punti di ripristino, e circa 1 GB resta non \
-     sovrascritto (la riserva). Solo su dischi rigidi (HDD) NTFS con almeno 2 GB liberi; sugli SSD si rifiuta, perché \
-     Windows usa TRIM. Alcuni controller RAID o dischi virtuali si dichiarano HDD anche su SSD. Alla fine i file di \
-     riempimento si cancellano.";
+pub const DESCRIPTION: &str = "Overwrites with zeros the free space of the system disk only (C:) so that files already \
+     deleted cannot be recovered. Partial coverage: the other disks are not touched, nor the MFT (very small \
+     deleted files may remain), nor the shadow copies of the restore points, and about 1 GB stays not \
+     overwritten (the reserve). Only on NTFS hard disks (HDD) with at least 2 GB free; on SSDs it refuses, because \
+     Windows uses TRIM. Some RAID controllers or virtual disks declare themselves HDD even on SSD. At the end the \
+     fill files are deleted.";
 
-pub const WARNING: &str = "Sovrascrive lo spazio libero del solo disco di sistema (niente MFT, niente altri dischi) \
-     perché i file cancellati non si possano recuperare. Può richiedere ore; durante la scrittura il disco resta quasi \
-     pieno (si lascia almeno 1 GB libero) e gli altri programmi possono non riuscire a scrivere: chiudili prima. I file \
-     cancellati dopo l'ultimo punto di ripristino possono restare nelle copie shadow, e con poco spazio libero Windows \
-     può eliminare i punti di ripristino. Su SSD la voce si rifiuta.";
+pub const WARNING: &str = "Overwrites the free space of the system disk only (no MFT, no other disks) \
+     so that deleted files cannot be recovered. It can take hours; while writing, the disk stays almost \
+     full (at least 1 GB is left free) and other programs may fail to write: close them first. Files \
+     deleted after the last restore point may remain in the shadow copies, and with little free space Windows \
+     may delete the restore points. On SSD the item refuses.";
 
 pub fn items() -> Vec<NativeItem> {
     vec![NativeItem {
         id: "wipe_free_space",
         group: GROUP,
-        label: "Pulisci spazio libero",
+        label: "Clean free space",
         description: DESCRIPTION,
         warning: Some(WARNING),
         warning_extra: None,
@@ -143,7 +143,7 @@ mod real {
         match win::RealVolume::system(ctx.guard) {
             Some(vol) => analyze_wipe(&vol),
             None => NativeFound {
-                detail: vec!["Disco di sistema non determinato: non si pulisce".to_string()],
+                detail: vec!["System disk not determined: not cleaned".to_string()],
                 ..Default::default()
             },
         }
@@ -213,22 +213,22 @@ fn root_text(vol: &dyn Volume) -> String {
 fn suitability(vol: &dyn Volume) -> Result<Suitable, String> {
     let root = root_text(vol);
     if !vol.is_fixed_ntfs() {
-        return Err(format!("{root} non è un disco fisso NTFS: non si pulisce"));
+        return Err(format!("{root} is not an NTFS fixed disk: not cleaned"));
     }
     let kind = vol.kind();
     let free = vol.free_bytes();
-    let free_text = free.as_ref().map(|f| format!(", {} liberi", fmt_size(*f))).unwrap_or_default();
+    let free_text = free.as_ref().map(|f| format!(", {} free", fmt_size(*f))).unwrap_or_default();
     match kind {
         Err(e) => {
-            return Err(format!("{root}: tipo di disco non determinato ({e}){free_text}: per prudenza non si pulisce"));
+            return Err(format!("{root}: disk type not determined ({e}){free_text}: not cleaned, to be safe"));
         }
-        Ok(DiskKind::Ssd) => return Err(format!("{root}: SSD{free_text}. Non serve su SSD: Windows usa TRIM")),
+        Ok(DiskKind::Ssd) => return Err(format!("{root}: SSD{free_text}. Not needed on SSD: Windows uses TRIM")),
         Ok(DiskKind::Hdd) => {}
     }
     match free {
-        Err(e) => Err(format!("{root}: spazio libero non leggibile ({e}): non si pulisce")),
+        Err(e) => Err(format!("{root}: free space not readable ({e}): not cleaned")),
         Ok(f) if f < MIN_FREE => Err(format!(
-            "{root}: disco rigido (HDD) con {} liberi: sotto 2 GB non si pulisce",
+            "{root}: hard disk (HDD) with {} free: below 2 GB it is not cleaned",
             fmt_size(f)
         )),
         Ok(f) => Ok(Suitable { free: f }),
@@ -264,7 +264,7 @@ pub fn cleanup_leftovers(vol: &dyn Volume, skip_pid: Option<u32>) -> Leftovers {
         Ok(n) => n,
         Err(e) => {
             out.failed = 1;
-            out.notes.push(format!("Cartelle rimaste in {root} non leggibili: {e}"));
+            out.notes.push(format!("Leftover folders in {root} not readable: {e}"));
             return out;
         }
     };
@@ -276,13 +276,13 @@ pub fn cleanup_leftovers(vol: &dyn Volume, skip_pid: Option<u32>) -> Leftovers {
             Ok(bytes) => {
                 out.freed += bytes;
                 out.notes.push(format!(
-                    "Cancellata la cartella rimasta da una pulizia interrotta: {root}{name} ({} liberati)",
+                    "Deleted the folder left over from an interrupted cleanup: {root}{name} ({} freed)",
                     fmt_size(bytes)
                 ));
             }
             Err(e) => {
                 out.failed += 1;
-                out.notes.push(format!("Cartella rimasta {root}{name} non cancellata: {e}"));
+                out.notes.push(format!("Leftover folder {root}{name} not deleted: {e}"));
             }
         }
     }
@@ -322,19 +322,19 @@ pub fn analyze_wipe(vol: &dyn Volume) -> NativeFound {
         Ok(names) => {
             for name in names.into_iter().filter(|n| is_wipe_dir_name(n)) {
                 notes.push(format!(
-                    "Trovata una cartella rimasta da una pulizia interrotta: {root}{name}. Verrà tolta (con Pulizia \
-                     o al prossimo avvio di Xiox)"
+                    "Found a folder left over from an interrupted cleanup: {root}{name}. It will be removed (with Cleanup \
+                     or at the next start of Xiox)"
                 ));
                 leftovers.push(format!("{LEFTOVER_ITEM}{name}"));
             }
         }
-        Err(e) => notes.push(format!("Cartelle rimaste in {root} non leggibili: {e}")),
+        Err(e) => notes.push(format!("Leftover folders in {root} not readable: {e}")),
     }
     let mut found = match suitability(vol) {
         Ok(s) => NativeFound {
             detail: vec![format!(
-                "{}: disco rigido (HDD) NTFS con {} liberi; se ne sovrascrivono circa {} (resta almeno 1 GB libero; \
-                 niente MFT né altri dischi)",
+                "{}: NTFS hard disk (HDD) with {} free; about {} will be overwritten (at least 1 GB stays free; \
+                 no MFT, no other disks)",
                 root_text(vol),
                 fmt_size(s.free),
                 fmt_size(s.free.saturating_sub(RESERVE + MARGIN))
@@ -418,7 +418,7 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
     let name = new_dir_name();
     if let Err(e) = vol.create_dir(&name) {
         out.failed += 1;
-        out.note(format!("Cartella di lavoro {root}{name} non creata: {e}"));
+        out.note(format!("Work folder {root}{name} not created: {e}"));
         return out;
     }
     let dir = DirGuard { vol, name: name.clone(), done: false };
@@ -433,7 +433,7 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
         }
         let free = match vol.free_bytes() {
             Ok(f) => f,
-            Err(e) => break Stop::Failed(format!("spazio libero non leggibile: {e}")),
+            Err(e) => break Stop::Failed(format!("free space not readable: {e}")),
         };
         // Ci si ferma con [`MARGIN`] sopra la riserva: un'altra app che scrive
         // durante questo blocco non fa scendere i liberi sotto [`RESERVE`].
@@ -445,12 +445,12 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
         if in_file >= FILE_SIZE {
             match vol.create_fill(&name, &fill_name(files.len() + 1)) {
                 Ok(f) => files.push(f),
-                Err(e) => break Stop::Failed(format!("file di riempimento non creato: {e}")),
+                Err(e) => break Stop::Failed(format!("fill file not created: {e}")),
             }
             in_file = 0;
         }
         n = n.min(FILE_SIZE - in_file);
-        let Some(file) = files.last_mut() else { break Stop::Failed("nessun file aperto".into()) };
+        let Some(file) = files.last_mut() else { break Stop::Failed("no open file".into()) };
         if let Err(e) = file.write_zeros(n) {
             break Stop::Failed(e);
         }
@@ -464,22 +464,22 @@ pub fn clean_wipe(vol: &dyn Volume, found: &NativeFound, cancel: &AtomicBool) ->
         Stop::Full => {
             out.removed = 1;
             out.note(format!(
-                "Sovrascritti {amount} di spazio libero su {root} (lasciato almeno 1 GB libero; MFT, altri dischi e \
-                 copie shadow non toccati)"
+                "Overwrote {amount} of free space on {root} (left at least 1 GB free; MFT, other disks and \
+                 shadow copies not touched)"
             ));
-            out.done.push(format!("{root}: {amount} di spazio libero sovrascritti"));
+            out.done.push(format!("{root}: {amount} of free space overwritten"));
         }
-        Stop::Cancelled => out.note(format!("Annullata dopo {amount} su {root}: file di riempimento cancellati")),
+        Stop::Cancelled => out.note(format!("Cancelled after {amount} on {root}: fill files deleted")),
         Stop::Failed(e) => {
             out.failed += 1;
-            out.note(format!("Scrittura interrotta dopo {amount} su {root}: {e}"));
+            out.note(format!("Write interrupted after {amount} on {root}: {e}"));
         }
     }
     if let Err(e) = removal {
         out.failed += 1;
         out.note(format!(
-            "La cartella {root}{name} non si è cancellata ({e}): si riprova al prossimo avvio di Xiox o alla \
-             prossima pulizia di questa voce"
+            "The folder {root}{name} was not deleted ({e}): it will be retried at the next start of Xiox or at the \
+             next cleanup of this item"
         ));
     }
     out
@@ -519,12 +519,12 @@ pub fn list_wipe_dirs_at(root: &Path) -> Result<Vec<String>, String> {
 /// una giunzione non si apre.
 pub fn remove_wipe_dir_at(root: &Path, name: &str, guard: &Guard) -> Result<u64, String> {
     if !is_wipe_dir_name(name) {
-        return Err(format!("nome non di una cartella di lavoro: {name}"));
+        return Err(format!("not the name of a work folder: {name}"));
     }
     let dir = root.join(name);
     let md = fs::symlink_metadata(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     if !md.is_dir() || is_reparse(&md) {
-        return Err(format!("{} non è una cartella vera: non si tocca", dir.display()));
+        return Err(format!("{} is not a real folder: left alone", dir.display()));
     }
     let rd = fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut freed = 0;
@@ -544,7 +544,7 @@ pub fn remove_wipe_dir_at(root: &Path, name: &str, guard: &Guard) -> Result<u64,
                 Ok(b) => freed += b,
                 Err(err) => problems.push(err),
             },
-            _ => problems.push(format!("lasciato {}: non è un file di riempimento", p.display())),
+            _ => problems.push(format!("left {}: not a fill file", p.display())),
         }
     }
     if !problems.is_empty() {
@@ -674,10 +674,10 @@ mod win {
             // SAFETY: radice terminata da zero; i quattro puntatori sono u32 locali scrivibili.
             let ok = unsafe { GetDiskFreeSpaceW(r.as_ptr(), &mut spc, &mut bps, &mut free, &mut total) };
             if ok == 0 {
-                return Err(format!("dimensione del settore non leggibile: {}", last_error()));
+                return Err(format!("sector size not readable: {}", last_error()));
             }
             if bps == 0 || !PAGE.is_multiple_of(bps as usize) {
-                return Err(format!("settore di {bps} byte non gestito"));
+                return Err(format!("sector of {bps} bytes not supported"));
             }
             Ok(())
         }
@@ -714,7 +714,7 @@ mod win {
         }
 
         fn kind(&self) -> Result<DiskKind, String> {
-            let letter = self.root.to_string_lossy().chars().next().ok_or("radice vuota")?;
+            let letter = self.root.to_string_lossy().chars().next().ok_or("empty root")?;
             let dev = wide(&format!(r"\\.\{letter}:"));
             // SAFETY: nome del dispositivo terminato da zero; accesso 0 (solo
             // domande sul dispositivo, nessuna lettura né scrittura).
@@ -722,7 +722,7 @@ mod win {
                 CreateFileW(dev.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, 0, null_mut())
             };
             if h == INVALID_HANDLE_VALUE {
-                return Err(format!("volume non apribile: {}", last_error()));
+                return Err(format!("volume cannot be opened: {}", last_error()));
             }
             let h = Handle(h);
             let query = STORAGE_PROPERTY_QUERY {
@@ -747,11 +747,11 @@ mod win {
                 )
             };
             if ok == 0 {
-                return Err(format!("IncursSeekPenalty non disponibile: {}", last_error()));
+                return Err(format!("IncursSeekPenalty not available: {}", last_error()));
             }
             let need = offset_of!(SeekPenalty, incurs_seek_penalty) + 1;
             if (got as usize) < need || (out.size as usize) < need || out.version == 0 {
-                return Err("risposta incompleta del disco".into());
+                return Err("incomplete answer from the disk".into());
             }
             Ok(if out.incurs_seek_penalty != 0 { DiskKind::Hdd } else { DiskKind::Ssd })
         }
@@ -773,13 +773,13 @@ mod win {
 
         fn create_dir(&self, name: &str) -> Result<(), String> {
             if !is_wipe_dir_name(name) {
-                return Err(format!("nome non valido: {name}"));
+                return Err(format!("invalid name: {name}"));
             }
             let path = self.root.join(name);
             std::fs::create_dir(&path).map_err(|e| e.to_string())?;
             let md = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
             if !md.is_dir() || is_reparse(&md) {
-                return Err("la cartella appena creata non è una cartella vera".into());
+                return Err("the folder just created is not a real folder".into());
             }
             let w = wide_long(&path);
             // SAFETY: percorso terminato da zero; solo attributi. Se fallisce
@@ -790,7 +790,7 @@ mod win {
 
         fn create_fill(&self, dir: &str, file: &str) -> Result<Box<dyn Fill + '_>, String> {
             if !is_wipe_dir_name(dir) || !is_fill_name(file) {
-                return Err(format!("nome non valido: {dir}\\{file}"));
+                return Err(format!("invalid name: {dir}\\{file}"));
             }
             self.sector_ok()?;
             let path = self.root.join(dir).join(file);
@@ -824,11 +824,11 @@ mod win {
                 GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as u32, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)
             } as usize;
             if n == 0 || n >= buf.len() {
-                return Err(format!("percorso vero non leggibile: {}", last_error()));
+                return Err(format!("real path not readable: {}", last_error()));
             }
             let actual = String::from_utf16_lossy(&buf[..n]);
             if !same_path(&path.to_string_lossy(), &actual) {
-                return Err(format!("il file è finito altrove ({actual}): collegamento nel percorso"));
+                return Err(format!("the file ended up elsewhere ({actual}): link in the path"));
             }
             let mut info: FILE_BASIC_INFO = FILE_BASIC_INFO::default();
             // SAFETY: handle valido; `info` è un FILE_BASIC_INFO intero della dimensione passata.
@@ -841,10 +841,10 @@ mod win {
                 )
             };
             if ok == 0 {
-                return Err(format!("attributi non leggibili: {}", last_error()));
+                return Err(format!("attributes not readable: {}", last_error()));
             }
             if info.FileAttributes & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
-                return Err("file compresso o sparso: gli zeri non coprirebbero lo spazio libero".into());
+                return Err("compressed or sparse file: the zeros would not cover the free space".into());
             }
             Ok(Box::new(fill))
         }
@@ -871,7 +871,7 @@ mod win {
                     return Err(last_error());
                 }
                 if done != n {
-                    return Err(format!("scritti {done} byte su {n}"));
+                    return Err(format!("wrote {done} bytes of {n}"));
                 }
                 left -= u64::from(n);
             }

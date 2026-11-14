@@ -141,10 +141,10 @@ fn profiles_are_found_for_chromium_and_gecko_layouts() {
         ("Microsoft Edge (Default)".to_string(), Kind::Chromium),
         ("Brave (Default)".to_string(), Kind::Chromium),
         ("Vivaldi (Default)".to_string(), Kind::Chromium),
-        ("Opera (profilo principale)".to_string(), Kind::Chromium),
+        ("Opera (main profile)".to_string(), Kind::Chromium),
         ("Opera (Default)".to_string(), Kind::Chromium),
-        ("Opera GX (profilo principale)".to_string(), Kind::Chromium),
-        ("Opera GX (profilo laterale abc)".to_string(), Kind::Chromium),
+        ("Opera GX (main profile)".to_string(), Kind::Chromium),
+        ("Opera GX (side profile abc)".to_string(), Kind::Chromium),
         ("Mozilla Firefox (x1y2.default-release)".to_string(), Kind::Gecko),
         ("Thunderbird (q9.default)".to_string(), Kind::Gecko),
     ];
@@ -157,7 +157,7 @@ fn profiles_are_found_for_chromium_and_gecko_layouts() {
     assert_eq!(p.lock, ud.join("lockfile"), "il lockfile di Chromium sta in `User Data`");
     let edge = all.iter().find(|p| p.browser == "Microsoft Edge").unwrap();
     assert_eq!(edge.processes, &["msedge.exe"]);
-    let side = all.iter().find(|p| p.label() == "Opera GX (profilo laterale abc)").unwrap();
+    let side = all.iter().find(|p| p.label() == "Opera GX (side profile abc)").unwrap();
     assert_eq!(side.lock, gx.join("lockfile"));
     assert_eq!(side.processes, &["opera.exe"]);
     let ff = all.iter().find(|p| p.kind == Kind::Gecko).unwrap();
@@ -253,18 +253,18 @@ fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     assert_eq!(path, t.path().join(r"Xiox\cookie_da_conservare.txt"));
     // Assente.
     assert_eq!(read_keep_list(&path), Ok(KeepList::default()));
-    assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
+    assert_eq!(keep_list_summary(&read_keep_list(&path)), "list: 0 domains");
     // Creata al primo uso con gli esempi commentati, mai sovrascritta.
     ensure_keep_list(&path).unwrap();
-    assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
+    assert_eq!(keep_list_summary(&read_keep_list(&path)), "list: 0 domains");
     fs::write(&path, "google.com\n").unwrap();
     ensure_keep_list(&path).unwrap();
-    assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 1 dominio");
+    assert_eq!(keep_list_summary(&read_keep_list(&path)), "list: 1 domain");
     // Vuota, o con soli commenti e righe vuote.
     fs::write(&path, "").unwrap();
     assert_eq!(read_keep_list(&path), Ok(KeepList::default()));
     fs::write(&path, "# google.com\r\n\r\n   \n").unwrap();
-    assert_eq!(keep_list_summary(&read_keep_list(&path)), "lista: 0 domini");
+    assert_eq!(keep_list_summary(&read_keep_list(&path)), "list: 0 domains");
     // UTF-8 con BOM.
     fs::write(&path, b"\xEF\xBB\xBFgoogle.com\n").unwrap();
     assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com"]);
@@ -282,20 +282,20 @@ fn empty_or_missing_keep_list_protects_nothing_and_says_so() {
     fs::create_dir_all(&dir).unwrap();
     let err = read_keep_list(&dir);
     assert!(err.is_err());
-    assert!(keep_list_summary(&err).contains("nessun cookie verrà eliminato"), "{}", keep_list_summary(&err));
+    assert!(keep_list_summary(&err).contains("no cookie will be deleted"), "{}", keep_list_summary(&err));
 
     // L'analisi con la lista vuota propone tutti i cookie e lo dice.
     let env = env_in(t.path());
     let prof = chromium_profile(&chrome_user_data(&env), "Default");
     chromium_cookies(&prof.join(r"Network\Cookies"), &COOKIE_HOSTS);
     let found = analyze_cookies(&profiles(&env), keep(&[]), &none, &go());
-    assert!(found.detail[0].contains("lista: 0 domini"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("list: 0 domains"), "{:?}", found.detail);
     assert_eq!(found.count, COOKIE_HOSTS.len() as u64);
     // Lista illeggibile: nessun cookie proposto.
     let found = analyze_cookies(&profiles(&env), Err("lista illeggibile".into()), &none, &go());
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty());
-    assert!(found.detail[0].contains("nessun cookie verrà eliminato"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("no cookie will be deleted"), "{:?}", found.detail);
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn keep_list_that_cannot_be_trusted_blocks_the_cookies() {
         let list = read_keep_list(&path);
         assert!(list.is_err(), "{list:?}");
         let s = keep_list_summary(&list);
-        assert!(s.starts_with("Lista dei cookie non valida: nessun cookie verrà eliminato"), "{s}");
+        assert!(s.starts_with("Cookie list not valid: no cookie will be deleted"), "{s}");
         s
     };
     // UTF-16 senza BOM: ogni carattere ha uno zero accanto.
@@ -324,8 +324,8 @@ fn keep_list_that_cannot_be_trusted_blocks_the_cookies() {
     let list = read_keep_list(&path);
     assert_eq!(list.as_ref().unwrap().domains, vec!["google.com"]);
     let s = keep_list_summary(&list);
-    assert!(s.starts_with("lista: 1 dominio"), "{s}");
-    assert!(s.contains("a b, c d, e f, g h, i j") && s.contains("…e altre 2") && !s.contains("k l"), "{s}");
+    assert!(s.starts_with("list: 1 domain"), "{s}");
+    assert!(s.contains("a b, c d, e f, g h, i j") && s.contains("…and 2 more") && !s.contains("k l"), "{s}");
 
     // L'analisi con una lista non valida non propone cookie.
     fs::write(&path, wide).unwrap();
@@ -335,7 +335,7 @@ fn keep_list_that_cannot_be_trusted_blocks_the_cookies() {
     let found = analyze_cookies(&profiles(&env), read_keep_list(&path), &none, &go());
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty());
-    assert!(found.detail[0].contains("Lista dei cookie non valida"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("Cookie list not valid"), "{:?}", found.detail);
 }
 
 #[test]
@@ -353,10 +353,10 @@ fn keep_list_behind_a_junction_is_refused() {
         Ok(())
     };
     let err = open_keep_list_in(&docs, &launch).unwrap_err();
-    assert!(err.contains("lista dei cookie non sicura"), "{err}");
+    assert!(err.contains("cookie list not safe"), "{err}");
     assert!(ensure_keep_list(&path).is_err());
     let read = read_keep_list(&path);
-    assert!(read.as_ref().is_err_and(|e| e.contains("non sicura")), "{read:?}");
+    assert!(read.as_ref().is_err_and(|e| e.contains("not safe")), "{read:?}");
     assert_eq!(launched.get(), 0);
     assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nessun file creato nella destinazione");
 
@@ -370,7 +370,7 @@ fn keep_list_behind_a_junction_is_refused() {
     })
     .unwrap();
     assert_eq!(*seen.borrow(), vec![keep_list_in(&docs)]);
-    assert_eq!(keep_list_summary(&read_keep_list(&keep_list_in(&docs))), "lista: 0 domini");
+    assert_eq!(keep_list_summary(&read_keep_list(&keep_list_in(&docs))), "list: 0 domains");
     // Il comando dell'editor: notepad.exe della cartella di sistema, percorso fra virgolette.
     let (exe, arg) = editor_command(Path::new(r"C:\Windows\System32"), &keep_list_in(&docs));
     assert_eq!(exe, Path::new(r"C:\Windows\System32\notepad.exe"));
@@ -391,13 +391,13 @@ fn cookies_outside_the_keep_list_are_deleted_chromium() {
     let list = keep(&["google.com", "live.com"]);
     let found = analyze_cookies(&profiles(&env), list, &none, &go());
     assert_eq!(found.count, 6, "{:?}", found.detail);
-    assert!(found.detail[0].contains("lista: 2 domini"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("list: 2 domains"), "{:?}", found.detail);
     let done = clean_cookies(&profiles(&env), &found, &none, &go());
     assert_eq!(done.removed, 6, "{:?}", done.notes);
     assert_eq!(done.failed, 0);
     // Quante righe e quanti byte, per ogni database.
     assert_eq!(done.done.len(), 2, "{:?}", done.done);
-    assert!(done.done.iter().all(|d| d.contains("3 cookie eliminati") && d.contains("liberati nel database")), "{:?}", done.done);
+    assert!(done.done.iter().all(|d| d.contains("3 cookies deleted") && d.contains("freed in the database")), "{:?}", done.done);
     // Rifatto con la stessa lista: niente più da eliminare.
     let again = analyze_cookies(&profiles(&env), keep(&["google.com", "live.com"]), &none, &go());
     assert_eq!(again.count, 0);
@@ -501,7 +501,7 @@ fn compact_runs_only_after_integrity_check_ok() {
     let done = clean_compact(&profiles(&env), &found, &none, &go());
     assert_eq!(done.removed, 0);
     assert_eq!(done.freed, 0);
-    assert!(done.notes.iter().any(|n| n.contains("controllo di integrità")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("integrity check")), "{:?}", done.notes);
     assert_eq!(fs::read(&history).unwrap(), bytes, "il database rovinato non si tocca");
 }
 
@@ -568,7 +568,7 @@ fn firefox_history_keeps_bookmarks() {
     let done = clean_history(&profiles(&env), &found, &none, &go());
     assert_eq!(done.failed, 0, "{:?}", done.notes);
     assert_eq!(done.removed, 7);
-    assert!(done.done[0].contains("4 visite e 3 pagine tolte") && done.done[0].contains("liberati nel database"), "{:?}", done.done);
+    assert!(done.done[0].contains("4 visits and 3 pages removed") && done.done[0].contains("freed in the database"), "{:?}", done.done);
 
     let c = Connection::open(&db).unwrap();
     assert_eq!(bookmarks(&c), before);
@@ -598,7 +598,7 @@ fn firefox_history_rolls_back_if_bookmark_count_changes() {
     let done = clean_history(&profiles(&env), &found, &none, &go());
     assert_eq!(done.removed, 0);
     assert_eq!(done.failed, 1);
-    assert!(done.notes.iter().any(|n| n.contains("segnalibri")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("bookmarks")), "{:?}", done.notes);
     let c = Connection::open(&db).unwrap();
     assert_eq!(bookmarks(&c).len(), 3);
     assert_eq!(ids(&c, "SELECT id FROM moz_historyvisits ORDER BY id"), vec![1, 2, 3, 4]);
@@ -621,7 +621,7 @@ fn firefox_history_rolls_back_if_a_bookmark_loses_its_page() {
     let done = clean_history(&profiles(&env), &found, &none, &go());
     assert_eq!(done.removed, 0);
     assert_eq!(done.failed, 1);
-    assert!(done.notes.iter().any(|n| n.contains("segnalibri")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("bookmarks")), "{:?}", done.notes);
     let c = Connection::open(&db).unwrap();
     assert_eq!(ids(&c, "SELECT id FROM moz_places ORDER BY id"), vec![1, 2, 3, 4, 5, 6]);
 }
@@ -638,7 +638,7 @@ fn places_without_the_firefox_tables_are_never_touched() {
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty());
     assert_eq!(found.skipped, 1);
-    assert!(found.detail.iter().any(|d| d.contains("non riconosciuto")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("not recognized")), "{:?}", found.detail);
     assert_eq!(fs::read(&db).unwrap(), bytes);
 }
 
@@ -686,8 +686,8 @@ fn last_download_dir_removed_from_preferences_and_prefs_js() {
 
 #[test]
 fn preferences_that_are_not_json_are_never_rewritten() {
-    assert_eq!(strip_chromium_prefs(b"{\"download\": {\"default_directory\": \"x\"}"), Err("non è JSON valido".to_string()));
-    assert_eq!(strip_chromium_prefs(b"[1, 2]"), Err("non è un oggetto JSON".to_string()));
+    assert_eq!(strip_chromium_prefs(b"{\"download\": {\"default_directory\": \"x\"}"), Err("not valid JSON".to_string()));
+    assert_eq!(strip_chromium_prefs(b"[1, 2]"), Err("not a JSON object".to_string()));
     assert_eq!(strip_chromium_prefs(b"{\"download\": \"x\"}"), Ok(None));
     assert_eq!(strip_chromium_prefs(b"{\"savefile\": \"x\"}"), Ok(None));
     assert_eq!(strip_chromium_prefs(b"{\"download\": {\"default_directory\": \"x\"}}"), Ok(None));
@@ -718,8 +718,8 @@ fn database_of_a_running_browser_is_never_opened() {
         assert_eq!(found.count, 0);
         assert_eq!(found.skipped, 1);
         assert!(found.items.is_empty());
-        assert!(found.detail.iter().any(|d| d.contains("Google Chrome (Default): chiudi chrome.exe per pulire")), "{:?}", found.detail);
-        assert!(!found.detail.iter().any(|d| d.contains("leggibil")), "{:?}", found.detail);
+        assert!(found.detail.iter().any(|d| d.contains("Google Chrome (Default): close chrome.exe to clean")), "{:?}", found.detail);
+        assert!(!found.detail.iter().any(|d| d.contains("not readable")), "{:?}", found.detail);
     }
 
     // Pulizia con un `found` dell'analisi fatta a browser chiuso: il browser
@@ -733,7 +733,7 @@ fn database_of_a_running_browser_is_never_opened() {
     let prefs = fs::read(prof.join("Preferences")).unwrap();
     let done = clean_cookies(&profiles(&env), &found, &chrome_running, &go());
     assert_eq!(done.removed, 0);
-    assert!(done.notes.iter().any(|n| n.contains("chiudi chrome.exe per pulire")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("close chrome.exe to clean")), "{:?}", done.notes);
     let found = analyze_download_dir(&profiles(&env), &none, &go());
     let done = clean_download_dir(&profiles(&env), &found, &chrome_running, &go());
     assert_eq!(done.removed, 0);
@@ -758,7 +758,7 @@ fn profile_of_a_running_browser_is_skipped_but_other_profiles_are_cleaned() {
     assert_eq!(found.count, 4, "solo i cookie di Firefox: {:?}", found.detail);
     assert_eq!(found.skipped, 1);
     assert_eq!(found.items, vec![ff_db.to_string_lossy().into_owned(), format!("{KEEP_PREFIX}google.com")]);
-    assert!(found.detail.iter().any(|d| d == "Google Chrome (Default): chiudi chrome.exe per pulire"), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d == "Google Chrome (Default): close chrome.exe to clean"), "{:?}", found.detail);
     let done = clean_cookies(&profiles(&env), &found, &chrome_running, &go());
     assert_eq!(done.removed, 4, "{:?}", done.notes);
     assert_eq!(hosts_in(&ff_db, "moz_cookies", "host"), vec![".google.com", "accounts.google.com", "google.com"]);
@@ -770,13 +770,13 @@ fn profile_of_a_running_browser_is_skipped_but_other_profiles_are_cleaned() {
     let found = analyze_history(&profiles(&env), &ff_running, &go());
     assert_eq!(found.count, 0);
     assert_eq!(found.skipped, 1);
-    assert!(found.detail.iter().any(|d| d.contains("Mozilla Firefox (a.default-release): chiudi firefox.exe per pulire")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("Mozilla Firefox (a.default-release): close firefox.exe to clean")), "{:?}", found.detail);
     // Un `found` fatto a browser chiuso non serve se intanto Firefox si è aperto.
     let found = analyze_history(&profiles(&env), &none, &go());
     let before = fs::read(&db).unwrap();
     let done = clean_history(&profiles(&env), &found, &ff_running, &go());
     assert_eq!(done.removed, 0);
-    assert!(done.notes.iter().any(|n| n.contains("chiudi firefox.exe per pulire")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("close firefox.exe to clean")), "{:?}", done.notes);
     assert_eq!(fs::read(&db).unwrap(), before);
 }
 
@@ -811,8 +811,8 @@ fn profile_whose_lock_is_held_is_skipped_even_with_an_unknown_process_name() {
     let found = analyze_cookies(&profiles(&env), keep(&[]), &none, &go());
     assert_eq!(found.count, 0, "{:?}", found.detail);
     assert_eq!(found.skipped, 2);
-    assert!(found.detail.iter().any(|d| d.contains("Google Chrome (Default): profilo in uso, chiudi chrome.exe per pulire")), "{:?}", found.detail);
-    assert!(found.detail.iter().any(|d| d.contains("Mozilla Firefox (a.default-release): profilo in uso")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("Google Chrome (Default): profile in use, close chrome.exe to clean")), "{:?}", found.detail);
+    assert!(found.detail.iter().any(|d| d.contains("Mozilla Firefox (a.default-release): profile in use")), "{:?}", found.detail);
     for found in [analyze_compact(&profiles(&env), &none, &go()), analyze_download_dir(&profiles(&env), &none, &go())] {
         assert_eq!(found.count, 0, "{:?}", found.detail);
         assert_eq!(found.skipped, 2);
@@ -932,7 +932,7 @@ fn compact_is_skipped_without_enough_free_space() {
     };
     let done = clean_compact_with(&profiles(&env), &found, &none, &go(), &free, Path::new(r"X:\temp"));
     assert_eq!((done.removed, done.freed), (0, 0));
-    assert!(done.notes.iter().any(|n| n.contains("spazio insufficiente per compattare")), "{:?}", done.notes);
+    assert!(done.notes.iter().any(|n| n.contains("not enough space to compact")), "{:?}", done.notes);
     assert_eq!(fs::read(&history).unwrap(), bytes);
     assert!(asked.borrow().iter().any(|p| p == Path::new(r"X:\temp")), "{:?}", asked.borrow());
     // Spazio sconosciuto: come insufficiente.
@@ -984,5 +984,5 @@ fn items_follow_the_coverage_table() {
     }
     assert!(items[0].warning_extra.is_some());
     assert!(items[1..].iter().all(|i| i.warning_extra.is_none()));
-    assert!(items[0].warning.unwrap().contains("tutti i cookie tranne i domini della lista"));
+    assert!(items[0].warning.unwrap().contains("all cookies will be deleted except the domains on the list"));
 }

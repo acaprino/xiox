@@ -96,7 +96,7 @@ fn rule_set() -> rules::RuleSet {
             cleaner("w_gamma", "Gamma", Origin::Winapp2, "Browsers", vec![opt("cache", "Gamma", "")]),
         ],
         winapp2_version: Some("0.1".into()),
-        status: "Winapp2 0.1 caricato".into(),
+        status: "Winapp2 0.1 loaded".into(),
         warnings: vec!["Winapp2: 2 regole scartate".into()],
         env: xiox_rules::Env::for_rules(),
         sections: vec![("Browsers".into(), vec![3]), ("Utilities".into(), vec![1, 2])],
@@ -166,7 +166,7 @@ fn blocker(rs: &mut rules::RuleSet) {
 #[test]
 fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
     let mut st = state();
-    assert_eq!(st.nav, "builtin:Sistema");
+    assert_eq!(st.nav, "builtin:System");
     assert!(st.clean_sel[0]);
     st.toggle("cat:0").unwrap();
     assert!(!st.clean_sel[0]);
@@ -178,7 +178,7 @@ fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
     st.toggle("t_tool/history").unwrap();
     assert!(!st.rule_sel.contains("t_tool/history"));
     // The keys of the view are the keys of the selection.
-    open(&mut st, "rules:Sviluppo e AI");
+    open(&mut st, "rules:Development & AI");
     let v = view(&st, false);
     assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["t_tool/history", "t_tool/legacy"]);
     open(&mut st, "rules:Windows");
@@ -218,7 +218,7 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     let before = (st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone());
     for (name, r) in [
         ("toggle", st.toggle("cat:0")),
-        ("select", st.select_category("builtin:Avanzate")),
+        ("select", st.select_category("builtin:Advanced")),
         ("only old", st.set_only_old(false)),
         ("analyze", st.analyze(notifier())),
         ("clean", st.request_clean()),
@@ -237,7 +237,7 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     assert!(st.confirm_clean);
     for (name, r) in [
         ("toggle", st.toggle("cat:0")),
-        ("select", st.select_category("builtin:Avanzate")),
+        ("select", st.select_category("builtin:Advanced")),
         ("only old", st.set_only_old(false)),
         ("analyze", st.analyze(notifier())),
         ("clean", st.request_clean()),
@@ -254,7 +254,7 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     st.clean_view = CleanView::Cleaned;
     st.clean_report = Some(Default::default());
     assert_eq!(err(st.toggle("cat:0")), REPORT_OPEN);
-    assert_eq!(err(st.select_category("builtin:Avanzate")), REPORT_OPEN);
+    assert_eq!(err(st.select_category("builtin:Advanced")), REPORT_OPEN);
     assert_eq!(err(st.set_only_old(false)), REPORT_OPEN);
     st.release();
     assert!(st.clean_report.is_none() && st.clean_view == CleanView::Empty);
@@ -324,7 +324,7 @@ fn previews_only_from_the_analysis_on_screen() {
     st.rule_sel.insert("native:env_path".into());
     st.rule_sel.remove("native:clipboard");
     let shown = |st: &mut CleanupState| {
-        st.native_found.push(("native:env_path".into(), "Percorso ambiente".into(), NativeFound { items: vec!["C:\\gone".into()], ..Default::default() }));
+        st.native_found.push(("native:env_path".into(), "Environment PATH".into(), NativeFound { items: vec!["C:\\gone".into()], ..Default::default() }));
     };
     // Cleaning from the analysis on screen: the PATH preview goes with the job.
     st.clean_view = CleanView::Analyzed;
@@ -385,11 +385,11 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!(
         nav,
         [
-            ("builtin:Sistema", "Sistema", true),
-            ("builtin:Esplora file", "Esplora file", false),
-            ("builtin:Avanzate", "Avanzate", false),
+            ("builtin:System", "System", true),
+            ("builtin:Explorer", "Explorer", false),
+            ("builtin:Advanced", "Advanced", false),
             ("rules:Windows", "Windows", false),
-            ("rules:Sviluppo e AI", "Sviluppo e AI", false),
+            ("rules:Development & AI", "Development & AI", false),
             ("winapp2", rules::WINAPP2_GROUP, false),
         ]
     );
@@ -405,7 +405,7 @@ fn cleanup_view_groups_levels_and_modes() {
         ("Files", ColumnKind::Cell),
         ("Size", ColumnKind::Size),
     ]);
-    assert_eq!((v.section, v.rev, v.title.as_str()), (SectionId::Cleanup, 0, "Sistema"));
+    assert_eq!((v.section, v.rev, v.title.as_str()), (SectionId::Cleanup, 0, "System"));
     assert!(!v.bulk && v.search.is_none() && v.dialog.is_none() && v.report.is_none() && v.job.is_none());
     // Built-in rows: the Recycle Bin empties, a default-on category is recommended.
     let bin = row(&v, "cat:0");
@@ -418,10 +418,10 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!(detail(bin, "item"), Some(cleaner::CATEGORIES[0].name));
     assert!(bin.cells.is_empty() && bin.bytes.is_none(), "no figures before an analysis");
     // Default-off: optional. Needs administrator: said for a standard user, not for an administrator.
-    open(&mut st, "builtin:Esplora file");
+    open(&mut st, "builtin:Explorer");
     let thumbs = view(&st, false);
     assert_eq!((row(&thumbs, "cat:6").level, row(&thumbs, "cat:6").check), (Some(LevelView::Optional), Check::Off));
-    open(&mut st, "builtin:Avanzate");
+    open(&mut st, "builtin:Advanced");
     let why = "Needs administrator: some folders are skipped";
     assert_eq!(row(&view(&st, false), "cat:7").why.as_deref(), Some(why));
     assert_eq!(row(&view(&st, true), "cat:7").why, None);
@@ -434,7 +434,7 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!(path.why.as_deref(), st.natives[1].warning);
     assert_eq!(detail(path, "warning"), st.natives[1].warning);
     assert_eq!(detail(path, "mode"), Some("permanently"));
-    open(&mut st, "rules:Sviluppo e AI");
+    open(&mut st, "rules:Development & AI");
     let v = view(&st, false);
     let (history, legacy) = (row(&v, "t_tool/history"), row(&v, "t_tool/legacy"));
     assert_eq!((history.name.as_str(), history.level, history.enabled), ("Toolchain – History", Some(LevelView::Caution), true));
@@ -458,7 +458,7 @@ fn cleanup_view_groups_levels_and_modes() {
     st.clean_view = CleanView::Analyzed;
     st.found[0] = Some(cleaner::Found { count: 5, bytes: 1000, skipped_dirs: 2, ..Default::default() });
     st.found[7] = Some(cleaner::Found { count: 2, bytes: 24, ..Default::default() });
-    st.native_found.push(("native:clipboard".into(), "Appunti".into(), NativeFound { bytes: 0, detail: vec!["1 voce".into(), "altro".into()], ..Default::default() }));
+    st.native_found.push(("native:clipboard".into(), "Clipboard".into(), NativeFound { bytes: 0, detail: vec!["1 item".into(), "other".into()], ..Default::default() }));
     st.rule_found.push(("t_tool/history".into(), "Toolchain – History".into(), rules::RuleFound { count: 4, bytes: 77, skipped: 3, skipped_reasons: vec!["a".into(), "b".into()], ..Default::default() }));
     let v = view(&st, false);
     assert_eq!(v.nav.iter().map(|n| n.bytes).collect::<Vec<_>>(), [Some(1000), Some(0), Some(24), Some(0), Some(77), Some(0)]);
@@ -470,7 +470,7 @@ fn cleanup_view_groups_levels_and_modes() {
     open(&mut st, "rules:Windows");
     let clip = view(&st, false).rows.into_iter().find(|r| r.id == "native:clipboard").unwrap();
     assert_eq!((clip.cells.as_slice(), clip.lines.len()), (&["—".to_string()][..], 2), "not files: a dash, the lines are the detail");
-    open(&mut st, "builtin:Sistema");
+    open(&mut st, "builtin:System");
     let bin = view(&st, false).rows.into_iter().find(|r| r.id == "cat:0").unwrap();
     assert_eq!((bin.cells.as_slice(), bin.bytes), (&["5".to_string()][..], Some(1000)));
     assert!(detail(&bin, "skipped").is_some(), "folders were skipped without administrator rights");
@@ -517,13 +517,13 @@ fn cleanup_view_report_and_items_after_cleaning() {
     st.clean_job = Some(rx);
     st.clean_view = CleanView::Cleaned;
     st.clean_cancel = Some((xiox_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
-    st.clean_chosen = Chosen { cats: vec![1, 3], others: vec![("native:clipboard".into(), "Appunti".into()), ("t_tool/history".into(), "Toolchain – History".into())] };
+    st.clean_chosen = Chosen { cats: vec![1, 3], others: vec![("native:clipboard".into(), "Clipboard".into()), ("t_tool/history".into(), "Toolchain – History".into())] };
     let locked = PathBuf::from(r"C:\t\a.tmp");
-    tx.send(CleanMsg::Progress("Pulizia – Cestino".into(), 0.5)).unwrap();
+    tx.send(CleanMsg::Progress("Cleaning – Recycle Bin".into(), 0.5)).unwrap();
     let cat = cleaner::Cleaned { freed: 100, removed: 4, failed: 1, dirs: 2, failures: vec![(locked.clone(), "in uso".into())], cancelled: false };
     tx.send(CleanMsg::Cleaned(1, cleaner::Found::default(), cat)).unwrap();
-    let nat = native::NativeCleaned { removed: 1, notes: vec!["una nota".into()], done: vec!["Appunti svuotati".into()], ..Default::default() };
-    tx.send(CleanMsg::Native("native:clipboard".into(), "Appunti".into(), NativeFound::default(), Some(nat))).unwrap();
+    let nat = native::NativeCleaned { removed: 1, notes: vec!["a note".into()], done: vec!["Clipboard emptied".into()], ..Default::default() };
+    tx.send(CleanMsg::Native("native:clipboard".into(), "Clipboard".into(), NativeFound::default(), Some(nat))).unwrap();
     let rule = rules::RuleCleaned { freed: 500, removed: 12, files: 10, failed: 2, backup: Some(PathBuf::from(r"C:\b\x.reg")), ..Default::default() };
     tx.send(CleanMsg::Rule("t_tool/history".into(), "Toolchain – History".into(), rules::RuleFound::default(), Some(rule))).unwrap();
     st.poll();
@@ -531,7 +531,7 @@ fn cleanup_view_report_and_items_after_cleaning() {
     let v = view(&st, false);
     assert_eq!((v.status.badge.as_str(), v.status.text.clone()), ("Cleaning", format!("{} freed", sys::fmt_size(600))));
     let job = v.job.as_ref().unwrap();
-    assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Cleaning…", 0.5, Some("Pulizia – Cestino")));
+    assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Cleaning…", 0.5, Some("Cleaning – Recycle Bin")));
     assert!(action(&v, "cancel").enabled && !action(&v, "clean").enabled && !action(&v, "analyze").enabled);
     assert!(v.report.is_none() && view(&st, false).rows.len() == 6);
     assert_eq!(st.report_text(), None, "nothing to save while it runs");
@@ -554,11 +554,11 @@ fn cleanup_view_report_and_items_after_cleaning() {
         r.items.iter().map(|i| (i.name.as_str(), i.freed_bytes, i.removed, i.left, i.note.as_deref(), i.lines.iter().map(String::as_str).collect())).collect();
     assert_eq!(items, [
         (cleaner::CATEGORIES[1].name, 100, 4, 1, None, vec![]),
-        ("Appunti", 0, 1, 0, Some("una nota"), vec!["Appunti svuotati", "una nota"]),
+        ("Clipboard", 0, 1, 0, Some("a note"), vec!["Clipboard emptied", "a note"]),
         ("Toolchain – History", 500, 12, 2, Some(r"Registry backup: C:\b\x.reg"), vec![r"Registry backup: C:\b\x.reg"]),
     ]);
     assert!(r.can_save && r.saved.is_none());
-    assert!(st.report_text().unwrap().contains("Resoconto della pulizia"));
+    assert!(st.report_text().unwrap().contains("Cleanup report"));
     st.set_saved("Saved.".into(), true);
     assert_eq!(view(&st, false).report.unwrap().saved, Some(SavedView { text: "Saved.".into(), ok: true }));
     // After the report: nothing to clean, Analyze allowed; the figures of the analysis are gone.
@@ -704,11 +704,11 @@ fn winapp2_search_matches_section_cleaner_or_option() {
     st.set_search("zzz");
     let v = view(&st, false);
     assert!(v.rows.is_empty() && v.empty.is_some());
-    open(&mut st, "builtin:Sistema");
+    open(&mut st, "builtin:System");
     assert!(view(&st, false).search.is_none(), "the box exists only in this category");
     // Rules not loaded yet: no Winapp2 entry, the natives are there already.
     st.rules = None;
     let v = view(&st, false);
-    assert_eq!(v.nav.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["builtin:Sistema", "builtin:Esplora file", "builtin:Avanzate", "rules:Windows"]);
+    assert_eq!(v.nav.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows"]);
     assert!(st.select_category("winapp2").is_err());
 }

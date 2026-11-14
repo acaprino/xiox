@@ -195,16 +195,16 @@ fn item_is_off_by_default_with_warning() {
     let it = &v[0];
     assert_eq!(it.id, "wipe_free_space");
     assert_eq!(it.group, "Windows");
-    assert_eq!(it.label, "Pulisci spazio libero");
+    assert_eq!(it.label, "Clean free space");
     assert!(!it.default_on);
     assert!(it.needs_admin);
     assert_eq!(it.warning, Some(WARNING));
     // L'avviso dice cosa si rompe e cosa non si copre.
-    for needle in ["solo disco di sistema", "MFT", "altri programmi", "copie shadow", "punti di ripristino", "SSD"] {
+    for needle in ["system disk only", "MFT", "other programs", "shadow copies", "restore points", "SSD"] {
         assert!(WARNING.contains(needle), "{needle}");
     }
     // La descrizione dichiara la copertura parziale.
-    for needle in ["solo disco di sistema", "parziale", "MFT", "altri dischi", "copie shadow", "1 GB"] {
+    for needle in ["system disk only", "Partial", "MFT", "other disks", "shadow copies", "1 GB"] {
         assert!(it.description.contains(needle), "{needle}");
     }
 }
@@ -217,8 +217,8 @@ fn ssd_is_refused_and_says_trim() {
     let found = analyze_wipe(&vol);
     assert_eq!(found.count, 0);
     assert!(found.items.is_empty());
-    assert!(found.detail[0].contains("Non serve su SSD: Windows usa TRIM"), "{:?}", found.detail);
-    assert!(found.detail[0].contains("100,00 GB"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("Not needed on SSD: Windows uses TRIM"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("100.00 GB"), "{:?}", found.detail);
 
     // Anche un `found` forzato non fa scrivere nulla su un SSD.
     let out = clean(&vol);
@@ -233,7 +233,7 @@ fn unknown_disk_type_or_not_fixed_ntfs_is_refused() {
     let vol = FakeVol::new(Err("IOCTL non supportato".into()), 100 * GIB);
     let found = analyze_wipe(&vol);
     assert_eq!(found.count, 0);
-    assert!(found.detail[0].contains("tipo di disco non determinato"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("disk type not determined"), "{:?}", found.detail);
     clean(&vol);
     assert_eq!(vol.writes.get(), 0);
 
@@ -251,7 +251,7 @@ fn below_two_gb_free_is_refused() {
     let vol = FakeVol::hdd(2 * GIB - 1);
     let found = analyze_wipe(&vol);
     assert_eq!(found.count, 0);
-    assert!(found.detail[0].contains("sotto 2 GB"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("below 2 GB"), "{:?}", found.detail);
     clean(&vol);
     assert_eq!(vol.writes.get(), 0);
     assert!(vol.created.borrow().is_empty());
@@ -268,8 +268,8 @@ fn hdd_analysis_shows_kind_and_free_space() {
     assert_eq!(found.items, vec![r"C:\".to_string()]);
     assert_eq!(found.bytes, 0, "non libera spazio");
     assert_eq!(found.files, 0);
-    assert!(found.detail[0].contains("disco rigido"), "{:?}", found.detail);
-    assert!(found.detail[0].contains("50,00 GB"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("hard disk"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("50.00 GB"), "{:?}", found.detail);
     assert_eq!(vol.writes.get(), 0, "l'analisi non scrive");
 }
 
@@ -291,12 +291,12 @@ fn analysis_only_reports_a_leftover_and_never_removes_it() {
     assert_eq!(found.items, vec![r"C:\".to_string(), "leftover:Xiox_wipe_123_456".to_string()]);
     assert_eq!(found.count, 2);
     assert!(
-        found.detail.iter().any(|d| d.contains("Trovata una cartella rimasta") && d.contains("Xiox_wipe_123_456")
-            && d.contains("Verrà tolta")),
+        found.detail.iter().any(|d| d.contains("Found a folder left over") && d.contains("Xiox_wipe_123_456")
+            && d.contains("It will be removed")),
         "{:?}",
         found.detail
     );
-    assert!(found.detail[0].contains("10,00 GB"), "{:?}", found.detail);
+    assert!(found.detail[0].contains("10.00 GB"), "{:?}", found.detail);
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn clean_removes_the_leftover_first_then_writes() {
     assert_eq!(out.freed, 4 * GIB);
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0, "{:?}", out.notes);
-    assert!(out.notes.iter().any(|n| n.contains("Cancellata la cartella rimasta") && n.contains("4,00 GB")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("Deleted the folder left over") && n.contains("4.00 GB")), "{:?}", out.notes);
 }
 
 #[test]
@@ -406,7 +406,7 @@ fn fill_stops_leaving_one_gb_free_and_the_folder_goes_away() {
     assert_eq!(out.removed, 1);
     assert_eq!(out.failed, 0);
     assert_eq!(out.freed, 0);
-    assert!(out.notes.iter().any(|n| n.contains("3,97 GB")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("3.97 GB")), "{:?}", out.notes);
     assert_eq!(out.done.len(), 1);
 }
 
@@ -478,7 +478,7 @@ fn cancel_midway_removes_the_folder() {
     assert!(vol.dirs.borrow().is_empty());
     assert_eq!(vol.free.get(), 20 * GIB);
     assert_eq!(out.removed, 0);
-    assert!(out.notes.iter().any(|n| n.contains("Annullata")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("Cancelled")), "{:?}", out.notes);
 }
 
 #[test]
@@ -541,7 +541,7 @@ fn clean_acts_only_on_the_volume_found_by_analysis() {
     vol.free.set(GIB);
     let out = clean_wipe(&vol, &found, &vol.cancel);
     assert!(vol.created.borrow().is_empty());
-    assert!(out.notes.iter().any(|n| n.contains("sotto 2 GB")), "{:?}", out.notes);
+    assert!(out.notes.iter().any(|n| n.contains("below 2 GB")), "{:?}", out.notes);
 }
 
 // ----- file system vero, solo in una cartella temporanea con file minuscoli -----

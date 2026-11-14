@@ -67,18 +67,18 @@ pub struct Category {
 }
 
 pub const CATEGORIES: &[Category] = &[
-    Category { name: "DLL condivise mancanti", default_on: true },
-    Category { name: "Estensioni file inutilizzate", default_on: true },
-    Category { name: "Problemi ActiveX e classi", default_on: true },
-    Category { name: "Librerie dei tipi", default_on: true },
-    Category { name: "Caratteri (font)", default_on: true },
-    Category { name: "Percorsi delle applicazioni", default_on: true },
-    Category { name: "File della guida", default_on: true },
-    Category { name: "Cartelle del programma di installazione", default_on: true },
-    Category { name: "Software obsoleto", default_on: true },
-    Category { name: "Esecuzione all'avvio", default_on: true },
+    Category { name: "Missing shared DLLs", default_on: true },
+    Category { name: "Unused file extensions", default_on: true },
+    Category { name: "ActiveX and class problems", default_on: true },
+    Category { name: "Type libraries", default_on: true },
+    Category { name: "Fonts", default_on: true },
+    Category { name: "Application paths", default_on: true },
+    Category { name: "Help files", default_on: true },
+    Category { name: "Installer folders", default_on: true },
+    Category { name: "Obsolete software", default_on: true },
+    Category { name: "Run at startup", default_on: true },
     Category { name: "Cache MUI", default_on: true },
-    Category { name: "Servizi Windows", default_on: false },
+    Category { name: "Windows services", default_on: false },
 ];
 
 const KNOWN_EXT: &[&str] = &[".exe", ".dll", ".ocx", ".sys", ".cpl", ".scr", ".com", ".chm", ".hlp", ".tlb", ".olb", ".msc", ".bat", ".cmd", ".ax"];
@@ -187,7 +187,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
             ] {
                 for (name, _) in values(Root::Hklm, path) {
                     if is_abs(&name) && missing(&name) {
-                        out.push(issue(c, "DLL condivisa mancante", name.clone(), Fix::DeleteValue { root: Root::Hklm, path: path.into(), value: name }));
+                        out.push(issue(c, "Missing shared DLL", name.clone(), Fix::DeleteValue { root: Root::Hklm, path: path.into(), value: name }));
                     }
                 }
             }
@@ -206,7 +206,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                 }
                 let exists = RegKey::predef(HKEY_CLASSES_ROOT).open_subkey_with_flags(&progid, KEY_READ).is_ok();
                 if !exists {
-                    out.push(issue(c, "Estensione file inutilizzata", format!("{ext} → {progid}"), Fix::DeleteKey { root: Root::Hkcu, path: kp }));
+                    out.push(issue(c, "Unused file extension", format!("{ext} → {progid}"), Fix::DeleteKey { root: Root::Hkcu, path: kp }));
                 }
             }
         }
@@ -218,7 +218,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                     for server in ["InprocServer32", "LocalServer32"] {
                         if let Some(v) = default_value(root, &format!("{kp}\\{server}")) {
                             if let Some(p) = missing_cmd(&v) {
-                                out.push(issue(c, "Classe ActiveX/COM con file mancante", p, Fix::DeleteKey { root, path: kp.clone() }));
+                                out.push(issue(c, "ActiveX/COM class with a missing file", p, Fix::DeleteKey { root, path: kp.clone() }));
                                 break;
                             }
                         }
@@ -242,7 +242,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                         }
                     }
                     if !paths.is_empty() && paths.iter().all(|p| missing(p)) {
-                        out.push(issue(c, "Libreria dei tipi mancante", paths[0].clone(), Fix::DeleteKey { root: Root::Hklm, path: vp }));
+                        out.push(issue(c, "Missing type library", paths[0].clone(), Fix::DeleteKey { root: Root::Hklm, path: vp }));
                     }
                 }
             }
@@ -262,7 +262,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                         None => continue,
                     };
                     if candidates.iter().all(|p| missing(p)) {
-                        out.push(issue(c, "Carattere mancante", format!("{name}: {data}"), Fix::DeleteValue { root, path: path.into(), value: name }));
+                        out.push(issue(c, "Missing font", format!("{name}: {data}"), Fix::DeleteValue { root, path: path.into(), value: name }));
                     }
                 }
             }
@@ -273,7 +273,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                 for app in subkeys(root, base) {
                     let kp = format!("{base}\\{app}");
                     if let Some(p) = default_value(root, &kp).and_then(|v| missing_cmd(&v)) {
-                        out.push(issue(c, "Percorso applicazione non valido", p, Fix::DeleteKey { root, path: kp }));
+                        out.push(issue(c, "Invalid application path", p, Fix::DeleteKey { root, path: kp }));
                     }
                 }
             }
@@ -287,7 +287,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                         }
                         let full = format!("{}\\{}", sys::expand_env(&folder).trim_end_matches('\\'), name);
                         if extract_path(&full).is_some() && missing(&full) {
-                            out.push(issue(c, "File della guida mancante", full, Fix::DeleteValue { root, path: path.into(), value: name }));
+                            out.push(issue(c, "Missing help file", full, Fix::DeleteValue { root, path: path.into(), value: name }));
                         }
                     }
                 }
@@ -298,7 +298,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
             for (name, _) in values(Root::Hklm, path) {
                 let p = name.trim_end_matches('\\');
                 if extract_path(p).is_some() && missing(p) {
-                    out.push(issue(c, "Cartella dell'installer mancante", name.clone(), Fix::DeleteValue { root: Root::Hklm, path: path.into(), value: name }));
+                    out.push(issue(c, "Missing installer folder", name.clone(), Fix::DeleteValue { root: Root::Hklm, path: path.into(), value: name }));
                 }
             }
         }
@@ -320,7 +320,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                     }
                     if let Some(p) = missing_cmd(&cmd) {
                         let name = k.get_value::<String, _>("DisplayName").unwrap_or_else(|_| app.clone());
-                        out.push(issue(c, "Software obsoleto", format!("{name} ({p})"), Fix::DeleteKey { root, path: kp }));
+                        out.push(issue(c, "Obsolete software", format!("{name} ({p})"), Fix::DeleteKey { root, path: kp }));
                     }
                 }
             }
@@ -333,7 +333,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
             ] {
                 for (name, cmd) in values(root, path) {
                     if let Some(p) = missing_cmd(&cmd) {
-                        out.push(issue(c, "Programma all'avvio mancante", format!("{name}: {p}"), Fix::DeleteValue { root, path: path.into(), value: name }));
+                        out.push(issue(c, "Missing startup program", format!("{name}: {p}"), Fix::DeleteValue { root, path: path.into(), value: name }));
                     }
                 }
             }
@@ -342,7 +342,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
             let path = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache";
             for (name, _) in values(Root::Hkcu, path) {
                 if let Some(p) = missing_cmd(&name) {
-                    out.push(issue(c, "Voce MUI non valida", p, Fix::DeleteValue { root: Root::Hkcu, path: path.into(), value: name }));
+                    out.push(issue(c, "Invalid MUI entry", p, Fix::DeleteValue { root: Root::Hkcu, path: path.into(), value: name }));
                 }
             }
         }
@@ -357,7 +357,7 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
                 }
                 let Ok(img) = k.get_value::<String, _>("ImagePath") else { continue };
                 if let Some(p) = missing_cmd(&img) {
-                    let mut i = issue(c, "Servizio con file mancante", format!("{svc}: {p}"), Fix::DeleteKey { root: Root::Hklm, path: kp });
+                    let mut i = issue(c, "Service with a missing file", format!("{svc}: {p}"), Fix::DeleteKey { root: Root::Hklm, path: kp });
                     i.selected = false;
                     out.push(i);
                 }
@@ -647,7 +647,7 @@ mod backup_tests {
         let out = fix_all(
             &chosen,
             true,
-            &|_| Err("reg.exe terminato con codice 1".to_string()),
+            &|_| Err("reg.exe ended with code 1".to_string()),
             &mut |f| {
                 applied.borrow_mut().push(f.key_text());
                 true
@@ -656,7 +656,7 @@ mod backup_tests {
         );
         assert!(applied.borrow().is_empty());
         assert_eq!((out.ok, out.failed, out.backup.clone()), (0, 0, None));
-        assert!(out.refused.as_deref().is_some_and(|r| r.contains("reg.exe terminato con codice 1")), "{:?}", out.refused);
+        assert!(out.refused.as_deref().is_some_and(|r| r.contains("reg.exe ended with code 1")), "{:?}", out.refused);
     }
 
     #[test]

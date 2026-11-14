@@ -73,7 +73,7 @@ mod win {
         let mut h: HANDLE = null_mut();
         // SAFETY: pseudo-handle del processo; `h` è un puntatore valido.
         if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut h) } == 0 {
-            return Err(format!("token del processo non aperto: {}", last_error()));
+            return Err(format!("process token not opened: {}", last_error()));
         }
         let t = Token(h);
         let mut len = 0u32;
@@ -82,7 +82,7 @@ mod win {
         let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
         // SAFETY: buffer di almeno `len` byte.
         if unsafe { GetTokenInformation(t.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) } == 0 {
-            return Err(format!("utente del processo non letto: {}", last_error()));
+            return Err(format!("process user not read: {}", last_error()));
         }
         Ok(buf)
     }
@@ -97,7 +97,7 @@ mod win {
         let mut p: *mut u16 = null_mut();
         // SAFETY: SID valido; `p` riceve una stringa da liberare con `LocalFree`.
         if unsafe { ConvertSidToStringSidW(sid_of(&user), &mut p) } == 0 || p.is_null() {
-            return Err(format!("SID dell'utente non convertito: {}", last_error()));
+            return Err(format!("user SID not converted: {}", last_error()));
         }
         // SAFETY: stringa terminata da zero restituita dal sistema.
         let n = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
@@ -108,7 +108,7 @@ mod win {
         if s.starts_with("S-1-") && s.chars().all(|c| c.is_ascii_digit() || c == '-' || c == 'S') {
             Ok(s)
         } else {
-            Err(format!("SID dell'utente non valido: {s}"))
+            Err(format!("invalid user SID: {s}"))
         }
     }
 
@@ -119,7 +119,7 @@ mod win {
         // sistema e liberata con `WTSFreeMemory`.
         let ok = unsafe { WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, class, &mut p, &mut bytes) };
         if ok == 0 || p.is_null() {
-            return Err(format!("utente della sessione non letto: {}", last_error()));
+            return Err(format!("session user not read: {}", last_error()));
         }
         // SAFETY: stringa terminata da zero restituita dal sistema.
         let n = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
@@ -157,7 +157,7 @@ mod win {
             LookupAccountNameW(null(), w.as_ptr(), sid.as_mut_ptr().cast(), &mut sl, domain.as_mut_ptr(), &mut dl, &mut use_)
         };
         if ok == 0 {
-            return Err(format!("account della sessione {account} non trovato: {}", last_error()));
+            return Err(format!("session account {account} not found: {}", last_error()));
         }
         Ok(sid)
     }
@@ -168,7 +168,7 @@ mod win {
         let name = sid_name(me).unwrap_or_else(|| "account sconosciuto".to_string());
         let (u, d) = (wts_string(WTSUserName)?, wts_string(WTSDomainName)?);
         if u.is_empty() {
-            return Err("nessun utente nella sessione".into());
+            return Err("no user in the session".into());
         }
         let session = name_sid(&if d.is_empty() { u } else { format!("{d}\\{u}") })?;
         // SAFETY: due SID validi.

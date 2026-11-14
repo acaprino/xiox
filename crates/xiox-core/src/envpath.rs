@@ -63,14 +63,14 @@ pub const SYSTEM_VARS: &[&str] = &[
     "allusersprofile", "commonprogramfiles", "commonprogramfiles(x86)", "commonprogramw6432", "public",
 ];
 
-const WARNING: &str = "Toglie dal PATH le cartelle che non esistono più e i doppioni. Una cartella creata più tardi \
-                       (un SDK o uno strumento installato dopo, o che si ricrea quando si aggiorna) o su un disco la \
-                       cui lettera ora è di un altro disco esce dal PATH: strumenti e build potrebbero non trovare i \
-                       programmi. Pulizia toglie solo le voci mostrate dall'ultima Analisi. Backup .reg in \
-                       Documenti\\Xiox.";
+const WARNING: &str = "Removes from the PATH the folders that no longer exist and the duplicates. A folder created later \
+                       (an SDK or a tool installed afterwards, or one that is recreated on update) or on a disk whose \
+                       letter now belongs to another disk leaves the PATH: tools and builds may not find the \
+                       programs. Cleanup removes only the entries shown by the last Analysis. .reg backup in \
+                       Documents\\Xiox.";
 
 /// Nota delle voci del PATH di sistema quando il processo non è elevato.
-pub const ADMIN_ONLY: &str = "solo con diritti di amministratore: non verrà modificato";
+pub const ADMIN_ONLY: &str = "only with administrator rights: it will not be changed";
 
 /// Tipo del valore `Path` nel registro (si riscrive sempre con lo stesso).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,11 +181,11 @@ pub fn items() -> Vec<NativeItem> {
     vec![NativeItem {
         id: "env_path",
         group: "Windows",
-        label: "Percorso ambiente",
-        description: "Toglie dalla variabile PATH, dell'utente e di sistema, le cartelle che non esistono più su un \
-                      disco fisso e quelle scritte due volte. Le cartelle di Windows, di rete, su dischi rimovibili \
-                      o scollegati e quelle con variabili sconosciute non si toccano mai. Pulizia toglie solo le \
-                      voci mostrate dall'ultima Analisi; prima di scrivere si salva un backup .reg.",
+        label: "Environment PATH",
+        description: "Removes from the PATH variable, the user's and the system's, the folders that no longer exist on a \
+                      fixed disk and those written twice. Windows folders, network folders, folders on removable \
+                      or disconnected disks and those with unknown variables are never touched. Cleanup removes only the \
+                      entries shown by the last Analysis; a .reg backup is saved before writing.",
         warning: Some(WARNING),
         warning_extra: None,
         default_on: false,
@@ -216,14 +216,14 @@ fn real_clean(ctx: &NativeCtx, found: &NativeFound) -> NativeCleaned {
 }
 
 fn no_env_note(e: &str) -> String {
-    format!("Ambiente dell'utente non letto ({e}): il PATH non si tocca")
+    format!("User environment not read ({e}): the PATH is left alone")
 }
 
 /// Nome della chiave per il resoconto.
 pub fn root_label(root: RegRoot) -> &'static str {
     match root {
-        RegRoot::Hklm => "Sistema",
-        RegRoot::Hkcu => "Utente",
+        RegRoot::Hklm => "System",
+        RegRoot::Hkcu => "User",
     }
 }
 
@@ -232,9 +232,9 @@ fn hkcu_refusal(account: &Account) -> Option<String> {
     match account {
         Account::Same(_) => None,
         Account::Other(name) => {
-            Some(format!("Utente: PATH utente di un altro account: non toccato (il programma gira come {name})"))
+            Some(format!("User: the user PATH of another account: not touched (the program runs as {name})"))
         }
-        Account::Unknown(e) => Some(format!("Utente: account della sessione non verificato ({e}), PATH utente non toccato")),
+        Account::Unknown(e) => Some(format!("User: session account not verified ({e}), user PATH not touched")),
     }
 }
 
@@ -269,16 +269,16 @@ pub fn split_entries(text: &str) -> Option<Vec<&str>> {
 /// danno `Err` (riscrivendo si perderebbe qualcosa).
 pub fn decode_reg_text(data: &[u8]) -> Result<String, String> {
     if !data.len().is_multiple_of(2) {
-        return Err("valore con lunghezza dispari".into());
+        return Err("value with an odd length".into());
     }
     let mut words: Vec<u16> = data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
     while words.last() == Some(&0) {
         words.pop();
     }
     if words.contains(&0) {
-        return Err("valore con un carattere nullo in mezzo".into());
+        return Err("value with a null character in the middle".into());
     }
-    String::from_utf16(&words).map_err(|_| "valore con testo UTF-16 non valido".to_string())
+    String::from_utf16(&words).map_err(|_| "value with invalid UTF-16 text".to_string())
 }
 
 /// `text` in UTF-16 little endian con un solo zero finale.
@@ -309,7 +309,7 @@ fn rebuild(entries: &[&str], remove: &[usize]) -> String {
 /// il motivo) quando il valore intero non si tocca: virgolette non chiuse,
 /// cartella di Windows sconosciuta, PATH di sistema che resterebbe vuoto.
 pub fn proposals(root: RegRoot, value: &PathValue, sys: &dyn PathSys, exp: &dyn Expander) -> Result<Vec<Proposal>, String> {
-    let entries = split_entries(&value.text).ok_or("virgolette non chiuse, non si tocca")?;
+    let entries = split_entries(&value.text).ok_or("unclosed quotes, left alone")?;
     let windows: Vec<PathBuf> = ["systemroot", "windir"]
         .iter()
         .filter_map(|v| exp.var(v))
@@ -317,7 +317,7 @@ pub fn proposals(root: RegRoot, value: &PathValue, sys: &dyn PathSys, exp: &dyn 
         .filter(|p| disk_path(p))
         .collect();
     if windows.is_empty() {
-        return Err("cartella di Windows sconosciuta, non si tocca".into());
+        return Err("unknown Windows folder, left alone".into());
     }
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::new();
@@ -348,7 +348,7 @@ pub fn proposals(root: RegRoot, value: &PathValue, sys: &dyn PathSys, exp: &dyn 
         out.push(Proposal { index, entry: raw.to_string(), reason });
     }
     if root == RegRoot::Hklm && !out.is_empty() && entries.iter().filter(|e| !e.is_empty()).count() == out.len() {
-        return Err("il PATH di sistema resterebbe vuoto, non si tocca".into());
+        return Err("the system PATH would stay empty, left alone".into());
     }
     Ok(out)
 }
@@ -550,8 +550,8 @@ fn parse_item(s: &str) -> Option<Item> {
 
 fn reason_text(r: Reason) -> &'static str {
     match r {
-        Reason::Missing => "non esiste più",
-        Reason::Duplicate => "doppione",
+        Reason::Missing => "no longer exists",
+        Reason::Duplicate => "duplicate",
     }
 }
 
@@ -580,7 +580,7 @@ pub fn analyze_path(sys: &dyn PathSys, exp: &dyn Expander) -> NativeFound {
             Ok(Some(v)) => v,
             Ok(None) => continue,
             Err(e) => {
-                notes.push(format!("{label}: PATH non letto, non si tocca ({e})"));
+                notes.push(format!("{label}: PATH not read, left alone ({e})"));
                 continue;
             }
         };
@@ -606,14 +606,14 @@ pub fn analyze_path(sys: &dyn PathSys, exp: &dyn Expander) -> NativeFound {
         }
         let entries = split_entries(&value.text).unwrap_or_default();
         if !ps.is_empty() && entries.iter().rev().skip(1).any(|e| e.is_empty()) {
-            notes.push(format!("{label}: si tolgono anche i separatori «;;» vuoti"));
+            notes.push(format!("{label}: the empty “;;” separators are removed too"));
         }
     }
     if found.count > 0 {
-        found.detail.push(plural(found.count, "cartella da togliere dal PATH", "cartelle da togliere dal PATH"));
+        found.detail.push(plural(found.count, "folder to remove from the PATH", "folders to remove from the PATH"));
         found.detail.extend(lines);
     } else if !admin_only.is_empty() {
-        found.detail.push("Nessuna cartella da togliere senza diritti di amministratore".to_string());
+        found.detail.push("No folders to remove without administrator rights".to_string());
     }
     found.detail.extend(admin_only.iter().cloned());
     if found.count > 0 || !admin_only.is_empty() {
@@ -648,13 +648,13 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
     for s in &found.items {
         let Some(it) = parse_item(s) else {
             out.failed += total;
-            out.note("Elemento del PATH non valido: non si tocca nulla, rifai l'analisi".into());
+            out.note("Invalid PATH entry: nothing is touched, analyze again".into());
             return out;
         };
         match plans.iter_mut().find(|p| p.root == it.root) {
             Some(p) if p.original != it.original => {
                 out.failed += total;
-                out.note("Elementi del PATH non coerenti: non si tocca nulla, rifai l'analisi".into());
+                out.note("Inconsistent PATH entries: nothing is touched, analyze again".into());
                 return out;
             }
             Some(p) => p.wanted.push((it.index, it.entry)),
@@ -680,7 +680,7 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
     // Un valore cambiato dall'analisi: l'utente non ha visto quello attuale.
     if let Some(p) = plans.iter().find(|p| !same_value(sys.read(p.root), &p.original)) {
         out.failed += plans.iter().map(|p| p.wanted.len() as u64).sum::<u64>();
-        out.note(format!("{}: PATH cambiato dopo l'analisi, non si tocca nulla: rifai l'analisi", root_label(p.root)));
+        out.note(format!("{}: PATH changed after the analysis, nothing is touched: analyze again", root_label(p.root)));
         return out;
     }
 
@@ -708,7 +708,7 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
                     removed.push(entry.clone());
                 }
             } else {
-                out.note(format!("{label}: {entry} non è più da togliere, lasciata"));
+                out.note(format!("{label}: {entry} is no longer to be removed, left alone"));
             }
         }
         if remove.is_empty() {
@@ -729,22 +729,22 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
         _ => String::new(),
     };
     match sys.backup(&roots) {
-        Ok(path) => out.note(format!("Backup del PATH{who}: {}", path.display())),
+        Ok(path) => out.note(format!("PATH backup{who}: {}", path.display())),
         Err(e) => {
             out.failed += pending(&ready);
-            out.note(format!("Backup .reg non riuscito, il PATH non si tocca: {e}"));
+            out.note(format!(".reg backup failed, the PATH is left alone: {e}"));
             return out;
         }
     }
     if cancel.load(Ordering::Relaxed) {
-        out.note("Annullato, PATH lasciato".into());
+        out.note("Cancelled, PATH left alone".into());
         return out;
     }
     // Riletti tutti subito prima di scrivere: un cambio durante il backup
     // ferma tutto.
     if let Some(r) = ready.iter().find(|r| !same_value(sys.read(r.0), &r.1)) {
         out.failed += pending(&ready);
-        out.note(format!("{}: PATH cambiato dopo l'analisi, non si tocca nulla: rifai l'analisi", root_label(r.0)));
+        out.note(format!("{}: PATH changed after the analysis, nothing is touched: analyze again", root_label(r.0)));
         return out;
     }
 
@@ -764,14 +764,14 @@ pub fn clean_path(sys: &dyn PathSys, exp: &dyn Expander, found: &NativeFound, ca
             }
             Err(e) => {
                 out.failed += removed.len() as u64;
-                out.note(format!("{label}: PATH non scritto ({e})"));
+                out.note(format!("{label}: PATH not written ({e})"));
             }
         }
     }
     if wrote {
         if let Err(e) = sys.broadcast() {
             out.note(format!(
-                "Avviso a Windows non riuscito ({e}): i programmi già aperti vedranno il nuovo PATH quando ripartono"
+                "Notice to Windows failed ({e}): programs already open will see the new PATH when they restart"
             ));
         }
     }
@@ -798,7 +798,7 @@ pub fn backup_covers(text: &str, roots: &[RegRoot]) -> Result<(), String> {
             }
         }
         if !ok {
-            return Err(format!("il backup non contiene \"Path\" della chiave {}", root_label(*root)));
+            return Err(format!("the backup does not contain \"Path\" of the key {}", root_label(*root)));
         }
     }
     Ok(())
@@ -851,7 +851,7 @@ mod win {
         let mut h: HANDLE = null_mut();
         // SAFETY: pseudo-handle del processo; `h` è un puntatore valido.
         if unsafe { OpenProcessToken(GetCurrentProcess(), access, &mut h) } == 0 {
-            return Err(format!("token del processo non aperto: {}", last_error()));
+            return Err(format!("process token not opened: {}", last_error()));
         }
         Ok(Token(h))
     }
@@ -865,7 +865,7 @@ mod win {
         // SAFETY: token valido con i diritti richiesti; `env` è un puntatore
         // valido, il blocco si libera con `DestroyEnvironmentBlock`.
         if unsafe { CreateEnvironmentBlock(&mut env, t.0, 0) } == 0 || env.is_null() {
-            return Err(format!("blocco d'ambiente non creato: {}", last_error()));
+            return Err(format!("environment block not created: {}", last_error()));
         }
         let p = env as *const u16;
         let mut n = 0usize;
@@ -937,7 +937,7 @@ mod win {
             let key = match open_env(root, KEY_QUERY_VALUE) {
                 Ok(k) => k,
                 Err(ERROR_FILE_NOT_FOUND) => return Ok(None),
-                Err(rc) => return Err(format!("chiave non aperta (errore {rc})")),
+                Err(rc) => return Err(format!("key not opened (error {rc})")),
             };
             let name = wide(VALUE);
             for _ in 0..READ_TRIES {
@@ -950,12 +950,12 @@ mod win {
                     return Ok(None);
                 }
                 if rc != ERROR_SUCCESS {
-                    return Err(format!("valore Path non letto (errore {rc})"));
+                    return Err(format!("Path value not read (error {rc})"));
                 }
                 let kind = match ty {
                     REG_SZ => Kind::Sz,
                     REG_EXPAND_SZ => Kind::ExpandSz,
-                    other => return Err(format!("valore Path di tipo {other}, non gestito")),
+                    other => return Err(format!("Path value of type {other}, not supported")),
                 };
                 let mut buf = vec![0u8; len as usize];
                 let mut got = len;
@@ -967,18 +967,18 @@ mod win {
                     continue; // cambiato fra le due letture
                 }
                 if rc != ERROR_SUCCESS {
-                    return Err(format!("valore Path non letto (errore {rc})"));
+                    return Err(format!("Path value not read (error {rc})"));
                 }
                 buf.truncate(got as usize);
                 return decode_reg_text(&buf).map(|text| Some(PathValue { kind, text }));
             }
-            Err("valore Path che cambia di continuo".into())
+            Err("Path value that keeps changing".into())
         }
 
         fn write(&self, root: RegRoot, value: &PathValue) -> Result<(), String> {
-            let key = open_env(root, KEY_QUERY_VALUE | KEY_SET_VALUE).map_err(|rc| format!("chiave non aperta (errore {rc})"))?;
+            let key = open_env(root, KEY_QUERY_VALUE | KEY_SET_VALUE).map_err(|rc| format!("key not opened (error {rc})"))?;
             let data = encode_reg_text(&value.text);
-            let len = u32::try_from(data.len()).map_err(|_| "PATH troppo lungo".to_string())?;
+            let len = u32::try_from(data.len()).map_err(|_| "PATH too long".to_string())?;
             let ty = match value.kind {
                 Kind::Sz => REG_SZ,
                 Kind::ExpandSz => REG_EXPAND_SZ,
@@ -987,7 +987,7 @@ mod win {
             // SAFETY: chiave aperta con `KEY_SET_VALUE`, nome terminato da
             // zero, `data` ha `len` byte leggibili (testo con lo zero finale).
             let rc = unsafe { RegSetValueExW(key.0, name.as_ptr(), 0, ty, data.as_ptr(), len) };
-            if rc == ERROR_SUCCESS { Ok(()) } else { Err(format!("errore {rc}")) }
+            if rc == ERROR_SUCCESS { Ok(()) } else { Err(format!("error {rc}")) }
         }
 
         fn backup(&self, roots: &[RegRoot]) -> Result<PathBuf, String> {
@@ -1006,7 +1006,7 @@ mod win {
                 &crate::regbackup::reg_exe_export,
                 &keys,
             )?
-            .ok_or_else(|| "nessuna chiave esportata".to_string())?;
+            .ok_or_else(|| "no key exported".to_string())?;
             // Il file scritto (e già su disco: `write_backup` fa `sync_all`)
             // deve contenere `"Path"` di ogni chiave.
             let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;

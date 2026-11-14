@@ -42,12 +42,12 @@ pub const KEEP_PREFIX: &str = "keep:";
 
 /// Contenuto della lista creata al primo uso: solo commenti.
 pub const KEEP_LIST_TEMPLATE: &str = "\
-# Cookie da conservare (Xiox)
+# Cookies to keep (Xiox)
 #
-# Un dominio per riga. Un dominio conserva anche i suoi sottodomini:
-# google.com conserva accounts.google.com, ma non notgoogle.com.
-# Le righe che iniziano con # non contano: togli il # dagli esempi
-# che vuoi usare, poi salva il file.
+# One domain per line. A domain also keeps its subdomains:
+# google.com keeps accounts.google.com, but not notgoogle.com.
+# Lines starting with # are ignored: remove the # from the examples
+# you want to use, then save the file.
 #
 # google.com
 # microsoft.com
@@ -265,7 +265,7 @@ pub fn profiles(env: &Env) -> Vec<Profile> {
                 }
                 Layout::Opera => {
                     if plain_file(&root.join("Preferences")) {
-                        push(root.clone(), "profilo principale".to_string(), chromium_lock.clone());
+                        push(root.clone(), "main profile".to_string(), chromium_lock.clone());
                     }
                     for (name, dir) in subdirs(&root) {
                         if name != "_side_profiles" && is_chromium_profile(&name, &dir) {
@@ -276,7 +276,7 @@ pub fn profiles(env: &Env) -> Vec<Profile> {
                     if plain_dir(&side) {
                         for (name, dir) in subdirs(&side) {
                             if is_chromium_profile(&name, &dir) {
-                                push(dir, format!("profilo laterale {name}"), chromium_lock.clone());
+                                push(dir, format!("side profile {name}"), chromium_lock.clone());
                             }
                         }
                     }
@@ -358,9 +358,9 @@ type Procs<'a> = &'a dyn Fn() -> Vec<String>;
 fn busy(p: &Profile, procs: Procs) -> Option<String> {
     let hits = crate::rules::running_among(p.processes, &procs());
     if !hits.is_empty() {
-        return Some(format!("{}: chiudi {} per pulire", p.label(), hits.join(", ")));
+        return Some(format!("{}: close {} to clean", p.label(), hits.join(", ")));
     }
-    lock_held(&p.lock).then(|| format!("{}: profilo in uso, chiudi {} per pulire", p.label(), p.processes.join(", ")))
+    lock_held(&p.lock).then(|| format!("{}: profile in use, close {} to clean", p.label(), p.processes.join(", ")))
 }
 
 /// `true` se un altro processo tiene aperto `lock`: Chromium lo apre con la
@@ -431,7 +431,7 @@ pub fn hold_profile(p: &Profile) -> Result<Option<ProfileLock>, String> {
     if p.kind != Kind::Gecko {
         return Ok(None);
     }
-    let busy = || format!("{}: profilo in uso, chiudi {} per pulire", p.label(), p.processes.join(", "));
+    let busy = || format!("{}: profile in use, close {} to clean", p.label(), p.processes.join(", "));
     let existed = match fs::symlink_metadata(&p.lock) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => false,
         Ok(_) if plain(&p.lock).is_some_and(|m| m.is_file()) => true,
@@ -530,7 +530,7 @@ pub fn keep_list_in(documents: &Path) -> PathBuf {
     xiox_model::legacy::app_dir_in(documents).join("cookie_da_conservare.txt")
 }
 
-const NOT_SAFE: &str = "lista dei cookie non sicura (la cartella Xiox o il file è un collegamento o una giunzione)";
+const NOT_SAFE: &str = "cookie list not safe (the Xiox folder or the file is a link or a junction)";
 
 /// `Ok` se né `Xiox` né il file della lista sono reparse point
 /// (giunzioni, collegamenti, segnaposto di OneDrive): ciò che manca va bene,
@@ -554,7 +554,7 @@ pub fn read_keep_list(path: &Path) -> Result<KeepList, String> {
     check_keep_list(path)?;
     match fs::metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(KeepList::default()),
-        Ok(m) if m.len() > KEEP_LIST_MAX => return Err("file troppo grande".to_string()),
+        Ok(m) if m.len() > KEEP_LIST_MAX => return Err("file too large".to_string()),
         _ => {}
     }
     let bytes = match fs::read(path) {
@@ -564,7 +564,7 @@ pub fn read_keep_list(path: &Path) -> Result<KeepList, String> {
     };
     let list = parse_keep_list(&decode_text(&bytes)?);
     if list.domains.is_empty() && !list.rejected.is_empty() {
-        return Err(format!("nessun dominio valido; righe non riconosciute: {}", rejected_text(&list.rejected)));
+        return Err(format!("no valid domain; unrecognized lines: {}", rejected_text(&list.rejected)));
     }
     Ok(list)
 }
@@ -573,7 +573,7 @@ pub fn read_keep_list(path: &Path) -> Result<KeepList, String> {
 fn rejected_text(rejected: &[String]) -> String {
     let mut s = rejected.iter().take(MAX_REJECTED_SHOWN).cloned().collect::<Vec<_>>().join(", ");
     if rejected.len() > MAX_REJECTED_SHOWN {
-        s.push_str(&format!(" …e altre {}", rejected.len() - MAX_REJECTED_SHOWN));
+        s.push_str(&format!(" …and {} more", rejected.len() - MAX_REJECTED_SHOWN));
     }
     s
 }
@@ -584,19 +584,19 @@ fn decode_text(bytes: &[u8]) -> Result<String, String> {
     let utf16 = |rest: &[u8], le: bool| {
         let (pairs, odd) = rest.as_chunks::<2>();
         if !odd.is_empty() {
-            return Err("testo UTF-16 incompleto".to_string());
+            return Err("incomplete UTF-16 text".to_string());
         }
         let units: Vec<u16> = pairs.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) }).collect();
-        String::from_utf16(&units).map_err(|_| "testo UTF-16 non valido".to_string())
+        String::from_utf16(&units).map_err(|_| "invalid UTF-16 text".to_string())
     };
     let text = match bytes {
         [0xFF, 0xFE, rest @ ..] => utf16(rest, true)?,
         [0xFE, 0xFF, rest @ ..] => utf16(rest, false)?,
-        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).map_err(|_| "testo non UTF-8".to_string())?,
-        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "testo non UTF-8: salvalo come UTF-8 nel Blocco note".to_string())?,
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8(rest.to_vec()).map_err(|_| "text is not UTF-8".to_string())?,
+        _ => String::from_utf8(bytes.to_vec()).map_err(|_| "text is not UTF-8: save it as UTF-8 in Notepad".to_string())?,
     };
     if text.contains('\0') {
-        return Err("testo con caratteri nulli (UTF-16 senza BOM?): salvalo come UTF-8 nel Blocco note".to_string());
+        return Err("text with null characters (UTF-16 without BOM?): save it as UTF-8 in Notepad".to_string());
     }
     Ok(text)
 }
@@ -621,13 +621,13 @@ pub fn ensure_keep_list(path: &Path) -> io::Result<()> {
 /// cookie verrà eliminato.
 pub fn keep_list_summary(list: &Result<KeepList, String>) -> String {
     match list {
-        Ok(v) if v.rejected.is_empty() => format!("lista: {}", plural(v.domains.len() as u64, "dominio", "domini")),
+        Ok(v) if v.rejected.is_empty() => format!("list: {}", plural(v.domains.len() as u64, "domain", "domains")),
         Ok(v) => format!(
-            "lista: {}; righe non riconosciute, non protette: {}",
-            plural(v.domains.len() as u64, "dominio", "domini"),
+            "list: {}; unrecognized lines, not protected: {}",
+            plural(v.domains.len() as u64, "domain", "domains"),
             rejected_text(&v.rejected)
         ),
-        Err(e) => format!("Lista dei cookie non valida: nessun cookie verrà eliminato ({e})"),
+        Err(e) => format!("Cookie list not valid: no cookie will be deleted ({e})"),
     }
 }
 
@@ -664,7 +664,7 @@ fn cookie_dbs(p: &Profile) -> Vec<(PathBuf, &'static str, &'static str)> {
 /// Host distinti dei cookie con il numero di righe di ciascuno.
 fn cookie_hosts(c: &Connection, table: &str, col: &str) -> Result<Vec<(Option<String>, u64)>, String> {
     if !has_column(c, table, col) {
-        return Err(format!("manca la tabella {table}"));
+        return Err(format!("table {table} is missing"));
     }
     let read = || -> rusqlite::Result<Vec<(Option<String>, u64)>> {
         let mut st = c.prepare(&format!("SELECT \"{col}\", COUNT(*) FROM \"{table}\" GROUP BY \"{col}\""))?;
@@ -716,12 +716,12 @@ pub fn analyze_cookies(profiles: &[Profile], list: Result<KeepList, String>, pro
                         f.items.push(path_text(&db));
                     }
                     if del + kept > 0 {
-                        lines.push(format!("{} – {}: {} da eliminare, {kept} da conservare", p.label(), short(p, &db), plural(del, "cookie", "cookie")));
+                        lines.push(format!("{} – {}: {} to delete, {kept} to keep", p.label(), short(p, &db), plural(del, "cookie", "cookies")));
                     }
                 }
                 Err(e) => {
                     f.skipped += 1;
-                    lines.push(format!("{} – {}: non leggibile ({e})", p.label(), short(p, &db)));
+                    lines.push(format!("{} – {}: not readable ({e})", p.label(), short(p, &db)));
                 }
             }
         }
@@ -730,9 +730,9 @@ pub fn analyze_cookies(profiles: &[Profile], list: Result<KeepList, String>, pro
         f.items.extend(keep.iter().map(|d| format!("{KEEP_PREFIX}{d}")));
     }
     f.detail.push(if f.count > 0 {
-        format!("{} da eliminare ({summary})", plural(f.count, "cookie", "cookie"))
+        format!("{} to delete ({summary})", plural(f.count, "cookie", "cookies"))
     } else {
-        format!("Nessun cookie da eliminare ({summary})")
+        format!("No cookies to delete ({summary})")
     });
     f.detail.extend(lines);
     f
@@ -773,16 +773,16 @@ pub fn clean_cookies(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
                     done.removed += n;
                     done.freed += before.saturating_sub(file_size(&db));
                     done.done.push(format!(
-                        "{} – {}: {} eliminati, {} liberati nel database",
+                        "{} – {}: {} deleted, {} freed in the database",
                         p.label(),
                         short(p, &db),
-                        plural(n, "cookie", "cookie"),
+                        plural(n, "cookie", "cookies"),
                         crate::sys::fmt_size(inside)
                     ));
                 }
                 Err(e) => {
                     done.failed += 1;
-                    done.note(format!("{} – {}: cookie non eliminati, nessuna modifica ({e})", p.label(), short(p, &db)));
+                    done.note(format!("{} – {}: cookies not deleted, nothing changed ({e})", p.label(), short(p, &db)));
                 }
             }
         }
@@ -877,19 +877,19 @@ pub fn analyze_compact(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) 
                     f.count += 1;
                     f.bytes += b;
                     f.items.push(path_text(&db));
-                    lines.push(format!("{} – {}: {} recuperabili", p.label(), short(p, &db), crate::sys::fmt_size(b)));
+                    lines.push(format!("{} – {}: {} recoverable", p.label(), short(p, &db), crate::sys::fmt_size(b)));
                 }
                 Err(e) => {
                     f.skipped += 1;
-                    lines.push(format!("{} – {}: non leggibile ({e})", p.label(), short(p, &db)));
+                    lines.push(format!("{} – {}: not readable ({e})", p.label(), short(p, &db)));
                 }
             }
         }
     }
     f.detail.push(if f.count > 0 {
-        format!("{}, {} recuperabili", plural(f.count, "database", "database"), crate::sys::fmt_size(f.bytes))
+        format!("{}, {} recoverable", plural(f.count, "database", "databases"), crate::sys::fmt_size(f.bytes))
     } else {
-        "Nessun database da compattare".to_string()
+        "No database to compact".to_string()
     });
     f.detail.extend(lines);
     f
@@ -941,14 +941,14 @@ pub fn clean_compact_with(
             }
             let name = short(p, &db);
             if !plain_file(&db) {
-                done.note(format!("{} – {name}: non c'è più", p.label()));
+                done.note(format!("{} – {name}: gone", p.label()));
                 continue;
             }
             let need = file_size(&db).saturating_mul(2);
             let room = |dir: &Path| free(dir).is_some_and(|b| b >= need);
             if !db.parent().is_some_and(room) || !room(temp) {
                 done.note(format!(
-                    "{} – {name}: spazio insufficiente per compattare (servono {} liberi qui e nella cartella temporanea)",
+                    "{} – {name}: not enough space to compact ({} free needed here and in the temporary folder)",
                     p.label(),
                     crate::sys::fmt_size(need)
                 ));
@@ -966,11 +966,11 @@ pub fn clean_compact_with(
                     ));
                 }
                 Err(CompactError::NotOk(why)) => {
-                    done.note(format!("{} – {name}: il controllo di integrità non dà «ok» ({why}): non si tocca", p.label()));
+                    done.note(format!("{} – {name}: the integrity check does not return “ok” ({why}): left alone", p.label()));
                 }
                 Err(CompactError::Db(e)) => {
                     done.failed += 1;
-                    done.note(format!("{} – {name}: non compattato ({e})", p.label()));
+                    done.note(format!("{} – {name}: not compacted ({e})", p.label()));
                 }
             }
         }
@@ -1061,27 +1061,27 @@ pub fn analyze_history(profiles: &[Profile], procs: Procs, cancel: &AtomicBool) 
                 f.count += visits + pages;
                 f.items.push(path_text(&db));
                 lines.push(format!(
-                    "{}: {} e {} senza segnalibri",
+                    "{}: {} and {} without bookmarks",
                     p.label(),
-                    plural(visits, "visita", "visite"),
-                    plural(pages, "pagina", "pagine")
+                    plural(visits, "visit", "visits"),
+                    plural(pages, "page", "pages")
                 ));
             }
             Ok(Some(_)) => {}
             Ok(None) => {
                 f.skipped += 1;
-                lines.push(format!("{}: places.sqlite non riconosciuto, non si tocca", p.label()));
+                lines.push(format!("{}: places.sqlite not recognized, left alone", p.label()));
             }
             Err(e) => {
                 f.skipped += 1;
-                lines.push(format!("{}: places.sqlite non leggibile ({e})", p.label()));
+                lines.push(format!("{}: places.sqlite not readable ({e})", p.label()));
             }
         }
     }
     f.detail.push(if f.count > 0 {
-        format!("{} da togliere, segnalibri esclusi", plural(f.count, "voce", "voci"))
+        format!("{} to remove, bookmarks excluded", plural(f.count, "item", "items"))
     } else {
-        "Nessuna cronologia da togliere".to_string()
+        "No history to remove".to_string()
     });
     f.detail.extend(lines);
     f
@@ -1112,7 +1112,7 @@ pub fn clean_history(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
             }
         };
         if plain_path(&p.dir, "places.sqlite", true).is_none() {
-            done.note(format!("{}: places.sqlite non c'è più", p.label()));
+            done.note(format!("{}: places.sqlite is gone", p.label()));
             continue;
         }
         let before = file_size(&db);
@@ -1121,26 +1121,26 @@ pub fn clean_history(profiles: &[Profile], found: &NativeFound, procs: Procs, ca
                 done.removed += visits + pages;
                 done.freed += before.saturating_sub(file_size(&db));
                 done.done.push(format!(
-                    "{}: {} e {} tolte, segnalibri intatti, {} liberati nel database",
+                    "{}: {} and {} removed, bookmarks intact, {} freed in the database",
                     p.label(),
-                    plural(visits, "visita", "visite"),
-                    plural(pages, "pagina", "pagine"),
+                    plural(visits, "visit", "visits"),
+                    plural(pages, "page", "pages"),
                     crate::sys::fmt_size(inside)
                 ));
             }
             Ok(HistoryOutcome::BookmarksChanged) => {
                 done.failed += 1;
                 done.note(format!(
-                    "{}: cronologia non tolta, perché sarebbero cambiati i segnalibri (nessuna modifica)",
+                    "{}: history not removed, because the bookmarks would have changed (nothing changed)",
                     p.label()
                 ));
             }
             Ok(HistoryOutcome::Unknown) => {
-                done.note(format!("{}: places.sqlite non riconosciuto, non si tocca", p.label()));
+                done.note(format!("{}: places.sqlite not recognized, left alone", p.label()));
             }
             Err(e) => {
                 done.failed += 1;
-                done.note(format!("{}: cronologia non tolta, nessuna modifica ({e})", p.label()));
+                done.note(format!("{}: history not removed, nothing changed ({e})", p.label()));
             }
         }
     }
@@ -1238,8 +1238,8 @@ const GECKO_LAST_DIR: &[u8] = b"\"browser.download.lastDir\"";
 /// tocca). Il risultato si rilegge come JSON uguale all'originale meno la
 /// chiave, con l'ordine delle chiavi e i numeri di prima.
 pub fn strip_chromium_prefs(bytes: &[u8]) -> Result<Option<(Vec<u8>, usize)>, String> {
-    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "non è JSON valido".to_string())?;
-    let root = v.as_object_mut().ok_or_else(|| "non è un oggetto JSON".to_string())?;
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "not valid JSON".to_string())?;
+    let root = v.as_object_mut().ok_or_else(|| "not a JSON object".to_string())?;
     let (obj, key) = CHROMIUM_LAST_DIR;
     let removed = root.get_mut(obj).and_then(|o| o.as_object_mut()).and_then(|o| o.shift_remove(key)).is_some();
     if !removed {
@@ -1248,7 +1248,7 @@ pub fn strip_chromium_prefs(bytes: &[u8]) -> Result<Option<(Vec<u8>, usize)>, St
     let out = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
     match serde_json::from_slice::<serde_json::Value>(&out) {
         Ok(back) if back == v => Ok(Some((out, 1))),
-        _ => Err("la riscrittura non si rilegge uguale".to_string()),
+        _ => Err("the rewritten file does not read back the same".to_string()),
     }
 }
 
@@ -1291,7 +1291,7 @@ fn prefs_file(p: &Profile) -> PathBuf {
 fn stripped_prefs(p: &Profile, file: &Path) -> Result<Option<(Vec<u8>, usize)>, String> {
     let m = fs::metadata(file).map_err(|e| e.to_string())?;
     if m.len() > PREFS_MAX {
-        return Err("file troppo grande".to_string());
+        return Err("file too large".to_string());
     }
     let bytes = fs::read(file).map_err(|e| e.to_string())?;
     match p.kind {
@@ -1323,19 +1323,19 @@ pub fn analyze_download_dir(profiles: &[Profile], procs: Procs, cancel: &AtomicB
             Ok(Some((_, n))) => {
                 f.count += n as u64;
                 f.items.push(path_text(&file));
-                lines.push(format!("{}: ultima cartella in {name}", p.label()));
+                lines.push(format!("{}: last folder in {name}", p.label()));
             }
             Ok(None) => {}
             Err(e) => {
                 f.skipped += 1;
-                lines.push(format!("{}: {name} {e}, non si tocca", p.label()));
+                lines.push(format!("{}: {name} {e}, left alone", p.label()));
             }
         }
     }
     f.detail.push(if f.count > 0 {
-        format!("Ultimo percorso di download in {}", plural(f.items.len() as u64, "profilo", "profili"))
+        format!("Last download path in {}", plural(f.items.len() as u64, "profile", "profiles"))
     } else {
-        "Niente da fare: nessun ultimo percorso salvato".to_string()
+        "Nothing to do: no last path saved".to_string()
     });
     f.detail.extend(lines);
     f
@@ -1365,7 +1365,7 @@ pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Proc
         };
         let name = short(p, &file);
         if !plain_file(&file) {
-            done.note(format!("{}: {name} non c'è più", p.label()));
+            done.note(format!("{}: {name} is gone", p.label()));
             continue;
         }
         let res = stripped_prefs(p, &file).and_then(|s| match s {
@@ -1389,11 +1389,11 @@ pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Proc
             Ok(0) => {}
             Ok(n) => {
                 done.removed += n as u64;
-                done.done.push(format!("{}: ultimo percorso tolto da {name}", p.label()));
+                done.done.push(format!("{}: last path removed from {name}", p.label()));
             }
             Err(e) => {
                 done.failed += 1;
-                done.note(format!("{}: {name} non modificato ({e})", p.label()));
+                done.note(format!("{}: {name} not modified ({e})", p.label()));
             }
         }
     }
@@ -1406,7 +1406,7 @@ pub fn clean_download_dir(profiles: &[Profile], found: &NativeFound, procs: Proc
 /// attributi dell'originale. In errore il temporaneo (creato qui) si toglie e
 /// `path` resta com'era. Un temporaneo vecchio non dà fastidio.
 fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> io::Result<()> {
-    let name = path.file_name().ok_or_else(|| io::Error::other("nome mancante"))?;
+    let name = path.file_name().ok_or_else(|| io::Error::other("missing name"))?;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut tmp_name = name.to_os_string();
     tmp_name.push(format!(".xiox.{}-{nanos}.tmp", std::process::id()));
@@ -1417,7 +1417,7 @@ fn write_replacing(path: &Path, bytes: &[u8], check: &dyn Fn(&[u8]) -> bool) -> 
         f.sync_all()?;
         drop(f);
         if !check(&fs::read(&tmp)?) {
-            return Err(io::Error::other("il file riscritto non si rilegge uguale"));
+            return Err(io::Error::other("the rewritten file does not read back the same"));
         }
         win::replace(path, &tmp)
     })();
@@ -1435,13 +1435,13 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: COOKIES_ID,
             group: GROUP,
-            label: "Cookie (con lista da conservare)",
-            description: "Elimina i cookie di Chrome, Edge, Firefox e degli altri browser, tranne quelli dei domini \
-                 scritti in Documenti\\Xiox\\cookie_da_conservare.txt (un dominio per riga, vale anche per i \
-                 sottodomini). Il profilo di un browser aperto si salta.",
+            label: "Cookies (with a keep list)",
+            description: "Deletes the cookies of Chrome, Edge, Firefox and the other browsers, except those of the domains \
+                 written in Documents\\Xiox\\cookie_da_conservare.txt (one domain per line, subdomains included). \
+                 The profile of an open browser is skipped.",
             warning: Some(
-                "si esce dai siti, e in Thunderbird anche dalla posta via web: verranno eliminati tutti i cookie \
-                 tranne i domini della lista",
+                "you are signed out of sites, and in Thunderbird of web mail too: all cookies will be deleted \
+                 except the domains on the list",
             ),
             warning_extra: Some(real::keep_list_warning),
             default_on: false,
@@ -1454,13 +1454,13 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: COMPACT_ID,
             group: GROUP,
-            label: "Compatta database",
-            description: "Ricompatta i database dei profili dei browser (cronologia, cookie, icone, moduli) per \
-                 recuperare lo spazio libero che hanno dentro. Nessun dato si cancella; un database che non \
-                 supera il controllo di integrità non si tocca. Il profilo di un browser aperto si salta.",
+            label: "Compact databases",
+            description: "Compacts the browser profile databases (history, cookies, icons, forms) to \
+                 recover the free space inside them. No data is deleted; a database that does not \
+                 pass the integrity check is left alone. The profile of an open browser is skipped.",
             warning: Some(
-                "i database si riscrivono per intero: serve spazio libero quanto il database più grande, e \
-                 un browser aperto a metà lavoro lo troverebbe bloccato. Chiudi i browser prima.",
+                "databases are rewritten in full: you need as much free space as the largest database, and \
+                 a browser left open mid-work would find it locked. Close the browsers first.",
             ),
             warning_extra: None,
             default_on: false,
@@ -1473,11 +1473,11 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: FIREFOX_HISTORY_ID,
             group: GROUP,
-            label: "Cronologia di Firefox e Thunderbird",
-            description: "Toglie da places.sqlite la cronologia di navigazione e dei download di Firefox e \
-                 Thunderbird. I segnalibri e le parole chiave restano: se cambiassero, la pulizia si annulla. \
-                 Il profilo di un browser aperto si salta.",
-            warning: Some("si perde la cronologia di navigazione e dei download di Firefox e Thunderbird; i segnalibri restano."),
+            label: "Firefox and Thunderbird history",
+            description: "Removes the browsing and download history of Firefox and Thunderbird from \
+                 places.sqlite. Bookmarks and keywords stay: if they would change, the cleanup is cancelled. \
+                 The profile of an open browser is skipped.",
+            warning: Some("the browsing and download history of Firefox and Thunderbird is lost; bookmarks stay."),
             warning_extra: None,
             default_on: false,
             needs_admin: false,
@@ -1489,13 +1489,13 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: DOWNLOAD_DIR_ID,
             group: GROUP,
-            label: "Ultimo percorso di download",
-            description: "Fa dimenticare l'ultima cartella usata: quella di «Salva con nome» per Chrome, Edge e \
-                 gli altri browser (file Preferences), quella dei download per Firefox e Thunderbird (prefs.js). \
-                 La cartella dei download scelta nelle impostazioni non cambia.",
+            label: "Last download path",
+            description: "Makes the browser forget the last folder used: the one of “Save as” for Chrome, Edge and \
+                 the other browsers (Preferences file), the download one for Firefox and Thunderbird (prefs.js). \
+                 The download folder chosen in the settings does not change.",
             warning: Some(
-                "si riscrive il file delle preferenze del browser (Preferences o prefs.js), solo a browser chiuso \
-                 e solo se il risultato si rilegge senza errori.",
+                "the browser preferences file (Preferences or prefs.js) is rewritten, only with the browser closed \
+                 and only if the result reads back without errors.",
             ),
             warning_extra: None,
             default_on: false,
@@ -1519,12 +1519,12 @@ fn keep_list_path() -> Option<PathBuf> {
 /// file di HKCU, nessun `ShellExecuteW` da amministratore. Da chiamare fuori
 /// dal thread della UI.
 pub fn open_keep_list() -> Result<(), String> {
-    let docs = crate::sysclean::documents_dir().ok_or_else(|| "cartella Documenti non trovata".to_string())?;
-    let system32 = crate::sysclean::system32_dir().ok_or_else(|| "cartella di sistema non trovata".to_string())?;
+    let docs = crate::sysclean::documents_dir().ok_or_else(|| "Documents folder not found".to_string())?;
+    let system32 = crate::sysclean::system32_dir().ok_or_else(|| "system folder not found".to_string())?;
     open_keep_list_in(&docs, &|path: &Path| {
         use std::os::windows::process::CommandExt;
         let (exe, arg) = editor_command(&system32, path);
-        std::process::Command::new(exe).raw_arg(arg).spawn().map(drop).map_err(|e| format!("Blocco note non avviato ({e})"))
+        std::process::Command::new(exe).raw_arg(arg).spawn().map(drop).map_err(|e| format!("Notepad not started ({e})"))
     })
 }
 
@@ -1532,7 +1532,7 @@ mod real {
     use super::*;
 
     fn keep_list() -> Result<KeepList, String> {
-        keep_list_path().ok_or_else(|| "cartella Documenti non trovata".to_string()).and_then(|p| read_keep_list(&p))
+        keep_list_path().ok_or_else(|| "Documents folder not found".to_string()).and_then(|p| read_keep_list(&p))
     }
 
     pub fn keep_list_warning() -> String {

@@ -123,8 +123,8 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: "clipboard",
             group: GROUP,
-            label: "Appunti",
-            description: "Svuota gli Appunti di Windows, cioè quello che hai copiato. La cronologia di Win+V non si tocca.",
+            label: "Clipboard",
+            description: "Empties the Windows clipboard, that is what you have copied. The Win+V history is not touched.",
             warning: None,
             warning_extra: None,
             default_on:true,
@@ -137,8 +137,8 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: "dns_cache",
             group: GROUP,
-            label: "Cache DNS",
-            description: "Svuota la cache dei nomi di dominio di Windows. Si riempie di nuovo da sola alle prossime visite.",
+            label: "DNS cache",
+            description: "Empties the Windows domain name cache. It fills up again by itself on the next visits.",
             warning: None,
             warning_extra: None,
             default_on:false,
@@ -151,14 +151,14 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: "event_logs",
             group: GROUP,
-            label: "Registri eventi di Windows",
-            description: "Svuota tre registri del Visualizzatore eventi: Applicazione, Sistema e Installazione \
-                 (Application, System, Setup). Windows scrive poi nel registro Sistema un evento 104 per ogni \
-                 registro svuotato, quindi Sistema non resta vuoto.",
+            label: "Windows event logs",
+            description: "Empties three Event Viewer logs: Application, System and Setup. \
+                 Windows then writes an event 104 in the System log for every \
+                 log emptied, so System does not stay empty.",
             warning: Some(
-                "si svuotano i registri Applicazione, Sistema e Installazione e si perde la storia degli eventi \
-                 che serve per la diagnosi dei problemi, senza copia. Sicurezza, Windows Defender e gli altri \
-                 registri restano come sono.",
+                "the Application, System and Setup logs are emptied and the event history used to \
+                 diagnose problems is lost, with no copy. Security, Windows Defender and the other \
+                 logs stay as they are.",
             ),
             warning_extra: None,
             default_on:false,
@@ -171,11 +171,11 @@ pub fn items() -> Vec<NativeItem> {
         NativeItem {
             id: "broken_shortcuts",
             group: GROUP,
-            label: "Collegamenti non validi",
-            description: "Elimina i collegamenti del menu Start e del Desktop (dell'utente e pubblici) la cui destinazione non esiste più su un disco fisso. Le destinazioni su dischi di rete o rimovibili non si considerano mai.",
+            label: "Invalid shortcuts",
+            description: "Deletes the Start menu and Desktop shortcuts (the user's and public ones) whose target no longer exists on a fixed disk. Targets on network or removable disks are never considered.",
             warning: Some(
-                "un programma spostato o un disco che ha cambiato lettera fanno sembrare non valido un collegamento \
-                 che serve ancora: controlla l'elenco dopo «Analizza».",
+                "a moved program or a disk that changed letter makes a shortcut that is still needed look invalid: \
+                 check the list after “Analyze”.",
             ),
             warning_extra: None,
             default_on:false,
@@ -247,7 +247,7 @@ pub fn analyze_clipboard(cb: &dyn Clipboard) -> NativeFound {
         return NativeFound::default();
     }
     NativeFound {
-        detail: vec!["Appunti con contenuto".to_string()],
+        detail: vec!["Clipboard with content".to_string()],
         count: 1,
         items: vec![CLIPBOARD_ITEM.to_string()],
         ..Default::default()
@@ -280,7 +280,7 @@ pub fn clean_clipboard(cb: &dyn Clipboard, found: &NativeFound, cancel: &AtomicB
         }
     }
     out.failed = 1;
-    out.note(format!("Appunti occupati: {last}"));
+    out.note(format!("Clipboard busy: {last}"));
     out
 }
 
@@ -290,7 +290,7 @@ pub fn clean_clipboard(cb: &dyn Clipboard, found: &NativeFound, cancel: &AtomicB
 /// Nessuna anteprima di dimensione: una sola operazione.
 pub fn analyze_dns() -> NativeFound {
     NativeFound {
-        detail: vec!["1 operazione".to_string()],
+        detail: vec!["1 operation".to_string()],
         count: 1,
         items: vec![DNS_ITEM.to_string()],
         ..Default::default()
@@ -315,7 +315,7 @@ pub fn clean_dns(found: &NativeFound, methods: &[&dyn Dns]) -> NativeCleaned {
         }
     }
     out.failed = 1;
-    out.note(format!("Cache DNS non svuotata: {}", errors.join("; ")));
+    out.note(format!("DNS cache not emptied: {}", errors.join("; ")));
     out
 }
 
@@ -325,7 +325,7 @@ pub const IPCONFIG_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_STEP: Duration = Duration::from_millis(50);
 
 /// Aspetta la fine di un processo (`poll` dà `Some(codice)` quando è finito)
-/// al più `timeout`. Oltre: `Err("Cache DNS: tempo scaduto")`, e chi chiama
+/// al più `timeout`. Oltre: `Err("DNS cache: timed out")`, e chi chiama
 /// termina il processo. Codice diverso da 0: errore con il codice.
 pub fn wait_bounded(
     poll: &mut dyn FnMut() -> Result<Option<i32>, String>,
@@ -336,8 +336,8 @@ pub fn wait_bounded(
     loop {
         match poll()? {
             Some(0) => return Ok(()),
-            Some(code) => return Err(format!("ipconfig /flushdns: codice {code}")),
-            None if waited >= timeout => return Err("Cache DNS: tempo scaduto".to_string()),
+            Some(code) => return Err(format!("ipconfig /flushdns: code {code}")),
+            None if waited >= timeout => return Err("DNS cache: timed out".to_string()),
             None => {
                 sleep(POLL_STEP);
                 waited += POLL_STEP;
@@ -372,15 +372,15 @@ pub fn analyze_event_logs(ev: &dyn EventLog) -> NativeFound {
     let bytes: u64 = channels.iter().map(|(_, _, b)| b).sum();
     let mut detail = vec![format!(
         "{}, {}, {}",
-        plural(channels.len() as u64, "registro", "registri"),
-        plural(events, "evento", "eventi"),
+        plural(channels.len() as u64, "log", "logs"),
+        plural(events, "event", "events"),
         crate::sys::fmt_size(bytes)
     )];
     detail.extend(
         channels
             .iter()
             .take(MAX_DETAIL)
-            .map(|(c, n, b)| format!("{c}: {}, {}", plural(*n, "evento", "eventi"), crate::sys::fmt_size(*b))),
+            .map(|(c, n, b)| format!("{c}: {}, {}", plural(*n, "event", "events"), crate::sys::fmt_size(*b))),
     );
     NativeFound {
         detail,
@@ -402,13 +402,13 @@ pub fn clean_event_logs(ev: &dyn EventLog, found: &NativeFound, cancel: &AtomicB
         }
         if !is_clearable_channel(channel) {
             out.failed += 1;
-            out.note(format!("{channel}: registro non ammesso, lasciato"));
+            out.note(format!("{channel}: log not allowed, left alone"));
             continue;
         }
         match ev.clear(channel) {
             Ok(()) => {
                 out.removed += 1;
-                out.done.push(format!("Svuotato: {channel}"));
+                out.done.push(format!("Emptied: {channel}"));
             }
             Err(e) => {
                 out.failed += 1;
@@ -436,14 +436,14 @@ pub fn shortcut_dirs(env: &Env, common: &CommonDirs) -> (Vec<ShortcutDir>, Vec<S
     let mut dirs = Vec::new();
     let mut notes = Vec::new();
     for (name, path, recursive, is_common) in [
-        ("Menu Start dell'utente", start_menu, true, false),
-        ("Menu Start comune", common.start_menu.clone(), true, true),
-        ("Desktop dell'utente", desktop, false, false),
-        ("Desktop pubblico", common.public_desktop.clone(), false, true),
+        ("User Start menu", start_menu, true, false),
+        ("Common Start menu", common.start_menu.clone(), true, true),
+        ("User Desktop", desktop, false, false),
+        ("Public Desktop", common.public_desktop.clone(), false, true),
     ] {
         match path.filter(|d| is_drive_path(d)) {
             Some(path) => dirs.push(ShortcutDir { path, recursive, common: is_common }),
-            None => notes.push(format!("{name}: cartella non trovata, saltata")),
+            None => notes.push(format!("{name}: folder not found, skipped")),
         }
     }
     (dirs, notes)
@@ -590,10 +590,10 @@ pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &
         notes_push_skipped(&mut found);
     }
     if found.count > 0 {
-        found.detail.push(plural(found.count, "collegamento non valido", "collegamenti non validi"));
+        found.detail.push(plural(found.count, "invalid shortcut", "invalid shortcuts"));
         found.detail.extend(lines);
         if found.count as usize > MAX_DETAIL {
-            found.detail.push(format!("… e altri {}", found.count as usize - MAX_DETAIL));
+            found.detail.push(format!("… and {} more", found.count as usize - MAX_DETAIL));
         }
     }
     found.detail.extend(notes);
@@ -601,8 +601,8 @@ pub fn analyze_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, cancel: &
 }
 
 fn notes_push_skipped(found: &mut NativeFound) {
-    let what = plural(found.skipped, "collegamento lasciato", "collegamenti lasciati");
-    let line = format!("{what}: protetti o con un nome non leggibile");
+    let what = plural(found.skipped, "shortcut left alone", "shortcuts left alone");
+    let line = format!("{what}: protected or with an unreadable name");
     found.detail.push(line);
 }
 
@@ -627,15 +627,15 @@ pub fn clean_shortcuts(sc: &dyn Shortcuts, env: &Env, guard: &Guard, found: &Nat
         });
         let Some(home) = home.filter(|_| is_lnk(&lnk)) else {
             out.failed += 1;
-            out.note(format!("{item}: fuori dalle cartelle dei collegamenti, lasciato"));
+            out.note(format!("{item}: outside the shortcut folders, left alone"));
             continue;
         };
         if matches!(std::fs::symlink_metadata(&lnk), Err(e) if e.kind() == ErrorKind::NotFound) {
-            out.note(format!("{item}: già assente"));
+            out.note(format!("{item}: already gone"));
             continue;
         }
         if broken_target(sc, env, &lnk, home.common).is_none() {
-            out.note(format!("{item}: non più da togliere (destinazione tornata o non giudicabile), lasciato"));
+            out.note(format!("{item}: no longer to be removed (target is back or cannot be judged), left alone"));
             continue;
         }
         match xiox_rules::delete_checked_with(&lnk, guard) {
@@ -949,12 +949,12 @@ mod win {
             // si libera con `FreeLibrary` su ogni percorso sotto.
             let module = unsafe { LoadLibraryExW(name.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
             if module.is_null() {
-                return Err(format!("dnsapi.dll non caricata: {}", last_error()));
+                return Err(format!("dnsapi.dll not loaded: {}", last_error()));
             }
             // SAFETY: modulo valido (sopra), nome ANSI terminato da zero.
             let proc = unsafe { GetProcAddress(module, c"DnsFlushResolverCache".as_ptr().cast()) };
             let out = match proc {
-                None => Err("DnsFlushResolverCache non presente in dnsapi.dll".to_string()),
+                None => Err("DnsFlushResolverCache not present in dnsapi.dll".to_string()),
                 Some(f) => {
                     // SAFETY: l'export ha firma `BOOL WINAPI DnsFlushResolverCache(void)`
                     // (la stessa che usa ipconfig): nessun argomento, convenzione
@@ -984,7 +984,7 @@ mod win {
                 .as_ref()
                 .map(|d| d.join("ipconfig.exe"))
                 .filter(|p| p.is_file())
-                .ok_or("ipconfig.exe non trovato")?;
+                .ok_or("ipconfig.exe not found")?;
             let mut child = std::process::Command::new(exe)
                 .arg("/flushdns")
                 .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
@@ -1269,7 +1269,7 @@ mod tests {
         fn empty(&self) -> Result<(), String> {
             let n = self.calls.get();
             self.calls.set(n + 1);
-            if n < self.busy { Err("aperti da un'altra app".into()) } else { Ok(()) }
+            if n < self.busy { Err("opened by another app".into()) } else { Ok(()) }
         }
     }
 
@@ -1408,7 +1408,7 @@ mod tests {
         let out = clean_clipboard(&cb, &full, &cancel, &no);
         assert_eq!((out.removed, out.failed), (0, 1));
         assert_eq!(cb.calls.get(), CLIPBOARD_TRIES);
-        assert!(out.notes.iter().any(|n| n.contains("Appunti occupati")), "{:?}", out.notes);
+        assert!(out.notes.iter().any(|n| n.contains("Clipboard busy")), "{:?}", out.notes);
     }
 
     #[test]
@@ -1426,7 +1426,7 @@ mod tests {
         assert_eq!(f.count, 1);
         assert_eq!(f.files, 0, "gli Appunti non sono un file");
         assert_eq!(analyze_dns().files, 0, "il DNS non è un file");
-        assert_eq!(f.detail, vec!["Appunti con contenuto".to_string()]);
+        assert_eq!(f.detail, vec!["Clipboard with content".to_string()]);
         assert_eq!(cb.calls.get(), 0, "l'analisi non svuota");
     }
 
@@ -1484,7 +1484,7 @@ mod tests {
         assert_eq!(*ev.cleared.borrow(), vec!["Application", "Setup", "System"]);
         assert_eq!(out.notes.len(), 1);
         assert!(out.notes[0].contains("Setup"), "{:?}", out.notes);
-        assert_eq!(out.done, vec!["Svuotato: Application".to_string(), "Svuotato: System".to_string()]);
+        assert_eq!(out.done, vec!["Emptied: Application".to_string(), "Emptied: System".to_string()]);
     }
 
     #[test]
@@ -1492,12 +1492,12 @@ mod tests {
         let ev = events(&[]);
         let found = analyze_event_logs(&ev);
         assert!(ev.cleared.borrow().is_empty());
-        assert!(found.detail[0].contains("3 registri"), "{:?}", found.detail);
-        assert!(found.detail[0].contains("20 eventi"), "{:?}", found.detail);
+        assert!(found.detail[0].contains("3 logs"), "{:?}", found.detail);
+        assert!(found.detail[0].contains("20 events"), "{:?}", found.detail);
         // Dimensione dei file dei registri (`EvtLogFileSize`), solo dei canali proposti.
         assert_eq!(found.bytes, 20_975_616 + 1_052_672 + 2 * 1024 * 1024);
-        assert!(found.detail[0].contains("23,0 MB"), "{:?}", found.detail);
-        assert!(found.detail.iter().any(|d| d == "Application: 10 eventi, 20,0 MB"), "{:?}", found.detail);
+        assert!(found.detail[0].contains("23.0 MB"), "{:?}", found.detail);
+        assert!(found.detail.iter().any(|d| d == "Application: 10 events, 20.0 MB"), "{:?}", found.detail);
         // Si svuota solo ciò che l'analisi ha trovato.
         let partial = NativeFound { items: vec!["System".into()], ..found };
         clean_event_logs(&ev, &partial, &AtomicBool::new(false));
@@ -1545,7 +1545,7 @@ mod tests {
         let slept = Cell::new(Duration::ZERO);
         let sleep = |d: Duration| slept.set(slept.get() + d);
         let mut never = || Ok(None);
-        assert_eq!(wait_bounded(&mut never, IPCONFIG_TIMEOUT, &sleep), Err("Cache DNS: tempo scaduto".to_string()));
+        assert_eq!(wait_bounded(&mut never, IPCONFIG_TIMEOUT, &sleep), Err("DNS cache: timed out".to_string()));
         assert!(slept.get() >= IPCONFIG_TIMEOUT && slept.get() <= IPCONFIG_TIMEOUT + Duration::from_millis(100));
         let calls = Cell::new(0);
         let mut later = || {
@@ -1554,7 +1554,7 @@ mod tests {
         };
         assert_eq!(wait_bounded(&mut later, IPCONFIG_TIMEOUT, &no), Ok(()));
         let mut bad = || Ok(Some(1));
-        assert!(wait_bounded(&mut bad, IPCONFIG_TIMEOUT, &no).unwrap_err().contains("codice 1"));
+        assert!(wait_bounded(&mut bad, IPCONFIG_TIMEOUT, &no).unwrap_err().contains("code 1"));
     }
 
     // ----- Collegamenti -----
@@ -1589,7 +1589,7 @@ mod tests {
         assert_eq!(found.count, 2);
         assert_eq!(found.bytes, 6);
         assert_eq!(found.files, 2, "i collegamenti sono file");
-        assert!(found.detail[0].contains("2 collegamenti"), "{:?}", found.detail);
+        assert!(found.detail[0].contains("2 invalid shortcuts"), "{:?}", found.detail);
         assert!(broken.exists() && on_desktop.exists(), "l'analisi non cancella");
     }
 
@@ -1769,12 +1769,12 @@ mod tests {
             PathBuf::from(r"C:\Users\u\Desktop"),
         ]);
         assert_eq!(notes, vec![
-            "Menu Start comune: cartella non trovata, saltata".to_string(),
-            "Desktop pubblico: cartella non trovata, saltata".to_string(),
+            "Common Start menu: folder not found, skipped".to_string(),
+            "Public Desktop: folder not found, skipped".to_string(),
         ]);
         // La nota arriva nel resoconto dell'analisi.
         let found = analyze_shortcuts(&FakeLinks { common, ..Default::default() }, &env, &Guard::new(&env), &AtomicBool::new(false));
-        assert!(found.detail.iter().any(|l| l.contains("Menu Start comune")), "{:?}", found.detail);
+        assert!(found.detail.iter().any(|l| l.contains("Common Start menu")), "{:?}", found.detail);
     }
 
     #[test]
@@ -1863,7 +1863,7 @@ mod tests {
         sc.targets.insert(lnk.clone(), vec![t.path().join("manca.exe").to_string_lossy().into_owned()]);
         let found = analyze_shortcuts(&sc, &env, &Guard::new(&env), &AtomicBool::new(false));
         assert_eq!((found.count, found.skipped), (0, 1));
-        assert!(found.detail.iter().any(|l| l == "1 collegamento lasciato: protetti o con un nome non leggibile"), "{:?}", found.detail);
+        assert!(found.detail.iter().any(|l| l == "1 shortcut left alone: protected or with an unreadable name"), "{:?}", found.detail);
     }
 
     #[test]
@@ -1961,12 +1961,12 @@ mod tests {
         let ev = by("event_logs");
         assert!(!ev.default_on && ev.needs_admin);
         let w = ev.warning.unwrap();
-        assert!(w.contains("diagnosi") && w.contains("Applicazione, Sistema e Installazione"), "{w}");
-        assert!(w.contains("Sicurezza, Windows Defender") && w.contains("restano"), "{w}");
+        assert!(w.contains("diagnose") && w.contains("Application, System and Setup"), "{w}");
+        assert!(w.contains("Security, Windows Defender") && w.contains("stay"), "{w}");
         assert!(ev.description.contains("104"), "{}", ev.description);
         assert!(!by("broken_shortcuts").default_on && by("broken_shortcuts").warning.is_some());
-        assert_eq!(by("clipboard").label, "Appunti");
-        assert_eq!(by("dns_cache").label, "Cache DNS");
+        assert_eq!(by("clipboard").label, "Clipboard");
+        assert_eq!(by("dns_cache").label, "DNS cache");
         for i in &items {
             let text = format!("{} {} {}", i.label, i.description, i.warning.unwrap_or(""));
             assert!(!text.contains("BleachBit") && !text.contains("AGG -"), "{text}");

@@ -39,15 +39,15 @@ pub struct Category {
 }
 
 pub const CATEGORIES: &[Category] = &[
-    Category { name: "Cestino", group: "Sistema", help: "Tutti i file nel Cestino", default_on: true, needs_admin: false, kind: Kind::RecycleBin },
-    Category { name: "File temporanei dell'utente", group: "Sistema", help: "La cartella Temp del tuo account", default_on: true, needs_admin: false, kind: Kind::Folders },
-    Category { name: "File temporanei di Windows", group: "Sistema", help: "La cartella Temp di Windows", default_on: true, needs_admin: true, kind: Kind::Folders },
-    Category { name: "Dump di memoria", group: "Sistema", help: "File creati quando un programma o Windows si blocca", default_on: true, needs_admin: false, kind: Kind::Folders },
-    Category { name: "File di log di Windows", group: "Sistema", help: "Registri di installazione e manutenzione", default_on: true, needs_admin: true, kind: Kind::Folders },
-    Category { name: "Segnalazione errori di Windows", group: "Sistema", help: "Rapporti di errore già inviati o in coda", default_on: true, needs_admin: false, kind: Kind::Folders },
-    Category { name: "Cache delle miniature", group: "Esplora file", help: "Anteprime delle immagini: Windows le ricrea", default_on: false, needs_admin: false, kind: Kind::Folders },
-    Category { name: "Vecchi dati Prefetch", group: "Avanzate", help: "Dati di avvio dei programmi più vecchi di 14 giorni", default_on: false, needs_admin: true, kind: Kind::Folders },
-    Category { name: "File di Ottimizzazione recapito", group: "Avanzate", help: "Copie degli aggiornamenti già installati", default_on: false, needs_admin: true, kind: Kind::Folders },
+    Category { name: "Recycle Bin", group: "System", help: "All files in the Recycle Bin", default_on: true, needs_admin: false, kind: Kind::RecycleBin },
+    Category { name: "User temporary files", group: "System", help: "The Temp folder of your account", default_on: true, needs_admin: false, kind: Kind::Folders },
+    Category { name: "Windows temporary files", group: "System", help: "The Windows Temp folder", default_on: true, needs_admin: true, kind: Kind::Folders },
+    Category { name: "Memory dumps", group: "System", help: "Files created when a program or Windows crashes", default_on: true, needs_admin: false, kind: Kind::Folders },
+    Category { name: "Windows log files", group: "System", help: "Installation and maintenance logs", default_on: true, needs_admin: true, kind: Kind::Folders },
+    Category { name: "Windows Error Reporting", group: "System", help: "Error reports already sent or queued", default_on: true, needs_admin: false, kind: Kind::Folders },
+    Category { name: "Thumbnail cache", group: "Explorer", help: "Image previews: Windows recreates them", default_on: false, needs_admin: false, kind: Kind::Folders },
+    Category { name: "Old Prefetch data", group: "Advanced", help: "Startup data of programs older than 14 days", default_on: false, needs_admin: true, kind: Kind::Folders },
+    Category { name: "Delivery Optimization files", group: "Advanced", help: "Copies of updates already installed", default_on: false, needs_admin: true, kind: Kind::Folders },
 ];
 
 fn t(dir: PathBuf, patterns: &[&'static str], recursive: bool) -> Target {
@@ -247,7 +247,7 @@ pub fn clean(index: usize, found: &Found, tick: &(dyn Fn(Tick) + Sync), cancel: 
             r.removed = found.count;
         } else {
             r.failed = found.count;
-            r.failures.push((PathBuf::from(CATEGORIES[index].name), "Svuotamento del Cestino non riuscito".into()));
+            r.failures.push((PathBuf::from(CATEGORIES[index].name), "Emptying the Recycle Bin failed".into()));
         }
         return r;
     }
