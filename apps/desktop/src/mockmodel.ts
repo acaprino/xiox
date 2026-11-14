@@ -100,6 +100,9 @@
 // WHAT NO INTENT DOES (the FakeBackend must not invent it either).
 //   developers:shortfall is reachable only through `go`: no intent leads to it (confirm from the confirm
 //       dialog goes to `cleaning`; in Rust the shortfall comes from a real disk check the fixture lacks).
+//   services:nomatch (a search that matches nothing: the empty state), services:partial and registry:partial (a change that
+//       half failed: a `warn` notice) are likewise reachable only through `go`; the smoke script draws them, the mock never
+//       moves to or from them by an intent (the real engine does both: the fixture only shows what they look like).
 //   `cancel` is never sent for Registry and Services: their intent types (RegistryIntent, ServicesIntent)
 //       have no `cancel`, and `actionIntent` returns null for it there; the only "Cancel" in Registry is
 //       the backup dialog's button, which is `closeDialog`. This mock does not look at the section when
@@ -245,6 +248,16 @@ export class MockModel {
     this.enter(s, state);
     delete this.back[s];
     return this.stamp(s);
+  }
+
+  /**
+   * Changes fields of a fixture state in the working copy (the smoke script's lever, with `go`): a view the engine
+   * never sends but the page must still survive (the bulk buttons with a job running).
+   */
+  patch(s: SectionId, state: string, fields: Partial<SectionView>): void {
+    const view = this.work[s][state];
+    if (!view) throw new Error(`no state ${state} for ${s}`);
+    Object.assign(view, structuredClone(fields));
   }
 
   private current(s: SectionId): SectionView {

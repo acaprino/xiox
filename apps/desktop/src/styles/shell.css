@@ -59,8 +59,16 @@ html, body { height: 100%; overflow: hidden; }
 /* About ends the bar, lifted from the bottom edge so its focus ring clears the cut corners of the frame. */
 #sections .nv.about { margin: auto 0 14px; }
 
-/* Bar 2. */
-.items { overflow: auto; min-height: 0; }
+/* Bar 2. The options may not all fit a short window: the bar scrolls, and its edges show a glow while there is more above
+   or below (the first two layers cover the glow at the ends of the scroll, so it only shows where something is hidden). */
+.items {
+  overflow: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  background:
+    linear-gradient(var(--pane) 30%, #0d0a2200) 0 0 / 100% 22px no-repeat local,
+    linear-gradient(#0d0a2200, var(--pane) 70%) 0 100% / 100% 22px no-repeat local,
+    linear-gradient(var(--line-strong), #6aa0e600) 0 0 / 100% 8px no-repeat scroll,
+    linear-gradient(#6aa0e600, var(--line-strong)) 0 100% / 100% 8px no-repeat scroll;
+}
 .it {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; width: 100%; padding: 5px 12px 5px 16px;
   border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer;

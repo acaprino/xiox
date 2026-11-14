@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptView, createGate, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from '../src/state.ts';
+import { acceptView, bulkLocked, createGate, createInflight, createUi, currentFocus, moveFocus, noticeKey, SERVICES_POLL_MS, shouldPollServices } from '../src/state.ts';
 import { visibleRows } from '../src/rows.ts';
 import type { DialogView, RowView, SectionId, SectionView } from '../src/types.ts';
 
@@ -118,4 +118,31 @@ test('services refresh only while shown, visible and without a dialog', () => {
   acceptView(ui, { ...view('developers', 1), dialog });
   assert.equal(shouldPollServices(ui, true), true);
   assert.equal(SERVICES_POLL_MS, 2000, 'the RAM meter is read every 2 s, as the old window repainted');
+});
+
+test('an identical intent is dropped while one is in flight, and goes again after the answer', () => {
+  const flight = createInflight();
+  const confirm = { kind: 'confirm' };
+  assert.equal(flight.begin('cleanup', confirm), true, 'the first one goes');
+  assert.equal(flight.begin('cleanup', { kind: 'confirm' }), false, 'the same intent (a double click) is dropped');
+  assert.equal(flight.begin('registry', confirm), true, 'the same words to another section are another intent');
+  assert.equal(flight.begin('cleanup', { kind: 'toggle', row: 'cat:1' }), true, 'a different intent is not held back');
+  assert.equal(flight.begin('cleanup', { kind: 'toggle', row: 'cat:2' }), true, 'nor the same kind on another row');
+  flight.end('cleanup', confirm);
+  assert.equal(flight.begin('cleanup', confirm), true, 'the answer came back: it may be sent again');
+  flight.end('cleanup', confirm);
+  flight.end('cleanup', confirm); // a second end is harmless
+  assert.equal(flight.begin('cleanup', confirm), true);
+});
+
+test('All and None are locked while a job runs', () => {
+  const idle = { job: null } as unknown as SectionView;
+  const busy = { job: { label: 'Scanning the registry…', fraction: 0.3, detail: null } } as unknown as SectionView;
+  assert.equal(bulkLocked(idle), false);
+  assert.equal(bulkLocked(busy), true);
+});
+
+test('a notice is remembered by its text, apart from the rows', () => {
+  assert.equal(noticeKey('Fixed 2 issues.'), 'notice:Fixed 2 issues.');
+  assert.notEqual(noticeKey('a'), noticeKey('b'));
 });

@@ -51,16 +51,17 @@ test('space toggles and arrows move outside fields and dialogs', () => {
 test("Enter and a press the view's action with that key, and nothing when it is disabled", () => {
   assert.deepEqual(keyAction({ key: 'a' }, free), { kind: 'action', key: 'a' });
   assert.deepEqual(keyAction({ key: 'Enter' }, free), { kind: 'action', key: 'Enter' });
-  assert.deepEqual(keyAction({ key: 's' }, free), { kind: 'action', key: 's' });
-  assert.deepEqual(keyAction({ key: 'r' }, free), { kind: 'action', key: 'r' });
-  const view = viewWith(action('analyze', 'a', true), action('clean', 'Enter', false), action('cancel', 'Escape', true), action('scan', 's', true));
+  // `a` is also Registry's Find issues and Services' Refresh: there is no `s` and no `r` key (the old window had them).
+  assert.equal(keyAction({ key: 's' }, free), null);
+  assert.equal(keyAction({ key: 'r' }, free), null);
+  const view = viewWith(action('analyze', 'a', true), action('clean', 'Enter', false), action('cancel', 'Escape', true));
   assert.equal(actionForKey(view, 'a')?.id, 'analyze');
   assert.equal(actionForKey(view, 'Enter'), null, 'Clean is disabled: Enter does nothing');
   assert.equal(actionForKey(view, 'Esc')?.id, 'cancel', 'the key name "Escape" is accepted');
   assert.equal(actionForKey(viewWith(action('cancel', 'Esc', true)), 'Esc')?.id, 'cancel', 'Rust writes the key as "Esc"');
   assert.equal(actionForKey(viewWith(action('cancel', 'Esc', false)), 'Esc'), null, 'a disabled Cancel does not answer');
-  assert.equal(actionForKey(view, 's')?.id, 'scan');
-  assert.equal(actionForKey(view, 'r'), null, 'no action has that key');
+  assert.equal(actionForKey(viewWith(action('scan', 'a', true)), 'a')?.id, 'scan', 'Registry: a presses Find issues');
+  assert.equal(actionForKey(viewWith(action('refresh', 'a', true)), 'a')?.id, 'refresh', 'Services: a presses Refresh');
   assert.equal(actionForKey(viewWith(action('analyze', 'a', false)), 'a'), null);
   assert.equal(actionForKey(viewWith(action('x', null, true)), 'a'), null, 'an action without a key never answers a key');
 });
@@ -89,7 +90,7 @@ test('the footer hint follows the section, from the keys its actions carry', () 
   assert.equal(hint('cleanup', 'analyzed'), '↑↓ move · space toggle · a analyze · ↵ clean');
   assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Esc is not in the footer, busy or not');
   assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Rust writes the Cancel key as "Esc": still not in the footer');
-  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · a scan · ↵ fix');
+  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · a find issues · ↵ fix');
   assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · a refresh · ↵ disable');
   assert.equal(hint('developers', 'projects'), '↑↓ move · space toggle · a analyze · ↵ clean');
   assert.equal(footerHint(viewWith()), '↑↓ move · space toggle');
@@ -120,7 +121,7 @@ test('question mark opens About outside fields and dialogs', () => {
 });
 
 test('a held key presses no action, but arrows and Escape keep repeating', () => {
-  for (const key of ['Enter', 'a', 's', 'r']) {
+  for (const key of ['Enter', 'a']) {
     assert.equal(keyAction({ key, repeat: true }, free), null, `${key} held down`);
     assert.deepEqual(keyAction({ key, repeat: false }, free), { kind: 'action', key }, `${key} pressed once`);
   }

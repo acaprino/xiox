@@ -86,3 +86,31 @@ export function createGate(): Gate {
     },
   };
 }
+
+/** Intents on their way to Rust: a second identical one (a double click on a dialog button) is dropped, not sent. */
+export interface Inflight {
+  /** True when the intent may go; false when the same one is already waiting for its answer. */
+  begin(section: SectionId, intent: unknown): boolean;
+  /** The answer (or the failure) came back: the same intent may be sent again. */
+  end(section: SectionId, intent: unknown): void;
+}
+
+export function createInflight(): Inflight {
+  const sent = new Set<string>();
+  const key = (section: SectionId, intent: unknown): string => `${section}:${JSON.stringify(intent)}`;
+  return {
+    begin(section, intent) {
+      const k = key(section, intent);
+      if (sent.has(k)) return false;
+      sent.add(k);
+      return true;
+    },
+    end(section, intent) { sent.delete(key(section, intent)); },
+  };
+}
+
+/** All / None follow the check boxes: while a job runs the list is frozen and Rust refuses a bulk change. */
+export const bulkLocked = (view: SectionView): boolean => view.job !== null;
+
+/** The key under which the page remembers that a notice's extra lines are open (`UiState.expanded` holds it with the rows' keys). */
+export const noticeKey = (text: string): string => `notice:${text}`;

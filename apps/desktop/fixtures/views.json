@@ -8,8 +8,8 @@
   },
   "about": {
     "version": "0.1.0",
-    "winapp2": "Winapp2 rules updated today",
-    "attribution": "Cleaner rules by the Winapp2 project."
+    "winapp2": "Winapp2: version 260915",
+    "attribution": "The cleaning rules for applications come from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every start."
   },
   "views": {
     "cleanup": {
@@ -668,7 +668,7 @@
         "job": null,
         "status": {
           "badge": "Analysis done",
-          "text": "13.48 GB to delete (46999 files)"
+          "text": "13.48 GB to delete (46,999 files)"
         },
         "nav": [
           {
@@ -762,7 +762,7 @@
             "sub": "All files in the Recycle Bin",
             "level": "recommended",
             "cells": [
-              "2311"
+              "2,311"
             ],
             "bytes": 4187593114,
             "sizeText": null,
@@ -806,7 +806,7 @@
             "sub": "The Temp folder of your account",
             "level": "recommended",
             "cells": [
-              "9870"
+              "9,870"
             ],
             "bytes": 3435973837,
             "sizeText": null,
@@ -850,7 +850,7 @@
             "sub": "The Windows Temp folder",
             "level": "recommended",
             "cells": [
-              "18204"
+              "18,204"
             ],
             "bytes": 4402341478,
             "sizeText": null,
@@ -1027,7 +1027,7 @@
         "job": null,
         "status": {
           "badge": "Analysis cancelled",
-          "text": "7.10 GB to delete (12181 files)"
+          "text": "7.10 GB to delete (12,181 files)"
         },
         "nav": [
           {
@@ -1121,7 +1121,7 @@
             "sub": "All files in the Recycle Bin",
             "level": "recommended",
             "cells": [
-              "2311"
+              "2,311"
             ],
             "bytes": 4187593114,
             "sizeText": null,
@@ -1165,7 +1165,7 @@
             "sub": "The Temp folder of your account",
             "level": "recommended",
             "cells": [
-              "9870"
+              "9,870"
             ],
             "bytes": 3435973837,
             "sizeText": null,
@@ -1372,7 +1372,7 @@
         "job": null,
         "status": {
           "badge": "Analysis done",
-          "text": "13.48 GB to delete (46999 files)"
+          "text": "13.48 GB to delete (46,999 files)"
         },
         "nav": [
           {
@@ -1439,7 +1439,7 @@
             "id": "keepList",
             "label": "Edit cookie keep list",
             "enabled": true,
-            "hint": "Opens Documents\\Xiox\\cookie_da_conservare.txt in Notepad (creates it if missing). One domain per line: their cookies stay."
+            "hint": "Opens Documents\\Xiox\\cookie-keep-list.txt in Notepad (creates it if missing). One domain per line: their cookies stay."
           }
         ],
         "title": "Browser",
@@ -1473,7 +1473,7 @@
             "sub": "Cookies of every browser; the sites in your keep list stay signed in",
             "level": "caution",
             "cells": [
-              "6410"
+              "6,410"
             ],
             "bytes": 41943040,
             "sizeText": null,
@@ -1626,7 +1626,7 @@
             "sub": "Pages and images Firefox saved to load faster",
             "level": "recommended",
             "cells": [
-              "5300"
+              "5,300"
             ],
             "bytes": 1610612736,
             "sizeText": null,
@@ -1725,7 +1725,7 @@
         "job": null,
         "status": {
           "badge": "Analysis done",
-          "text": "13.48 GB to delete (46999 files)"
+          "text": "13.48 GB to delete (46,999 files)"
         },
         "nav": [
           {
@@ -1789,7 +1789,7 @@
           },
           {
             "kind": "text",
-            "text": "Winapp2 rules updated today",
+            "text": "Winapp2 260915 loaded",
             "tone": "info",
             "hint": null
           }
@@ -1842,7 +1842,7 @@
             "sub": "Pages and images Opera saved to load faster",
             "level": "recommended",
             "cells": [
-              "3120"
+              "3,120"
             ],
             "bytes": 429496730,
             "sizeText": null,
@@ -1975,7 +1975,7 @@
             "sub": "Songs and covers Spotify downloaded",
             "level": "recommended",
             "cells": [
-              "1780"
+              "1,780"
             ],
             "bytes": 262144000,
             "sizeText": null,
@@ -2232,7 +2232,7 @@
         "job": null,
         "status": {
           "badge": "Analysis done",
-          "text": "13.48 GB to delete (46999 files)"
+          "text": "13.48 GB to delete (46,999 files)"
         },
         "nav": [
           {
@@ -2326,7 +2326,7 @@
             "sub": "All files in the Recycle Bin",
             "level": "recommended",
             "cells": [
-              "2311"
+              "2,311"
             ],
             "bytes": 4187593114,
             "sizeText": null,
@@ -2370,7 +2370,7 @@
             "sub": "The Temp folder of your account",
             "level": "recommended",
             "cells": [
-              "9870"
+              "9,870"
             ],
             "bytes": 3435973837,
             "sizeText": null,
@@ -2414,7 +2414,7 @@
             "sub": "The Windows Temp folder",
             "level": "recommended",
             "cells": [
-              "18204"
+              "18,204"
             ],
             "bytes": 4402341478,
             "sizeText": null,
@@ -3356,7 +3356,7 @@
               "left": 0,
               "note": "Kept the cookies of 3 domains (keep list)",
               "lines": [
-                "Removed 6410 cookies from 3 browsers",
+                "Removed 6,410 cookies from 3 browsers",
                 "Kept the cookies of 3 domains from the keep list"
               ]
             },
@@ -9550,7 +9550,1414 @@
             "tone": "ok",
             "text": "Fixed 2 issues.",
             "more": [
-              "Backup saved in: C:\\Users\\<you>\\Documents\\Xiox\\registry-backup-2026-11-14.reg"
+              "Backup saved in: C:\\Users\\<you>\\Documents\\Xiox\\registry-backup-20261114_103000.reg"
+            ]
+          }
+        ],
+        "actions": [
+          {
+            "id": "scan",
+            "label": "Find issues",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "fix",
+            "label": "Fix selected (0)…",
+            "key": "Enter",
+            "enabled": false,
+            "primary": true
+          }
+        ],
+        "search": null,
+        "dialog": null,
+        "report": null,
+        "footer": null
+      },
+      "partial": {
+        "section": "registry",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Scan done",
+          "text": "39 issues found · 0 selected"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "toggle",
+            "id": "cat:0",
+            "label": "Missing shared DLLs",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:1",
+            "label": "Unused file extensions",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:2",
+            "label": "ActiveX and class problems",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:3",
+            "label": "Type libraries",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:4",
+            "label": "Fonts",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:5",
+            "label": "Application paths",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:6",
+            "label": "Help files",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:7",
+            "label": "Installer folders",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:8",
+            "label": "Obsolete software",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:9",
+            "label": "Run at startup",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:10",
+            "label": "MUI cache",
+            "on": true,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "toggle",
+            "id": "cat:11",
+            "label": "Windows services",
+            "on": false,
+            "enabled": true,
+            "hint": null
+          },
+          {
+            "kind": "text",
+            "text": "Before fixing you can save a backup: double-click the .reg file to go back.",
+            "tone": "info",
+            "hint": null
+          }
+        ],
+        "title": "Registry problems",
+        "subtitle": "39 issues found",
+        "columns": [
+          {
+            "title": "Issue",
+            "kind": "name"
+          },
+          {
+            "title": "Registry key",
+            "kind": "cell"
+          }
+        ],
+        "rows": [
+          {
+            "id": "i:0",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "ActiveX/COM class with a missing file",
+            "sub": "C:\\Program Files\\Acme3\\ctl3.ocx",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\CLSID\\{4F2A1C03-8B3D-4E57-9A10-2C7E5D1B0003}"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "ActiveX/COM class with a missing file"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\CLSID\\{4F2A1C03-8B3D-4E57-9A10-2C7E5D1B0003}"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme3\\ctl3.ocx"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:1",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing type library",
+            "sub": "C:\\Program Files\\Acme4\\lib4.tlb",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A24-3B44-4D8A-B7F0-51A9E02C0004}\\1.0"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing type library"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A24-3B44-4D8A-B7F0-51A9E02C0004}\\1.0"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme4\\lib4.tlb"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:2",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing font",
+            "sub": "Acme Sans 5 (TrueType): acmesans5.ttf",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing font"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+              ],
+              [
+                "data",
+                "Acme Sans 5 (TrueType): acmesans5.ttf"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:3",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid application path",
+            "sub": "C:\\Program Files\\Acme6\\acme6.exe",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme6.exe"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid application path"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme6.exe"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme6\\acme6.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:4",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing help file",
+            "sub": "C:\\Program Files\\Acme7\\help7.chm",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing help file"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme7\\help7.chm"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:5",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing installer folder",
+            "sub": "C:\\ProgramData\\Acme8\\Setup",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing installer folder"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+              ],
+              [
+                "data",
+                "C:\\ProgramData\\Acme8\\Setup"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:6",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Obsolete software",
+            "sub": "Acme Tool 9 (C:\\Program Files\\AcmeTool9)",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\AcmeTool9"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Obsolete software"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\AcmeTool9"
+              ],
+              [
+                "data",
+                "Acme Tool 9 (C:\\Program Files\\AcmeTool9)"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:7",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing startup program",
+            "sub": "AcmeUpdater10: C:\\Program Files\\Acme10\\update.exe",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing startup program"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+              ],
+              [
+                "data",
+                "AcmeUpdater10: C:\\Program Files\\Acme10\\update.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:8",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid MUI entry",
+            "sub": "C:\\Program Files\\Acme11\\acme11.exe.FriendlyAppName",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid MUI entry"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme11\\acme11.exe.FriendlyAppName"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:9",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "C:\\Program Files\\Common Files\\Acme12\\acme12.dll",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Common Files\\Acme12\\acme12.dll"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:10",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Unused file extension",
+            "sub": ".ac13 → AcmeFile13",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\.ac13"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Unused file extension"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\.ac13"
+              ],
+              [
+                "data",
+                ".ac13 → AcmeFile13"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:11",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "ActiveX/COM class with a missing file",
+            "sub": "C:\\Program Files\\Acme14\\ctl14.ocx",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\CLSID\\{4F2A1C04-8B3D-4E57-9A10-2C7E5D1B0014}"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "ActiveX/COM class with a missing file"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\CLSID\\{4F2A1C04-8B3D-4E57-9A10-2C7E5D1B0014}"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme14\\ctl14.ocx"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:12",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing type library",
+            "sub": "C:\\Program Files\\Acme15\\lib15.tlb",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A25-3B44-4D8A-B7F0-51A9E02C0015}\\1.0"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing type library"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A25-3B44-4D8A-B7F0-51A9E02C0015}\\1.0"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme15\\lib15.tlb"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:13",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing font",
+            "sub": "Acme Sans 16 (TrueType): acmesans16.ttf",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing font"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+              ],
+              [
+                "data",
+                "Acme Sans 16 (TrueType): acmesans16.ttf"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:14",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid application path",
+            "sub": "C:\\Program Files\\Acme17\\acme17.exe",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme17.exe"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid application path"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme17.exe"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme17\\acme17.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:15",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing help file",
+            "sub": "C:\\Program Files\\Acme18\\help18.chm",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing help file"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme18\\help18.chm"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:16",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing installer folder",
+            "sub": "C:\\ProgramData\\Acme19\\Setup",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing installer folder"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+              ],
+              [
+                "data",
+                "C:\\ProgramData\\Acme19\\Setup"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:17",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Obsolete software",
+            "sub": "Acme Tool 20 (C:\\Program Files\\AcmeTool20)",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\AcmeTool20"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Obsolete software"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\AcmeTool20"
+              ],
+              [
+                "data",
+                "Acme Tool 20 (C:\\Program Files\\AcmeTool20)"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:18",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing startup program",
+            "sub": "AcmeUpdater21: C:\\Program Files\\Acme21\\update.exe",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing startup program"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+              ],
+              [
+                "data",
+                "AcmeUpdater21: C:\\Program Files\\Acme21\\update.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:19",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid MUI entry",
+            "sub": "C:\\Program Files\\Acme22\\acme22.exe.FriendlyAppName",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid MUI entry"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme22\\acme22.exe.FriendlyAppName"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:20",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "C:\\Program Files\\Common Files\\Acme23\\acme23.dll",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Common Files\\Acme23\\acme23.dll"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:21",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Unused file extension",
+            "sub": ".ac24 → AcmeFile24",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\.ac24"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Unused file extension"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\.ac24"
+              ],
+              [
+                "data",
+                ".ac24 → AcmeFile24"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:22",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "ActiveX/COM class with a missing file",
+            "sub": "C:\\Program Files\\Acme25\\ctl25.ocx",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\CLSID\\{4F2A1C05-8B3D-4E57-9A10-2C7E5D1B0025}"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "ActiveX/COM class with a missing file"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\CLSID\\{4F2A1C05-8B3D-4E57-9A10-2C7E5D1B0025}"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme25\\ctl25.ocx"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:23",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing type library",
+            "sub": "C:\\Program Files\\Acme26\\lib26.tlb",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A26-3B44-4D8A-B7F0-51A9E02C0026}\\1.0"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing type library"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A26-3B44-4D8A-B7F0-51A9E02C0026}\\1.0"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme26\\lib26.tlb"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:24",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing font",
+            "sub": "Acme Sans 27 (TrueType): acmesans27.ttf",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing font"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+              ],
+              [
+                "data",
+                "Acme Sans 27 (TrueType): acmesans27.ttf"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:25",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid application path",
+            "sub": "C:\\Program Files\\Acme28\\acme28.exe",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme28.exe"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid application path"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme28.exe"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme28\\acme28.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:26",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing help file",
+            "sub": "C:\\Program Files\\Acme29\\help29.chm",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing help file"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme29\\help29.chm"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:27",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing installer folder",
+            "sub": "C:\\ProgramData\\Acme30\\Setup",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing installer folder"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\Folders"
+              ],
+              [
+                "data",
+                "C:\\ProgramData\\Acme30\\Setup"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:28",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Obsolete software",
+            "sub": "Acme Tool 31 (C:\\Program Files\\AcmeTool31)",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\AcmeTool31"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Obsolete software"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\AcmeTool31"
+              ],
+              [
+                "data",
+                "Acme Tool 31 (C:\\Program Files\\AcmeTool31)"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:29",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing startup program",
+            "sub": "AcmeUpdater32: C:\\Program Files\\Acme32\\update.exe",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing startup program"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+              ],
+              [
+                "data",
+                "AcmeUpdater32: C:\\Program Files\\Acme32\\update.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:30",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid MUI entry",
+            "sub": "C:\\Program Files\\Acme33\\acme33.exe.FriendlyAppName",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid MUI entry"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme33\\acme33.exe.FriendlyAppName"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:31",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "C:\\Program Files\\Common Files\\Acme34\\acme34.dll",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Common Files\\Acme34\\acme34.dll"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:32",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Unused file extension",
+            "sub": ".ac35 → AcmeFile35",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\.ac35"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Unused file extension"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\.ac35"
+              ],
+              [
+                "data",
+                ".ac35 → AcmeFile35"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:33",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "ActiveX/COM class with a missing file",
+            "sub": "C:\\Program Files\\Acme36\\ctl36.ocx",
+            "level": null,
+            "cells": [
+              "HKCU\\Software\\Classes\\CLSID\\{4F2A1C06-8B3D-4E57-9A10-2C7E5D1B0036}"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "ActiveX/COM class with a missing file"
+              ],
+              [
+                "key",
+                "HKCU\\Software\\Classes\\CLSID\\{4F2A1C06-8B3D-4E57-9A10-2C7E5D1B0036}"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme36\\ctl36.ocx"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:34",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing type library",
+            "sub": "C:\\Program Files\\Acme37\\lib37.tlb",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A27-3B44-4D8A-B7F0-51A9E02C0037}\\1.0"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing type library"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Classes\\TypeLib\\{9C1E7A27-3B44-4D8A-B7F0-51A9E02C0037}\\1.0"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme37\\lib37.tlb"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:35",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing font",
+            "sub": "Acme Sans 38 (TrueType): acmesans38.ttf",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing font"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+              ],
+              [
+                "data",
+                "Acme Sans 38 (TrueType): acmesans38.ttf"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:36",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Invalid application path",
+            "sub": "C:\\Program Files\\Acme39\\acme39.exe",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme39.exe"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Invalid application path"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\acme39.exe"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme39\\acme39.exe"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:37",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing help file",
+            "sub": "C:\\Program Files\\Acme40\\help40.chm",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing help file"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\Help"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Acme40\\help40.chm"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "i:38",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Missing shared DLL",
+            "sub": "C:\\Program Files\\Common Files\\Acme1\\acme1.dll",
+            "level": null,
+            "cells": [
+              "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Missing shared DLL"
+              ],
+              [
+                "key",
+                "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SharedDLLs"
+              ],
+              [
+                "data",
+                "C:\\Program Files\\Common Files\\Acme1\\acme1.dll"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": true,
+        "empty": null,
+        "notices": [
+          {
+            "tone": "warn",
+            "text": "Fixed 1 issue. 1 not fixed (administrator rights are needed).",
+            "more": [
+              "Backup saved in: C:\\Users\\<you>\\Documents\\Xiox\\registry-backup-20261114_103000.reg"
             ]
           }
         ],
@@ -10566,6 +11973,536 @@
             }
           ]
         },
+        "report": null,
+        "footer": "Selected: 3 · Freeable RAM (estimate): 47.6 MB"
+      },
+      "nomatch": {
+        "section": "services",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Loaded",
+          "text": "8 services read · 5 recommended to turn off"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "meter",
+            "id": "ram",
+            "label": "RAM in use",
+            "usedBytes": 24429600000,
+            "totalBytes": 33930000000,
+            "tone": "warn"
+          },
+          {
+            "kind": "choice",
+            "id": "filter",
+            "label": "Show",
+            "value": "all",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "recommended",
+                "label": "Recommended"
+              },
+              {
+                "id": "all",
+                "label": "All"
+              }
+            ]
+          }
+        ],
+        "title": "Services & RAM",
+        "subtitle": "0 of 8 services shown",
+        "columns": [
+          {
+            "title": "Service",
+            "kind": "name"
+          },
+          {
+            "title": "State",
+            "kind": "cell"
+          },
+          {
+            "title": "Startup",
+            "kind": "cell"
+          },
+          {
+            "title": "Memory",
+            "kind": "cell"
+          }
+        ],
+        "rows": [],
+        "bulk": false,
+        "empty": {
+          "title": "No services",
+          "text": "Nothing matches “x”."
+        },
+        "notices": [],
+        "actions": [
+          {
+            "id": "refresh",
+            "label": "Refresh",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "manual",
+            "label": "Set to Manual",
+            "key": null,
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "restore",
+            "label": "Restore originals (0)",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "disable",
+            "label": "Disable",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": {
+          "placeholder": "Search…",
+          "value": "x"
+        },
+        "dialog": null,
+        "report": null,
+        "footer": "Selected: 3 · Freeable RAM (estimate): 47.6 MB"
+      },
+      "partial": {
+        "section": "services",
+        "rev": 1,
+        "job": null,
+        "status": {
+          "badge": "Loaded",
+          "text": "8 services read · 5 recommended to turn off"
+        },
+        "nav": [],
+        "options": [
+          {
+            "kind": "meter",
+            "id": "ram",
+            "label": "RAM in use",
+            "usedBytes": 24429600000,
+            "totalBytes": 33930000000,
+            "tone": "warn"
+          },
+          {
+            "kind": "choice",
+            "id": "filter",
+            "label": "Show",
+            "value": "all",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "recommended",
+                "label": "Recommended"
+              },
+              {
+                "id": "all",
+                "label": "All"
+              }
+            ]
+          }
+        ],
+        "title": "Services & RAM",
+        "subtitle": "8 of 8 services shown",
+        "columns": [
+          {
+            "title": "Service",
+            "kind": "name"
+          },
+          {
+            "title": "State",
+            "kind": "cell"
+          },
+          {
+            "title": "Startup",
+            "kind": "cell"
+          },
+          {
+            "title": "Memory",
+            "kind": "cell"
+          }
+        ],
+        "rows": [
+          {
+            "id": "svc:Fax",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Fax",
+            "sub": "Fax",
+            "level": null,
+            "cells": [
+              "Stopped",
+              "Manual",
+              "–"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Needs a fax modem, which almost no PC has.",
+            "detail": [
+              [
+                "item",
+                "Fax"
+              ],
+              [
+                "service",
+                "Fax"
+              ],
+              [
+                "startup",
+                "Manual"
+              ],
+              [
+                "state",
+                "Stopped"
+              ],
+              [
+                "why turn it off",
+                "Needs a fax modem, which almost no PC has."
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:DiagTrack",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Connected User Experiences and Telemetry",
+            "sub": "DiagTrack",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic",
+              "38.4 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Sends usage data to Microsoft; Windows works without it.",
+            "detail": [
+              [
+                "item",
+                "Connected User Experiences and Telemetry"
+              ],
+              [
+                "service",
+                "DiagTrack"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "why turn it off",
+                "Sends usage data to Microsoft; Windows works without it."
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:MapsBroker",
+            "kind": "item",
+            "parent": null,
+            "check": "on",
+            "enabled": true,
+            "name": "Downloaded Maps Manager",
+            "sub": "MapsBroker",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic (delayed)",
+              "9.2 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Only used by the Maps app.",
+            "detail": [
+              [
+                "item",
+                "Downloaded Maps Manager"
+              ],
+              [
+                "service",
+                "MapsBroker"
+              ],
+              [
+                "startup",
+                "Automatic (delayed)"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "why turn it off",
+                "Only used by the Maps app."
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:WSearch",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Windows Search",
+            "sub": "WSearch",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic (delayed)",
+              "112.6 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Indexes files for search; turning it off slows searches.",
+            "detail": [
+              [
+                "item",
+                "Windows Search"
+              ],
+              [
+                "service",
+                "WSearch"
+              ],
+              [
+                "startup",
+                "Automatic (delayed)"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "why turn it off",
+                "Indexes files for search; turning it off slows searches."
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:SysMain",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "SysMain",
+            "sub": "SysMain",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic",
+              "96.0 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": "Preloads apps into memory; matters on slow disks.",
+            "detail": [
+              [
+                "item",
+                "SysMain"
+              ],
+              [
+                "service",
+                "SysMain"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ],
+              [
+                "why turn it off",
+                "Preloads apps into memory; matters on slow disks."
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:Spooler",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": true,
+            "name": "Print Spooler",
+            "sub": "Spooler",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic",
+              "11.8 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": false,
+            "why": null,
+            "detail": [
+              [
+                "item",
+                "Print Spooler"
+              ],
+              [
+                "service",
+                "Spooler"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:wuauserv",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "name": "Windows Update",
+            "sub": "wuauserv",
+            "level": null,
+            "cells": [
+              "Running",
+              "Manual",
+              "45.0 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": true,
+            "why": "Needed by Windows: protected",
+            "detail": [
+              [
+                "item",
+                "Windows Update"
+              ],
+              [
+                "service",
+                "wuauserv"
+              ],
+              [
+                "startup",
+                "Manual"
+              ],
+              [
+                "state",
+                "Running"
+              ]
+            ],
+            "lines": []
+          },
+          {
+            "id": "svc:RpcSs",
+            "kind": "item",
+            "parent": null,
+            "check": "off",
+            "enabled": false,
+            "name": "Remote Procedure Call (RPC)",
+            "sub": "RpcSs",
+            "level": null,
+            "cells": [
+              "Running",
+              "Automatic",
+              "21.0 MB"
+            ],
+            "bytes": null,
+            "sizeText": null,
+            "muted": true,
+            "why": "Needed by Windows: protected",
+            "detail": [
+              [
+                "item",
+                "Remote Procedure Call (RPC)"
+              ],
+              [
+                "service",
+                "RpcSs"
+              ],
+              [
+                "startup",
+                "Automatic"
+              ],
+              [
+                "state",
+                "Running"
+              ]
+            ],
+            "lines": []
+          }
+        ],
+        "bulk": false,
+        "empty": null,
+        "notices": [
+          {
+            "tone": "warn",
+            "text": "2 services disabled, 1 failed (administrator rights are needed).",
+            "more": []
+          }
+        ],
+        "actions": [
+          {
+            "id": "refresh",
+            "label": "Refresh",
+            "key": "a",
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "manual",
+            "label": "Set to Manual",
+            "key": null,
+            "enabled": true,
+            "primary": false
+          },
+          {
+            "id": "restore",
+            "label": "Restore originals (0)",
+            "key": null,
+            "enabled": false,
+            "primary": false
+          },
+          {
+            "id": "disable",
+            "label": "Disable",
+            "key": "Enter",
+            "enabled": true,
+            "primary": true
+          }
+        ],
+        "search": {
+          "placeholder": "Search…",
+          "value": ""
+        },
+        "dialog": null,
         "report": null,
         "footer": "Selected: 3 · Freeable RAM (estimate): 47.6 MB"
       }

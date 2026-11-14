@@ -1,0 +1,76 @@
+// The fixture is what the Rust engine's views look like (the drift test in src-tauri compares the two): these
+// checks pin the engine strings the page must be drawn with, so a hand edit of views.json cannot lose them.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { MockModel, type Fixture } from '../src/mockmodel.ts';
+import type { NoticeView, SectionId, SectionView } from '../src/types.ts';
+
+const fixture = JSON.parse(readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8')) as Fixture;
+const views = Object.entries(fixture.views).flatMap(([section, states]) => Object.entries(states).map(([state, view]) => [`${section}:${state}`, view] as const));
+
+/** Every string the page draws from a view that is not a path: where a count may hide. */
+function counts(view: SectionView): string[] {
+  const texts = [view.status.text, view.subtitle, view.footer ?? '', ...view.nav.map((n) => n.note ?? ''), ...view.rows.flatMap((r) => r.cells)];
+  return texts;
+}
+
+test('About carries the attribution Winapp2 asks for, in the engine words', () => {
+  assert.match(fixture.about.winapp2, /^Winapp2: (version \d+|loading|not downloaded yet)$/);
+  assert.equal(
+    fixture.about.attribution,
+    'The cleaning rules for applications come from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every start.',
+  );
+});
+
+test('counts are grouped with a comma, never bare digits of four or more', () => {
+  for (const [name, view] of views) {
+    for (const text of counts(view)) {
+      assert.ok(!/(?<![0-9.,:\-\\])\b\d{4,}\b(?![0-9\-:])/.test(text), `${name}: ${JSON.stringify(text)} has an ungrouped count`);
+    }
+  }
+  assert.equal(fixture.views.cleanup.analyzed.status.text, '13.48 GB to delete (46,999 files)');
+  assert.deepEqual(fixture.views.cleanup.analyzed.rows.slice(0, 3).map((r) => r.cells[0]), ['2,311', '9,870', '18,204']);
+});
+
+test('a count of one agrees with its word', () => {
+  for (const [name, view] of views) {
+    const notices = [...view.notices, ...(view.report?.notes ?? [])];
+    const texts = [view.status.text, view.subtitle, view.footer ?? '', view.empty?.text ?? '', ...view.nav.map((n) => n.note ?? ''), ...notices.map((n) => n.text)];
+    for (const text of texts) {
+      assert.ok(!/(?<![0-9,.])\b1 (items|files|services|rules|folders|issues|projects|worktrees|sessions)\b/.test(text), `${name}: ${JSON.stringify(text)} says "1" with a plural`);
+    }
+  }
+});
+
+test('a partial failure is a warning, not a success', () => {
+  const partial = (section: SectionId, state: string): NoticeView => {
+    const notice = fixture.views[section][state]?.notices[0];
+    assert.ok(notice, `${section}:${state} has a notice`);
+    return notice;
+  };
+  assert.equal(partial('registry', 'partial').tone, 'warn');
+  assert.match(partial('registry', 'partial').text, /\d+ not fixed/);
+  assert.equal(partial('services', 'partial').tone, 'warn');
+  assert.match(partial('services', 'partial').text, /\d+ failed/);
+  assert.equal(partial('registry', 'fixed').tone, 'ok', 'a clean fix stays a success');
+});
+
+test('Services with a search that matches nothing says so', () => {
+  const view = fixture.views.services.nomatch as SectionView;
+  assert.equal(view.rows.length, 0);
+  assert.deepEqual(view.empty, { title: 'No services', text: 'Nothing matches “x”.' });
+  assert.equal(view.search?.value, 'x');
+  assert.equal(view.subtitle, '0 of 8 services shown');
+  const model = new MockModel(fixture);
+  const shown = model.go('services', 'nomatch');
+  assert.equal(shown.empty?.title, 'No services', 'the mock can be put on it (the smoke script does)');
+});
+
+test('the data files the page names are the English ones', () => {
+  const text = JSON.stringify(fixture);
+  for (const old of ['cookie_da_conservare', 'servizi_originali', 'backup_registro', 'backup_regole']) assert.ok(!text.includes(old), `${old} is gone`);
+  assert.match(text, /registry-backup-\d{8}_\d{6}\.reg/);
+  assert.ok(text.includes('cookie-keep-list.txt'));
+});

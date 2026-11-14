@@ -8,7 +8,7 @@ import { ramText } from '../format.ts';
 import { actionIntent, bulkIntent } from '../intents.ts';
 import { footerHint } from '../keys.ts';
 import { sortRows, visibleRows } from '../rows.ts';
-import { currentFocus, SECTION_ORDER, type UiState } from '../state.ts';
+import { bulkLocked, currentFocus, noticeKey, SECTION_ORDER, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
 import { ABOUT_KEY } from './about.ts';
 import { renderBar2 } from './bar2.ts';
@@ -70,12 +70,28 @@ function actionButton(section: SectionId, action: ActionView, on: Handlers): HTM
   );
 }
 
-/** A notice strip: one line in its tone colour; the extra lines (`more`) are in the tooltip. Errors are announced. */
-export function noticeNode(notice: NoticeView): HTMLElement {
-  const full = [notice.text, ...notice.more].join('\n');
-  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null, title: notice.more.length > 0 ? full : null },
-    h('span', { class: 'ellipsis', title: full }, notice.text),
-    notice.more.length > 0 ? h('small', { 'data-fit': '' }, `+${notice.more.length} more`) : null);
+/** What a notice needs to open its extra lines: which are open, and how to flip one (the click goes to the page, which redraws). */
+export interface NoticeCtx { expanded: ReadonlySet<string>; on: Handlers }
+
+/**
+ * A notice strip: one line in its tone colour. The extra lines (`more`: the backup path of a Registry fix, say) sit
+ * behind a button that opens them under the strip: a real control, so the keyboard and a screen reader reach them (a
+ * tooltip would not). Without a `ctx` the lines are simply shown. Errors are announced.
+ */
+let noticeSeq = 0;
+export function noticeNode(notice: NoticeView, ctx?: NoticeCtx): HTMLElement {
+  const key = noticeKey(notice.text);
+  const extra = notice.more.length;
+  const open = extra > 0 && (ctx === undefined || ctx.expanded.has(key));
+  const listId = `notice-more-${(noticeSeq += 1)}`;
+  const toggle = extra === 0 || ctx === undefined ? null : h('button', {
+    type: 'button', class: 'more', 'aria-expanded': String(open), 'aria-controls': listId, 'data-key': `more:${key}`,
+    'aria-label': `${notice.text}: ${open ? 'hide' : 'show'} ${extra} more ${extra === 1 ? 'line' : 'lines'}`,
+    onClick: () => ctx.on.toggleExpanded(key),
+  }, open ? 'hide' : `+${extra} more`);
+  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null },
+    h('div', { class: 'notice-line' }, h('span', { class: 'ellipsis', title: notice.text }, notice.text), toggle),
+    open ? h('ul', { class: 'notice-more', id: listId }, ...notice.more.map((line) => h('li', {}, line))) : null);
 }
 
 /** The progress bar under the status row: the job's label, the bar, its percentage and the detail. No animation. */
@@ -113,7 +129,8 @@ export function renderShell(screen: Screen, on: Handlers): void {
   byId('status-right').textContent = `${app.admin ? 'administrator' : 'standard user'} · ${ramText(app.ramTotalBytes)}`;
   const profile = byId('profile');
   profile.hidden = app.profileMismatch === null;
-  if (app.profileMismatch !== null) fill(profile, ellipsis(app.profileMismatch));
+  // Both halves of the sentence matter (whose profile is cleaned, and whose session it is): it wraps instead of cutting.
+  if (app.profileMismatch !== null) { profile.title = app.profileMismatch; fill(profile, app.profileMismatch); }
 
   // The job's progress bar.
   renderJob(byId('job'), view);
@@ -136,13 +153,14 @@ export function renderShell(screen: Screen, on: Handlers): void {
     h('span', { class: 'hd-title', 'data-fit': '' }, view.title),
     h('span', { class: 'hd-right' },
       h('span', { class: 'sub' }, ellipsis(view.subtitle)),
-      bulk ? button(h('span', { 'data-fit': '' }, 'All'), { class: 'btn sm', 'data-key': 'bulk:all', onClick: () => on.send(view.section, bulkIntent(view.section, true)) }) : null,
-      bulk ? button(h('span', { 'data-fit': '' }, 'None'), { class: 'btn sm', 'data-key': 'bulk:none', onClick: () => on.send(view.section, bulkIntent(view.section, false)) }) : null));
+      bulk ? button(h('span', { 'data-fit': '' }, 'All'), { class: 'btn sm', 'data-key': 'bulk:all', disabled: bulkLocked(view), onClick: () => on.send(view.section, bulkIntent(view.section, true)) }) : null,
+      bulk ? button(h('span', { 'data-fit': '' }, 'None'), { class: 'btn sm', 'data-key': 'bulk:none', disabled: bulkLocked(view), onClick: () => on.send(view.section, bulkIntent(view.section, false)) }) : null));
 
   // Notices, then the list and the detail of the focused row.
+  const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
   fill(byId('notices'),
     ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
-    ...view.notices.map(noticeNode));
+    ...view.notices.map((notice) => noticeNode(notice, noticeCtx)));
   const rowsArea = byId('rows');
   if (view.report !== null) {
     // The report replaces the list (and its search box and detail) until it is closed.

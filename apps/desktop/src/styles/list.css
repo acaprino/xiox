@@ -31,11 +31,18 @@
 /* Notices above the list. */
 #notices:not(:empty) { padding: 0 16px 4px; }
 .notice {
-  display: flex; align-items: baseline; gap: 10px; margin-top: 4px; padding: 4px 10px; min-width: 0;
+  margin-top: 4px; padding: 4px 10px; min-width: 0;
   border-left: 3px solid var(--tone, var(--line)); background: var(--box); color: var(--tone, var(--text-2));
 }
-.notice > .ellipsis { flex: 0 1 auto; }
-.notice small { flex: none; color: var(--muted); font-size: 11px; font-weight: 400; }
+.notice-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.notice-line > .ellipsis { flex: 0 1 auto; }
+/* "+N more": a real button that opens the notice's extra lines under it. */
+.notice .more {
+  flex: none; appearance: none; padding: 0 4px; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font-size: 11px; font-weight: 400; text-decoration: underline;
+}
+.notice .more[aria-expanded="true"] { color: var(--ice); }
+.notice-more { margin: 4px 0 2px; padding: 0 0 0 16px; color: var(--text-2); font: 400 12px var(--font-mono); overflow-wrap: anywhere; }
 
 /* The list header's right side. */
 .hd-right { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -62,8 +69,10 @@
   font: 700 11px var(--font-display); letter-spacing: .08em; text-transform: uppercase;
 }
 .r.sel { background: var(--sel-soft); }
-/* A blocked row is dimmed, but the reason under its name stays readable. */
-.r.muted > :not(.nm), .r.muted .nm-text .t, .r.muted .caret { opacity: .55; }
+/* A blocked row is dimmed, but its text keeps 4.5:1 (tests/contrast.test.ts); the reason under its name is not dimmed at all. */
+.r.muted > :not(.nm), .r.muted .nm-text .t, .r.muted .caret { opacity: .7; }
+/* On the selected row's lighter ground the dimming is gentler for the same reason. */
+.r.muted.sel > :not(.nm), .r.muted.sel .nm-text .t, .r.muted.sel .caret { opacity: .9; }
 
 .nm { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .r.child .nm { padding-left: 14px; }
@@ -125,6 +134,15 @@
 .meter i { display: block; height: 100%; background: var(--tone, var(--line-strong)); }
 .meter-text { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
 .ctl-text { margin: 0; color: var(--tone, var(--muted)); font-size: 12px; font-weight: 400; }
+
+/* A short window (1000x640): the options of Developers are the tallest, so bar 2 is packed tighter and its list of folders is shorter. */
+@media (max-height: 700px) {
+  .ctl { padding-top: 3px; padding-bottom: 3px; }
+  .hd-sub { padding-top: 6px; }
+  .ctl-title { margin-bottom: 1px; }
+  .pick { max-height: 56px; }
+  .pick-buttons { margin-top: 4px; }
+}
 
 /* The active category (mock-up .it.on). */
 .it.on { background: var(--sel); color: var(--text-hi); }

@@ -66,6 +66,10 @@ setInterval(() => { if (!paused) for (const view of model.tick()) emit(view); },
       if (text === null) sessionStorage.removeItem(MISMATCH_KEY); else sessionStorage.setItem(MISMATCH_KEY, text);
     } catch { /* no storage: the warning only lasts until the reload */ }
   },
+  /** Edits a state of the working copy (a view Rust would not send); `go` then shows it. */
+  patch(target: SectionId, state: string, fields: Partial<SectionView>): void {
+    model.patch(target, state, fields);
+  },
   go(target: SectionId, state: string): SectionView {
     const view = model.go(target, state);
     emit(view);

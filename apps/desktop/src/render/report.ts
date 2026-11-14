@@ -9,18 +9,20 @@ import { noticeNode, type Handlers } from './shell.ts';
 
 const count = (n: number): string => n.toLocaleString('en-US');
 
+/** One cell of a report table: one line, cut with an ellipsis, the full text in the tooltip. */
 function ellipsis(text: string, cls = ''): HTMLElement {
-  return h('span', { class: `ellipsis ${cls}`.trim(), title: text }, text);
+  return h('span', { class: `ellipsis ${cls}`.trim(), title: text, role: 'cell' }, text);
 }
 
-/** `Skipped (n)` / `Failed (n)`: the item and why, the full path in the tooltip. */
+/** `Skipped (n)` / `Failed (n)`: the item and why; the full path (when there is one) is a line of its own, not a tooltip. */
 function lineTable(title: string, lines: ReportLine[]): HTMLElement | null {
   if (lines.length === 0) return null;
   return h('section', { class: 'rp-block' },
     h('h3', { class: 'rp-sub' }, `${title} (${lines.length})`),
     h('div', { class: 'rp-tab rp-lines', role: 'table', 'aria-label': title },
-      ...lines.map((l) => h('div', { class: 'rp-row', role: 'row', title: l.path },
-        ellipsis(l.item, 'rp-name'), ellipsis(l.why, 'rp-why')))));
+      ...lines.map((l) => h('div', { class: 'rp-row', role: 'row' },
+        ellipsis(l.item, 'rp-name'), ellipsis(l.why, 'rp-why'),
+        l.path === '' ? null : h('span', { class: 'rp-path', role: 'cell' }, l.path)))));
 }
 
 function itemRow(item: ReportItem, index: number, expanded: ReadonlySet<string>, on: Handlers): HTMLElement[] {
@@ -33,10 +35,10 @@ function itemRow(item: ReportItem, index: number, expanded: ReadonlySet<string>,
       'data-key': `caret:${key}`, onClick: () => on.toggleExpanded(key),
     });
   const row = h('div', { class: 'rp-row rp-item', role: 'row' },
-    h('div', { class: 'nm' }, caret, ellipsis(item.name, 'rp-name')),
-    h('span', { class: 'num rp-n' }, formatBytes(item.freedBytes)),
-    h('span', { class: 'num rp-n' }, count(item.removed)),
-    h('span', { class: 'num rp-n' }, count(item.left)),
+    h('div', { class: 'nm', role: 'cell' }, caret, h('span', { class: 'ellipsis rp-name', title: item.name }, item.name)),
+    h('span', { class: 'num rp-n', role: 'cell' }, formatBytes(item.freedBytes)),
+    h('span', { class: 'num rp-n', role: 'cell' }, count(item.removed)),
+    h('span', { class: 'num rp-n', role: 'cell' }, count(item.left)),
     ellipsis(item.note ?? '', 'rp-why'));
   const lines = open && item.lines.length > 0 ? [h('ul', { class: 'lines rp-open' }, ...item.lines.map((l) => h('li', {}, l)))] : [];
   return [row, ...lines];
@@ -57,16 +59,16 @@ export function renderReport(root: HTMLElement, section: SectionId, report: Repo
   const categories = report.byCategory.length === 0 ? null : h('section', { class: 'rp-block' },
     h('h3', { class: 'rp-sub' }, 'By category'),
     h('div', { class: 'rp-tab rp-cats', role: 'table', 'aria-label': 'By category' },
-      ...report.byCategory.map(([name, bytes]) => h('div', { class: 'rp-row', role: 'row' }, ellipsis(name, 'rp-name'), h('span', { class: 'num rp-n' }, formatBytes(bytes))))));
+      ...report.byCategory.map(([name, bytes]) => h('div', { class: 'rp-row', role: 'row' }, ellipsis(name, 'rp-name'), h('span', { class: 'num rp-n', role: 'cell' }, formatBytes(bytes))))));
   const items = report.items.length === 0 ? null : h('section', { class: 'rp-block' },
     h('h3', { class: 'rp-sub' }, `Items (${report.items.length})`),
     h('div', { class: 'rp-tab rp-items', role: 'table', 'aria-label': 'Items' },
       h('div', { class: 'rp-row rp-hrow', role: 'row' },
-        h('span', {}, 'item'), h('span', { class: 'rp-n' }, 'freed'), h('span', { class: 'rp-n' }, 'removed'), h('span', { class: 'rp-n' }, 'left'), h('span', {}, 'note')),
+        h('span', { role: 'columnheader' }, 'item'), h('span', { class: 'rp-n', role: 'columnheader' }, 'freed'), h('span', { class: 'rp-n', role: 'columnheader' }, 'removed'), h('span', { class: 'rp-n', role: 'columnheader' }, 'left'), h('span', { role: 'columnheader' }, 'note')),
       ...report.items.flatMap((item, index) => itemRow(item, index, expanded, on))));
   const saved = report.saved === null ? null
     : h('p', { class: `rp-saved ${report.saved.ok ? 'tone-ok' : 'tone-warn'}`, role: report.saved.ok ? 'status' : 'alert' }, report.saved.text);
   const body = h('div', { class: 'rp-body' },
-    sum, ...report.notes.map(noticeNode), saved, categories, lineTable('Skipped', report.skipped), lineTable('Failed', report.failed), items);
+    sum, ...report.notes.map((note) => noticeNode(note, { expanded, on })), saved, categories, lineTable('Skipped', report.skipped), lineTable('Failed', report.failed), items);
   fill(root, h('section', { class: 'report', role: 'region', 'aria-labelledby': 'rp-title', tabindex: -1 }, head, body));
 }

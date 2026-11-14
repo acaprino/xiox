@@ -8,14 +8,14 @@ import type { ActionView, SectionId, SectionView } from './types.ts';
 
 export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; repeat?: boolean }
 
-/** The keys an action can carry (`ActionView.key`): `a` analyze, `s` scan, `r` refresh, Enter clean / fix, Esc cancel. */
-export type ActionKey = 'a' | 's' | 'r' | 'Enter' | 'Esc';
+/** The keys an action can carry (`ActionView.key`): `a` is Analyze, Find issues (Registry) and Refresh (Services); Enter is Clean / Fix / Disable; Esc cancels a job. */
+export type ActionKey = 'a' | 'Enter' | 'Esc';
 
 export type KeyAction =
   | { kind: 'section'; section: SectionId } | { kind: 'move'; delta: number } | { kind: 'toggle' }
   | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' } | { kind: 'about' };
 
-const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 's', 'r', 'Enter']);
+const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 'Enter']);
 
 /**
  * What a key press means. `inField`: a text field has the focus; `dialog`: a confirmation is open.
@@ -56,6 +56,8 @@ export function actionForKey(view: SectionView, key: ActionKey): ActionView | nu
 }
 
 const KEY_WORDS: Record<string, string> = { Enter: '↵' };
+/** The word after a key in the footer: the action's id, except where the id is not what the button says (`scan` is "Find issues"). */
+const HINT_WORDS: Record<string, string> = { scan: 'find issues' };
 
 /**
  * The footer's key hints for the section on screen: movement and Space, then every action that has a
@@ -63,7 +65,7 @@ const KEY_WORDS: Record<string, string> = { Enter: '↵' };
  * hint does not change while a job runs. Derived from the actions, so the hint and the keys agree.
  */
 export function footerHint(view: SectionView): string {
-  const keyed = view.actions.filter((a) => a.key !== null && !isEsc(a.key)).map((a) => `${KEY_WORDS[a.key as string] ?? a.key} ${a.id}`);
+  const keyed = view.actions.filter((a) => a.key !== null && !isEsc(a.key)).map((a) => `${KEY_WORDS[a.key as string] ?? a.key} ${HINT_WORDS[a.id] ?? a.id}`);
   return ['↑↓ move', 'space toggle', ...keyed].join(' · ');
 }
 

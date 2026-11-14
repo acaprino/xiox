@@ -196,7 +196,7 @@ async function checkSelection(page, label) {
 const KEY_LABELS = { Enter: '↵', Escape: 'Esc' };
 const FOOTER = {
   cleanup: '↑↓ move · space toggle · a analyze · ↵ clean',
-  registry: '↑↓ move · space toggle · a scan · ↵ fix',
+  registry: '↑↓ move · space toggle · a find issues · ↵ fix',
   services: '↑↓ move · space toggle · a refresh · ↵ disable',
   developers: '↑↓ move · space toggle · a analyze · ↵ clean',
 };
@@ -253,7 +253,7 @@ async function checkCopy(page, label, section, view) {
       report: report ? {
         title: text('#rp-title'), freed: text('.rp-freed'), lines: [...report.querySelectorAll('.rp-sum p')].map((p) => p.textContent),
         subs: [...report.querySelectorAll('.rp-sub')].map((n) => n.textContent),
-        skipped: [...report.querySelectorAll('.rp-lines')].map((t) => [...t.querySelectorAll('.rp-row')].map((r) => [r.children[0].textContent, r.children[1].textContent, r.title])),
+        skipped: [...report.querySelectorAll('.rp-lines')].map((t) => [...t.querySelectorAll('.rp-row')].map((r) => [r.children[0].textContent, r.children[1].textContent, r.querySelector('.rp-path')?.textContent ?? ''])),
         cats: [...report.querySelectorAll('.rp-cats .rp-row')].map((r) => [r.children[0].textContent, r.children[1].textContent]),
         items: [...report.querySelectorAll('.rp-items .rp-item')].map((r) => [...r.children].map((c) => c.textContent)),
         buttons: [...report.querySelectorAll('.rp-buttons .btn')].map((b) => b.textContent),
@@ -754,7 +754,7 @@ async function sectionFlows(page, size, shot) {
   check(await sent(page, 'registry', 'toggleCategory', (a) => a.index === 11), 'a category box did not send toggleCategory { index: 11 }');
   check(await page.locator('#rows [data-row="i:39"]').count() === 1 || (await page.locator('#rows .grid').evaluate((n) => n.scrollHeight > n.clientHeight)), 'the 40 issues are not all reachable in the list');
   await goTo(page, 'registry', 'fixed');
-  check((await page.locator('#notices .notice small').textContent().catch(() => '')) === '+1 more', 'the fixed notice does not say it has one more line');
+  check((await page.locator('#notices .notice .more').textContent().catch(() => '')) === '+1 more', 'the fixed notice does not say it has one more line');
   await page.screenshot({ path: `${shot}registry-fixed-${size}.png` });
 
   // ---- Services & RAM: the protected row, the filter, the meter at 72 % in the warning tone, the refresh timer.
@@ -782,6 +782,108 @@ async function sectionFlows(page, size, shot) {
   check(await polled(2600) === 0, 'Services was read again while another section is open');
   await page.keyboard.press('3');
   await page.waitForTimeout(300);
+  await page.evaluate(() => window.__xioxMock.pause(false));
+  return failures;
+}
+
+/**
+ * The final fix wave: what a notice hides is reachable by keyboard, a skipped path is on the page, All / None wait for a
+ * job, a double click sends once, the Services empty state, bar 2 of Developers reaches its folder buttons, the focus
+ * does not fall to nothing when a report closes.
+ */
+async function fixWaveFlows(page, size, shot) {
+  const failures = [];
+  const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
+  await page.evaluate(() => window.__xioxMock.pause(true));
+
+  // The extra lines of a notice: a button, reached with Tab, opened with Enter, closed with Space; the focus stays on it.
+  await goTo(page, 'registry', 'fixed');
+  const more = page.locator('#notices .notice .more');
+  check(await more.count() === 1 && await more.getAttribute('aria-expanded') === 'false' && await page.locator('#notices .notice-more').count() === 0, 'the fixed notice does not start closed with a +1 more button');
+  check(await more.evaluate((n) => n.tagName === 'BUTTON' && !n.closest('[title]')), 'the extra lines are behind something that is not a plain button (a tooltip is not reachable)');
+  let reached = false;
+  for (let i = 0; i < 80 && !reached; i += 1) {
+    await page.keyboard.press('Tab');
+    reached = ((await focusKey(page)) ?? '').startsWith('more:');
+  }
+  check(reached, 'Tab never reaches the +1 more button');
+  await page.keyboard.press('Enter');
+  await page.locator('#notices .notice-more li').first().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter on +1 more did not open the line`));
+  check((await page.locator('#notices .notice-more').innerText().catch(() => '')).includes('registry-backup-'), 'the opened line does not show the backup path');
+  check(((await focusKey(page)) ?? '').startsWith('more:') && await page.locator('#notices .notice .more').getAttribute('aria-expanded') === 'true', 'the button lost the focus or does not say expanded after Enter');
+  failures.push(...await checkFit(page, `registry-fixed-open-${size}`));
+  await page.screenshot({ path: `${shot}registry-fixed-notice-open-${size}.png` });
+  await page.keyboard.press('Space');
+  await page.locator('#notices .notice-more').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Space on the open notice did not close it`));
+  check(await page.locator('#notices .notice .more').getAttribute('aria-expanded') === 'false', 'the button does not say collapsed after Space');
+  // A partial failure is a warning, not a success.
+  await goTo(page, 'registry', 'partial');
+  check(await page.locator('#notices .notice.tone-warn').count() === 1 && await page.locator('#notices .tone-ok').count() === 0, 'the partial fix is not shown as a warning');
+  await page.screenshot({ path: `${shot}registry-partial-${size}.png` });
+
+  // Services: a search that matches nothing says so, with the box still holding the text.
+  await goTo(page, 'services', 'nomatch');
+  check((await page.locator('#rows .empty-title').textContent().catch(() => '')) === 'No services', 'Services with no match has no empty title');
+  check((await page.locator('#rows .empty span').textContent().catch(() => '')) === 'Nothing matches “x”.', 'Services with no match does not say what it searched');
+  check(await page.locator('input.search').inputValue() === 'x', 'the search box lost its text');
+  failures.push(...await checkFit(page, `services-nomatch-${size}`));
+  await page.screenshot({ path: `${shot}services-nomatch-${size}.png` });
+  await goTo(page, 'services', 'partial');
+  check(await page.locator('#notices .notice.tone-warn').count() === 1, 'the partial Services change is not shown as a warning');
+
+  // Skipped / failed: the full path is on the page (a line of its own), not in a tooltip.
+  await goTo(page, 'cleanup', 'report');
+  const paths = await page.locator('#rows .report .rp-lines .rp-path').allInnerTexts();
+  check(paths.length > 0 && paths.every((p) => p.length > 8), `the skipped / failed paths are not on the page (${JSON.stringify(paths)})`);
+  check(await page.locator('#rows .report .rp-lines .rp-row[title]').count() === 0, 'a report row still hides its path in a tooltip');
+  check(await page.locator('#rows .report [role=table] [role=row] > [role=cell], #rows .report [role=table] [role=row] > [role=columnheader]').count() > 0, 'the report tables have no cells');
+  await page.screenshot({ path: `${shot}cleanup-report-paths-${size}.png` });
+
+  // All / None wait while a job runs (checked on a view Rust would not send: bulk buttons with a job).
+  await page.evaluate(() => window.__xioxMock.patch('registry', 'analyzed', { job: { label: 'Fixing…', fraction: 0.5, detail: null } }));
+  await goTo(page, 'registry', 'analyzed');
+  await page.waitForTimeout(100);
+  check(await page.locator('[data-key="bulk:all"]').isDisabled() && await page.locator('[data-key="bulk:none"]').isDisabled(), 'All / None are enabled while a job runs');
+  await page.evaluate(() => window.__xioxMock.patch('registry', 'analyzed', { job: null }));
+  await goTo(page, 'registry', 'analyzed');
+  await page.waitForTimeout(100);
+  check(await page.locator('[data-key="bulk:all"]').isEnabled() && await page.locator('[data-key="bulk:none"]').isEnabled(), 'All / None stay disabled after the job');
+
+  // A double click on a dialog button sends its intent once (the second one is dropped while the first is in flight).
+  await goTo(page, 'cleanup', 'confirm');
+  await clearCalls(page);
+  await page.evaluate(() => {
+    const button = document.querySelector('[data-button="continue"]');
+    button.click();
+    button.click();
+  });
+  await page.waitForTimeout(200);
+  const confirms = (await callsOf(page)).filter(([c, k]) => c === 'cleanup' && k === 'confirm').length;
+  check(confirms === 1, `a double click sent confirm ${confirms} times`);
+  check(await page.locator('#notices .tone-error').count() === 0, 'a double click on Continue left an error strip');
+
+  // The report closing does not leave the focus on nothing.
+  await goTo(page, 'cleanup', 'report');
+  await page.locator('#rows .report [data-key="report:close"]').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('#rows .report').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Close did not leave the report`));
+  check(await page.evaluate(() => document.activeElement?.classList.contains('grid') ?? false), `after the report closed the focus is on ${await focusKey(page)}, expected the list`);
+
+  // Bar 2 of Developers: the folder buttons are inside the bar (it is also what the window is tall enough for), and if
+  // the bar ever scrolls it says so with its glow.
+  await goTo(page, 'developers', 'projects');
+  const bar = await page.evaluate(() => {
+    const items = document.querySelector('#bar2 .items');
+    const box = items.getBoundingClientRect();
+    const buttons = ['add', 'remove'].map((id) => document.querySelector(`[data-key^="opt:"][data-key$=":${id}"]`)?.getBoundingClientRect() ?? null);
+    return {
+      scrolls: items.scrollHeight > items.clientHeight + 1, glow: getComputedStyle(items).backgroundImage.includes('gradient'),
+      inside: buttons.every((b) => b !== null && b.top >= box.top && b.bottom <= box.bottom + 0.5),
+    };
+  });
+  check(bar.inside, 'Add folder… / Remove are not inside bar 2 of Developers');
+  check(!bar.scrolls || bar.glow, 'bar 2 scrolls with no cue');
+  await page.screenshot({ path: `${shot}developers-bar2-${size}.png` });
   await page.evaluate(() => window.__xioxMock.pause(false));
   return failures;
 }
@@ -880,7 +982,8 @@ async function profileFlows(page, size, shot) {
 /** Tab from the top of the page visits, in order: the sections, About, bar 2, the list header and search, the list (one stop), the detail, then the top-bar actions. Every stop has a visible ring that the cut corners cannot hide. */
 async function tabAudit(page, size, shot) {
   const failures = [];
-  const REGIONS = ['#sections', '#bar2', '#list-head', '#rows .tools', '#rows .grid', '#detail', '#actions'];
+  const REGIONS = ['#sections', '#bar2', '#notices', '#list-head', '#rows .tools', '#rows .grid', '#detail', '#actions'];
+  const [GRID, DETAIL, ACTIONS] = [5, 6, 7];
   for (const [section, state] of [['cleanup', 'analyzed'], ['developers', 'projects'], ['services', 'loaded'], ['registry', 'analyzed']]) {
     const label = `${size} Tab audit ${section}:${state}`;
     await goTo(page, section, state);
@@ -905,7 +1008,7 @@ async function tabAudit(page, size, shot) {
       if (stop === null) { failures.push(`${label}: Tab ${i + 1} left the focus on the page body`); break; }
       stops.push(stop);
       // What the rings look like, once per stop worth looking at (Cleanup only).
-      if (section === 'cleanup' && (stop.key === 'about' || stop.region === 4 || stop.region === 5 || stop.key === 'action:clean')) {
+      if (section === 'cleanup' && (stop.key === 'about' || stop.region === GRID || stop.region === DETAIL || stop.key === 'action:clean')) {
         await page.screenshot({ path: `${shot}tab-${stop.region}-${stop.key.replace(/[^a-z0-9]+/gi, "_")}-${size}.png` });
         shots += 1;
       }
@@ -921,9 +1024,9 @@ async function tabAudit(page, size, shot) {
     const keys = stops.map((s) => s.key);
     if (keys.slice(0, 5).join() !== 'section:cleanup,section:registry,section:services,section:developers,about') failures.push(`${label}: Tab starts with ${keys.slice(0, 5).join()}, expected the four sections then About`);
     if (!stops.some((s) => s.region === 1)) failures.push(`${label}: Tab never reached bar 2`);
-    if (stops.filter((s) => s.region === 4).length !== 1) failures.push(`${label}: the list is not exactly one Tab stop (${stops.filter((s) => s.region === 4).length})`);
-    if (stops.filter((s) => s.region === 5).length !== 1) failures.push(`${label}: the detail is not exactly one Tab stop (${stops.filter((s) => s.region === 5).length})`);
-    if (stops.length === 0 || stops[stops.length - 1].region !== 6) failures.push(`${label}: Tab does not end on the top-bar actions: ${names}`);
+    if (stops.filter((s) => s.region === GRID).length !== 1) failures.push(`${label}: the list is not exactly one Tab stop (${stops.filter((s) => s.region === GRID).length})`);
+    if (stops.filter((s) => s.region === DETAIL).length !== 1) failures.push(`${label}: the detail is not exactly one Tab stop (${stops.filter((s) => s.region === DETAIL).length})`);
+    if (stops.length === 0 || stops[stops.length - 1].region !== ACTIONS) failures.push(`${label}: Tab does not end on the top-bar actions: ${names}`);
     // Arrows move inside the list once it has the focus, and the stop does not change.
     if (state === 'analyzed' || state === 'projects') {
       await page.locator('#rows .grid').focus();
@@ -1089,6 +1192,8 @@ try {
 
     // Keyboard, dialogs, report, progress bar and motion (Task 3).
     failures.push(...await keyboardFlows(page, size, expect, out));
+    failures.push(...await fixWaveFlows(page, size, out));
+    shots += 5;
     failures.push(...await reportFlows(page, size, out));
     shots += 5;
     // About, the profile strip and the Tab audit (Task 15).

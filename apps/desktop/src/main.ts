@@ -9,7 +9,7 @@ import { actionForKey, keyAction } from './keys.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { rowParents, sortRows, visibleRows } from './rows.ts';
-import { acceptView, createGate, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from './state.ts';
+import { acceptView, createGate, createInflight, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -18,8 +18,12 @@ let app: AppInfo | null = null;
 let error: { section: SectionId; text: string } | null = null;
 /** Rapid clicks on the section bar: only the answer to the last one is drawn. */
 const opening = createGate();
+/** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
+const inflight = createInflight();
 
 const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
+/** Whether the last render drew a report: when that changes the list (or the report) is rebuilt and the focused control is gone. */
+let reportShown = false;
 
 /** Draws the open section's view and keeps what the user was doing: the focused control and the scroll positions. */
 function render(): void {
@@ -39,6 +43,14 @@ function render(): void {
   // An open dialog manages its own focus (render/dialog.ts); the rest of the page is inert behind it.
   if (view.dialog === null && active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
     document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
+  }
+  // A report opening or closing replaces the list: if the focus fell to the page, put it where the user is working
+  // (the report, then the list again) instead of leaving a screen reader on nothing.
+  const reporting = view.report !== null;
+  if (reporting !== reportShown) {
+    reportShown = reporting;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .grid')?.focus();
   }
 }
 
@@ -60,13 +72,15 @@ async function open(section: SectionId): Promise<void> {
 }
 
 async function send(section: SectionId, intent: AnyIntent | null): Promise<void> {
-  if (intent === null) return;
+  if (intent === null || !inflight.begin(section, intent)) return;
   try {
     const view = await api.intent(section, intent);
     error = null;
     acceptView(ui, view);
   } catch (failure) {
     error = { section, text: errorText(failure) };
+  } finally {
+    inflight.end(section, intent);
   }
   render();
 }
@@ -111,7 +125,7 @@ const PRESSABLE = 'button, a[href], summary, [role="checkbox"], [role="button"]'
 
 /**
  * The global keys (keys.ts decides what a key means). Arrows move the selection, Space ticks the focused
- * row, Enter / a / s / r press the view's action that carries that key, Esc closes the dialog or the
+ * row, Enter / a press the view's action that carries that key, Esc closes the dialog or the
  * report, else cancels the job. The page presses only what the view offers enabled; Rust still decides.
  */
 function onKey(event: KeyboardEvent): void {

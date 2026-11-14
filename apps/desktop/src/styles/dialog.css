@@ -61,6 +61,8 @@
 .rp-cats .rp-row { grid-template-columns: minmax(0, 1fr) auto; }
 .rp-items .rp-row { grid-template-columns: minmax(0, 1.6fr) 84px 72px 52px minmax(0, 1fr); }
 .rp-name { color: var(--text); }
+/* The full path of a skipped or failed item: a line of its own, wrapped (a tooltip is not reachable by keyboard). */
+.rp-path { grid-column: 1 / -1; color: var(--muted); font: 400 11px var(--font-mono); overflow-wrap: anywhere; }
 .rp-n { text-align: right; color: var(--text); font-size: 12px; white-space: nowrap; }
 .rp-why { color: var(--muted); font-size: 12px; font-weight: 400; }
 .rp-hrow { color: var(--muted); font: 400 11px var(--font-body); text-transform: lowercase; }
