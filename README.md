@@ -34,7 +34,7 @@ Xiox knows. Point it at **one project** and it lists everything on the PC that b
 - **Work you did not save is never the price.** A worktree with uncommitted changes, a commit that exists nowhere else, a copy of the repository with its own commits or stash: all blocked, even with `--include`.
 - **Built for scripts and agents.** Stable exit codes, one JSON object on stdout, no prompt when you pass `--yes`.
 
-Agent session discovery is powered by **[Mukade](https://github.com/acaprino/mukade)**, embedded in Xiox through `xiox-mukade`. It reads session listings and metadata from the local stores of Claude Code, Codex, OpenCode and Pi. Xiox associates those sessions with projects and applies its cleanup safety rules.
+Agent session discovery is powered by **[Mukade](https://github.com/acaprino/mukade)**, run by Xiox as a prebuilt executable (`vendor/mukade/mukade.exe`, no source in this repository) through `xiox-mukade`. It reads session listings and metadata from the local stores of Claude Code, Codex, OpenCode and Pi. Xiox associates those sessions with projects and applies its cleanup safety rules.
 
 ## The command line
 

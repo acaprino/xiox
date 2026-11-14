@@ -1939,18 +1939,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mukade"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rusqlite",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4855,8 +4843,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "mukade",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "xiox-model",

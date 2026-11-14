@@ -196,7 +196,7 @@ impl SessionSource for Preloaded {
     }
 }
 
-/// All four agents through the embedded mukade library: listings only, read-only. A source
+/// All four agents through the mukade executable: listings only, read-only. A source
 /// that panics becomes a warning. The managed worktrees are kept only if they exist
 /// (`xiox_mukade::claude_worktrees` names the worktree a session folder points into without
 /// checking it is still there).

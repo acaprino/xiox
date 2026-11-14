@@ -12,10 +12,10 @@ xiox-app = { path = "../xiox-app" }
 xiox-mukade = { path = "../xiox-mukade" }
 xiox-sessions = { path = "../xiox-sessions" }
 serde = { version = "1", features = ["derive"] }
-# Same version and features as xiox-mukade (already in the build): local dates in the Developers tables.
+# Same version and features as xiox-mukade: local dates in the Developers tables.
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 winreg = "0.56"
-# Same version and features as xiox-mukade (already in the build): browser databases (cookies, VACUUM, Firefox history).
+# Same version and features as xiox-mukade: browser databases (cookies, VACUUM, Firefox history).
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 # Already in the build: browser `Preferences`. `float_roundtrip` and `preserve_order` keep numbers and key order
 # exactly as the browser wrote them when the file is rewritten.

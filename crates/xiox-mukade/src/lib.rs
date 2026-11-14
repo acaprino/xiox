@@ -1,35 +1,80 @@
-//! Session source backed by the `mukade` library (<https://github.com/acaprino/mukade>, MIT),
-//! vendored under `vendor/mukade` and compiled into the app: one reader per harness (Claude Code,
-//! Codex CLI, OpenCode, Pi) that parses the harness's own store. Only the listings are used
-//! (`cwd`, last update, archived, live): no session is ever read in full and nothing is written to
-//! the stores. What each listing covers (mukade `docs/usage.md`, "The list output"):
+//! Session source backed by the `mukade` executable (<https://github.com/acaprino/mukade>, MIT),
+//! used as an already-compiled program, never as source: `mukade list <harness>` prints one JSON
+//! row per session and this crate reads them. One reader per harness (Claude Code, Codex CLI,
+//! OpenCode, Pi) parses the harness's own store. Only the listings are used (`cwd`, last update,
+//! archived, live): no session is ever read in full and nothing is written to the stores. What
+//! each listing covers (mukade `docs/usage.md`, "The list output"):
 //!
 //! * Claude Code: the `projects/**/*.jsonl` transcripts, the sessions `history.jsonl` still names
 //!   after their transcript was deleted, and the `sessions/<pid>.json` registrations whose process
-//!   is verified running (`live`). The listing keeps a cache of what each file said, keyed by the
-//!   file's path, size and mtime, in the folder given to [`MukadeSessions::with_cache_dir`].
+//!   is verified running (`live`). mukade keeps a cache of what each file said, keyed by the
+//!   file's path, size and mtime, under the folder given to [`MukadeSessions::with_cache_dir`]
+//!   (passed as `MUKADE_DATA_DIR`).
 //! * Codex: the rollouts under `sessions/` plus every `threads` row of the newest
 //!   `state_<n>.sqlite` (the catalogue outlives the rollouts), subagent threads included.
 //! * OpenCode: the selected `opencode.db` and the other `opencode*.db` beside it, `session_v2`
 //!   and the legacy `session` table.
 //! * Pi: `sessions/**/*.jsonl`; no update time is recorded, the file's mtime stands in.
 //!
+//! Which `mukade.exe` runs: `XIOX_MUKADE_EXE`, else `mukade.exe` beside the running executable,
+//! else the prebuilt copy kept in this repository (`vendor/mukade/mukade.exe`).
+//!
 //! Agent-managed git worktrees (Codex `~/.codex/worktrees`, OpenCode's `worktree` table and
 //! `project.sandboxes`) are not a mukade concern: they are discovered here, read-only.
 
 use xiox_model::*;
-use mukade::model::HarnessId;
-use mukade::reader::{self, SessionInfo};
-use mukade::roots::StoreRoots;
 use rusqlite::{Connection, OpenFlags};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
+
+/// Where each harness keeps its sessions (a folder, or OpenCode's database file). `None`: not
+/// configured, nothing to list.
+#[derive(Clone, Debug, Default)]
+pub struct StoreRoots {
+    pub claude_config_dir: Option<PathBuf>,
+    pub codex_home: Option<PathBuf>,
+    pub opencode_db: Option<PathBuf>,
+    pub pi_agent_dir: Option<PathBuf>,
+}
+
+/// One row of `mukade list` (keys `id`, `title`, `cwd`, `timestamp`, `location`, `archived`,
+/// `unreadable`, `live`, and `parent`/`kind` for a session that has a parent).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default, rename = "timestamp")]
+    pub updated: Option<String>,
+    /// Whether the source marked this session archived.
+    #[serde(default)]
+    pub archived: bool,
+    /// The native file (or store record) the session lives in.
+    #[serde(default, rename = "location")]
+    pub path: String,
+    /// The native parent link, when the harness records one (rows listed with `--children`).
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `spawn` or `fork`: set whenever `parent` is.
+    #[serde(default, rename = "kind")]
+    pub parent_kind: Option<String>,
+    #[serde(default)]
+    pub unreadable: Option<String>,
+    /// `Some(true)` only when the harness's process is verified running; `None` is "not known".
+    #[serde(default)]
+    pub live: Option<bool>,
+}
 
 pub struct MukadeSessions {
     agent: Agent,
     roots: StoreRoots,
-    /// Folder for mukade's listing cache (Claude Code only). `None`: no cache.
+    /// mukade's data folder (its Claude Code listing cache). `None`: a folder under the system
+    /// temp directory.
     cache_dir: Option<PathBuf>,
 }
 
@@ -45,6 +90,19 @@ fn env_dir(var: &str, default: PathBuf) -> PathBuf {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or(default)
+}
+
+const EXE_NAME: &str = if cfg!(windows) { "mukade.exe" } else { "mukade" };
+
+/// The mukade executable: `XIOX_MUKADE_EXE`, else beside the running executable, else the
+/// prebuilt copy in this repository. `None` when none of them exists.
+pub fn mukade_exe() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("XIOX_MUKADE_EXE").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(EXE_NAME)));
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/mukade").join(EXE_NAME);
+    beside.into_iter().chain([repo]).find(|p| p.is_file())
 }
 
 impl MukadeSessions {
@@ -74,21 +132,31 @@ impl MukadeSessions {
         Self { agent, roots, cache_dir: None }
     }
 
-    /// Where mukade may keep its listing cache: what each Claude Code session file said, keyed by
-    /// the file's path, size and mtime, so only the files that changed are read next time (a cold
-    /// listing of a few hundred files takes seconds, a cached one tens of milliseconds). `None`:
-    /// no cache, every file is read on every scan. Nothing else is ever written.
+    /// Where mukade keeps its data (`MUKADE_DATA_DIR`): the Claude Code listing cache (what each
+    /// session file said, keyed by the file's path, size and mtime, so only the files that
+    /// changed are read next time) and the intent prompts it installs on first run. Never beside
+    /// its executable.
     pub fn with_cache_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.cache_dir = dir;
         self
     }
 
-    fn harness(&self) -> HarnessId {
+    fn harness(&self) -> &'static str {
         match self.agent {
-            Agent::Claude => HarnessId::ClaudeCode,
-            Agent::Codex => HarnessId::Codex,
-            Agent::Opencode => HarnessId::OpenCode,
-            Agent::Pi => HarnessId::Pi,
+            Agent::Claude => "claude_code",
+            Agent::Codex => "codex",
+            Agent::Opencode => "opencode",
+            Agent::Pi => "pi",
+        }
+    }
+
+    /// The variable mukade reads this agent's store from.
+    fn store_env(&self) -> &'static str {
+        match self.agent {
+            Agent::Claude => "CLAUDE_CONFIG_DIR",
+            Agent::Codex => "CODEX_HOME",
+            Agent::Opencode => "OPENCODE_DB",
+            Agent::Pi => "PI_CODING_AGENT_DIR",
         }
     }
 
@@ -103,12 +171,53 @@ impl MukadeSessions {
         }
     }
 
+    /// `mukade list <harness>`: the root sessions, or with `children` every session the store
+    /// holds (forks and subagent sessions included).
+    fn run_list(&self, children: bool) -> anyhow::Result<Vec<SessionInfo>> {
+        let store = self.store_root().ok_or_else(|| anyhow::anyhow!("no store configured"))?;
+        let exe = mukade_exe().ok_or_else(|| {
+            anyhow::anyhow!("{EXE_NAME} not found (put it beside the executable or set XIOX_MUKADE_EXE)")
+        })?;
+        let data = self
+            .cache_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("xiox-mukade"));
+        let data = std::path::absolute(&data).unwrap_or(data);
+        let mut cmd = Command::new(&exe);
+        cmd.arg("list").arg(self.harness());
+        if children {
+            cmd.arg("--children");
+        }
+        cmd.env(self.store_env(), store)
+            .env("MUKADE_DATA_DIR", &data)
+            .stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| anyhow::anyhow!("{}: {e}", exe.display()))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!("mukade list {}: {}", self.harness(), err.trim());
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                serde_json::from_str::<SessionInfo>(l).map_err(|e| {
+                    anyhow::anyhow!("mukade list {}: unreadable row: {e}", self.harness())
+                })
+            })
+            .collect()
+    }
+
     fn list(&self) -> anyhow::Result<Vec<SessionInfo>> {
         match self.agent {
-            // Same as `Reader::list_all`, with our cache folder instead of mukade's own
-            // (`mukade-data/cache` beside the executable).
-            Agent::Claude => reader::claude_code::list_cached(&self.roots, self.cache_dir.as_deref()),
-            _ => reader::for_harness(self.harness())?.list_all(&self.roots),
+            // Claude Code: the root sessions only (subagent transcripts left out).
+            Agent::Claude => self.run_list(false),
+            _ => self.run_list(true),
         }
     }
 }
@@ -176,19 +285,6 @@ pub fn aggregate(
     by.into_values().collect()
 }
 
-/// A listing error that only says the store is not there (agent not installed): stay quiet.
-fn is_missing_store(e: &anyhow::Error) -> bool {
-    let root = e.root_cause();
-    root.downcast_ref::<reader::Lookup>()
-        .is_some_and(|l| matches!(l, reader::Lookup::NoStore(_)))
-        || root
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-        || root.downcast_ref::<rusqlite::Error>().is_some_and(|db| {
-            matches!(db, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::CannotOpen)
-        })
-}
-
 impl SessionSource for MukadeSessions {
     fn agent(&self) -> Agent {
         self.agent
@@ -202,7 +298,6 @@ impl SessionSource for MukadeSessions {
         }
         match self.list() {
             Ok(infos) => out.items = aggregate(self.agent, infos, &mut out.warnings),
-            Err(e) if is_missing_store(&e) => {}
             Err(e) => out.warnings.push(format!("{:?}: {e:#}", self.agent)),
         }
         out
@@ -414,15 +509,10 @@ impl MukadeSessions {
             }),
             // NOTE: Codex `threads` rows may be paginated by the reader; a long catalogue could
             // be truncated and hide children from `all`.
-            _ => reader::for_harness(self.harness()).and_then(|r| {
-                let roots = r.list(&self.roots)?;
-                let all = r.list_all(&self.roots)?;
-                Ok((roots, all))
-            }),
+            _ => self.run_list(false).and_then(|roots| Ok((roots, self.run_list(true)?))),
         };
         match listed {
             Ok((roots, all)) => out.items = select_archived(self.agent, store, roots, &all),
-            Err(e) if is_missing_store(&e) => {}
             Err(e) => out.warnings.push(format!("{:?}: {e:#}", self.agent)),
         }
         out
