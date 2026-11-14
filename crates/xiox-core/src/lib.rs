@@ -2,6 +2,7 @@
 //! sviluppatori condividono, indipendenti da egui.
 
 pub mod account;
+pub mod app;
 pub mod browserdb;
 pub mod cleaner;
 pub mod cleanup;
@@ -12,6 +13,7 @@ mod live_checks;
 pub mod native;
 pub mod notify;
 pub mod netcreds;
+pub mod pump;
 pub mod regbackup;
 pub mod regstate;
 pub mod registry;
