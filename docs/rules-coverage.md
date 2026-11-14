@@ -1,3 +1,5 @@
+> Internal working notes, written in Italian.
+
 # Copertura delle voci di pulizia di Windows in Xiox (Fase 3)
 
 Stato: inventario e tabella di copertura per la Fase 3 della spec `docs/superpowers/specs/2026-11-10-dev-mode-design.md` (sezione «Copertura nativa»). Decisione dell'utente: **tutto l'elenco**, anche le voci per programmi non installati su questo PC.

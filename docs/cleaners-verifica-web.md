@@ -1,3 +1,5 @@
+> Internal working notes, written in Italian.
+
 # Verifica dei percorsi: lotto «web» (Task 9, Parte B)
 
 Ogni voce ha la sua fonte (documentazione o repository ufficiale dello strumento). Dove la fonte dice `~` si intende `%USERPROFILE%`. File 🔒 non toccati: `token`, `stored_tokens` (Hugging Face), `keras.json`, `settings.json` e `keybindings.json` (editor), `auth.ini` di pnpm.

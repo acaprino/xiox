@@ -1,3 +1,5 @@
+> Internal working notes, written in Italian.
+
 > Copia di `D:\Projects\KKK\devcleanendor\mukade\VENDORED.md`, presa il 2026-11-12 prima di eliminare la cartella. La copia di mukade usata da Xiox (prima PulisciPC) è descritta in `vendor/mukade/VENDORED.md`. Dal 2026-11-13 i crate `dc-*` si chiamano `xiox-*` (`dc-mukade` -> `xiox-mukade`); il resto del testo è quello di allora.
 
 # Vendored: mukade

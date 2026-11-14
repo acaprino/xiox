@@ -1,7 +1,7 @@
 # Xiox: the desktop app
 
 Xiox is a Windows cleaner for people who code. The desktop app (`xiox-ui.exe`) is one window
-with four sections: **Files** (temporary files, caches, browser data, logs), **Registry**
+with four sections: **Cleanup** (temporary files, caches, browser data, logs), **Registry**
 (entries that point to files or programs that no longer exist), **Services & RAM** (services
 you can turn off, and how much memory they hold) and **Developers** (build folders, git
 worktrees and archived coding-agent sessions of every project on the PC).
@@ -14,7 +14,7 @@ uses.
 
 - [Starting it](#starting-it)
 - [The window](#the-window)
-- [Files](#files)
+- [Cleanup](#cleanup)
 - [Registry](#registry)
 - [Services & RAM](#services--ram)
 - [Developers](#developers)
@@ -53,19 +53,19 @@ the app prints a message and exits with code 2, instead of falling back to your 
 
 At start the app also loads the cleaning rules (and updates Winapp2 in the background, see
 [About](#about)) and removes the leftovers of a free-space wipe that a power cut or a crash
-interrupted (see [Files](#files)).
+interrupted (see [Cleanup](#cleanup)).
 
 ## The window
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ XIOX  0.1.0                                      [ Analyze a ] [ Clean … ↵ ]│  top bar
-│ ANALYSIS DONE   13.48 GB to delete (46999 files)  administrator · RAM 32 GB │  status row
+│ ANALYSIS DONE   13.48 GB to delete (46,999 files)  administrator · RAM 32 GB │  status row
 │ Cleaning…  ████████░░░░  64%  Windows temporary files                        │  progress (while a job runs)
 │ Xiox is cleaning the profile of “…”, not that of “…” …                       │  profile strip (when it applies)
 ├──────────┬────────────┬─────────────────────────────────────────────────────┤
 │ SECTIONS │ CATEGORIES │ title ................................  All  None    │
-│ Files   1│ System     │ ☐  Item         Level          Files        Size    │  list
+│ Cleanup 1│ System     │ ☐  Item         Level          Files        Size    │  list
 │ Registry2│ Explorer   │ ☑  …                                                │
 │ Services3│ …          │                                                     │
 │ Develop.4│ OPTIONS    ├─────────────────────────────────────────────────────┤
@@ -82,7 +82,7 @@ below say when. The style sheet writes the button labels in capitals; this guide
 they are written in the sentences of the app.
 
 **Status row.** On the left a badge (`Ready`, `Analyzing`, `Analysis done`, `Cleaning`,
-`Cleanup done`, ...) and a sentence with the figures (`13.48 GB to delete (46999 files)`,
+`Cleanup done`, ...) and a sentence with the figures (`13.48 GB to delete (46,999 files)`,
 `40 issues found · 2 selected`). On the right who you are running as, `administrator` or
 `standard user`, and the PC's total memory (`RAM 32 GB`).
 
@@ -96,9 +96,8 @@ approved with another administrator's password. "Your" Temp folder, browser data
 per-user locations are then those of account A, not of the person sitting at the screen. Close
 the app and start it again from the right account if that is not what you want.
 
-**Sections bar (the first sidebar).** Files `1`, Registry `2`, Services & RAM `3`,
-Developers `4`, and `About` (`?`). The number is the key that opens the section. The Files
-section is the entry named `Cleanup` in this bar.
+**Sections bar (the first sidebar).** Cleanup `1`, Registry `2`, Services & RAM `3`,
+Developers `4`, and `About` (`?`). The number is the key that opens the section.
 
 **Categories bar (the second sidebar).** The categories of the open section, each with its
 item count and, after an analysis, its size (`System`, `Explorer`, ...; for Developers
@@ -121,7 +120,10 @@ ticked. A caret folds and unfolds the rows under a parent. Where a section has m
 holds how many cookies.
 
 **Notices.** Coloured one-line strips above the list: a result, a warning, or an error or
-refusal. A strip that has more to say ends with `+2 more`; hover it to read the rest.
+refusal. A strip that has more to say ends with a `+2 more` button: reach it with `Tab` and press
+`Enter` or `Space` to open the extra lines under the strip, and again to close them. A result that
+only half worked (some keys not fixed, some services that failed) is shown in the warning colour,
+not as a success.
 
 **Footer.** The keys of the open section (`↑↓ move · space toggle · a analyze · ↵ clean`) and,
 in some sections, a line about the selection (`Selected in Projects: 6.80 GB · 2 folders`).
@@ -129,7 +131,7 @@ in some sections, a line about the selection (`Selected in Projects: 6.80 GB · 
 While a job runs the lists are frozen: you cannot tick or untick anything, because the
 selection is what the job is working on.
 
-## Files
+## Cleanup
 
 Temporary files, caches, browser data, logs and the other things Windows and your programs
 leave behind. This is the section the app opens in.
@@ -163,7 +165,7 @@ that choice belongs to [Developers](#developers).
 
 **Options.** `Only delete Temp files older than 24 hours`: when it is on, temporary folders are
 cleaned of files at least a day old, so a program that is writing a file right now keeps it. In
-`Browser`, `Edit cookie keep list` opens `Documents\Xiox\cookie_da_conservare.txt` in Notepad
+`Browser`, `Edit cookie keep list` opens `Documents\Xiox\cookie-keep-list.txt` in Notepad
 (it creates the file if it is missing): one domain per line, and the cookies of those sites are
 not removed. In `Applications`, a line says whether the Winapp2 rules are up to date.
 
@@ -219,7 +221,7 @@ or press `None` and tick only what you want. Nothing is changed until you press
 
 | Button | What it does |
 |---|---|
-| `Yes, back up and fix` | saves a `.reg` copy of the keys it is about to change in `Documents\Xiox` (the file is named `backup_registro_<date>_<time>.reg`, and an existing file is never overwritten), then fixes |
+| `Yes, back up and fix` | saves a `.reg` copy of the keys it is about to change in `Documents\Xiox` (the file is named `registry-backup-<date>_<time>.reg`, and an existing file is never overwritten), then fixes |
 | `Fix without backup` | fixes without saving anything |
 | `Cancel` | closes the question, nothing happens |
 
@@ -227,8 +229,9 @@ If the backup cannot be written, **nothing is fixed** and a notice says why (*Re
 failed (...): no repair was done.*).
 
 **The result** is a notice (`Fixed 2 issues.`, with the path of the backup on the line behind
-`+1 more`). If some keys could not be changed it adds how many and why (*not fixed
-(administrator rights are needed)*: start the app as administrator). When everything was fixed
+`+1 more`). If some keys could not be changed it adds how many and why (*1 not fixed
+(administrator rights are needed)*: start the app as administrator), and the strip turns to the
+warning colour. When everything was fixed
 the fixed issues leave the list; when something failed they stay.
 
 **There is no restore button in the app.** To go back, double-click the `.reg` file of the
@@ -247,8 +250,9 @@ services the first time you open it; `Refresh` (`a`) reads them again.
 **Show: Recommended / All.** `Recommended` (the default) lists only the services Xiox suggests
 turning off, each with the reason in the `why turn it off` line of the detail (*Needs a fax
 modem, which almost no PC has.*, *Sends usage data to Microsoft; Windows works without it.*).
-`All` lists every service. The search box filters by display name or service name. The status
-row says how many services were read and how many are recommended to turn off.
+`All` lists every service. The search box filters by display name or service name; when nothing matches, the list says
+`No services` and *Nothing matches “x”.* (*No services to show.* when there is no search). The
+status row says how many services were read and how many are recommended to turn off.
 
 **Memory.** The `RAM in use` meter in the second sidebar changes tone as the memory fills (a
 warning above 65%, an error above 85%) and is refreshed every two seconds while the section is
@@ -277,7 +281,7 @@ firewall, Windows Defender, Windows Update, the network stack, ...) and everythi
 an ordinary service process (drivers).
 
 **Restoring.** The first time Xiox changes a service it saves the service's startup type in
-`Documents\Xiox\servizi_originali.txt` (only the very first state is kept). `Restore originals`
+`Documents\Xiox\services-original.txt` (only the very first state is kept). `Restore originals`
 puts every saved one back and starts the ones that were `Automatic`. A service that could not be
 restored stays in the file for the next try.
 
@@ -298,7 +302,7 @@ those agents worked in; you can add more folders to look through.
 
 These options are saved (see [Where things are stored](#where-things-are-stored)). A note under
 `Deletion` reminds you that the Recycle Bin frees no space until you empty it, and that the
-`Recycle Bin` entry of Files empties it. If the settings cannot be saved a red line says so
+`Recycle Bin` entry of Cleanup empties it. If the settings cannot be saved a red line says so
 (`Settings not saved: ...`) and the options only last until you close the app.
 
 **Analyze** (`a`). Looks at the projects (the progress bar says `Looking at projects…`), then
@@ -362,7 +366,7 @@ permanently.*), then the figures (`2 folders · 6.80 GB`) and one line per folde
 
 **Space freed.** A cleaning that goes to the Recycle Bin frees no space yet: the report says
 `Sent to the Recycle Bin` with the size, and the status row `Space freed: 0 B`. The space comes
-back when you empty the Recycle Bin (the `Recycle Bin` entry of [Files](#files) does that).
+back when you empty the Recycle Bin (the `Recycle Bin` entry of [Cleanup](#cleanup) does that).
 
 ## Levels and blocked entries
 
@@ -382,7 +386,7 @@ of the row says why. The reason is a fact about your PC right now:
 
 | Where | Reason shown |
 |---|---|
-| Files | *Close Google Chrome to clean* (the program is running); *... : this option cannot be used* (the rule is not supported on this system); *Needs administrator: some folders are skipped* |
+| Cleanup | *Close Google Chrome to clean* (the program is running); *... : this option cannot be used* (the rule is not supported on this system); *Needs administrator: some folders are skipped* |
 | Services | *Needed by Windows: protected* |
 | Projects | *The project is in use by an agent: its folders are cleaned when the session is closed.*, or the reason it is locked or unreachable |
 | Worktrees | the `State` reason, for example *Unsaved changes: the worktree stays* |
@@ -400,7 +404,7 @@ of what will be touched, the warnings and its buttons. While it is open the rest
 inert: you cannot click or Tab behind it, and nothing can be ticked or unticked (what the
 warnings describe must be what runs). `Esc` or `Cancel` closes it and nothing runs.
 
-- **Files** asks `Start cleaning?` with *The selected files will be deleted permanently. Files in
+- **Cleanup** asks `Start cleaning?` with *The selected files will be deleted permanently. Files in
   use are left where they are.*, followed by `Warnings for the chosen options`: one line for each
   chosen entry that has a warning (cookies, emptying the Recycle Bin, an application cache that
   has to be downloaded again, ...). `Continue` starts.
@@ -413,7 +417,7 @@ milliseconds after the confirmation opens, and ignore a key that is held down: t
 opened the confirmation (or that you are still holding) must never also confirm it. A mouse click
 is never held back.
 
-**Cancel.** While an analysis or a cleaning runs in Files or Developers, a `Cancel` button
+**Cancel.** While an analysis or a cleaning runs in Cleanup or Developers, a `Cancel` button
 (`Esc`) appears in the top bar. It stops before the next file or item; it does not undo what was
 already done. An analysis that is cancelled keeps what it had found (the other rows have no
 figure and a notice says so); a cleaning that is cancelled ends with a report of what was done,
@@ -432,9 +436,9 @@ replaces the list:
 | the counts | `Files deleted`, `Folders deleted`, `Duration` |
 | notes | for example *Some files could not be removed. They are listed below.* |
 | `By category` | the freed size per category, largest first |
-| `Skipped (n)` | what was left alone, one line each: the item and the reason (*In use by another program*, *Left: protected or unreadable*, *Not started: the cleanup was cancelled*); hover for the full path |
+| `Skipped (n)` | what was left alone, one line each: the item and the reason (*In use by another program*, *Left: protected or unreadable*, *Not started: the cleanup was cancelled*); the full path is on a line of its own under it |
 | `Failed (n)` | what was tried and refused (*Access denied*) |
-| `Items (n)` | in Files: for each entry the size freed, how many were removed, how many were left and a note; a caret opens the details (which cookies were kept, what stayed in use, ...) |
+| `Items (n)` | in Cleanup: for each entry the size freed, how many were removed, how many were left and a note; a caret opens the details (which cookies were kept, what stayed in use, ...) |
 
 **Skipped** means left alone on purpose, or in use, or changed: nothing went wrong, it is simply
 still there. **Failed** means a removal was attempted and refused by Windows.
@@ -451,9 +455,9 @@ The engine is written so that a mistake costs a skipped entry, not your work. In
 - **Nothing is hidden.** Everything the section found is in the list, with its level and its
   reason. What cannot be removed is shown too, with the reason, not left out.
 - **Nothing runs by itself.** Opening the app, switching section or analyzing never deletes
-  anything. A removal needs, in this order, an analysis on screen (Files and Developers), a press
+  anything. A removal needs, in this order, an analysis on screen (Cleanup and Developers), a press
   of the main button and a click on the confirmation. Some entries start ticked (the
-  `Recommended` ones in Files, the engine's recommendation in Developers); the ticks are in plain
+  `Recommended` ones in Cleanup, the engine's recommendation in Developers); the ticks are in plain
   sight and the confirmation lists exactly what it is about to do.
 - **Pressing a key is not confirming.** `Enter` only opens the confirmation. Inside it, `Enter`
   and `Space` are ignored for the first 300 ms and while held.
@@ -461,7 +465,7 @@ The engine is written so that a mistake costs a skipped entry, not your work. In
   open, and the removal works on the analysis you were looking at, not on a newer one.
 - **The analysis is checked again.** In Developers an analysis older than 30 minutes is refused,
   only items the analysis itself would plan are accepted, and archived sessions are looked up
-  again right before they are deleted. The Files entries that need an analysis (PATH, network
+  again right before they are deleted. The Cleanup entries that need an analysis (PATH, network
   passwords, old Windows data) act only on what that analysis showed.
 - **Unsaved work is never the price.** A worktree with uncommitted changes, a project an agent is
   using and a session that is open are blocked. Worktrees go through `git worktree remove`, never
@@ -488,14 +492,14 @@ that is greyed out ignores its key.
 
 | Key | What it does |
 |---|---|
-| `1` `2` `3` `4` | open Files, Registry, Services & RAM, Developers |
+| `1` `2` `3` `4` | open Cleanup, Registry, Services & RAM, Developers |
 | `?` | open About (not while a confirmation is open) |
 | `↑` `↓` | move the selection one row |
 | `PageUp` `PageDown` | move ten rows |
 | `Home` `End` | first and last row |
 | `→` `←` | unfold and fold the rows under a project or an entry |
 | `Space` | tick or untick the selected row (not while a job runs, not on a blocked row) |
-| `a` | `Analyze` in Files and Developers, `Find issues` in Registry, `Refresh` in Services & RAM |
+| `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry, `Refresh` in Services & RAM |
 | `Enter` | the section's main button: `Clean`, `Fix selected` or `Disable`; it opens the confirmation |
 | `Esc` | in this order: close About or the confirmation; leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
@@ -539,13 +543,16 @@ next chapter). Their licence stays their own.
 |---|---|
 | Developers options (`Days of inactivity`, `Deletion`, extra folders) | `%APPDATA%\Xiox\settings.json` |
 | The window's size and position | `%APPDATA%\Xiox\window.json` (next to the settings file) |
-| Registry backups | `Documents\Xiox\backup_registro_<date>_<time>.reg` |
-| The startup types saved before a service was changed | `Documents\Xiox\servizi_originali.txt` |
-| The cookie keep list | `Documents\Xiox\cookie_da_conservare.txt` |
+| Registry backups | `Documents\Xiox\registry-backup-<date>_<time>.reg` |
+| Backup of the registry keys an `Applications` rule is about to delete | `Documents\Xiox\rules-backup-<date>_<time>.reg` |
+| The startup types saved before a service was changed | `Documents\Xiox\services-original.txt` |
+| The cookie keep list | `Documents\Xiox\cookie-keep-list.txt` |
 | `.reg` backup of an Environment PATH change | `Documents\Xiox` |
 | The Winapp2 rules | `%ProgramData%\Xiox\winapp2\` |
 | Cache of the agent-session listing | `%LOCALAPPDATA%\Xiox\mukade` |
 | Reports | nowhere, unless you press `Save as text…` and choose a place |
+
+Files that an earlier version created under their old names (`servizi_originali.txt`, `cookie_da_conservare.txt`) keep working: Xiox goes on reading and writing the old file if it is there, and never renames, copies or deletes it.
 
 `Documents` is your Documents folder (`%USERPROFILE%\Documents`). The app writes nothing else
 outside the places you choose. A window position that no longer fits is ignored; a settings file
@@ -555,7 +562,7 @@ that cannot be written is reported in the window (`Settings not saved: ...`).
 
 **A button is greyed out.** It has a reason, and it is one of these: a job is running (wait for
 it, or `Cancel`); a confirmation is open (answer it); nothing is ticked; there is no analysis yet
-(Files: *Analyze first: Clean works on the analysis on screen.*); the report is open (close it);
+(Cleanup: *Analyze first: Clean works on the analysis on screen.*); the report is open (close it);
 or there is nothing to do (`Restore originals (0)`).
 
 **A row cannot be ticked.** It is blocked: read the second line of the row, or the `blocked` line
@@ -581,7 +588,7 @@ you are most likely to meet:
 user, so keys under `HKLM` cannot be changed. Start the production build (it asks for
 administrator rights) and scan again.
 
-**Files: `n folders skipped: they need administrator rights`.** Same cause: some system folders
+**Cleanup: `n folders skipped: they need administrator rights`.** Same cause: some system folders
 could not be read or cleaned as a standard user.
 
 **The report lists Skipped or Failed items.** `Skipped` items are still there: they were in use
@@ -589,7 +596,7 @@ could not be read or cleaned as a standard user.
 refused by Windows. Analyze again to see what is left; items that are still blocked say why.
 
 **Space was not freed after a Developers cleaning.** It went to the Recycle Bin. Empty it with
-the `Recycle Bin` entry of Files, or choose `Permanently` next time.
+the `Recycle Bin` entry of Cleanup, or choose `Permanently` next time.
 
 **`OpenCode sessions could not be read: some projects may be missing.`** The list of that
 agent's sessions was not readable, so the projects only that agent knows are not in this

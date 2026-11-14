@@ -44,7 +44,7 @@ Licensed under CC-BY-SA-4.0. Xiox downloads `Winapp2.ini` at runtime to read its
 
 ### Embedded CleanerML cleaners
 
-The eleven XML cleaners in `cleaners/` (Claude Code, Codex, Gemini CLI, OpenCode, Cargo, crash dumps, Go, JetBrains, npm, pip, GPU shaders) are compiled into the executable. They are authored or adapted for this app and are covered by the app's own licence.
+The XML cleaners in `cleaners/` are compiled into the executable. They are authored or adapted for this app and are covered by the app's own licence.
 
 ### Also looked at (ideas only, no code)
 

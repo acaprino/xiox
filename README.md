@@ -18,7 +18,7 @@ A Windows cleaner for people who code, with a command line that agents can drive
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-engine-FFB21E?style=flat-square&labelColor=0B0416" alt="Rust engine">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-3F6FB5?style=flat-square&labelColor=0B0416" alt="Windows 10 and 11">
-  <img src="https://img.shields.io/badge/tests-1217%20passing-8FD6FF?style=flat-square&labelColor=0B0416" alt="1217 tests passing">
+  <img src="https://img.shields.io/badge/tests-passing-8FD6FF?style=flat-square&labelColor=0B0416" alt="Tests passing">
   <img src="https://img.shields.io/badge/CLI-never%20asks%20for%20admin-9CC4F5?style=flat-square&labelColor=0B0416" alt="The CLI never asks for administrator rights">
 </p>
 
@@ -140,7 +140,7 @@ The look follows the suite: a violet-black stage, steel-blue frames with cut cor
 
 - **Nothing is removed without a confirmation.** Every clean opens a dialog that lists what will run and its warnings; items at the `caution` level need the box "I have read the warnings" ticked first.
 - **Keyboard first.** `↑` `↓` move, `space` toggles, `a` analyzes, `Enter` cleans (and asks first), `Esc` closes a dialog, `?` opens About. Every control is also reachable with `Tab`.
-- **It asks for administrator rights at start**, as the old window did: the registry, the services and the system folders need them. The status bar shows `administrator` or `standard user`. The command line never asks.
+- **It asks for administrator rights at start**: the registry, the services and the system folders need them. The status bar shows `administrator` or `standard user`. The command line never asks.
 - **Same guards as the CLI.** The page only sends clicks: what can be selected or removed is decided in Rust, through the same `xiox_cleaner` guard and the fresh analysis before every removal.
 - **No network from the window**, apart from the Winapp2 rules update, which runs in the engine as before.
 

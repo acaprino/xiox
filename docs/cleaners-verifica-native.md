@@ -1,3 +1,5 @@
+> Internal working notes, written in Italian.
+
 # Verifica dei percorsi: lotto «native» (Task 9, Parte B)
 
 Ogni percorso dei cleaner di questo lotto è stato controllato sulla documentazione o sul codice ufficiale dello strumento (sito, repository GitHub dello strumento). Data della verifica: 2026-11-10. Stato: **tenuta** (documentata), **cambiata** (la fonte dice altro dalla tabella della spec), **tolta** (non documentata o non raggiungibile dal motore).

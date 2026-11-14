@@ -1,3 +1,5 @@
+> Internal working notes, written in Italian.
+
 # Verifica dei percorsi: lotto «jvm» (Task 9, Parte B)
 
 Regola 4 della spec `docs/superpowers/specs/2026-11-10-catalogo-sviluppo-design.md`: ogni percorso è controllato sulla documentazione ufficiale dello strumento (sito o GitHub dello strumento). Dove la documentazione non dà il percorso letterale, si cita il sorgente ufficiale che lo definisce. Data della verifica: 2026-11-10.

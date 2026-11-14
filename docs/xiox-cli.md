@@ -26,7 +26,7 @@ There is no installer. Build the release executable from the workspace root (the
 `Cargo.toml`). You need a Rust toolchain (`cargo`):
 
 ```powershell
-cargo build --release -p xiox-cli
+cargo build --release --locked -p xiox-cli
 ```
 
 The result is `target\release\xiox.exe` (about 3.2 MB, one file). Copy it anywhere, or put its
