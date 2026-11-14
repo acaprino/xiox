@@ -5,3 +5,6 @@
 # with `#` are ignored. Add an entry only for a literal that code consumes (rule id,
 # registry path, file name, JSON key, serde tag, service name, protocol string) or that
 # is an Italian input of a test; put a one-line reason in a comment above it.
+
+# Google Drive's Italian folder name, matched against the real directory on disk (crates/xiox-scanner/src/sessions.rs).
+il mio drive
