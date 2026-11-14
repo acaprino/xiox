@@ -1,10 +1,10 @@
 //! Stato di Pulizia file senza interfaccia: scelte, lavori in un thread, analisi, pulizia,
-//! resoconto e opzioni dinamiche. Spostato da `src/main.rs` così com'era; al posto di
-//! `egui::Context` i thread svegliano chi mostra la sezione con un [`SharedNotifier`].
+//! resoconto e opzioni dinamiche. Spostato dalla vecchia finestra così com'era; al posto di
+//! un contesto grafico i thread svegliano chi mostra la sezione con un [`SharedNotifier`].
 //!
 //! Sopra lo stato stanno le intenzioni della pagina (`select_category`, `toggle`, `analyze`,
-//! `request_clean`, `confirm`...): ognuna rifiuta, con una frase in inglese, ciò che l'interfaccia
-//! egui avrebbe tenuto disattivato, e un rifiuto non cambia nulla. Il lavoro vero gira dietro
+//! `request_clean`, `confirm`...): ognuna rifiuta, con una frase in inglese, ciò che la vecchia
+//! interfaccia avrebbe tenuto disattivato, e un rifiuto non cambia nulla. Il lavoro vero gira dietro
 //! [`CleanupWorkers`], così i test arrivano da «Continua» fino all'avvio senza toccare il motore.
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
@@ -79,50 +79,50 @@ pub enum CleanView {
 
 /// Lo stato di Pulizia file: tutto ciò che la sezione sa e i lavori in corso.
 pub struct CleanupState {
-    pub clean_sel: Vec<bool>,
-    pub only_old: bool,
-    pub clean_job: Option<Receiver<CleanMsg>>,
-    pub clean_text: String,
-    pub clean_progress: f32,
-    pub found: Vec<Option<cleaner::Found>>,
-    pub cleaned: Vec<Option<cleaner::Cleaned>>,
-    pub clean_view: CleanView,
+    pub(crate) clean_sel: Vec<bool>,
+    only_old: bool,
+    pub(crate) clean_job: Option<Receiver<CleanMsg>>,
+    clean_text: String,
+    clean_progress: f32,
+    found: Vec<Option<cleaner::Found>>,
+    cleaned: Vec<Option<cleaner::Cleaned>>,
+    pub(crate) clean_view: CleanView,
     /// «Annulla» della pulizia o dell'analisi in corso: lo stesso clic ferma le categorie
     /// (`xiox_cleaner::Cancel`) e le voci native e dinamiche (`AtomicBool`).
-    pub clean_cancel: Option<(xiox_cleaner::Cancel, Arc<AtomicBool>)>,
-    pub clean_started: Instant,
+    clean_cancel: Option<(xiox_cleaner::Cancel, Arc<AtomicBool>)>,
+    clean_started: Instant,
     /// Resoconto della pulizia, costruito quando tutte le voci hanno finito.
-    pub clean_report: Option<xiox_model::CleanReport>,
+    clean_report: Option<xiox_model::CleanReport>,
     /// Voci scelte all'avvio dell'ultima analisi o pulizia.
-    pub clean_chosen: Chosen,
+    clean_chosen: Chosen,
     /// Come è finita l'ultima analisi o pulizia (`None` = in corso o mai partita).
-    pub clean_end: Option<CleanEnd>,
+    pub(crate) clean_end: Option<CleanEnd>,
     /// Esito di «Salva come testo…»: (testo, riuscito).
-    pub clean_saved: Option<(String, bool)>,
-    pub confirm_clean: bool,
+    clean_saved: Option<(String, bool)>,
+    pub(crate) confirm_clean: bool,
     /// Avvisi della finestra di conferma, calcolati una volta all'apertura
     /// (la lista dei cookie si legge lì, non a ogni fotogramma).
-    pub confirm_warnings: Vec<String>,
+    confirm_warnings: Vec<String>,
 
-    pub rules: Option<rules::RuleSet>,
+    pub(crate) rules: Option<rules::RuleSet>,
     /// Aperto finché il thread delle regole (caricamento e aggiornamento di Winapp2) vive.
-    pub rules_rx: Option<Receiver<rules::RulesMsg>>,
+    rules_rx: Option<Receiver<rules::RulesMsg>>,
     /// Esito dell'aggiornamento di Winapp2 di questo avvio (`None` = in corso o non partito).
     pub winapp2_update: Option<xiox_rules::updater::UpdateOutcome>,
-    pub rule_sel: HashSet<String>,
-    pub rule_found: Vec<(String, String, rules::RuleFound)>,
-    pub rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
-    pub rule_search: String,
+    rule_sel: HashSet<String>,
+    rule_found: Vec<(String, String, rules::RuleFound)>,
+    rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
+    rule_search: String,
     /// Voci native (Appunti, DNS…): selezione `native:<id>` in `rule_sel`.
-    pub natives: Vec<native::NativeItem>,
-    pub native_found: Vec<(String, String, native::NativeFound)>,
-    pub native_cleaned: Vec<(String, String, native::NativeCleaned)>,
+    natives: Vec<native::NativeItem>,
+    native_found: Vec<(String, String, native::NativeFound)>,
+    native_cleaned: Vec<(String, String, native::NativeCleaned)>,
     /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
-    pub processes: Vec<String>,
+    processes: Vec<String>,
     /// La categoria aperta nell'elenco a sinistra (id di [`CleanupState::nav_ids`]).
-    pub nav: String,
+    nav: String,
     /// Il lavoro del thread di analisi e pulizia (quello vero per default).
-    pub workers: CleanupWorkers,
+    workers: CleanupWorkers,
 }
 
 /// Tutto ciò che il thread di analisi e pulizia riceve: la scelta fatta all'avvio e i segnali di
@@ -415,7 +415,7 @@ impl CleanupState {
 }
 
 /// What the page asks of Cleanup (`CleanupIntent`). Each intent refuses, with a reason in English
-/// (`Err`), whatever the egui window would have kept disabled: the caller (the Tauri command) turns
+/// (`Err`), whatever the old window would have kept disabled: the caller (the Tauri command) turns
 /// it into a `CmdError { kind: "refused" }`. A refused intent changes nothing.
 impl CleanupState {
     /// A job runs: nothing may change under it.
@@ -543,7 +543,7 @@ impl CleanupState {
 
     /// «Clean N items»: opens the confirmation, with the warnings of what is chosen, for the
     /// analysis on screen. With none (nothing analysed yet, or a report is showing) there is nothing
-    /// to clean from: that is the contract of the page, stricter than the egui button (which cleaned
+    /// to clean from: that is the contract of the page, stricter than the old button (which cleaned
     /// without an analysis); the PATH preview needs an analysis on screen anyway.
     pub fn request_clean(&mut self) -> Result<(), String> {
         self.unlocked()?;

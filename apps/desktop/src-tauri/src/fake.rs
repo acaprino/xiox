@@ -241,6 +241,7 @@ impl FakeModel {
     }
 
     /// The name of the fixture state a section is in.
+    #[cfg(test)]
     pub fn state_of(&self, s: SectionId) -> &str {
         &self.state[&s]
     }

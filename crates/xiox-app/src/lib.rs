@@ -478,7 +478,7 @@ pub fn plans_something(report: &ProjectReport) -> bool {
         || report.artifacts.iter().any(|a| a.level == Level::Recommended)
 }
 
-/// INTERIM (the per-project checkbox of `src/dev.rs`; Task 10 deletes this together with it).
+/// The per-project tick of the Developers list as the engine's selection (used by `xiox_core::dev`).
 ///
 /// Report ids (one checkbox per project/worktree) -> the engine's [`Selection`]: an agent
 /// worktree removed whole goes in `worktrees`; any other report gives only its `Recommended`

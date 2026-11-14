@@ -2,7 +2,7 @@
 //! gruppi "Windows", "Browser" e "Sviluppo e AI", vedi
 //! `xiox_rules::embedded`) e le voci di Winapp2 ("Applicazioni").
 //!
-//! Nessuna UI qui: `main.rs` mostra le caselle e lancia il job; questo modulo
+//! Nessuna UI qui: la finestra mostra le caselle e lancia il job; questo modulo
 //! carica le regole, raccoglie ciò che un'opzione toglierebbe e lo cancella
 //! seguendo il contratto di `xiox_rules` (vedi `crates/xiox-rules/src/lib.rs`):
 //! file e cartelle solo con `delete_checked_with` e un solo `Guard` per
@@ -1679,7 +1679,7 @@ mod tests {
 
     /// Misura sul Winapp2 vero (sola lettura): quali voci nasconde la regola 9
     /// con tutti gli inglobati presenti e ogni `Detect` considerato vero.
-    /// `XIOX_WINAPP2=<percorso> cargo test -p xiox-desktop real_winapp2_rule_9 -- --ignored --nocapture`
+    /// `XIOX_WINAPP2=<percorso> cargo test -p xiox-core real_winapp2_rule_9 -- --ignored --nocapture`
     /// (anche il vecchio nome `PULISCI_WINAPP2` vale, se `XIOX_WINAPP2` non c'è).
     #[test]
     #[ignore]
@@ -2427,7 +2427,7 @@ mod tests {
     }
 
     /// Prova sul registro vero, da un terminale da amministratore:
-    /// `cargo test -p xiox-desktop real_registry_round_trip_as_admin -- --ignored --nocapture`.
+    /// `cargo test -p xiox-core real_registry_round_trip_as_admin -- --ignored --nocapture`.
     /// Usa solo chiavi create dal test (`Xiox_Verify_<pid>_<nanos>`) e le
     /// toglie all'uscita, anche dopo un panico. Prova: backup con `reg.exe` nella
     /// cartella solo per amministratori, cancellazione vera di chiavi e valori,

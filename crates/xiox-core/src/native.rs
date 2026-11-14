@@ -4,7 +4,7 @@
 //!
 //! Ogni voce ha un `analyze` che guarda e basta e un `clean` che agisce
 //! **solo** su `NativeFound::items`, cioè su ciò che l'analisi dello stesso
-//! job ha trovato. Nessuna UI qui: `main.rs` mostra le caselle (selezione
+//! job ha trovato. Nessuna UI qui: la finestra mostra le caselle (selezione
 //! `native:<id>`, vedi `rules::native_key`) e lancia [`run_natives`] nel
 //! thread del job.
 

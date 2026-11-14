@@ -117,5 +117,5 @@ test('services refresh only while shown, visible and without a dialog', () => {
   // Another section's dialog is not ours.
   acceptView(ui, { ...view('developers', 1), dialog });
   assert.equal(shouldPollServices(ui, true), true);
-  assert.equal(SERVICES_POLL_MS, 2000, 'the RAM meter is read every 2 s, as egui repainted');
+  assert.equal(SERVICES_POLL_MS, 2000, 'the RAM meter is read every 2 s, as the old window repainted');
 });

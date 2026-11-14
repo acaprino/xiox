@@ -156,7 +156,7 @@ const TEST_WORKERS: DevWorkers = DevWorkers { scan: scan_none, clean: clean_reco
 
 /// A state whose workers never reach the engine. Tests that change settings use `persist = false`.
 fn state() -> DevState {
-    DevState::with_settings(xiox_app::default_settings(), Section::Projects, false).with_workers(TEST_WORKERS)
+    DevState::with_settings(xiox_app::default_settings(), Section::Projects).with_workers(TEST_WORKERS)
 }
 
 /// `set_scan` empties a scan when `persist` is false and there is no single root, so the scan goes
@@ -368,7 +368,7 @@ fn settings_intents_clamp_dedupe_and_stay_in_memory_with_only_root() {
     let before = stamp();
 
     let tmp = tempfile::tempdir().unwrap();
-    let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects, false).with_workers(TEST_WORKERS);
+    let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects).with_workers(TEST_WORKERS);
     st.set_inactive_days(0).unwrap();
     assert_eq!(st.settings.inactive_days, 1);
     st.set_inactive_days(999).unwrap();
@@ -492,7 +492,7 @@ fn request_clean_opens_the_dialog_or_says_why_not() {
     st.request_clean().unwrap();
     assert!(st.confirm.is_some());
 
-    // An analysis older than 30 minutes opens nothing and says so (the egui strip, as a notice).
+    // An analysis older than 30 minutes opens nothing and says so (the old window's strip, as a notice).
     let mut old = three_sections();
     old.scanned_at_ms = xiox_app::now_ms() - 31 * 60 * 1000;
     let mut st = with_scan(old);
@@ -940,7 +940,7 @@ fn clean_script(job: DevCleanJob, out: Outbox<DevMsg>) {
 
 /// The state the script calls `name` (`go`).
 fn script_state(name: &str) -> DevState {
-    let mut st = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
+    let mut st = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
         .with_workers(DevWorkers { scan: scan_script, clean: clean_script });
     if name == "idle" {
         st.persist = false;

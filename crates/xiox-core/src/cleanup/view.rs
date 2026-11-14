@@ -11,7 +11,7 @@ use std::path::Path;
 const MODE: &str = "permanently";
 const MODE_BIN: &str = "empties the Recycle Bin";
 const NEEDS_ADMIN: &str = "Needs administrator: some folders are skipped";
-/// The hover text of the egui button, as it was.
+/// The hover text of the old window's button, as it was.
 const KEEP_LIST_HINT: &str = "Opens Documents\\Xiox\\cookie_da_conservare.txt in Notepad (creates it if missing). \
                               One domain per line: their cookies stay.";
 

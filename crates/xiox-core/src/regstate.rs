@@ -1,11 +1,11 @@
 //! The Registry section without a window: its state, the two jobs (scan, fix) behind a worker
 //! seam, the intents the page can send, and the `SectionView` the page draws.
 //!
-//! Moved out of `src/main.rs` (the egui window): `RegMsg`, the `reg_*` fields, `start_reg_scan`,
+//! Moved out of the old window's `main.rs`: `RegMsg`, the `reg_*` fields, `start_reg_scan`,
 //! `start_reg_fix` and the registry half of `poll`. The strings of the moved code are English at the
 //! source, like the sentences the view adds.
 //!
-//! The intents refuse what the egui window had disabled: registry choices and the scan while a job
+//! The intents refuse what the old window had disabled: registry choices and the scan while a job
 //! runs or while the backup question is open (the question describes the selection), a fix without
 //! the question, a question without a selected issue. A refused intent changes nothing.
 
@@ -46,15 +46,15 @@ pub const UNKNOWN_ISSUE: &str = "That issue is not in the list.";
 pub const UNKNOWN_CATEGORY: &str = "That category does not exist.";
 pub struct RegistryState {
     /// One tick per `registry::CATEGORIES` entry.
-    pub sel: Vec<bool>,
-    pub issues: Vec<registry::Issue>,
-    pub job: Option<Receiver<RegMsg>>,
-    pub text: String,
-    pub progress: f32,
-    pub scanned: bool,
+    sel: Vec<bool>,
+    issues: Vec<registry::Issue>,
+    job: Option<Receiver<RegMsg>>,
+    text: String,
+    progress: f32,
+    scanned: bool,
     /// The backup question is open.
-    pub confirm: bool,
-    pub msg: String,
+    pub(crate) confirm: bool,
+    msg: String,
     /// The running job is a fix (not a scan).
     fixing: bool,
     /// `msg` reports a failure (a refused backup, a dead worker), not a result.

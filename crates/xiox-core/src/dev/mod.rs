@@ -1,12 +1,11 @@
 //! Voce «Sviluppatori»: Progetti, Worktree degli agenti e Sessioni archiviate.
 //!
 //! Analisi e pulizia girano in un thread e parlano alla UI con [`DevMsg`] su `mpsc`, come
-//! `start_clean`/`poll` in `main.rs`: la UI non si blocca mai. L'ultima analisi ([`DevScan`])
+//! `start_clean`/`poll` della vecchia finestra: la UI non si blocca mai. L'ultima analisi ([`DevScan`])
 //! è anche l'elenco di ciò che si può cancellare: `xiox_app` rifiuta tutto il resto.
 //! I dati dell'analisi si liberano con [`DevState::release`] (uscendo dalla voce) o rianalizzando.
 //!
-//! Qui sta lo stato senza disegno; il disegno egui resta in `src/dev.rs` finché non lo sostituisce
-//! la nuova interfaccia.
+//! Qui sta lo stato senza disegno; la finestra Tauri lo disegna da `apps/desktop`.
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::sys;
@@ -51,16 +50,6 @@ impl From<DevCategory> for Section {
 }
 
 impl Section {
-    /// Valore di `--dev-section`.
-    pub fn parse(s: &str) -> Option<Section> {
-        match s {
-            "projects" => Some(Section::Projects),
-            "worktree" | "worktrees" => Some(Section::Worktrees),
-            "sessions" => Some(Section::Sessions),
-            _ => None,
-        }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             Section::Projects => "Projects",
@@ -140,42 +129,33 @@ pub struct Confirm {
 }
 
 pub struct DevState {
-    pub settings: Settings,
-    pub settings_err: Option<String>,
-    pub section: Section,
-    pub view: View,
-    pub scan: Option<Arc<DevScan>>,
+    settings: Settings,
+    settings_err: Option<String>,
+    section: Section,
+    pub(crate) view: View,
+    pub(crate) scan: Option<Arc<DevScan>>,
     /// Le cartelle scelte nei progetti (`Artifact::id`).
-    pub sel_artifacts: HashSet<String>,
-    pub sel_worktrees: Vec<bool>,
-    pub sel_sessions: Vec<bool>,
-    pub cleaned: Option<DevCleaned>,
-    pub error: Option<String>,
-    pub job: Option<Receiver<DevMsg>>,
-    pub text: String,
-    pub progress: f32,
-    pub confirm: Option<Confirm>,
+    sel_artifacts: HashSet<String>,
+    sel_worktrees: Vec<bool>,
+    sel_sessions: Vec<bool>,
+    pub(crate) cleaned: Option<DevCleaned>,
+    error: Option<String>,
+    job: Option<Receiver<DevMsg>>,
+    text: String,
+    progress: f32,
+    pub(crate) confirm: Option<Confirm>,
     /// Perché «Avvia pulizia» non ha aperto la conferma (striscia gialla sopra la card).
-    pub notice: Option<String>,
-    pub root_sel: Option<usize>,
-    pub auto_scan: bool,
+    notice: Option<String>,
+    root_sel: Option<usize>,
     /// Falso con `--only-root`: le impostazioni restano in memoria.
-    pub persist: bool,
-    /// `--screenshot`: progetti aperti, nessun dialogo di sistema.
-    pub screenshot: bool,
+    pub(crate) persist: bool,
     /// Avanzamento e «Annulla» della pulizia in corso.
-    pub tick: Option<Tick>,
-    pub cancel: Option<Cancel>,
+    tick: Option<Tick>,
+    cancel: Option<Cancel>,
     /// Esito di «Salva come testo…»: (testo, riuscito).
-    pub saved: Option<(String, bool)>,
+    saved: Option<(String, bool)>,
     /// Chi fa il lavoro vero: i due thread di analisi e di pulizia. I test ne mettono di finti.
-    pub workers: DevWorkers,
-    /// Solo build di debug: `--dev-demo`, per gli screenshot della conferma e del resoconto.
-    #[cfg(debug_assertions)]
-    pub demo: Option<Demo>,
-    /// Fotogrammi dall'ultimo passo della dimostrazione (lo screenshot aspetta che il dialogo compaia).
-    #[cfg(debug_assertions)]
-    pub demo_frames: u32,
+    workers: DevWorkers,
 }
 
 /// Tutto ciò che serve a un thread di pulizia: la conferma già accettata, spogliata di ciò che
@@ -207,29 +187,6 @@ impl DevWorkers {
     pub const REAL: DevWorkers = DevWorkers { scan: real_scan, clean: real_clean };
 }
 
-/// `--dev-demo` (solo build di debug, solo con `--only-root` su un albero finto): dopo l'analisi
-/// sceglie tutte le cartelle e apre la conferma (`Confirm`), oppure pulisce in modo definitivo
-/// (`Clean`), oppure pulisce e annulla subito (`Cancel`).
-#[cfg(debug_assertions)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Demo {
-    Confirm,
-    Clean,
-    Cancel,
-}
-
-#[cfg(debug_assertions)]
-impl Demo {
-    pub fn parse(s: &str) -> Option<Demo> {
-        match s {
-            "confirm" => Some(Demo::Confirm),
-            "clean" => Some(Demo::Clean),
-            "cancel" => Some(Demo::Cancel),
-            _ => None,
-        }
-    }
-}
-
 /// Progetti e worktree non si puliscono da un'analisi più vecchia di `xiox_app::MAX_SCAN_AGE_MS`.
 pub const STALE_SCAN: &str = xiox_app::STALE_ANALYSIS;
 /// Il thread della pulizia è morto senza esito: qualcosa può essere già sparito.
@@ -253,12 +210,11 @@ pub const PERMANENT_NOT_OFFERED: &str = "Permanent deletion is not offered here:
 pub const PERMANENT_ONLY: &str = "The Recycle Bin is too small: only permanent deletion is offered.";
 
 impl DevState {
-    /// `analyze`: avvia l'analisi la prima volta che la voce viene mostrata (`--analyze`).
-    pub fn new(section: Section, analyze: bool) -> Self {
-        Self::with_settings(xiox_app::load_settings(), section, analyze)
+    pub fn new(section: Section) -> Self {
+        Self::with_settings(xiox_app::load_settings(), section)
     }
 
-    pub fn with_settings(settings: Settings, section: Section, analyze: bool) -> Self {
+    pub fn with_settings(settings: Settings, section: Section) -> Self {
         DevState {
             settings,
             settings_err: None,
@@ -276,50 +232,20 @@ impl DevState {
             confirm: None,
             notice: None,
             root_sel: None,
-            auto_scan: analyze,
             persist: true,
-            screenshot: false,
             tick: None,
             cancel: None,
             saved: None,
             workers: DevWorkers::REAL,
-            #[cfg(debug_assertions)]
-            demo: None,
-            #[cfg(debug_assertions)]
-            demo_frames: 0,
         }
     }
 
     /// `--only-root <dir>`: si cerca solo in `dir`, niente sessioni né altri dischi, e le
     /// impostazioni non si salvano.
-    pub fn only_root(dir: PathBuf, section: Section, analyze: bool) -> Self {
-        let mut st = Self::with_settings(only_root_settings(xiox_app::default_settings(), dir), section, analyze);
+    pub fn only_root(dir: PathBuf, section: Section) -> Self {
+        let mut st = Self::with_settings(only_root_settings(xiox_app::default_settings(), dir), section);
         st.persist = false;
         st
-    }
-
-    /// `--screenshot`: i progetti si mostrano aperti e «Salva come testo…» non apre dialoghi.
-    pub fn set_screenshot(&mut self) {
-        self.screenshot = true;
-    }
-
-    /// Solo build di debug e solo con `--only-root` su un albero finto (mai sui progetti veri):
-    /// la dimostrazione cancella in modo definitivo. `Err`: il motivo del rifiuto.
-    #[cfg(debug_assertions)]
-    pub fn set_demo(&mut self, demo: Demo) -> Result<(), String> {
-        demo_allowed(self.persist, &self.settings.roots)?;
-        self.demo = Some(demo);
-        Ok(())
-    }
-
-    /// Lo screenshot aspetta: la dimostrazione non ha ancora finito o il dialogo sta comparendo.
-    pub fn demo_pending(&self) -> bool {
-        #[cfg(debug_assertions)]
-        {
-            self.demo.is_some() || (self.demo_frames > 0 && self.demo_frames < 30)
-        }
-        #[cfg(not(debug_assertions))]
-        false
     }
 
     pub fn busy(&self) -> bool {
@@ -598,45 +524,9 @@ impl DevState {
             self.settings_err = xiox_app::save_settings(&self.settings).err();
         }
     }
-
-    /// Un passo di `--dev-demo` (solo build di debug, solo `--only-root` su un albero finto).
-    #[cfg(debug_assertions)]
-    pub fn run_demo(&mut self, notifier: SharedNotifier) {
-        if self.demo_frames > 0 {
-            self.demo_frames += 1;
-        }
-        let Some(demo) = self.demo else { return };
-        if self.busy() || self.view != View::Scanned {
-            return;
-        }
-        let Some(scan) = self.scan.clone() else { return };
-        self.demo = None;
-        // Le radici possono essere cambiate dal pannello dopo l'avvio: si ricontrolla.
-        if let Err(e) = demo_allowed(self.persist, &self.settings.roots) {
-            self.notice = Some(e);
-            return;
-        }
-        self.demo_frames = 1;
-        self.section = Section::Projects;
-        select_all_artifacts(&scan.projects, &mut self.sel_artifacts, true);
-        if demo != Demo::Confirm {
-            self.settings.remove_mode = RemoveMode::Permanent;
-        }
-        self.open_confirm();
-        if demo == Demo::Confirm {
-            return;
-        }
-        if let Some(mut c) = self.confirm.take() {
-            c.ack = true;
-            self.start_clean(notifier, c);
-            if demo == Demo::Cancel {
-                self.cancel_clean();
-            }
-        }
-    }
 }
 
-/// The intents of the page. Every one of them refuses what the egui screen would have shown as
+/// The intents of the page. Every one of them refuses what the old window would have shown as
 /// disabled, with a reason in English (`Err`): the caller (the Tauri command) turns it into a
 /// `CmdError { kind: "refused" }`. A refused intent changes nothing.
 impl DevState {
@@ -1437,35 +1327,6 @@ pub fn keep_only_under(scan: &mut DevScan, root: &Path) {
     scan.projects.retain(inside);
     scan.worktrees.retain(inside);
     scan.other_worktrees.retain(inside);
-}
-
-/// File che segna la radice di un albero finto per `--dev-demo`.
-#[cfg(debug_assertions)]
-pub const DEMO_MARKER: &str = ".xiox-demo";
-
-/// `--dev-demo` cancella in modo definitivo: vale solo con `--only-root` (`!persist`) e una sola
-/// radice dentro la cartella temporanea di sistema o con [`DEMO_MARKER`] alla radice.
-#[cfg(debug_assertions)]
-pub fn demo_allowed(persist: bool, roots: &[PathBuf]) -> Result<(), String> {
-    let refuse = |why: &str| Err(format!("Demo refused: {why}"));
-    let [root] = roots else {
-        return refuse("--only-root with a single folder is required.");
-    };
-    if persist {
-        return refuse("--only-root is required.");
-    }
-    let Ok(root) = std::fs::canonicalize(root) else {
-        return refuse("the --only-root folder does not exist.");
-    };
-    let in_temp = std::fs::canonicalize(std::env::temp_dir()).is_ok_and(|t| root.starts_with(&t) && root != t);
-    if in_temp || root.join(DEMO_MARKER).is_file() {
-        Ok(())
-    } else {
-        refuse(&format!(
-            "{} is not a fake tree (neither in the temporary folder nor with the {DEMO_MARKER} file).",
-            root.display()
-        ))
-    }
 }
 
 pub fn analysis_failed(scan: &DevScan) -> bool {

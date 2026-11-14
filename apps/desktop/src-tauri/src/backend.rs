@@ -26,6 +26,8 @@ pub trait Backend: Send + Sync + 'static {
     fn report_text(&self, s: SectionId) -> Option<String>;
     /// What the save dialog and the write came to, put on the report.
     fn set_saved(&self, s: SectionId, text: String, ok: bool) -> SectionView;
+    /// Only the debug-build fake window asks (`XIOX_UI_FAKE`); a release build never reads it.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     fn is_fake(&self) -> bool;
 }
 

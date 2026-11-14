@@ -48,7 +48,7 @@ export function currentFocus(ui: UiState, view: SectionView): string | null {
   return moveFocus(shown, null, 1);
 }
 
-/** How often the RAM meter of Services & RAM is read again while the section is shown (egui repainted every 2 s). */
+/** How often the RAM meter of Services & RAM is read again while the section is shown (the old window repainted every 2 s). */
 export const SERVICES_POLL_MS = 2000;
 
 /**

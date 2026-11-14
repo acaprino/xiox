@@ -92,7 +92,7 @@ mod tests {
 
     fn backend() -> RealBackend {
         // `--only-root`: settings in memory, nothing written, and nothing searched outside this folder.
-        let dev = DevState::only_root(PathBuf::from(r"C:\xiox-test-nowhere"), Section::Projects, false);
+        let dev = DevState::only_root(PathBuf::from(r"C:\xiox-test-nowhere"), Section::Projects);
         let core = Core::with_states(
             CoreOptions { version: "t".into(), admin: false, only_root: None, load_rules: false, update_rules: false },
             Arc::new(NoNotifier),

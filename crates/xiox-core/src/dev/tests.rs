@@ -474,16 +474,8 @@ fn a_failed_analysis_is_not_an_empty_one() {
     assert_eq!(empty_text(Section::Sessions, true), "No archived session.");
 }
 
-#[test]
-fn sections_from_the_command_line() {
-    assert_eq!(Section::parse("projects"), Some(Section::Projects));
-    assert_eq!(Section::parse("worktree"), Some(Section::Worktrees));
-    assert_eq!(Section::parse("sessions"), Some(Section::Sessions));
-    assert_eq!(Section::parse("boh"), None);
-}
-
 fn state() -> DevState {
-    DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
+    DevState::with_settings(xiox_app::default_settings(), Section::Projects)
 }
 
 #[test]
@@ -864,7 +856,7 @@ fn keep_only_under_drops_everything_outside_the_root() {
 
 #[test]
 fn only_root_never_keeps_real_sessions_or_worktrees() {
-    let mut fake = DevState::only_root(PathBuf::from(r"D:\t\albero"), Section::Sessions, false);
+    let mut fake = DevState::only_root(PathBuf::from(r"D:\t\albero"), Section::Sessions);
     fake.set_scan(mixed_scan());
     let scan = fake.scan.clone().unwrap();
     assert!(scan.archived.is_empty() && fake.sel_sessions.is_empty());
@@ -889,42 +881,9 @@ fn only_root_keeps_everything_in_memory() {
     let s = only_root_settings(xiox_app::default_settings(), dir.clone());
     assert!(!s.session_projects && s.scan_roots && !s.all_drives);
     assert_eq!(s.roots, vec![dir.clone()]);
-    let mut st = DevState::only_root(dir, Section::Projects, false);
+    let mut st = DevState::only_root(dir, Section::Projects);
     assert!(!st.persist);
     st.settings.inactive_days = 3;
     st.save();
     assert!(st.settings_err.is_none());
-}
-
-/// `--dev-demo` cancella per davvero: solo con `--only-root` su un albero finto.
-#[cfg(debug_assertions)]
-#[test]
-fn demo_runs_only_on_a_fake_tree() {
-    // Fuori dalla cartella temporanea: serve il file segnale.
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
-    let real = tempfile::Builder::new().prefix("demo-vero-").tempdir_in(&base).unwrap();
-    let mut st = DevState::only_root(real.path().to_path_buf(), Section::Projects, false);
-    let e = st.set_demo(Demo::Clean).unwrap_err();
-    assert!(e.contains(DEMO_MARKER), "{e}");
-    assert!(st.demo.is_none());
-    std::fs::write(real.path().join(DEMO_MARKER), "").unwrap();
-    st.set_demo(Demo::Clean).unwrap();
-    assert_eq!(st.demo, Some(Demo::Clean));
-
-    // Dentro la cartella temporanea basta --only-root, ma non la cartella temporanea stessa.
-    let tmp = tempfile::tempdir().unwrap();
-    let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects, false);
-    st.set_demo(Demo::Confirm).unwrap();
-    let mut st = DevState::only_root(std::env::temp_dir(), Section::Projects, false);
-    assert!(st.set_demo(Demo::Confirm).is_err());
-    let mut st = DevState::only_root(real.path().join("manca"), Section::Projects, false);
-    assert!(st.set_demo(Demo::Confirm).is_err(), "cartella inesistente");
-
-    // Senza --only-root (le radici vere dell'utente) mai, nemmeno con il segnale.
-    let mut normal = state();
-    normal.settings.roots = vec![real.path().to_path_buf()];
-    assert!(normal.set_demo(Demo::Clean).is_err());
-    assert!(normal.demo.is_none());
-    // Le radici cambiate dopo l'avvio: il passo della dimostrazione si ferma.
-    assert!(demo_allowed(false, &[real.path().to_path_buf(), tmp.path().to_path_buf()]).is_err());
 }

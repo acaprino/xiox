@@ -128,7 +128,7 @@ mod tests {
         services: ServicesState,
     ) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
         let (notifier, rx) = pump_channel();
-        let mut dev = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
+        let mut dev = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
             .with_workers(DevWorkers { scan, clean: clean_never });
         dev.persist = false;
         let core = Core::with_states(
@@ -227,7 +227,7 @@ mod tests {
             RegistryState::new(),
             ServicesState::new(),
             {
-                let mut d = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
+                let mut d = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
                     .with_workers(DevWorkers { scan: scan_never, clean: clean_never });
                 d.persist = false;
                 d

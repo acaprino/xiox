@@ -8,6 +8,7 @@
 use crate::backend::{Backend, BackendState};
 use crate::error::{CmdError, CmdResult};
 use crate::files;
+#[cfg(any(debug_assertions, test))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

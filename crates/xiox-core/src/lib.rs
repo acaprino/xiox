@@ -1,5 +1,5 @@
 //! Motore di Xiox senza interfaccia: i moduli che pulizia, registro, servizi e
-//! sviluppatori condividono, indipendenti da egui.
+//! sviluppatori condividono, indipendenti dall'interfaccia.
 
 pub mod account;
 pub mod app;

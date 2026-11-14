@@ -1,4 +1,4 @@
-//! How a worker thread wakes whoever shows its section: a [`Notifier`] instead of `egui::Context`.
+//! How a worker thread wakes whoever shows its section: a [`Notifier`] instead of a graphics context.
 //!
 //! A worker talks to its section's state over an `mpsc` channel and then calls
 //! [`Notifier::notify`]; the state's `poll` drains the channel. [`Outbox`] bundles the two so a

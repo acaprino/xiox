@@ -2,11 +2,11 @@
 //! start types) behind a worker seam, the intents the page can send, and the `SectionView` the page
 //! draws.
 //!
-//! Moved out of `src/main.rs` (the egui window): `SvcMsg`, `send_svc`, the `svc_*` fields,
+//! Moved out of the old window's `main.rs`: `SvcMsg`, `send_svc`, the `svc_*` fields,
 //! `load_services`, `apply_services` and the services half of `poll`. The strings of the moved code
 //! are English at the source, like the sentences the view adds.
 //!
-//! The intents refuse what the egui window had disabled: a protected row cannot be ticked, an action
+//! The intents refuse what the old window had disabled: a protected row cannot be ticked, an action
 //! needs a ticked service (or a saved backup, for «Restore originals»), a confirmation needs its
 //! question open, nothing changes while a job runs or the question is open. A refused intent
 //! changes nothing. Services Xiox never touches (`protected`) are filtered out of every change,
@@ -52,15 +52,15 @@ pub const NOTHING_SAVED: &str = "No original startup types are saved: there is n
 pub const UNKNOWN_ACTION: &str = "That action is not offered.";
 
 pub struct ServicesState {
-    pub services: Vec<services::Service>,
-    pub job: Option<Receiver<SvcMsg>>,
-    pub loaded: bool,
+    services: Vec<services::Service>,
+    job: Option<Receiver<SvcMsg>>,
+    pub(crate) loaded: bool,
     /// `true`: every service; `false`: only the ones Xiox suggests turning off.
-    pub all: bool,
-    pub filter: String,
-    pub msg: String,
+    all: bool,
+    filter: String,
+    pub(crate) msg: String,
     /// The question that is open: the start type it would apply (`0`: restore the originals).
-    pub confirm: Option<u32>,
+    pub(crate) confirm: Option<u32>,
     /// `msg` reports a failure (a dead worker), not a result.
     msg_error: bool,
     workers: ServicesWorkers,
@@ -162,7 +162,7 @@ impl ServicesState {
 
     // ---------- intents (page -> Rust) ----------
 
-    /// The egui filter: the Recommended list or all of them, and the search text (lower case) in the
+    /// The old window's filter: the Recommended list or all of them, and the search text (lower case) in the
     /// display name or in the service name.
     pub fn visible(&self) -> Vec<usize> {
         let filter = self.filter.to_lowercase();
@@ -682,8 +682,8 @@ mod tests {
         }
     }
 
-    /// A start type the page could not have produced (`confirm` is a public field of the egui
-    /// adapter) is refused: it is never read as Disable, and no question is drawn for it.
+    /// A start type the page could not have produced (`confirm` was a public field of the old
+    /// window) is refused: it is never read as Disable, and no question is drawn for it.
     #[test]
     fn an_unknown_start_type_in_the_question_is_refused() {
         let mut st = state().with_workers(ServicesWorkers { apply: start_recording_apply, ..NEVER });

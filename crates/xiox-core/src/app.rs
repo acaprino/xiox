@@ -52,8 +52,8 @@ impl Core {
     /// The application as it starts. With `load_rules` the rules thread starts here.
     pub fn new(o: CoreOptions, notifier: SharedNotifier) -> Core {
         let dev = match &o.only_root {
-            Some(dir) => DevState::only_root(dir.clone(), dev::Section::Projects, false),
-            None => DevState::new(dev::Section::Projects, false),
+            Some(dir) => DevState::only_root(dir.clone(), dev::Section::Projects),
+            None => DevState::new(dev::Section::Projects),
         };
         let (load, update) = (o.load_rules, o.update_rules);
         let mut core = Core::with_states(o, notifier.clone(), CleanupState::new(), RegistryState::new(), ServicesState::new(), dev);
@@ -345,7 +345,7 @@ mod tests {
     }
 
     fn dev_state() -> DevState {
-        let mut dev = DevState::with_settings(xiox_app::default_settings(), dev::Section::Projects, false)
+        let mut dev = DevState::with_settings(xiox_app::default_settings(), dev::Section::Projects)
             .with_workers(DevWorkers { scan: scan_never, clean: dev_clean_never });
         dev.persist = false; // a test never writes the real settings file
         dev
