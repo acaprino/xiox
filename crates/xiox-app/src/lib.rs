@@ -22,7 +22,8 @@ use xiox_sessions::{HarnessCli, SessionOutcome, Trash};
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::cell::Cell;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use xiox_model::legacy::app_dir_in;
 const AGENTS: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi];
@@ -331,6 +332,29 @@ impl ProjectScanner for SplitScanner<'_> {
     }
 }
 
+/// The bar between «Analyzing projects…» (45%) and «Archived sessions…» (90%): the share of the
+/// projects probed so far. Never leaves that range, so the bar only moves forward.
+pub fn analysis_fraction(done: usize, total: usize) -> f32 {
+    const FROM: f32 = 0.45;
+    const TO: f32 = 0.9;
+    if total == 0 {
+        return FROM;
+    }
+    FROM + (TO - FROM) * (done.min(total) as f32 / total as f32)
+}
+
+/// The label of the bar while the projects are probed: how many are done, once there is a count.
+pub fn analysis_text(done: usize, total: usize) -> String {
+    if total == 0 {
+        "Analyzing projects…".to_string()
+    } else {
+        format!("Analyzing projects… {done} of {total}")
+    }
+}
+
+/// The least time between two progress reports of the project probe.
+const PROGRESS_EVERY: Duration = Duration::from_millis(150);
+
 const FAST_READ_FAILED: &str = "Fast disk read failed: using the normal scan.";
 pub const ANALYSIS_FAILED: &str = "Internal error while analyzing the projects.";
 
@@ -437,8 +461,25 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     };
     let sources: Vec<&dyn SessionSource> = sessions.iter().map(|s| s as &dyn SessionSource).collect();
     let scanner = SplitScanner { inner: &xiox_scanner::DefaultScanner };
+    // The slow part: a few `git` processes per project. It says how far it is, so the bar moves
+    // from 45% to 90% instead of sitting still for minutes.
+    let reported = Cell::new(None::<Instant>);
     let analysis = guarded_analysis(|| {
-        xiox_engine::analyze(&cfg, &scanner, index.as_ref().map(|i| i as &dyn DirIndex), &sources, &xiox_git::GitCli)
+        xiox_engine::analyze_with_progress(
+            &cfg,
+            &scanner,
+            index.as_ref().map(|i| i as &dyn DirIndex),
+            &sources,
+            &xiox_git::GitCli,
+            &|done, total| {
+                // Thousands of projects must not flood the window with updates: a few per second.
+                let due = done == 0 || reported.get().is_none_or(|t| t.elapsed() >= PROGRESS_EVERY);
+                if due {
+                    reported.set(Some(Instant::now()));
+                    step(&analysis_text(done, total), analysis_fraction(done, total));
+                }
+            },
+        )
     });
     drop(index);
     warnings.extend(analysis.warnings);

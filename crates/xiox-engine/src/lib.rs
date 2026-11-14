@@ -17,7 +17,8 @@ use xiox_model::*;
 use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError, mpsc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DAY_MS: i64 = 86_400_000;
@@ -169,6 +170,20 @@ pub fn analyze(
     sources: &[&dyn SessionSource],
     git: &dyn GitProbe,
 ) -> AnalysisResult {
+    analyze_with_progress(cfg, scanner, index, sources, git, &|_, _| {})
+}
+
+/// [`analyze`] that says how far the per-project probe is: `progress(done, total)` once before the
+/// first project and once after each one, always from the calling thread. The probe is the slow
+/// part (a few `git` processes per project): it runs on several threads at once.
+pub fn analyze_with_progress(
+    cfg: &EngineConfig,
+    scanner: &dyn ProjectScanner,
+    index: Option<&dyn DirIndex>,
+    sources: &[&dyn SessionSource],
+    git: &dyn GitProbe,
+    progress: &dyn Fn(usize, usize),
+) -> AnalysisResult {
     let mut warnings: Vec<String> = Vec::new();
 
     let scanned = scanner.scan(&cfg.roots, &cfg.scan, index);
@@ -265,17 +280,66 @@ pub fn analyze(
         })
         .collect();
 
-    let mut reports: Vec<ProjectReport> = unique
-        .into_iter()
-        .zip(matching)
-        .map(|((id, cand), m)| analyze_one(cfg, git, m, &worktree_keys, cand, id))
-        .collect();
+    let jobs: Vec<Job> = unique.into_iter().zip(matching).map(|((id, cand), m)| (id, cand, m)).collect();
+    let mut reports = analyze_all(cfg, git, &worktree_keys, jobs, progress);
 
     reports.sort_by(|a, b| {
         b.reclaimable_bytes.cmp(&a.reclaimable_bytes).then_with(|| a.id.cmp(&b.id))
     });
 
     AnalysisResult { reports, warnings }
+}
+
+/// One project to analyze: its id, its candidate and the sessions that belong to it.
+type Job<'a> = (String, ProjectCandidate, Vec<&'a SessionRecord>);
+
+/// How many projects are probed at once. Each probe waits on `git` processes (creating one costs
+/// tens of milliseconds on Windows, more with an antivirus), so a few at a time cut the wall time
+/// by that factor; more than this only floods the machine with processes.
+const MAX_PROBES: usize = 8;
+
+/// Every job through [`analyze_one`], several at once. The reports come back in completion order
+/// (the caller sorts them); `progress` is called here, on the calling thread, as each one lands.
+/// A panic in a probe is rethrown when the workers are joined, as in the one-at-a-time version.
+fn analyze_all(
+    cfg: &EngineConfig,
+    git: &dyn GitProbe,
+    worktree_keys: &[String],
+    jobs: Vec<Job>,
+    progress: &dyn Fn(usize, usize),
+) -> Vec<ProjectReport> {
+    let total = jobs.len();
+    progress(0, total);
+    if total == 0 {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(2, MAX_PROBES).min(total);
+    let queue: Vec<Mutex<Option<Job>>> = jobs.into_iter().map(|j| Mutex::new(Some(j))).collect();
+    let next = AtomicUsize::new(0);
+    let mut reports = Vec::with_capacity(total);
+    std::thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<ProjectReport>();
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let (queue, next) = (&queue, &next);
+            scope.spawn(move || {
+                loop {
+                    let Some(slot) = queue.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                    let job = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+                    let Some((id, cand, m)) = job else { continue };
+                    if tx.send(analyze_one(cfg, git, m, worktree_keys, cand, id)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for report in rx {
+            reports.push(report);
+            progress(reports.len(), total);
+        }
+    });
+    reports
 }
 
 fn analyze_one(

@@ -1032,3 +1032,82 @@ fn session_in_a_big_non_repo_folder_does_not_credit_projects_but_a_small_workspa
         }
     }
 }
+
+// ───────────────── the probe of every project runs side by side, and says how far it is ─────────────────
+
+/// A git whose `state` takes a while and records how many calls were in flight at once: what
+/// the real `git` does (a process per question, ~0.6 s per project on a real PC).
+#[derive(Default)]
+struct SlowGit {
+    inflight: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
+}
+
+impl GitProbe for SlowGit {
+    fn state(&self, _: &Path) -> GitState {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = self.inflight.fetch_add(1, SeqCst) + 1;
+        self.peak.fetch_max(now, SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        self.inflight.fetch_sub(1, SeqCst);
+        GitState::default()
+    }
+    fn is_tracked(&self, _: &Path, _: &Path) -> bool {
+        false
+    }
+    fn is_ignored(&self, _: &Path, _: &Path) -> Option<bool> {
+        None
+    }
+}
+
+fn many(n: usize) -> Vec<ProjectCandidate> {
+    (0..n).map(|i| cand(&format!(r"C:\dev\p{i}"), 10 + i as u64, Some(ago(30)))).collect()
+}
+
+/// The Developers analysis sat at 45% for minutes: the projects were probed one after the other,
+/// each with a handful of `git` processes. Two or more must be in flight at once.
+#[test]
+fn projects_are_probed_side_by_side() {
+    let git = SlowGit::default();
+    let scanner = FakeScanner { items: many(12), warnings: vec![] };
+    let r = analyze(&cfg(), &scanner, None, &[], &git);
+    assert_eq!(r.reports.len(), 12);
+    let peak = git.peak.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(peak >= 2, "the projects were probed one at a time (peak {peak})");
+}
+
+/// The result does not depend on how the probes interleave: same reports, same order as a single run.
+#[test]
+fn parallel_probes_keep_the_order_largest_first() {
+    let git = SlowGit::default();
+    let scanner = FakeScanner { items: many(12), warnings: vec![] };
+    let r = analyze(&cfg(), &scanner, None, &[], &git);
+    let sizes: Vec<u64> = r.reports.iter().map(|p| p.reclaimable_bytes).collect();
+    let mut sorted = sizes.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    assert_eq!(sizes, sorted);
+    let ids: HashSet<&String> = r.reports.iter().map(|p| &p.id).collect();
+    assert_eq!(ids.len(), 12, "every project once");
+}
+
+/// The page needs a number to move: `(done, total)` before the first project, then once per
+/// project, ending at `(total, total)`, always from the calling thread and in increasing order.
+#[test]
+fn progress_counts_every_project_up_to_the_total() {
+    let git = SlowGit::default();
+    let scanner = FakeScanner { items: many(7), warnings: vec![] };
+    let seen = std::cell::RefCell::new(Vec::new());
+    let r = analyze_with_progress(&cfg(), &scanner, None, &[], &git, &|done, total| seen.borrow_mut().push((done, total)));
+    assert_eq!(r.reports.len(), 7);
+    let expected: Vec<(usize, usize)> = (0..=7).map(|d| (d, 7)).collect();
+    assert_eq!(*seen.borrow(), expected);
+}
+
+#[test]
+fn progress_of_an_empty_scan_is_one_report_of_nothing() {
+    let seen = std::cell::RefCell::new(Vec::new());
+    let scanner = FakeScanner { items: vec![], warnings: vec![] };
+    let r = analyze_with_progress(&cfg(), &scanner, None, &[], &FakeGit::default(), &|d, t| seen.borrow_mut().push((d, t)));
+    assert!(r.reports.is_empty());
+    assert_eq!(*seen.borrow(), vec![(0, 0)]);
+}

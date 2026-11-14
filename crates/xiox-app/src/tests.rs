@@ -1012,3 +1012,26 @@ fn recycle_shortfall_empty_for_a_permanent_plan() {
     let plan = plan_of(vec![sized(r"C:\p\target", 10 * GB)]);
     assert!(recycle_shortfall_with(&plan, |_| panic!("not asked for a permanent plan")).is_empty());
 }
+
+// ── the bar of the project probe: 45% → 90%, moving as the projects are probed ──
+
+#[test]
+fn the_probe_bar_runs_from_45_to_90_percent_and_only_forward() {
+    assert_eq!(analysis_fraction(0, 139), 0.45);
+    assert!((analysis_fraction(139, 139) - 0.9).abs() < 1e-6);
+    let mut last = 0.0;
+    for done in 0..=139 {
+        let f = analysis_fraction(done, 139);
+        assert!(f >= last && (0.45..=0.9 + 1e-6).contains(&f), "{done}: {f}");
+        last = f;
+    }
+    // A count past the total, or none at all, stays inside the range.
+    assert!((analysis_fraction(500, 139) - 0.9).abs() < 1e-6);
+    assert_eq!(analysis_fraction(0, 0), 0.45);
+}
+
+#[test]
+fn the_probe_label_counts_the_projects_once_there_is_a_total() {
+    assert_eq!(analysis_text(0, 0), "Analyzing projects…");
+    assert_eq!(analysis_text(37, 139), "Analyzing projects… 37 of 139");
+}
