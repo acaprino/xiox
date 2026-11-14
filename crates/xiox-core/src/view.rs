@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::notify::SectionId;
 
+/// What a section tells when its worker ends without an answer (it died): the job is over and
+/// the page is told, never left with a spinner. (Italian until Task 18, like the worker strings.)
+pub const JOB_DIED: &str = "Il lavoro si è interrotto per un errore interno.";
+
 /// `T | null` in the contract: the key has to be there. (serde takes a missing `Option` for
 /// `null` unless a field says how to read it.)
 fn required<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
@@ -447,6 +451,17 @@ pub(crate) mod testing {
 
     pub fn notifier() -> SharedNotifier {
         Arc::new(NoNotifier)
+    }
+
+    /// Polls `done` until it holds (the workers of the tests answer from their own thread).
+    pub fn wait(mut done: impl FnMut() -> bool) {
+        for _ in 0..500 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the worker did not answer in 5 s");
     }
 
     /// The refusal of an intent that has to be refused.

@@ -44,9 +44,6 @@ pub const NO_CATEGORY: &str = "Tick at least one category to look through.";
 pub const NO_ISSUES: &str = "There are no issues to choose from: find issues first.";
 pub const UNKNOWN_ISSUE: &str = "That issue is not in the list.";
 pub const UNKNOWN_CATEGORY: &str = "That category does not exist.";
-/// The worker ended without telling how it went.
-pub const JOB_DIED: &str = "Il lavoro si è interrotto per un errore interno.";
-
 pub struct RegistryState {
     /// One tick per `registry::CATEGORIES` entry.
     pub sel: Vec<bool>,
@@ -114,6 +111,8 @@ impl RegistryState {
         self.job = Some(rx);
         self.fixing = false;
         self.msg_error = false;
+        self.text.clear();
+        self.progress = 0.0;
         self.issues.clear();
         self.msg.clear();
         self.scanned = true;
@@ -127,6 +126,8 @@ impl RegistryState {
         self.job = Some(rx);
         self.fixing = true;
         self.msg_error = false;
+        self.text.clear();
+        self.progress = 0.0;
         let work = self.workers.fix;
         std::thread::spawn(move || work(chosen, with_backup, Outbox::new(tx, n, SectionId::Registry)));
     }
@@ -483,7 +484,7 @@ pub fn real_fix(chosen: Vec<registry::Issue>, with_backup: bool, out: Outbox<Reg
 mod tests {
     use super::*;
     use crate::registry::{Fix, Issue, Root};
-    use crate::view::testing::{action, button, err, notifier, row};
+    use crate::view::testing::{action, button, err, notifier, row, wait};
     use std::sync::atomic::{AtomicU8, Ordering::SeqCst};
     use std::sync::Mutex;
 
@@ -512,16 +513,6 @@ mod tests {
         st.issues = vec![issue(0, true), issue(1, true), issue(2, false)];
         st.scanned = true;
         st
-    }
-
-    fn wait(mut done: impl FnMut() -> bool) {
-        for _ in 0..500 {
-            if done() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        panic!("the worker did not answer in 5 s");
     }
 
     fn drain(st: &mut RegistryState) {
@@ -774,6 +765,43 @@ mod tests {
         assert!(st.view().job.is_none());
     }
 
+    static HOLD3: AtomicU8 = AtomicU8::new(0);
+    fn gated_fix(_: Vec<registry::Issue>, _: bool, out: Outbox<RegMsg>) {
+        while HOLD3.load(SeqCst) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        out.send(RegMsg::Fixed { ok: 0, failed: 0, backup: None, refused: None });
+    }
+
+    /// A job starts from zero: the label and the bar of the scan before it are not shown again.
+    #[test]
+    fn a_new_job_does_not_inherit_the_last_progress() {
+        let mut st = scanned().with_workers(RegistryWorkers { scan: never_scan, fix: gated_fix });
+        st.text = "Controllo: old".into();
+        st.progress = 0.9;
+        st.open_fix().unwrap();
+        st.fix(false, notifier()).unwrap();
+        let j = st.view().job.unwrap();
+        assert_eq!((j.label.as_str(), j.fraction), ("Fixing…", 0.0));
+        HOLD3.store(1, SeqCst);
+        drain(&mut st);
+        let mut st = st.with_workers(RegistryWorkers { scan: progress_scan_after_reset, fix: never_fix });
+        st.text = "Riparazione in corso…".into();
+        st.progress = 0.8;
+        st.scan(notifier()).unwrap();
+        assert_eq!((st.text.as_str(), st.progress), ("", 0.0), "a scan starts from zero too");
+        HOLD4.store(1, SeqCst);
+        drain(&mut st);
+    }
+
+    static HOLD4: AtomicU8 = AtomicU8::new(0);
+    fn progress_scan_after_reset(_: Vec<usize>, out: Outbox<RegMsg>) {
+        while HOLD4.load(SeqCst) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        out.send(RegMsg::Done);
+    }
+
     /// Every Registry state of the shared fixture reads through the Rust types (no missing key,
     /// no unknown one) and round-trips.
     #[test]
@@ -865,17 +893,14 @@ mod tests {
 
     /// Replays the Registry steps of `apps/desktop/fixtures/intent-script.json` against the real
     /// state, through the worker seam (the workers wait at a gate and answer when the script's
-    /// `tick` says the job lands). Where the mock and the engine differ, the step is re-synchronised
-    /// on the script's expected state and counted: exactly ONE (below). When the script changes,
-    /// re-count.
-    ///   * `toggle i:4` "a protected entry is blocked": the fixture draws a blocked row, the engine's
-    ///     registry has no protected entries (every issue is a plain toggle), so Rust ticks it.
+    /// `tick` says the job lands). No step is re-synchronised: the script (since the mock ticks any
+    /// entry, the engine has no protected registry ones) and Rust agree on every state compared.
     #[test]
     fn replays_the_registry_steps_of_the_shared_script() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
         let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let mut st = script_state("idle");
-        let (mut compared, mut landed, mut resyncs) = (0, 0, 0);
+        let (mut compared, mut landed) = (0, 0);
         for step in script["steps"].as_array().unwrap() {
             let note = step["note"].as_str().unwrap_or("");
             match step["op"].as_str().unwrap() {
@@ -907,11 +932,6 @@ mod tests {
                     if let Some(checks) = step["expect"]["checks"].as_object() {
                         for (id, want) in checks {
                             let got = serde_json::to_value(row(&v, id).check).unwrap();
-                            if note == "a protected entry is blocked" {
-                                resyncs += 1;
-                                assert_eq!(got, "on", "the engine has no protected registry entries: {note}");
-                                continue;
-                            }
                             assert_eq!(&got, want, "{note}: check of {id}");
                         }
                     }
@@ -923,6 +943,6 @@ mod tests {
             }
         }
         assert!(compared >= 9, "{compared} registry intents compared");
-        assert_eq!((landed, resyncs), (2, 1), "jobs landed, steps re-synchronised");
+        assert_eq!(landed, 2, "jobs landed: the scan and the fix");
     }
 }

@@ -49,8 +49,7 @@ pub const PROTECTED: &str = "Needed by Windows: protected";
 pub const UNKNOWN_SERVICE: &str = "That service is not in the list.";
 pub const NOT_SHOWN: &str = "That service is hidden by the filter.";
 pub const NOTHING_SAVED: &str = "No original startup types are saved: there is nothing to restore.";
-/// The worker ended without telling how it went.
-pub const JOB_DIED: &str = "Il lavoro si è interrotto per un errore interno.";
+pub const UNKNOWN_ACTION: &str = "That action is not offered.";
 
 pub struct ServicesState {
     pub services: Vec<services::Service>,
@@ -255,7 +254,8 @@ impl ServicesState {
             return Err(BUSY.into());
         }
         let Some(start) = self.confirm else { return Err(NO_DIALOG.into()) };
-        self.check_action(action_of(start))?;
+        let action = action_of(start).ok_or_else(|| UNKNOWN_ACTION.to_string())?;
+        self.check_action(action)?;
         self.confirm = None;
         self.apply(if start == 0 { None } else { Some(start) }, n);
         Ok(())
@@ -370,7 +370,7 @@ impl ServicesState {
 
     fn dialog_view(&self) -> Option<DialogView> {
         let start = self.confirm?;
-        let (title, text) = match action_of(start) {
+        let (title, text) = match action_of(start)? {
             ServiceAction::Restore => ("Restore the services?", "Every service Xiox changed goes back to how it was."),
             ServiceAction::Manual => ("Set to Manual?", "The services stop now and Windows starts them only when needed."),
             ServiceAction::Disable => {
@@ -397,12 +397,14 @@ impl ServicesState {
     }
 }
 
-/// The question's start type back to its action (`0`: restore; Manual; anything else disables).
-fn action_of(start: u32) -> ServiceAction {
+/// The question's start type back to its action (`0`: restore, Manual, Disabled). Any other value
+/// is not an action the page offers: `None`, never read as Disable.
+fn action_of(start: u32) -> Option<ServiceAction> {
     match start {
-        0 => ServiceAction::Restore,
-        services::START_MANUAL => ServiceAction::Manual,
-        _ => ServiceAction::Disable,
+        0 => Some(ServiceAction::Restore),
+        services::START_MANUAL => Some(ServiceAction::Manual),
+        services::START_DISABLED => Some(ServiceAction::Disable),
+        _ => None,
     }
 }
 
@@ -484,7 +486,7 @@ pub fn send_svc(chosen: Vec<services::Service>, start: Option<u32>, out: Outbox<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::testing::{action, button, err, notifier, row};
+    use crate::view::testing::{action, button, err, notifier, row, wait};
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::sync::Mutex;
 
@@ -535,16 +537,6 @@ mod tests {
         st.services = list();
         st.loaded = true;
         st
-    }
-
-    fn wait(mut done: impl FnMut() -> bool) {
-        for _ in 0..500 {
-            if done() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        panic!("the worker did not answer in 5 s");
     }
 
     fn drain(st: &mut ServicesState) {
@@ -633,6 +625,50 @@ mod tests {
         // Again without a question.
         assert_eq!(err(st.confirm(notifier())), NO_DIALOG);
         assert_eq!(APPLIED.lock().unwrap().len(), 1);
+    }
+
+    // ---- each action sends its own start type to the worker ----
+
+    static SENT: Mutex<Vec<Option<u32>>> = Mutex::new(Vec::new());
+    fn start_recording_apply(_: Vec<services::Service>, start: Option<u32>, out: Outbox<SvcMsg>) {
+        SENT.lock().unwrap().push(start);
+        out.send(SvcMsg::Message("done".into()));
+    }
+    fn saved_one() -> usize {
+        1
+    }
+
+    /// The question says what it will do (title) and the worker does exactly that: Disable sends
+    /// `Some(START_DISABLED)`, Set to Manual `Some(START_MANUAL)`, Restore `None` (the marker for
+    /// "put the saved originals back"). A wrong start type under a right title would be a wrong
+    /// change to the system under a confirmation that says something else.
+    #[test]
+    fn each_action_sends_its_own_start_type_to_the_worker() {
+        for (action_kind, want) in [
+            (ServiceAction::Disable, Some(services::START_DISABLED)),
+            (ServiceAction::Manual, Some(services::START_MANUAL)),
+            (ServiceAction::Restore, None),
+        ] {
+            let mut st = state().with_workers(ServicesWorkers { load: plain_load, apply: start_recording_apply, saved: saved_one, ..NEVER });
+            st.open_confirm(action_kind).unwrap();
+            st.confirm(notifier()).unwrap();
+            wait(|| !SENT.lock().unwrap().is_empty());
+            assert_eq!(SENT.lock().unwrap().drain(..).collect::<Vec<_>>(), vec![want], "{action_kind:?}");
+            drain(&mut st);
+        }
+    }
+
+    /// A start type the page could not have produced (`confirm` is a public field of the egui
+    /// adapter) is refused: it is never read as Disable, and no question is drawn for it.
+    #[test]
+    fn an_unknown_start_type_in_the_question_is_refused() {
+        let mut st = state().with_workers(ServicesWorkers { apply: start_recording_apply, ..NEVER });
+        st.confirm = Some(services::START_AUTO);
+        assert!(st.view().dialog.is_none(), "no question text for a start type nobody offers");
+        assert_eq!(err(st.confirm(notifier())), UNKNOWN_ACTION);
+        assert!(st.confirm.is_none() || st.confirm == Some(services::START_AUTO));
+        assert!(!st.busy(), "nothing started");
+        assert!(SENT.lock().unwrap().is_empty(), "nothing reached the worker");
     }
 
     // ---- restore_needs_a_saved_backup ----
@@ -907,7 +943,11 @@ mod tests {
         out.send(SvcMsg::Loaded(script_list()));
     }
 
-    fn script_apply(_: Vec<services::Service>, _: Option<u32>, out: Outbox<SvcMsg>) {
+    /// The start types the replay's changes were sent with, in order.
+    static SCRIPT_SENT: Mutex<Vec<Option<u32>>> = Mutex::new(Vec::new());
+
+    fn script_apply(_: Vec<services::Service>, start: Option<u32>, out: Outbox<SvcMsg>) {
+        SCRIPT_SENT.lock().unwrap().push(start);
         out.send(SvcMsg::Message("2 servizi impostati su Manuale.".into()));
     }
 
@@ -969,6 +1009,8 @@ mod tests {
         st.services = script_list();
         st.loaded = true;
         let (mut compared, mut landed, mut shows, mut texts) = (0, 0, 0, 0);
+        // The action the open question was opened with, and the start types the worker was given.
+        let (mut opened, mut sent) = (None, Vec::new());
         for step in script["steps"].as_array().unwrap() {
             let note = step["note"].as_str().unwrap_or("");
             match step["op"].as_str().unwrap() {
@@ -998,6 +1040,9 @@ mod tests {
                     let intent: ServicesIntent = serde_json::from_value(step["intent"].clone()).unwrap();
                     let expect = step["expect"]["state"].as_str().unwrap();
                     let result = apply(&mut st, intent.clone());
+                    if let (ServicesIntent::OpenConfirm { action }, Ok(())) = (&intent, &result) {
+                        opened = Some(*action);
+                    }
                     let restore = matches!(intent, ServicesIntent::OpenConfirm { action: ServiceAction::Restore });
                     assert_eq!(result.is_ok(), !restore, "{note}: {intent:?}");
                     if matches!(intent, ServicesIntent::Confirm) {
@@ -1009,6 +1054,12 @@ mod tests {
                         LOAD_GATE.store(1, SeqCst);
                         drain(&mut st);
                         LOAD_GATE.store(0, SeqCst);
+                        let want = match opened.take().expect("a confirm follows an open question") {
+                            ServiceAction::Disable => Some(services::START_DISABLED),
+                            ServiceAction::Manual => Some(services::START_MANUAL),
+                            ServiceAction::Restore => None,
+                        };
+                        sent.push(want);
                     }
                     assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                     let v = st.view();
@@ -1027,6 +1078,8 @@ mod tests {
                 _ => {}
             }
         }
+        assert_eq!(*SCRIPT_SENT.lock().unwrap(), sent, "each change reached the worker with the start type of its action");
+        assert_eq!(sent, vec![Some(services::START_MANUAL), Some(services::START_DISABLED), Some(services::START_DISABLED)]);
         assert!(compared >= 9, "{compared} services intents compared");
         assert_eq!((landed, shows, texts), (1, 1, 3), "jobs landed, notices cleared by `show`, notices compared without their text");
     }
