@@ -5,13 +5,14 @@ mod theme;
 
 use xiox_core::{browserdb, cleaner, native, registry, rules, services, sys, wipe};
 use xiox_core::cleanup::{analysis_title, clean_report, Chosen, CleanEnd, CleanView, CleanupState};
-use xiox_core::notify::{Notifier, SectionId};
+use xiox_core::notify::{NoNotifier, Notifier, SectionId};
+use xiox_core::regstate::RegistryState;
+use xiox_core::svcstate::ServicesState;
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 use theme::*;
 
@@ -32,19 +33,6 @@ enum Tab {
     Dev,
 }
 
-enum RegMsg {
-    Progress(String, f32),
-    Found(Vec<registry::Issue>),
-    Done,
-    /// `refused`: backup chiesto e non riuscito (il motivo); allora nessuna riparazione.
-    Fixed { ok: usize, failed: usize, backup: Option<String>, refused: Option<String> },
-}
-
-enum SvcMsg {
-    Loaded(Vec<services::Service>),
-    Message(String),
-}
-
 struct App {
     tab: Tab,
     admin: bool,
@@ -61,22 +49,8 @@ struct App {
     /// Finestra Informazioni aperta.
     about_open: bool,
 
-    reg_sel: Vec<bool>,
-    issues: Vec<registry::Issue>,
-    reg_job: Option<Receiver<RegMsg>>,
-    reg_text: String,
-    reg_progress: f32,
-    reg_scanned: bool,
-    reg_confirm: bool,
-    reg_msg: String,
-
-    services: Vec<services::Service>,
-    svc_job: Option<Receiver<SvcMsg>>,
-    svc_loaded: bool,
-    svc_all: bool,
-    svc_filter: String,
-    svc_msg: String,
-    svc_confirm: Option<u32>,
+    registry: RegistryState,
+    services: ServicesState,
 
     dev: dev::DevState,
 }
@@ -95,25 +69,13 @@ impl App {
             mem_at: Instant::now(),
             cleanup: CleanupState::new(),
             about_open,
-            reg_sel: registry::CATEGORIES.iter().map(|c| c.default_on).collect(),
-            issues: vec![],
-            reg_job: None,
-            reg_text: String::new(),
-            reg_progress: 0.0,
-            reg_scanned: false,
-            reg_confirm: false,
-            reg_msg: String::new(),
-            services: vec![],
-            svc_job: None,
-            svc_loaded: false,
-            svc_all: false,
-            svc_filter: String::new(),
-            svc_msg: String::new(),
-            svc_confirm: None,
+            registry: RegistryState::new(),
+            services: ServicesState::new(),
             dev,
         };
         if tab == Tab::Services {
-            app.load_services();
+            // Senza finestra a cui chiedere un ridisegno: come prima, il ciclo di `update` rilegge.
+            app.services.load(Arc::new(NoNotifier));
         }
         app
     }
@@ -187,138 +149,10 @@ impl App {
         ));
     }
 
-    fn start_reg_scan(&mut self, ctx: &egui::Context) {
-        let cats: Vec<usize> = (0..self.reg_sel.len()).filter(|&i| self.reg_sel[i]).collect();
-        let (tx, rx) = channel();
-        self.reg_job = Some(rx);
-        self.issues.clear();
-        self.reg_msg.clear();
-        self.reg_scanned = true;
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let total = cats.len().max(1) as f32;
-            for (k, &i) in cats.iter().enumerate() {
-                let name = registry::CATEGORIES[i].name;
-                let _ = tx.send(RegMsg::Progress(format!("Controllo: {name}"), k as f32 / total));
-                ctx.request_repaint();
-                let found = registry::scan(i, &|_| {});
-                let _ = tx.send(RegMsg::Found(found));
-            }
-            let _ = tx.send(RegMsg::Done);
-            ctx.request_repaint();
-        });
-    }
-
-    fn start_reg_fix(&mut self, with_backup: bool, ctx: &egui::Context) {
-        let chosen: Vec<registry::Issue> = self.issues.iter().filter(|i| i.selected).cloned().collect();
-        let (tx, rx) = channel();
-        self.reg_job = Some(rx);
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            if with_backup {
-                let _ = tx.send(RegMsg::Progress("Salvataggio del backup…".into(), 0.0));
-            }
-            let total = chosen.len().max(1) as f32;
-            // Backup chiesto e non riuscito: non si ripara nulla.
-            let out = registry::fix_all(&chosen, with_backup, &registry::backup, &mut registry::apply, &mut |k| {
-                if k % 20 == 0 {
-                    let _ = tx.send(RegMsg::Progress("Riparazione in corso…".into(), k as f32 / total));
-                    ctx.request_repaint();
-                }
-            });
-            let backup = out.backup.map(|p| p.to_string_lossy().to_string());
-            let _ = tx.send(RegMsg::Fixed { ok: out.ok, failed: out.failed, backup, refused: out.refused });
-            ctx.request_repaint();
-        });
-    }
-
-    fn load_services(&mut self) {
-        let (tx, rx) = channel();
-        self.svc_job = Some(rx);
-        self.svc_loaded = true;
-        std::thread::spawn(move || {
-            let _ = tx.send(SvcMsg::Loaded(services::load()));
-        });
-    }
-
-    fn apply_services(&mut self, start: Option<u32>) {
-        let chosen: Vec<services::Service> = self.services.iter().filter(|s| s.selected && !s.protected).cloned().collect();
-        let (tx, rx) = channel();
-        self.svc_job = Some(rx);
-        std::thread::spawn(move || send_svc(tx, chosen, start));
-    }
-
-    fn poll(&mut self) {
+    fn poll(&mut self, ctx: &egui::Context) {
         self.cleanup.poll();
-        if let Some(rx) = &self.reg_job {
-            let mut done = false;
-            let mut gone = false;
-            loop {
-                let m = match rx.try_recv() {
-                    Ok(m) => m,
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        gone = true;
-                        break;
-                    }
-                };
-                match m {
-                    RegMsg::Progress(t, p) => {
-                        self.reg_text = t;
-                        self.reg_progress = p;
-                    }
-                    RegMsg::Found(v) => self.issues.extend(v),
-                    RegMsg::Done => done = true,
-                    RegMsg::Fixed { refused: Some(why), .. } => {
-                        self.reg_msg = format!("Backup del registro non riuscito ({why}): nessuna riparazione eseguita.");
-                        done = true;
-                    }
-                    RegMsg::Fixed { ok, failed, backup, refused: None } => {
-                        self.reg_msg = format!("Riparati {ok} problemi.");
-                        if failed > 0 {
-                            self.reg_msg.push_str(&format!(" {failed} non riparati (servono i diritti di amministratore)."));
-                        }
-                        if let Some(b) = backup {
-                            self.reg_msg.push_str(&format!("\nBackup salvato in: {b}"));
-                        }
-                        if failed == 0 {
-                            self.issues.retain(|i| !i.selected);
-                        }
-                        done = true;
-                    }
-                }
-            }
-            if gone && !done {
-                self.reg_msg = "Il lavoro si è interrotto per un errore interno.".into();
-                done = true;
-            }
-            if done {
-                self.reg_job = None;
-            }
-        }
-        if let Some(rx) = &self.svc_job {
-            let mut reload = false;
-            let mut done = false;
-            while let Ok(m) = rx.try_recv() {
-                match m {
-                    SvcMsg::Loaded(v) => {
-                        self.services = v;
-                        done = true;
-                    }
-                    SvcMsg::Message(t) => {
-                        self.svc_msg = t;
-                        reload = true;
-                    }
-                }
-            }
-            if done {
-                self.svc_job = None;
-            }
-            if reload {
-                self.svc_job = None;
-                self.load_services();
-            }
-        }
+        self.registry.poll();
+        self.services.poll(Arc::new(Repaint(ctx.clone())));
         self.dev.poll();
     }
 
@@ -363,8 +197,8 @@ impl App {
                             self.dev.release();
                         }
                         self.tab = tab;
-                        if tab == Tab::Services && !self.svc_loaded {
-                            self.load_services();
+                        if tab == Tab::Services && !self.services.loaded {
+                            self.services.load(Arc::new(Repaint(ctx.clone())));
                         }
                     }
                 }
@@ -713,7 +547,7 @@ impl App {
     }
 
     fn registry_tab(&mut self, ui: &mut Ui) {
-        let busy = self.reg_job.is_some();
+        let busy = self.registry.busy();
         egui::SidePanel::left("reg_opts")
             .exact_width(270.0)
             .resizable(false)
@@ -723,7 +557,7 @@ impl App {
                 ui.separator();
                 ui.add_enabled_ui(!busy, |ui| {
                     for (i, c) in registry::CATEGORIES.iter().enumerate() {
-                        ui.checkbox(&mut self.reg_sel[i], c.name);
+                        ui.checkbox(&mut self.registry.sel[i], c.name);
                     }
                 });
                 ui.add_space(14.0);
@@ -733,13 +567,12 @@ impl App {
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let sel = self.issues.iter().filter(|i| i.selected).count();
+                    let sel = self.registry.issues.iter().filter(|i| i.selected).count();
                     if primary(ui, &format!("Ripara selezionati ({sel})…"), !busy && sel > 0).clicked() {
-                        self.reg_confirm = true;
+                        self.registry.confirm = true;
                     }
-                    if secondary(ui, "Cerca problemi", !busy && self.reg_sel.iter().any(|&b| b)).clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.start_reg_scan(&ctx);
+                    if secondary(ui, "Cerca problemi", !busy && self.registry.sel.iter().any(|&b| b)).clicked() {
+                        self.registry.start_scan(Arc::new(Repaint(ui.ctx().clone())));
                     }
                 });
             });
@@ -747,16 +580,16 @@ impl App {
             self.profile_strip(ui);
             card(ui, |ui| {
                 if busy {
-                    ui.label(RichText::new(&self.reg_text).size(16.0).color(TEXT));
+                    ui.label(RichText::new(&self.registry.text).size(16.0).color(TEXT));
                     ui.add_space(6.0);
-                    ui.add(egui::ProgressBar::new(self.reg_progress).fill(ACCENT).show_percentage());
+                    ui.add(egui::ProgressBar::new(self.registry.progress).fill(ACCENT).show_percentage());
                     ui.add_space(10.0);
                 }
-                if !self.reg_msg.is_empty() {
-                    ui.label(RichText::new(&self.reg_msg).color(GREEN));
+                if !self.registry.msg.is_empty() {
+                    ui.label(RichText::new(&self.registry.msg).color(GREEN));
                     ui.add_space(8.0);
                 }
-                if !self.reg_scanned {
+                if !self.registry.scanned {
                     ui.add_space(30.0);
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new("Pulizia del registro").size(22.0).strong().color(TEXT));
@@ -765,19 +598,19 @@ impl App {
                     });
                     return;
                 }
-                if self.issues.is_empty() && !busy {
+                if self.registry.issues.is_empty() && !busy {
                     ui.add_space(20.0);
                     ui.vertical_centered(|ui| ui.label(RichText::new("✔  Nessun problema trovato").size(18.0).color(GREEN)));
                     return;
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{} problemi trovati", self.issues.len())).size(18.0).strong().color(TEXT));
+                    ui.label(RichText::new(format!("{} problemi trovati", self.registry.issues.len())).size(18.0).strong().color(TEXT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("Nessuno").clicked() {
-                            self.issues.iter_mut().for_each(|i| i.selected = false);
+                            self.registry.issues.iter_mut().for_each(|i| i.selected = false);
                         }
                         if ui.small_button("Tutti").clicked() {
-                            self.issues.iter_mut().for_each(|i| i.selected = true);
+                            self.registry.issues.iter_mut().for_each(|i| i.selected = true);
                         }
                     });
                 });
@@ -792,10 +625,10 @@ impl App {
                     cell(ui, wk, RichText::new("Chiave di registro").strong());
                 });
                 ui.separator();
-                let n = self.issues.len();
+                let n = self.registry.issues.len();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, 22.0, n, |ui, range| {
                     for i in range {
-                        let it = &mut self.issues[i];
+                        let it = &mut self.registry.issues[i];
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut it.selected, "");
                             cell(ui, wp, &it.problem);
@@ -806,7 +639,7 @@ impl App {
                 });
             });
         });
-        if self.reg_confirm {
+        if self.registry.confirm {
             let mut close = false;
             egui::Modal::new(egui::Id::new("reg_confirm")).show(ui.ctx(), |ui| {
                 ui.set_width(400.0);
@@ -816,13 +649,11 @@ impl App {
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Sì, salva e ripara", true).clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.start_reg_fix(true, &ctx);
+                        self.registry.start_fix(true, Arc::new(Repaint(ui.ctx().clone())));
                         close = true;
                     }
                     if secondary(ui, "Ripara senza backup", true).clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.start_reg_fix(false, &ctx);
+                        self.registry.start_fix(false, Arc::new(Repaint(ui.ctx().clone())));
                         close = true;
                     }
                     if ui.button("Annulla").clicked() {
@@ -831,7 +662,7 @@ impl App {
                 });
             });
             if close {
-                self.reg_confirm = false;
+                self.registry.confirm = false;
             }
         }
     }
@@ -842,25 +673,25 @@ impl App {
             self.mem_at = Instant::now();
         }
         ui.ctx().request_repaint_after(Duration::from_secs(2));
-        let busy = self.svc_job.is_some();
+        let busy = self.services.busy();
         egui::TopBottomPanel::bottom("svc_buttons")
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let sel: Vec<&services::Service> = self.services.iter().filter(|s| s.selected && !s.protected).collect();
+                    let sel: Vec<&services::Service> = self.services.services.iter().filter(|s| s.selected && !s.protected).collect();
                     let kb: u64 = sel.iter().map(|s| s.freeable_kb()).sum();
                     ui.label(RichText::new(format!("Selezionati: {}  ·  RAM liberabile (stima): {}", sel.len(), sys::fmt_size(kb * 1024))).color(TEXT));
                     let n = sel.len();
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if primary(ui, "Disattiva selezionati", !busy && n > 0).clicked() {
-                            self.svc_confirm = Some(services::START_DISABLED);
+                            self.services.confirm = Some(services::START_DISABLED);
                         }
                         if secondary(ui, "Imposta su Manuale", !busy && n > 0).clicked() {
-                            self.svc_confirm = Some(services::START_MANUAL);
+                            self.services.confirm = Some(services::START_MANUAL);
                         }
                         let saved = services::read_backup().len();
                         if secondary(ui, &format!("Ripristina originali ({saved})"), !busy && saved > 0).clicked() {
-                            self.svc_confirm = Some(0);
+                            self.services.confirm = Some(0);
                         }
                     });
                 });
@@ -885,35 +716,28 @@ impl App {
             ui.add_space(10.0);
             card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.svc_all, false, "Consigliati da spegnere");
-                    ui.selectable_value(&mut self.svc_all, true, "Tutti i servizi");
+                    ui.selectable_value(&mut self.services.all, false, "Consigliati da spegnere");
+                    ui.selectable_value(&mut self.services.all, true, "Tutti i servizi");
                     ui.add_space(12.0);
-                    ui.add(egui::TextEdit::singleline(&mut self.svc_filter).hint_text("Cerca…").desired_width(180.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.services.filter).hint_text("Cerca…").desired_width(180.0));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.add_enabled(!busy, egui::Button::new("⟳ Aggiorna")).clicked() {
-                            self.load_services();
+                            self.services.load(Arc::new(Repaint(ui.ctx().clone())));
                         }
                     });
                 });
-                if !self.svc_msg.is_empty() {
-                    ui.label(RichText::new(&self.svc_msg).color(GREEN));
+                if !self.services.msg.is_empty() {
+                    ui.label(RichText::new(&self.services.msg).color(GREEN));
                 }
                 ui.add_space(6.0);
-                if busy && self.services.is_empty() {
+                if busy && self.services.services.is_empty() {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Lettura dei servizi…");
                     });
                     return;
                 }
-                let filter = self.svc_filter.to_lowercase();
-                let rows: Vec<usize> = (0..self.services.len())
-                    .filter(|&i| {
-                        let s = &self.services[i];
-                        (self.svc_all || s.suggestion.is_some())
-                            && (filter.is_empty() || s.display.to_lowercase().contains(&filter) || s.name.to_lowercase().contains(&filter))
-                    })
-                    .collect();
+                let rows: Vec<usize> = self.services.visible();
                 let w = ui.available_width();
                 let (wn, ws, wa, wm) = (((w - 60.0) * 0.30).max(160.0), 110.0, 150.0, 120.0);
                 let wd = (w - 40.0 - wn - ws - wa - wm - 30.0).max(120.0);
@@ -928,7 +752,7 @@ impl App {
                 ui.separator();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, 22.0, rows.len(), |ui, range| {
                     for &i in &rows[range] {
-                        let s = &mut self.services[i];
+                        let s = &mut self.services.services[i];
                         ui.horizontal(|ui| {
                             if s.protected {
                                 ui.add_enabled(false, egui::Checkbox::new(&mut false, "")).on_disabled_hover_text("Servizio necessario a Windows: protetto");
@@ -955,7 +779,7 @@ impl App {
                 });
             });
         });
-        if let Some(action) = self.svc_confirm {
+        if let Some(action) = self.services.confirm {
             let mut close = false;
             egui::Modal::new(egui::Id::new("svc_confirm")).show(ui.ctx(), |ui| {
                 ui.set_width(400.0);
@@ -970,10 +794,11 @@ impl App {
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Continua", true).clicked() {
+                        let notifier = Arc::new(Repaint(ui.ctx().clone()));
                         if action == 0 {
-                            self.apply_services(None);
+                            self.services.apply(None, notifier);
                         } else {
-                            self.apply_services(Some(action));
+                            self.services.apply(Some(action), notifier);
                         }
                         close = true;
                     }
@@ -983,7 +808,7 @@ impl App {
                 });
             });
             if close {
-                self.svc_confirm = None;
+                self.services.confirm = None;
             }
         }
     }
@@ -992,8 +817,8 @@ impl App {
         let Some(path) = self.screenshot.clone() else { return };
         ctx.request_repaint();
         let busy = self.cleanup.clean_job.is_some()
-            || self.reg_job.is_some()
-            || self.svc_job.is_some()
+            || self.registry.busy()
+            || self.services.busy()
             || self.dev.busy()
             || self.dev.demo_pending()
             || self.cleanup.rules_rx.is_some();
@@ -1022,37 +847,6 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
-}
-
-fn send_svc(tx: Sender<SvcMsg>, chosen: Vec<services::Service>, start: Option<u32>) {
-    let msg = match start {
-        None => {
-            let (ok, bad) = services::restore_all();
-            if bad > 0 {
-                format!("Ripristinati {ok} servizi, {bad} non riusciti.")
-            } else {
-                format!("Ripristinati {ok} servizi.")
-            }
-        }
-        Some(s) => {
-            let mut ok = 0;
-            let mut bad = 0;
-            for svc in &chosen {
-                if services::set_start(svc, s) {
-                    ok += 1;
-                } else {
-                    bad += 1;
-                }
-            }
-            let what = if s == services::START_DISABLED { "disattivati" } else { "impostati su Manuale" };
-            if bad > 0 {
-                format!("{ok} servizi {what}, {bad} non riusciti (servono i diritti di amministratore).")
-            } else {
-                format!("{ok} servizi {what}.")
-            }
-        }
-    };
-    let _ = tx.send(SvcMsg::Message(msg));
 }
 
 /// Gruppi dinamici del pannello sinistro di Pulizia file: gli inglobati per
@@ -1258,8 +1052,8 @@ fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Respons
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
-        self.poll();
-        if self.cleanup.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() {
+        self.poll(ctx);
+        if self.cleanup.clean_job.is_some() || self.registry.busy() || self.services.busy() || self.dev.busy() {
             ctx.request_repaint_after(Duration::from_millis(150));
         }
         self.sidebar(ctx);
