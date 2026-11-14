@@ -31,10 +31,16 @@ Licensed under the MIT License. Portions of Xiox adapt ideas or code from this p
 Source: https://github.com/acaprino/mukade (same author as Xiox), commit dfde57e (2026-11-10).
 Copyright (c) acaprino. MIT. Library-only copy in `vendor/mukade/` (see `vendor/mukade/VENDORED.md`); used to read the sessions of Claude Code, Codex, OpenCode and Pi (listings only, read-only).
 
+### Tauri (compiled into the desktop app)
+
+Source: https://github.com/tauri-apps/tauri (crates `tauri`, `tauri-build` and `tauri-plugin-dialog`, the `@tauri-apps/api` package that ships inside the page, and `rfd` 0.17 (MIT), which the dialog plugin uses for the folder picker and the save dialog).
+Copyright (c) 2017 - Present Tauri Apps Contributors
+Dual-licensed MIT or Apache-2.0; Xiox uses it under the MIT License, whose full text is reproduced at the end of this file. The window renders with the Microsoft Edge WebView2 runtime that Windows provides; Xiox does not ship it.
+
 ### Winapp2 (rules downloaded at runtime)
 
 Source: https://github.com/MoscaDotTo/Winapp2
-Licensed under CC-BY-SA-4.0. Xiox downloads `Winapp2.ini` at runtime to read its cleaning rules: il file si scarica a runtime, non fa parte dell'eseguibile. The file is kept unmodified in the user's data folder and keeps its own licence.
+Licensed under CC-BY-SA-4.0. Xiox downloads `Winapp2.ini` at runtime to read its cleaning rules: the file is downloaded at run time and is not part of the executable. The file is kept unmodified in the user's data folder and keeps its own licence.
 
 ### Embedded CleanerML cleaners
 
