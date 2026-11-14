@@ -71,7 +71,7 @@ const CLEANERS: [(&str, &str); 61] = [
 ];
 
 /// Gruppo di un cleaner inglobato, dal nome: le voci di Windows e i browser
-/// hanno un gruppo proprio, tutti gli altri sono «Sviluppo e AI» (il gruppo
+/// hanno un gruppo proprio, tutti gli altri sono “Development & AI” (il gruppo
 /// che `parse_cleaner` assegna).
 fn group_of(name: &str) -> Option<&'static str> {
     match name {
@@ -94,7 +94,7 @@ pub fn embedded(env: &Env) -> (Vec<Cleaner>, Vec<String>) {
                 }
                 cleaners.push(c);
             }
-            Err(e) => warnings.push(format!("cleaner inglobato {name}: {e}")),
+            Err(e) => warnings.push(format!("embedded cleaner {name}: {e}")),
         }
     }
     (cleaners, warnings)
@@ -145,7 +145,7 @@ mod tests {
             let want = match c.id.as_str() {
                 "windows_extra" => "Windows",
                 "safari" => "Browser",
-                _ => "Sviluppo e AI",
+                _ => "Development & AI",
             };
             assert_eq!(c.group, want, "gruppo di {}", c.id);
         }

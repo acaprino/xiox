@@ -107,7 +107,7 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
     let mut bad = |warnings: &mut Vec<String>, n: usize, line: &str, why: &str| {
         unreadable += 1;
         if unreadable <= MAX_UNREADABLE_WARNINGS {
-            warnings.push(format!("riga {n}: {why}: {line}"));
+            warnings.push(format!("line {n}: {why}: {line}"));
         }
     };
 
@@ -142,11 +142,11 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
-            bad(&mut warnings, n, line, "riga illeggibile");
+            bad(&mut warnings, n, line, "unreadable line");
             continue;
         };
         let Some(entry) = cur.as_mut() else {
-            bad(&mut warnings, n, line, "chiave fuori da una voce");
+            bad(&mut warnings, n, line, "key outside an entry");
             continue;
         };
         let key = key.trim();
@@ -155,7 +155,7 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
         match base.to_ascii_lowercase().as_str() {
             "langsecref" => match value.parse::<u32>() {
                 Ok(v) => entry.lang_sec_ref = Some(v),
-                Err(_) => bad(&mut warnings, n, line, "LangSecRef non numerico"),
+                Err(_) => bad(&mut warnings, n, line, "LangSecRef not numeric"),
             },
             "section" => {
                 if !value.is_empty() {
@@ -230,7 +230,7 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
                 let path = parts.next().unwrap_or("").trim();
                 let pattern = parts.next().map(str::trim).filter(|p| !p.is_empty());
                 if kind.is_empty() || path.is_empty() {
-                    bad(&mut warnings, n, line, "ExcludeKey illeggibile");
+                    bad(&mut warnings, n, line, "unreadable ExcludeKey");
                 } else {
                     entry.excludes.push(Exclude {
                         kind,
@@ -248,17 +248,17 @@ pub fn parse(text: &str) -> (Winapp2, Vec<String>) {
 
     if unreadable > MAX_UNREADABLE_WARNINGS {
         warnings.push(format!(
-            "altre {} righe illeggibili non elencate",
+            "{} more unreadable lines not listed",
             unreadable - MAX_UNREADABLE_WARNINGS
         ));
     }
     for (key, count) in &unknown {
-        warnings.push(format!("chiave sconosciuta «{key}»: {count} volte, ignorata"));
+        warnings.push(format!("unknown key “{key}”: {count} times, ignored"));
     }
     let skipped: u32 = w.entries.iter().map(|e| e.skipped_rules).sum();
     if skipped > 0 {
         warnings.push(format!(
-            "{skipped} regole non rappresentabili (radice di registro diversa da HKCU/HKLM o FileKey senza modelli), ignorate"
+            "{skipped} rules that cannot be represented (registry root other than HKCU/HKLM, or FileKey without patterns), ignored"
         ));
     }
     (w, warnings)
@@ -480,10 +480,10 @@ pub fn to_cleaners_with(
 fn group_of(entry: &Entry) -> String {
     let by_ref = entry.lang_sec_ref.and_then(|r| {
         Some(match r {
-            3021 => "Applicazioni",
+            3021 => "Applications",
             3022 => "Internet",
             3023 => "Multimedia",
-            3024 => "Utilità",
+            3024 => "Utilities",
             3025 => "Windows",
             3031 => "Microsoft Store",
             3001 => "Browser: Internet Explorer",
@@ -502,10 +502,10 @@ fn group_of(entry: &Entry) -> String {
         return g.to_string();
     }
     let Some(section) = entry.section.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
-        return "Applicazioni".to_string();
+        return "Applications".to_string();
     };
     if section.eq_ignore_ascii_case("games") {
-        return "Giochi".to_string();
+        return "Games".to_string();
     }
     let lower = section.to_lowercase();
     if let Some(name) = lower.strip_suffix(" web browser").map(|_| &section[..section.len() - 12])
@@ -843,7 +843,7 @@ mod tests {
         let (w, warnings) = parse(SAMPLE);
         assert_eq!(w.entries.len(), 12);
         let future = warnings.iter().find(|m| m.contains("FutureKey")).unwrap();
-        assert!(future.contains("2 volte"), "{future}");
+        assert!(future.contains("2 times"), "{future}");
         assert!(warnings.iter().any(|m| m.contains("SpecialDetect")));
         // La voce con chiavi sconosciute si legge comunque.
         assert_eq!(entry(&w, "Eta Unknown *").file_keys.len(), 1);
@@ -853,7 +853,7 @@ mod tests {
     fn unreadable_lines_and_unsupported_roots_are_reported() {
         let (w, warnings) = parse("[A *]\nsenza uguale\nFileKey1=%AppData%\\A\nRegKey1=HKU\\x\\y\n");
         assert_eq!(w.entries.len(), 1);
-        assert!(warnings.iter().any(|m| m.contains("illeggibile")));
+        assert!(warnings.iter().any(|m| m.contains("unreadable")));
         assert_eq!(w.entries[0].skipped_rules, 2);
         assert!(w.entries[0].file_keys.is_empty() && w.entries[0].reg_keys.is_empty());
     }
@@ -1252,7 +1252,7 @@ mod tests {
         assert_eq!(w.entries[0].reg_keys.len(), 1);
         assert_eq!(w.entries[0].reg_keys[0].path, r"Software\P\Z");
         assert_eq!(w.entries[0].skipped_rules, 1);
-        assert!(warnings.iter().any(|m| m.contains("non rappresentabili")));
+        assert!(warnings.iter().any(|m| m.contains("cannot be represented")));
     }
 
     #[test]
@@ -1395,19 +1395,19 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                "Applicazioni",
+                "Applications",
                 "Internet",
                 "Multimedia",
-                "Utilità",
+                "Utilities",
                 "Windows",
-                "Giochi",
+                "Games",
                 "Browser: Opera GX",
                 "Browser: Genspark",
                 "Adobe",
-                "Applicazioni",
+                "Applications",
                 "Browser: Google Chrome",
-                "Giochi",
-                "Utilità",
+                "Games",
+                "Utilities",
             ]
         );
     }
@@ -1479,7 +1479,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         let (w, warnings) = parse(&text);
         let took = t0.elapsed();
-        let unknown = warnings.iter().filter(|m| m.contains("chiave sconosciuta")).count();
+        let unknown = warnings.iter().filter(|m| m.contains("unknown key")).count();
         eprintln!(
             "voci: {} (dichiarate {:?}), versione {:?}, avvisi: {}, chiavi sconosciute: {}, tempo di lettura: {:?}",
             w.entries.len(),

@@ -100,10 +100,10 @@ fn levels_project() -> ProjectReport {
     };
     r.artifacts.push(mk(
         "node_modules",
-        "Dipendenze Node (node_modules)",
+        "Node dependencies (node_modules)",
         xiox_model::Class::Dependency,
         Level::Optional,
-        "Si riscarica con npm install (o pnpm, yarn, bun install)",
+        "Download again with npm install (or pnpm, yarn, bun install)",
         50,
     ));
     r.artifacts.push(mk(

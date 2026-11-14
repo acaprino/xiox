@@ -177,35 +177,35 @@ impl Guard {
         self.keep_dirs
             .iter()
             .any(|dir| comps.len() <= dir.len() && prefix_matches(&comps, dir))
-            .then_some("cartella che si svuota ma non si cancella")
+            .then_some("folder that is emptied but not deleted")
     }
 
     fn check(&self, comps: &[String]) -> Option<&'static str> {
         // Radice di un disco, anche presa con i soli jolly (`D:\*`, `E:\*\*`).
         if comps.len() <= 1 {
-            return Some("radice di un disco");
+            return Some("drive root");
         }
         if comps[1..].iter().all(|c| wildcard_only(c)) {
-            return Some("radice di un disco presa per intero con i caratteri jolly");
+            return Some("drive root taken whole with wildcards");
         }
         // Cartelle prese per intero, i loro antenati e "cartella + solo jolly".
         if self.whole.iter().any(|d| covers_whole(comps, d)) {
-            return Some("cartella di sistema o del profilo presa per intero");
+            return Some("system or profile folder taken whole");
         }
         // Cartelle dei documenti dell'utente prese per intero (le sottocartelle sì).
         if self.user_content.iter().any(|d| covers_whole(comps, d)) {
-            return Some("cartella dei documenti dell'utente presa per intero");
+            return Some("user documents folder taken whole");
         }
         // Archivi di chiavi e credenziali di Windows, con il contenuto.
         if in_key_store(comps) || self.key_stores.iter().any(|d| covers_whole(comps, d)) {
-            return Some("archivio di chiavi o credenziali di Windows");
+            return Some("Windows key or credential store");
         }
         // Avvio, ripristino, Cestino e file di paging nella radice di ogni
         // disco, con il contenuto.
         // Cartelle di soli jolly sotto la radice, qualunque sia il file
         // (`D:\*\*.docx`).
         if comps.len() >= 3 && comps[1..comps.len() - 1].iter().all(|c| wildcard_only(c)) {
-            return Some("cartelle di un disco prese con i soli caratteri jolly");
+            return Some("drive folders taken with wildcards only");
         }
         let first = &comps[1];
         let rest_wild = comps[2..].iter().all(|c| wildcard_only(c));
@@ -213,7 +213,7 @@ impl Guard {
             .iter()
             .any(|name| first == name || (rest_wild && comp_matches(first, name)))
         {
-            return Some("file o cartella di sistema nella radice del disco");
+            return Some("system file or folder in the drive root");
         }
         // Cartelle di sistema e il loro contenuto.
         if self
@@ -221,36 +221,36 @@ impl Guard {
             .iter()
             .any(|d| comps.len() >= d.len() && prefix_matches(comps, d))
         {
-            return Some("cartella di sistema di Windows");
+            return Some("Windows system folder");
         }
         for dir in &self.installer {
             let patch_cache = comps.get(dir.len()).is_some_and(|c| c == "$patchcache$");
             if covers_whole(comps, dir) || (!patch_cache && covers_subtree(comps, dir)) {
-                return Some("cache di Windows Installer");
+                return Some("Windows Installer cache");
             }
         }
         if self.subtrees.iter().any(|d| covers_subtree_pattern(comps, d)) {
-            return Some("cartella di sistema di Windows o profilo predefinito");
+            return Some("Windows system folder or default profile");
         }
         if self.own_trees.iter().any(|d| covers_subtree(comps, d)) {
-            return Some("cartella dei dati di Xiox");
+            return Some("Xiox data folder");
         }
         if comps.iter().any(|c| c.starts_with("ntuser.") || c.starts_with("usrclass.dat")) {
-            return Some("registro dell'utente (NTUSER.DAT, UsrClass.dat)");
+            return Some("user registry (NTUSER.DAT, UsrClass.dat)");
         }
         if comps.iter().any(|c| CREDENTIAL_CONTENT_DIRS.contains(&c.as_str())) {
-            return Some("cartella di credenziali");
+            return Some("credentials folder");
         }
         if comps.iter().any(|c| c == ".git") {
-            return Some("cartella .git di un repository");
+            return Some("repository .git folder");
         }
         if comps.iter().any(|c| CREDENTIAL_FILES.contains(&c.as_str())) {
-            return Some("file di credenziali");
+            return Some("credentials file");
         }
         if let Some(last) = comps.last()
             && CREDENTIAL_DIRS.contains(&last.as_str())
         {
-            return Some("cartella di credenziali o configurazione di un agente");
+            return Some("agent credentials or configuration folder");
         }
         None
     }
@@ -356,7 +356,7 @@ const CREDENTIAL_FILES: &[&str] = &[".credentials.json", "auth.json", "credentia
 
 const CREDENTIAL_DIRS: &[&str] = &[".codex", ".claude"];
 
-const NOT_DRIVE: &str = "percorso non assoluto o con prefisso non riconosciuto (UNC, volume, relativo)";
+const NOT_DRIVE: &str = "path not absolute or with an unrecognised prefix (UNC, volume, relative)";
 
 /// Componenti normalizzati (minuscolo, senza punti/spazi finali né flussi). Il
 /// primo è sempre la lettera di unità (`c:`). `strict` rifiuta i nomi 8.3.
@@ -380,16 +380,16 @@ fn normalize(raw: &str, strict: bool) -> Result<Vec<String>, &'static str> {
             return Err(NOT_DRIVE);
         }
         if raw_comp == ".." {
-            return Err("il percorso contiene «..» e può uscire dalla sua cartella");
+            return Err("the path contains “..” and can leave its folder");
         }
         // `nome:flusso` e `nome::$DATA`: conta solo il nome.
         let name = raw_comp.split(':').next().unwrap_or("");
         let name = name.trim_end_matches(['.', ' ']);
         if name.is_empty() {
-            return Err("nome di componente non valido (solo punti, spazi o flusso)");
+            return Err("invalid component name (only dots, spaces or stream)");
         }
         if strict && has_short_name_marker(name) {
-            return Err("nome breve 8.3: non si può confrontare con certezza");
+            return Err("8.3 short name: cannot be compared with certainty");
         }
         out.push(name.to_lowercase());
     }

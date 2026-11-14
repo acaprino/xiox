@@ -36,10 +36,10 @@ pub fn reg_allowed(root: RegRoot, path: &str, value: Option<&str>) -> Result<(),
     }
     let comps = normalize(path)?;
     if comps.first().map(String::as_str) != Some("software") {
-        return Err("chiave di registro fuori da Software");
+        return Err("registry key outside Software");
     }
     if value.is_some_and(|v| v.is_empty()) {
-        return Err("nome del valore di registro vuoto");
+        return Err("empty registry value name");
     }
     for (critical, reason) in INSIDE {
         let crit = split(critical);
@@ -57,7 +57,7 @@ pub fn reg_allowed(root: RegRoot, path: &str, value: Option<&str>) -> Result<(),
             return Err(TOO_HIGH);
         }
         if NO_VALUES.iter().any(|k| comps == split(k)) {
-            return Err("valore di una chiave di sistema di Windows");
+            return Err("value of a Windows system key");
         }
         return Ok(());
     }
@@ -69,12 +69,12 @@ pub fn reg_allowed(root: RegRoot, path: &str, value: Option<&str>) -> Result<(),
         return Err(TOO_HIGH);
     }
     if WHOLE.iter().any(|w| split(w).starts_with(&comps)) || is_current_version_child(&comps) {
-        return Err("chiave di sistema presa per intero (o un suo antenato)");
+        return Err("system key taken whole (or one of its ancestors)");
     }
     Ok(())
 }
 
-const TOO_HIGH: &str = "chiave di registro troppo in alto per cancellarla intera";
+const TOO_HIGH: &str = "registry key too high up to delete whole";
 
 /// Chiavi critiche con tutto ciò che contengono: né la chiave, né le
 /// sottochiavi, né i valori, né un antenato intero.
@@ -153,14 +153,14 @@ const INSIDE: &[(&str, &str)] = &[
     (r"software\microsoft\windows\currentversion\explorer\startupapproved", AUTORUN),
 ];
 
-const DEFAULTS: &str = "programmi predefiniti di Windows";
-const INSTALLER: &str = "programmi installati (Windows Installer)";
+const DEFAULTS: &str = "Windows default programs";
+const INSTALLER: &str = "installed programs (Windows Installer)";
 
-const AUTORUN: &str = "avvio automatico dei programmi";
-const POLICIES: &str = "criteri di sistema";
-const LOGON: &str = "chiave di sistema di Windows (accesso, servizi, cartelle note)";
-const SECURITY: &str = "sicurezza di Windows (Defender, certificati, crittografia)";
-const EXEC: &str = "apertura dei file eseguibili";
+const AUTORUN: &str = "program autostart";
+const POLICIES: &str = "system policies";
+const LOGON: &str = "Windows system key (logon, services, known folders)";
+const SECURITY: &str = "Windows security (Defender, certificates, cryptography)";
+const EXEC: &str = "opening of executable files";
 
 /// Chiavi che non si cancellano intere (né i loro antenati); sottochiavi più
 /// profonde e valori sì.
@@ -212,7 +212,7 @@ fn normalize(path: &str) -> Result<Vec<String>, &'static str> {
     let mut comps: Vec<String> = Vec::new();
     for c in path.split('\\').filter(|c| !c.is_empty()) {
         if c == "." || c == ".." {
-            return Err("il percorso di registro contiene «.» o «..»");
+            return Err("the registry path contains “.” or “..”");
         }
         comps.push(c.to_lowercase());
     }
@@ -388,7 +388,7 @@ mod tests {
             Err(LOGON)
         );
         assert_eq!(key(Hkcu, r"Software\Microsoft\Windows\CurrentVersion\Run"), Err(AUTORUN));
-        assert_eq!(key(Hklm, r"System\Setup"), Err("chiave di registro fuori da Software"));
+        assert_eq!(key(Hklm, r"System\Setup"), Err("registry key outside Software"));
         assert_eq!(key(Hklm, r"Software\Microsoft"), Err(AUTORUN)); // antenato di Run
         assert_eq!(key(Hklm, r"Software\Classes"), Err(EXEC));
         assert_eq!(key(Hklm, r"Software\Classes\*"), Err(EXEC));

@@ -205,22 +205,22 @@ fn ambiguous_names_are_the_dagger_ones() {
 #[test]
 fn dependency_hints() {
     let want: &[(&str, &str, &str)] = &[
-        ("node", "node_modules", "Si riscarica con npm install (o pnpm, yarn, bun install)"),
-        ("python", ".venv", "Si ricrea con python -m venv e l'installazione dei requisiti"),
-        ("python", "venv", "Si ricrea con python -m venv e l'installazione dei requisiti"),
-        ("python", ".tox", "Si ricrea al prossimo tox/nox"),
-        ("python", ".nox", "Si ricrea al prossimo tox/nox"),
-        ("python", "__pypackages__", "Si riscarica con pdm install"),
-        ("terraform", ".terraform", "Si riscarica con terraform init"),
-        ("go", "vendor", "Si ricrea con go mod vendor"),
-        ("php", "vendor", "Si riscarica con composer install"),
-        ("ruby", "vendor/bundle", "Si riscarica con bundle install"),
-        ("elixir", "deps", "Si riscarica con mix deps.get"),
-        ("ocaml", "_opam", "Si ricrea con opam install . --deps-only"),
-        ("vcpkg", "vcpkg_installed", "Si ricrea con vcpkg install"),
-        ("platformio", ".pio", "Si riscarica alla prossima build PlatformIO"),
-        ("swift", ".build", "Si ricrea con swift build"),
-        ("dbt", "dbt_packages", "Si riscarica con dbt deps"),
+        ("node", "node_modules", "Download again with npm install (or pnpm, yarn, bun install)"),
+        ("python", ".venv", "Recreate with python -m venv and reinstalling the requirements"),
+        ("python", "venv", "Recreate with python -m venv and reinstalling the requirements"),
+        ("python", ".tox", "Recreated on the next tox/nox run"),
+        ("python", ".nox", "Recreated on the next tox/nox run"),
+        ("python", "__pypackages__", "Download again with pdm install"),
+        ("terraform", ".terraform", "Download again with terraform init"),
+        ("go", "vendor", "Recreate with go mod vendor"),
+        ("php", "vendor", "Download again with composer install"),
+        ("ruby", "vendor/bundle", "Download again with bundle install"),
+        ("elixir", "deps", "Download again with mix deps.get"),
+        ("ocaml", "_opam", "Recreate with opam install . --deps-only"),
+        ("vcpkg", "vcpkg_installed", "Recreate with vcpkg install"),
+        ("platformio", ".pio", "Downloaded again on the next PlatformIO build"),
+        ("swift", ".build", "Recreate with swift build"),
+        ("dbt", "dbt_packages", "Download again with dbt deps"),
     ];
     let mut deps = 0;
     for m in markers::MARKERS {
@@ -1018,7 +1018,7 @@ fn nested_artifacts_of_one_project_count_once() {
         let c = find(&r, &p);
         let paths: Vec<String> = c.artifacts.iter().map(|a| path_key(&a.path)).collect();
         assert_eq!(paths, vec![path_key(&p.join("vendor"))]);
-        assert_eq!(c.artifacts[0].label, "Dipendenze Composer (vendor)");
+        assert_eq!(c.artifacts[0].label, "Composer dependencies (vendor)");
     }
 }
 

@@ -118,25 +118,25 @@ mod win {
     pub(super) fn delete_checked(path: &Path, guard: &Guard) -> Result<u64, String> {
         let shown = path.display();
         if let Some(why) = prot(path, guard, false) {
-            return Err(format!("percorso protetto: {shown} ({why})"));
+            return Err(format!("protected path: {shown} ({why})"));
         }
         let text = path.to_string_lossy();
         if super::comparable(&text).is_none() {
-            return Err(format!("percorso non assoluto o non valido: {shown}"));
+            return Err(format!("path not absolute or not valid: {shown}"));
         }
-        let handle = open(path).map_err(|e| format!("non si apre {shown}: {e}"))?;
-        let tag = attribute_tag(&handle).map_err(|e| format!("attributi di {shown}: {e}"))?;
+        let handle = open(path).map_err(|e| format!("cannot open {shown}: {e}"))?;
+        let tag = attribute_tag(&handle).map_err(|e| format!("attributes of {shown}: {e}"))?;
         let is_link = tag.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
         let is_dir = tag.attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
-        let actual = final_path(&handle).map_err(|e| format!("percorso vero di {shown}: {e}"))?;
+        let actual = final_path(&handle).map_err(|e| format!("real path of {shown}: {e}"))?;
         if !same_path(&text, &actual.to_string_lossy()) {
             return Err(format!(
-                "collegamento non seguito: {shown} porta a {}",
+                "link not followed: {shown} leads to {}",
                 actual.display()
             ));
         }
         if let Some(why) = prot(&actual, guard, is_dir) {
-            return Err(format!("percorso protetto: {shown} ({why})"));
+            return Err(format!("protected path: {shown} ({why})"));
         }
         let size = if is_dir || is_link {
             0
@@ -147,9 +147,9 @@ mod win {
         };
         dispose(&handle, tag.attributes).map_err(|code| {
             if code == ERROR_DIR_NOT_EMPTY {
-                format!("cartella non vuota: {shown}")
+                format!("folder not empty: {shown}")
             } else {
-                format!("non si cancella {shown}: {}", std::io::Error::from_raw_os_error(code as i32))
+                format!("cannot delete {shown}: {}", std::io::Error::from_raw_os_error(code as i32))
             }
         })?;
         Ok(size)
@@ -372,12 +372,12 @@ mod tests {
         // Raccolto come `cache\x.txt`; poi `cache` diventa una giunzione.
         let parent = t.path().join("cache");
         if !junction(&parent, &other) {
-            println!("SKIP: mklink /J non riuscito");
+            println!("SKIP: mklink /J failed");
             return;
         }
         let expected: PathBuf = parent.join("x.txt");
         let err = delete_checked(&expected, &env()).unwrap_err();
-        assert!(err.starts_with("collegamento non seguito: "), "{err}");
+        assert!(err.starts_with("link not followed: "), "{err}");
         assert_eq!(fs::read_to_string(other.join("x.txt")).unwrap(), "precious");
     }
 
@@ -387,10 +387,10 @@ mod tests {
         let f = t.path().join("auth.json");
         fs::write(&f, "secret").unwrap();
         let err = delete_checked(&f, &env()).unwrap_err();
-        assert!(err.starts_with("percorso protetto: "), "{err}");
+        assert!(err.starts_with("protected path: "), "{err}");
         assert!(f.exists());
         let err = delete_checked(Path::new(r"\\host\share\x.tmp"), &env()).unwrap_err();
-        assert!(err.starts_with("percorso protetto: "), "{err}");
+        assert!(err.starts_with("protected path: "), "{err}");
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         fs::create_dir_all(d.join("sub")).unwrap();
         fs::write(d.join("sub").join("f.txt"), "1").unwrap();
         let err = delete_checked(&d.join("sub"), &env()).unwrap_err();
-        assert!(err.starts_with("cartella non vuota: "), "{err}");
+        assert!(err.starts_with("folder not empty: "), "{err}");
         assert!(d.join("sub").join("f.txt").exists());
         fs::remove_file(d.join("sub").join("f.txt")).unwrap();
         assert_eq!(delete_checked(&d.join("sub"), &env()), Ok(0));
@@ -415,11 +415,11 @@ mod tests {
         fs::write(target.join("keep.txt"), "keep").unwrap();
         let link = t.path().join("link");
         if !junction(&link, &target) {
-            println!("SKIP: mklink /J non riuscito");
+            println!("SKIP: mklink /J failed");
             return;
         }
         assert_eq!(delete_checked(&link, &env()), Ok(0));
-        assert!(std::fs::symlink_metadata(&link).is_err(), "la giunzione è rimasta");
+        assert!(std::fs::symlink_metadata(&link).is_err(), "the junction is still there");
         assert_eq!(fs::read_to_string(target.join("keep.txt")).unwrap(), "keep");
     }
 

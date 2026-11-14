@@ -27,7 +27,7 @@ use crate::expand::expand;
 use crate::model::{Action, Cleaner, Env, Opt, Origin, RegRoot, Search};
 
 /// Gruppo con cui compaiono i cleaner CleanerML nell'elenco.
-const GROUP: &str = "Sviluppo e AI";
+const GROUP: &str = "Development & AI";
 
 /// Legge un cleaner CleanerML. Tutte le opzioni sono spente di default; ciò che
 /// il motore non sa fare (altri comandi, `search` non elencati, regex non
@@ -36,19 +36,19 @@ const GROUP: &str = "Sviluppo e AI";
 /// solo i valori le cui variabili d'ambiente sono definite in `env`.
 pub fn parse_cleaner(xml: &str, origin: &'static str, env: &Env) -> Result<Cleaner, String> {
     let doc = Document::parse(xml.trim_start_matches('\u{feff}'))
-        .map_err(|e| format!("XML non valido: {e}"))?;
+        .map_err(|e| format!("invalid XML: {e}"))?;
     let root = doc.root_element();
     if !root.has_tag_name("cleaner") {
-        return Err("manca l'elemento <cleaner>".into());
+        return Err("missing <cleaner> element".into());
     }
     if !os_ok(root.attribute("os")) {
-        return Err("os non windows".into());
+        return Err("os is not windows".into());
     }
     let id = root
         .attribute("id")
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or("il cleaner non ha l'attributo id")?
+        .ok_or("the cleaner has no id attribute")?
         .to_string();
 
     let vars = read_vars(root, env);
@@ -59,7 +59,7 @@ pub fn parse_cleaner(xml: &str, origin: &'static str, env: &Env) -> Result<Clean
         .filter(|n| n.has_tag_name("running") && os_ok(n.attribute("os")))
         .find_map(|n| match n.attribute("type").map(str::trim) {
             Some("exe") => None,
-            other => Some(format!("tipo di processo «{}»", other.unwrap_or(""))),
+            other => Some(format!("process type “{}”", other.unwrap_or(""))),
         });
     let running = root
         .descendants()
@@ -167,7 +167,7 @@ fn parse_option(
         actions,
         excludes: Vec::new(),
         unsupported: (!reasons.is_empty())
-            .then(|| format!("non supportato: {}", reasons.join(", "))),
+            .then(|| format!("unsupported: {}", reasons.join(", "))),
     })
 }
 
@@ -186,13 +186,13 @@ fn parse_action(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Acti
         }
         return Err(match name {
             "wholeregex" | "nwholeregex" => name.to_string(),
-            _ => format!("attributo {name}"),
+            _ => format!("attribute {name}"),
         });
     }
     match a.attribute("command").map(str::trim).unwrap_or("") {
         "delete" => parse_delete(a, vars),
         "winreg" => parse_winreg(a, vars),
-        "" => Err("azione senza comando".into()),
+        "" => Err("action without a command".into()),
         other => Err(other.to_string()),
     }
 }
@@ -204,14 +204,14 @@ fn parse_delete(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Acti
         "walk.all" => Search::WalkAll,
         "walk.files" => Search::WalkFiles,
         "walk.top" => Search::WalkTop,
-        "" => return Err("azione senza search".into()),
+        "" => return Err("action without a search".into()),
         other => return Err(other.to_string()),
     };
     let path = a
         .attribute("path")
         .map(str::trim)
         .filter(|p| !p.is_empty())
-        .ok_or("azione senza percorso")?;
+        .ok_or("action without a path")?;
     if a.has_attribute("nregex") {
         return Err("nregex".into());
     }
@@ -230,7 +230,7 @@ fn parse_delete(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Acti
         Some(re) if matches!(search, Search::WalkAll | Search::WalkFiles | Search::WalkTop) => {
             translate_regex(re).map_err(|_| format!("regex {re}"))?
         }
-        Some(re) => return Err(format!("regex {re} con questo search")),
+        Some(re) => return Err(format!("regex {re} with this search")),
     };
     let recurse = matches!(search, Search::WalkAll | Search::WalkFiles);
     Ok(substitute(path, vars)?
@@ -250,10 +250,10 @@ fn parse_winreg(a: Node, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Acti
         .attribute("path")
         .map(str::trim)
         .filter(|p| !p.is_empty())
-        .ok_or("azione senza percorso")?;
+        .ok_or("action without a path")?;
     let (root_name, rest) = full.split_once('\\').unwrap_or((full, ""));
     if rest.trim_matches('\\').is_empty() {
-        return Err("winreg senza chiave".into());
+        return Err("winreg without a key".into());
     }
     let root = match root_name.to_ascii_uppercase().as_str() {
         "HKCU" | "HKEY_CURRENT_USER" => RegRoot::Hkcu,
@@ -286,7 +286,7 @@ fn substitute(path: &str, vars: &HashMap<String, Vec<String>>) -> Result<Vec<Str
         let name = &after[..end];
         let values = vars
             .get(name)
-            .ok_or_else(|| format!("variabile $${name}$$ sconosciuta"))?;
+            .ok_or_else(|| format!("unknown variable $${name}$$"))?;
         out = out
             .iter()
             .flat_map(|p| values.iter().map(move |v| format!("{p}{}{v}", &rest[..start])))
@@ -318,7 +318,7 @@ fn translate_regex(re: &str) -> Result<Vec<String>, String> {
     let mut chars = re.chars().peekable();
     let alts = parse_alts(&mut chars, 0)?;
     if chars.next().is_some() {
-        return Err("parentesi non bilanciate".into());
+        return Err("unbalanced parentheses".into());
     }
     let mut out: Vec<String> = Vec::new();
     for alt in alts {
@@ -336,7 +336,7 @@ fn translate_regex(re: &str) -> Result<Vec<String>, String> {
                 Tok::One => pattern.push('?'),
                 Tok::Start if i == 0 => {}
                 Tok::End if i == last => {}
-                _ => return Err("ancora `^` o `$` in mezzo al modello".into()),
+                _ => return Err("anchor `^` or `$` in the middle of the pattern".into()),
             }
         }
         if !anchored_end {
@@ -347,7 +347,7 @@ fn translate_regex(re: &str) -> Result<Vec<String>, String> {
         }
         // `*.*` vuol dire «tutto ciò che ha un punto»: una regex come `\.` non lo chiede
         if pattern == "*.*" {
-            return Err("tradotta in *.* (troppo larga)".into());
+            return Err("translated to *.* (too broad)".into());
         }
         if !out.contains(&pattern) {
             out.push(pattern);
@@ -365,7 +365,7 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
     loop {
         let Some(c) = chars.next() else {
             if depth > 0 {
-                return Err("parentesi non chiusa".into());
+                return Err("unclosed parenthesis".into());
             }
             done.extend(current);
             return Ok(done);
@@ -373,7 +373,7 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
         match c {
             ')' => {
                 if depth == 0 {
-                    return Err("parentesi chiusa in più".into());
+                    return Err("extra closing parenthesis".into());
                 }
                 done.extend(current);
                 return Ok(done);
@@ -385,7 +385,7 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
                 if chars.peek() == Some(&'?') {
                     chars.next();
                     if chars.next() != Some(':') {
-                        return Err("gruppo speciale non gestito".into());
+                        return Err("unhandled special group".into());
                     }
                 }
                 let sub = parse_alts(chars, depth + 1)?;
@@ -400,7 +400,7 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
                     })
                     .collect();
                 if current.len() + done.len() > MAX_ALTERNATIVES {
-                    return Err("troppe alternative".into());
+                    return Err("too many alternatives".into());
                 }
             }
             '^' => push_all(&mut current, Tok::Start),
@@ -417,13 +417,13 @@ fn parse_alts(chars: &mut Peekable<Chars>, depth: usize) -> Result<Vec<Vec<Tok>>
                 Some(e) if !e.is_alphanumeric() && e != '*' && e != '?' => {
                     push_all(&mut current, Tok::Lit(e));
                 }
-                _ => return Err("escape non gestito".into()),
+                _ => return Err("unhandled escape".into()),
             },
             '*' | '+' | '?' | '{' | '}' | '[' | ']' => {
-                return Err(format!("operatore «{c}» non gestito"));
+                return Err(format!("unhandled operator “{c}”"));
             }
             // il raccoglitore separa i modelli con `;`
-            ';' => return Err("«;» letterale non traducibile".into()),
+            ';' => return Err("literal “;” cannot be translated".into()),
             c => push_all(&mut current, Tok::Lit(c)),
         }
     }
@@ -595,7 +595,7 @@ mod tests {
     fn unsupported_commands_are_flagged_not_dropped() {
         let c = parse(&full_env());
         let db = opt(&c, "database");
-        assert_eq!(db.unsupported.as_deref(), Some("non supportato: sqlite.vacuum"));
+        assert_eq!(db.unsupported.as_deref(), Some("unsupported: sqlite.vacuum"));
         assert_eq!(db.label, "Database (avanzato)");
         assert!(!db.default_on);
     }
@@ -622,16 +622,16 @@ mod tests {
         </cleaner>"#;
         let c = parse_cleaner(xml, "x", &env(&[("temp", r"C:\T")])).unwrap();
         let a = opt(&c, "a");
-        assert_eq!(a.unsupported.as_deref(), Some("non supportato: deep"));
+        assert_eq!(a.unsupported.as_deref(), Some("unsupported: deep"));
         // l'azione supportata della stessa opzione non si perde
         assert_eq!(a.actions, vec![files(r"%TEMP%\ok.txt", &[], false, Search::File)]);
-        assert_eq!(opt(&c, "b").unsupported.as_deref(), Some("non supportato: nregex"));
+        assert_eq!(opt(&c, "b").unsupported.as_deref(), Some("unsupported: nregex"));
         assert!(
             opt(&c, "c")
                 .unsupported
                 .as_deref()
                 .unwrap()
-                .starts_with("non supportato: regex ")
+                .starts_with("unsupported: regex ")
         );
         assert!(
             opt(&c, "d")
@@ -665,10 +665,10 @@ mod tests {
         </cleaner>"#;
         let c = parse_cleaner(xml, "x", &env(&[("temp", r"C:\T")])).unwrap();
         for (id, reason) in [
-            ("w", "non supportato: wholeregex"),
-            ("n", "non supportato: nwholeregex"),
-            ("f", "non supportato: attributo foo"),
-            ("r", "non supportato: attributo foo"),
+            ("w", "unsupported: wholeregex"),
+            ("n", "unsupported: nwholeregex"),
+            ("f", "unsupported: attribute foo"),
+            ("r", "unsupported: attribute foo"),
         ] {
             let o = opt(&c, id);
             assert_eq!(o.unsupported.as_deref(), Some(reason), "{id}");
@@ -703,8 +703,8 @@ mod tests {
         let c = parse_cleaner(xml, "x", &env(&[])).unwrap();
         assert_eq!(c.running, vec!["x.exe"]);
         let reason = opt(&c, "a").unsupported.as_deref().unwrap();
-        assert!(reason.starts_with("non supportato: "), "{reason}");
-        assert!(reason.contains("tipo di processo"), "{reason}");
+        assert!(reason.starts_with("unsupported: "), "{reason}");
+        assert!(reason.contains("process type"), "{reason}");
         // un `running` di un altro sistema operativo non conta
         let xml = r#"<cleaner id="x"><label>X</label>
           <running type="pathname" os="linux">/tmp/x</running>
@@ -751,7 +751,7 @@ mod tests {
         let xml = r#"<cleaner id="x" os="linux"><label>X</label></cleaner>"#;
         assert_eq!(
             parse_cleaner(xml, "x", &env(&[])),
-            Err("os non windows".to_string())
+            Err("os is not windows".to_string())
         );
         // senza `os` si accetta
         let xml = r#"<cleaner id="x"><label>X</label></cleaner>"#;

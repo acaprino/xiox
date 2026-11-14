@@ -437,7 +437,7 @@ impl Ctx<'_> {
     }
 
     fn skip_protected(&mut self, path: &Path, why: &str) {
-        self.skip(|| format!("percorso protetto: {} ({why})", path.display()));
+        self.skip(|| format!("protected path: {} ({why})", path.display()));
     }
 
     fn files_action(
@@ -460,7 +460,7 @@ impl Ctx<'_> {
             let bases = match resolve_glob(&expanded, self.env) {
                 Ok(b) => b,
                 Err(()) => {
-                    self.skip(|| format!("collegamento non seguito: {}", expanded.display()));
+                    self.skip(|| format!("link not followed: {}", expanded.display()));
                     continue;
                 }
             };
@@ -490,7 +490,7 @@ impl Ctx<'_> {
         };
         if chain_has_link(base, self.env) {
             // La cartella o un suo antenato è un collegamento: non si segue.
-            self.skip(|| format!("collegamento non seguito: {}", base.display()));
+            self.skip(|| format!("link not followed: {}", base.display()));
             return;
         }
         let name = base
@@ -558,7 +558,7 @@ impl Ctx<'_> {
     /// contiene è stato elencato per la rimozione (la cartella resterebbe vuota).
     fn walk(&mut self, dir: &Path, spec: &Spec) -> bool {
         let Ok(rd) = std::fs::read_dir(dir) else {
-            self.skip(|| format!("cartella illeggibile: {}", dir.display()));
+            self.skip(|| format!("unreadable folder: {}", dir.display()));
             return false;
         };
         let mut entries: Vec<_> = rd.flatten().collect();
@@ -660,7 +660,7 @@ impl Ctx<'_> {
             RegItem::Value { root, path, value } => (*root, path.as_str(), Some(value.as_str())),
         };
         if let Err(why) = reg_allowed(root, path, value) {
-            self.skip(|| format!("chiave di registro protetta: {} ({why})", reg_display(&item)));
+            self.skip(|| format!("protected registry key: {} ({why})", reg_display(&item)));
             return;
         }
         // Si raccoglie il percorso che esiste davvero: per HKLM, se la chiave
@@ -1428,7 +1428,7 @@ mod tests {
         assert!(c.dirs_to_remove.is_empty(), "{:?}", c.dirs_to_remove);
         assert_eq!(c.skipped, 1);
         assert!(
-            c.skipped_reasons.iter().any(|r| r.starts_with("percorso protetto: ")),
+            c.skipped_reasons.iter().any(|r| r.starts_with("protected path: ")),
             "{:?}",
             c.skipped_reasons
         );
@@ -1525,7 +1525,7 @@ mod tests {
     }
 
     #[test]
-    fn skipped_reasons_are_italian_and_capped_at_twenty() {
+    fn skipped_reasons_are_english_and_capped_at_twenty() {
         let t = tempfile::tempdir().unwrap();
         let base = t.path().join("agent");
         for i in 0..30 {
@@ -1537,9 +1537,9 @@ mod tests {
         assert_eq!(c.skipped, 30);
         assert_eq!(c.skipped_reasons.len(), 20);
         assert!(
-            c.skipped_reasons[0].starts_with("percorso protetto: ")
+            c.skipped_reasons[0].starts_with("protected path: ")
                 && c.skipped_reasons[0].contains("auth.json")
-                && c.skipped_reasons[0].contains("file di credenziali"),
+                && c.skipped_reasons[0].contains("credentials file"),
             "{:?}",
             c.skipped_reasons[0]
         );
@@ -1559,7 +1559,7 @@ mod tests {
         let c = collect(&o, &Env::default(), &never);
         assert!(c.files.is_empty());
         assert!(
-            c.skipped_reasons.iter().any(|r| r.starts_with("collegamento non seguito: ")),
+            c.skipped_reasons.iter().any(|r| r.starts_with("link not followed: ")),
             "{:?}",
             c.skipped_reasons
         );

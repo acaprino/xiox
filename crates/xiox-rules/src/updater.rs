@@ -76,7 +76,7 @@ const RENAME_BACKOFF: Duration = Duration::from_millis(200);
 
 /// Motivo con cui [`read_valid`] rifiuta una copia non protetta.
 pub const UNPROTECTED_COPY: &str =
-    "cartella delle regole modificabile da utenti non amministratori: copia ignorata";
+    "rules folder writable by non-administrators: copy ignored";
 
 /// Risposta di una richiesta condizionale.
 pub enum Fetched {
@@ -158,11 +158,11 @@ pub fn ensure_admin_dir(dir: &Path, protect: &dyn Protect) -> Result<(), String>
                 Ok(()) => return protect.secure(dir),
                 // Ricreata da altri nel frattempo: si ricontrolla.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(format!("cartella non creabile: {e}")),
+                Err(e) => return Err(format!("folder cannot be created: {e}")),
             },
         }
     }
-    Err(format!("{}: ricreata da altri più volte", dir.display()))
+    Err(format!("{}: recreated by others several times", dir.display()))
 }
 
 /// [`ensure_admin_dir`] su ogni cartella di [`trust_chain`], dalla più esterna.
@@ -181,7 +181,7 @@ const QUARANTINE_MARK: &str = ".non-fidata-";
 /// sia il loro ACL).
 pub fn quarantine_dir(dir: &Path) -> Result<(), String> {
     let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
-        return Err("cartella senza genitore".into());
+        return Err("folder without a parent".into());
     };
     let name = name.to_string_lossy().into_owned();
     let nanos = std::time::SystemTime::now()
@@ -193,7 +193,7 @@ pub fn quarantine_dir(dir: &Path) -> Result<(), String> {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::rename(dir, &aside).map_err(|e| format!("cartella non fidata non spostabile: {e}"))?;
+    fs::rename(dir, &aside).map_err(|e| format!("untrusted folder cannot be moved: {e}"))?;
     if let Ok(rd) = fs::read_dir(parent) {
         let prefix = format!("{name}{QUARANTINE_MARK}").to_lowercase();
         for e in rd.flatten() {
@@ -270,26 +270,26 @@ fn read_trusted(path: &Path, protect: &dyn Protect, max: u64) -> Result<Vec<u8>,
         if e.kind() == std::io::ErrorKind::NotFound {
             ReadError::Missing
         } else {
-            ReadError::Other(format!("{} non si apre: {e}", path.display()))
+            ReadError::Other(format!("cannot open {}: {e}", path.display()))
         }
     })?;
     let md = file
         .metadata()
         .map_err(|e| ReadError::Other(format!("{}: {e}", path.display())))?;
     if is_link_md(&md) || !md.is_file() {
-        return Err(ReadError::Other(format!("{} non è un file normale", path.display())));
+        return Err(ReadError::Other(format!("{} is not a regular file", path.display())));
     }
     if md.len() > max {
-        return Err(ReadError::Other(format!("{} troppo grande ({} byte)", path.display(), md.len())));
+        return Err(ReadError::Other(format!("{} too large ({} bytes)", path.display(), md.len())));
     }
     protect.check_file(&file).map_err(|_| ReadError::Untrusted)?;
     let mut bytes = Vec::new();
     (&file)
         .take(max + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| ReadError::Other(format!("{} illeggibile: {e}", path.display())))?;
+        .map_err(|e| ReadError::Other(format!("{} unreadable: {e}", path.display())))?;
     if bytes.len() as u64 > max {
-        return Err(ReadError::Other(format!("{} troppo grande", path.display())));
+        return Err(ReadError::Other(format!("{} too large", path.display())));
     }
     Ok(bytes)
 }
@@ -384,18 +384,18 @@ pub fn remove_legacy_copy(old: &Path) {
 /// Controlla che `bytes` sia davvero un Winapp2.ini intero. `Ok(versione)`.
 pub fn is_valid(bytes: &[u8]) -> Result<String, String> {
     if bytes.is_empty() {
-        return Err("file vuoto".into());
+        return Err("empty file".into());
     }
     if bytes.len() < MIN_BYTES {
-        return Err(format!("file troppo piccolo ({} byte)", bytes.len()));
+        return Err(format!("file too small ({} bytes)", bytes.len()));
     }
     if bytes.len() > MAX_BYTES {
-        return Err(format!("file troppo grande ({} byte)", bytes.len()));
+        return Err(format!("file too large ({} bytes)", bytes.len()));
     }
     if bytes.last() != Some(&b'\n') {
-        return Err("file troncato (non finisce con un ritorno a capo)".into());
+        return Err("truncated file (does not end with a newline)".into());
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| "il file non è UTF-8".to_string())?;
+    let text = std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8".to_string())?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
     let mut version: Option<String> = None;
@@ -427,17 +427,17 @@ pub fn is_valid(bytes: &[u8]) -> Result<String, String> {
             has_filekey = true;
         }
     }
-    let version = version.ok_or_else(|| "riga '; Version:' assente".to_string())?;
+    let version = version.ok_or_else(|| "'; Version:' line missing".to_string())?;
     if sections < MIN_SECTIONS {
-        return Err(format!("solo {sections} sezioni"));
+        return Err(format!("only {sections} sections"));
     }
     if let Some(d) = declared
         && sections < d
     {
-        return Err(format!("{sections} sezioni su {d} dichiarate"));
+        return Err(format!("{sections} sections out of {d} declared"));
     }
     if !has_filekey {
-        return Err("nessuna FileKey".into());
+        return Err("no FileKey".into());
     }
     Ok(version)
 }
@@ -454,7 +454,7 @@ pub fn read_valid(dir: &Path) -> Result<(String, String), String> {
 pub fn read_valid_with(dir: &Path, protect: &dyn Protect) -> Result<(String, String), String> {
     let ini = dir.join(INI_NAME);
     if fs::symlink_metadata(&ini).is_err() {
-        return Err("nessuna copia locale".into());
+        return Err("no local copy".into());
     }
     for d in trust_chain(dir) {
         let link = fs::symlink_metadata(&d).is_ok_and(|m| is_link_md(&m));
@@ -464,12 +464,12 @@ pub fn read_valid_with(dir: &Path, protect: &dyn Protect) -> Result<(String, Str
     }
     // Controllo e lettura sullo stesso handle.
     let bytes = read_trusted(&ini, protect, MAX_BYTES as u64).map_err(|e| match e {
-        ReadError::Missing => "nessuna copia locale".to_string(),
+        ReadError::Missing => "no local copy".to_string(),
         ReadError::Untrusted => UNPROTECTED_COPY.to_string(),
-        ReadError::Other(e) => format!("copia locale illeggibile: {e}"),
+        ReadError::Other(e) => format!("local copy unreadable: {e}"),
     })?;
-    let version = is_valid(&bytes).map_err(|e| format!("copia locale non valida: {e}"))?;
-    let text = String::from_utf8(bytes).map_err(|_| "il file non è UTF-8".to_string())?;
+    let version = is_valid(&bytes).map_err(|e| format!("local copy not valid: {e}"))?;
+    let text = String::from_utf8(bytes).map_err(|_| "the file is not UTF-8".to_string())?;
     Ok((text, version))
 }
 
@@ -496,7 +496,7 @@ pub fn update_with(dir: &Path, fetch: &dyn Fetch, url: &str, protect: &dyn Prote
     // `Xiox` e `winapp2` fidate (una cartella creata prima da altri si
     // toglie di mezzo e si ricrea), prima di ogni rete e scrittura.
     if let Err(e) = ensure_chain(dir, protect) {
-        return fail(format!("cartella delle regole non protetta: {e}"));
+        return fail(format!("rules folder not protected: {e}"));
     }
 
     // L'etag vale solo se la copia esiste: un 304 senza file non serve a nulla.
@@ -514,36 +514,36 @@ pub fn update_with(dir: &Path, fetch: &dyn Fetch, url: &str, protect: &dyn Prote
             if have_copy {
                 UpdateOutcome::UpToDate
             } else {
-                fail("risposta 304 senza copia locale".into())
+                fail("304 response without a local copy".into())
             }
         }
         Ok(Fetched::Body { bytes, etag }) => {
             let version = match is_valid(&bytes) {
                 Ok(v) => v,
-                Err(e) => return fail(format!("file scaricato non valido: {e}")),
+                Err(e) => return fail(format!("downloaded file not valid: {e}")),
             };
             if let Some(old) = &local_version
                 && is_older(&version, old)
             {
-                return fail("versione più vecchia ignorata".into());
+                return fail("older version ignored".into());
             }
             // La cartella si riprotegge subito prima di scrivere.
             if let Err(e) = ensure_chain(dir, protect) {
-                return fail(format!("cartella delle regole non protetta: {e}"));
+                return fail(format!("rules folder not protected: {e}"));
             }
             // La cartella è fidata: un `.tmp` rimasto è nostro e si toglie; il
             // nuovo si crea con `create_new` (mai un file già esistente).
             let tmp = dir.join(TMP_NAME);
             if fs::symlink_metadata(&tmp).is_ok() && !remove_tree_no_follow(&tmp) {
-                return fail("file temporaneo rimasto non cancellabile".into());
+                return fail("leftover temporary file cannot be deleted".into());
             }
             if let Err(e) = write_new(&tmp, &bytes) {
                 let _ = fs::remove_file(&tmp);
-                return fail(format!("scrittura non riuscita: {e}"));
+                return fail(format!("write failed: {e}"));
             }
             if let Err(e) = rename_retry(&tmp, &ini) {
                 let _ = fs::remove_file(&tmp);
-                return fail(format!("sostituzione non riuscita: {e}"));
+                return fail(format!("replacement failed: {e}"));
             }
             match etag.as_deref().and_then(sanitize_etag) {
                 Some(t) => {
@@ -571,7 +571,7 @@ fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
             Err(e) => last = Some(e),
         }
     }
-    Err(last.unwrap_or_else(|| std::io::Error::other("rename non tentato")))
+    Err(last.unwrap_or_else(|| std::io::Error::other("rename not attempted")))
 }
 
 /// Avvia l'aggiornamento della cartella `dir` in un thread staccato (nessun
@@ -621,12 +621,12 @@ pub fn spawn_update_with(
                 update_with(&worker_dir, fetch.as_ref(), &url, protect.as_ref())
             }))
             .unwrap_or_else(|_| {
-                fallback_outcome(&worker_dir, "aggiornamento interrotto da un errore interno")
+                fallback_outcome(&worker_dir, "update stopped by an internal error")
             });
             finish(&worker_slot, outcome);
         });
     if spawned.is_err() {
-        finish(&slot, fallback_outcome(&dir, "impossibile avviare l'aggiornamento"));
+        finish(&slot, fallback_outcome(&dir, "cannot start the update"));
     }
 }
 
@@ -709,10 +709,10 @@ pub struct AceInfo {
 pub fn acl_verdict(owner: &str, dacl: Option<&[AceInfo]>) -> Result<(), String> {
     if !TRUSTED_SIDS.contains(&owner) {
         // Il proprietario può sempre cambiare l'ACL.
-        return Err(format!("proprietario non amministratore ({owner})"));
+        return Err(format!("owner is not an administrator ({owner})"));
     }
     let Some(aces) = dacl else {
-        return Err("nessuna ACL: chiunque può modificare".into());
+        return Err("no ACL: anyone can modify".into());
     };
     for ace in aces {
         if ace.inherit_only
@@ -726,13 +726,13 @@ pub fn acl_verdict(owner: &str, dacl: Option<&[AceInfo]>) -> Result<(), String> 
             0 => {
                 if ace.mask & WRITE_LIKE != 0 {
                     return Err(format!(
-                        "{} ha diritti di modifica (0x{:08x})",
+                        "{} has modify rights (0x{:08x})",
                         ace.sid, ace.mask
                     ));
                 }
             }
             other => {
-                return Err(format!("voce dell'ACL di tipo {other} non riconosciuta"));
+                return Err(format!("ACL entry of type {other} not recognised"));
             }
         }
     }
@@ -792,18 +792,18 @@ fn has_link_in_chain(path: &Path) -> bool {
 /// Rifiuta una cartella (o un antenato) che sia un collegamento.
 pub fn secure_dir(dir: &Path) -> Result<(), String> {
     if has_link_in_chain(dir) {
-        return Err("la cartella o una che la contiene è un collegamento".into());
+        return Err("the folder or one containing it is a link".into());
     }
-    fs::create_dir_all(dir).map_err(|e| format!("cartella non creabile: {e}"))?;
+    fs::create_dir_all(dir).map_err(|e| format!("folder cannot be created: {e}"))?;
     if has_link_in_chain(dir) {
-        return Err("la cartella o una che la contiene è un collegamento".into());
+        return Err("the folder or one containing it is a link".into());
     }
     let icacls = system_directory()
         .map(|d| d.join("icacls.exe"))
         .filter(|p| p.is_file())
-        .ok_or_else(|| "icacls.exe non trovato".to_string())?;
+        .ok_or_else(|| "icacls.exe not found".to_string())?;
     run_hidden(&icacls, &icacls_grant_args(dir))
-        .map_err(|e| format!("permessi non impostati: {e}"))?;
+        .map_err(|e| format!("permissions not set: {e}"))?;
     let _ = run_hidden(&icacls, &icacls_owner_args(dir));
     check_admin_only(dir)
 }
@@ -820,23 +820,23 @@ fn run_hidden(exe: &Path, args: &[OsString]) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let mut child = cmd.spawn().map_err(|e| format!("non avviabile: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("cannot be started: {e}"))?;
     let deadline = Instant::now() + ICACLS_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(s)) if s.success() => return Ok(()),
             Ok(Some(s)) => {
-                return Err(format!("terminato con codice {}", s.code().unwrap_or(-1)));
+                return Err(format!("exited with code {}", s.code().unwrap_or(-1)));
             }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("tempo scaduto".into());
+                return Err("timed out".into());
             }
             Ok(None) => thread::sleep(Duration::from_millis(20)),
             Err(e) => {
                 let _ = child.kill();
-                return Err(format!("attesa non riuscita: {e}"));
+                return Err(format!("wait failed: {e}"));
             }
         }
     }
@@ -848,7 +848,7 @@ fn run_hidden(exe: &Path, args: &[OsString]) -> Result<(), String> {
 /// `GetNamedSecurityInfoW`: non dipende dalla lingua di Windows.
 pub fn check_admin_only(path: &Path) -> Result<(), String> {
     if has_link_in_chain(path) {
-        return Err("collegamento nel percorso".into());
+        return Err("link in the path".into());
     }
     let (owner, dacl) = read_acl(AclOf::Path(path))?;
     acl_verdict(&owner, dacl.as_deref())
@@ -936,7 +936,7 @@ fn read_acl(of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
     };
     if err != 0 {
         return Err(format!(
-            "permessi illeggibili: {}",
+            "permissions unreadable: {}",
             std::io::Error::from_raw_os_error(err as i32)
         ));
     }
@@ -959,14 +959,14 @@ fn read_acl(of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
             ) == 0
             {
                 LocalFree(sd.cast());
-                return Err("ACL illeggibile".into());
+                return Err("unreadable ACL".into());
             }
             let mut list = Vec::new();
             for i in 0..info.AceCount {
                 let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
                 if GetAce(dacl, i, &mut ace) == 0 || ace.is_null() {
                     LocalFree(sd.cast());
-                    return Err("voce dell'ACL illeggibile".into());
+                    return Err("unreadable ACL entry".into());
                 }
                 let header = *(ace as *const ACE_HEADER);
                 // ACCESS_ALLOWED_ACE e ACCESS_DENIED_ACE: intestazione (4 byte),
@@ -990,12 +990,12 @@ fn read_acl(of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
         (owner_text, aces)
     };
     let (owner, aces) = result;
-    Ok((owner.ok_or("proprietario illeggibile")?, aces))
+    Ok((owner.ok_or("unreadable owner")?, aces))
 }
 
 #[cfg(not(windows))]
 fn read_acl(_of: AclOf) -> Result<(String, Option<Vec<AceInfo>>), String> {
-    Err("permessi non verificabili fuori da Windows".into())
+    Err("permissions cannot be verified outside Windows".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,7 +1107,7 @@ fn locate_curl(system_dir: &Path) -> Result<PathBuf, String> {
     if p.is_file() {
         Ok(p)
     } else {
-        Err("curl.exe non trovato".to_string())
+        Err("curl.exe not found".to_string())
     }
 }
 
@@ -1116,7 +1116,7 @@ fn locate_curl(system_dir: &Path) -> Result<PathBuf, String> {
 fn curl_exe_path() -> Result<PathBuf, String> {
     let dir = system_directory()
         .or_else(|| std::env::var_os("SystemRoot").map(|r| PathBuf::from(r).join("System32")))
-        .ok_or_else(|| "curl.exe non trovato".to_string())?;
+        .ok_or_else(|| "curl.exe not found".to_string())?;
     locate_curl(&dir)
 }
 
@@ -1124,27 +1124,27 @@ fn curl_exe_path() -> Result<PathBuf, String> {
 /// non arriva all'utente).
 fn curl_error_text(code: Option<i32>) -> String {
     let what = match code {
-        Some(5) => "server proxy non trovato",
-        Some(6) => "server non trovato (nessuna connessione o DNS non raggiungibile)",
-        Some(7) => "connessione al server non riuscita",
-        Some(16 | 92) => "errore del protocollo HTTP/2",
-        Some(18) => "scaricamento interrotto a metà",
-        Some(22) => "il server ha risposto con un errore",
-        Some(23) => "scrittura del file scaricato non riuscita",
-        Some(28) => "tempo scaduto",
-        Some(35) => "connessione sicura (TLS) non riuscita",
+        Some(5) => "proxy server not found",
+        Some(6) => "server not found (no connection or DNS unreachable)",
+        Some(7) => "connection to the server failed",
+        Some(16 | 92) => "HTTP/2 protocol error",
+        Some(18) => "download interrupted halfway",
+        Some(22) => "the server answered with an error",
+        Some(23) => "writing the downloaded file failed",
+        Some(28) => "timed out",
+        Some(35) => "secure connection (TLS) failed",
         Some(47) => "troppi reindirizzamenti",
-        Some(52) => "il server non ha risposto",
-        Some(55) => "invio dei dati non riuscito",
-        Some(56) => "ricezione dei dati non riuscita",
-        Some(58 | 59 | 77 | 83) => "certificati della connessione sicura non utilizzabili",
-        Some(60) => "certificato del server non valido",
-        Some(63) => "file più grande del massimo consentito",
-        Some(1 | 3) => "indirizzo di scaricamento non valido",
-        Some(c) => return format!("scaricamento non riuscito (curl, codice {c})"),
-        None => "scaricamento interrotto",
+        Some(52) => "the server did not respond",
+        Some(55) => "sending data failed",
+        Some(56) => "receiving data failed",
+        Some(58 | 59 | 77 | 83) => "secure connection certificates not usable",
+        Some(60) => "server certificate not valid",
+        Some(63) => "file larger than the maximum allowed",
+        Some(1 | 3) => "download address not valid",
+        Some(c) => return format!("download failed (curl, code {c})"),
+        None => "download interrupted",
     };
-    let code = code.map(|c| format!(" (curl, codice {c})")).unwrap_or_default();
+    let code = code.map(|c| format!(" (curl, code {c})")).unwrap_or_default();
     format!("{what}{code}")
 }
 
@@ -1198,9 +1198,9 @@ impl CurlFetch {
     ) -> Result<Fetched, String> {
         let curl = curl_exe_path()?;
         ensure_admin_dir(&self.work, self.protect.as_ref())
-            .map_err(|e| format!("cartella di lavoro non protetta: {e}"))?;
+            .map_err(|e| format!("working folder not protected: {e}"))?;
         remove_stale_scratch(&self.work, STALE_AFTER);
-        let scratch = ScratchDir::new_in(&self.work).map_err(|e| format!("cartella di lavoro: {e}"))?;
+        let scratch = ScratchDir::new_in(&self.work).map_err(|e| format!("working folder: {e}"))?;
 
         let mut cmd = Command::new(&curl);
         cmd.current_dir(&scratch.0)
@@ -1216,7 +1216,7 @@ impl CurlFetch {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("curl.exe non avviabile: {e}"))?;
+            .map_err(|e| format!("curl.exe cannot be started: {e}"))?;
 
         // Guardiano: se curl non finisce entro timeout + margine, lo si uccide.
         let deadline = Instant::now() + timeout + WATCHDOG_GRACE;
@@ -1227,13 +1227,13 @@ impl CurlFetch {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
-                        return Err("tempo scaduto: scaricamento interrotto".into());
+                        return Err("timed out: download interrupted".into());
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
                     let _ = child.kill();
-                    return Err(format!("attesa di curl non riuscita: {e}"));
+                    return Err(format!("waiting for curl failed: {e}"));
                 }
             }
         };
@@ -1253,7 +1253,7 @@ impl CurlFetch {
                 let bytes = read("body.bin", MAX_BYTES as u64)?;
                 Ok(Fetched::Body { bytes, etag: new_etag })
             }
-            other => Err(format!("risposta HTTP {other}")),
+            other => Err(format!("HTTP response {other}")),
         }
     }
 }
@@ -1263,11 +1263,11 @@ impl CurlFetch {
 fn read_scratch(scratch: &Path, name: &str, protect: &dyn Protect, max: u64) -> Result<Vec<u8>, String> {
     let link = fs::symlink_metadata(scratch).is_ok_and(|m| is_link_md(&m));
     if link || protect.check(scratch).is_err() {
-        return Err("cartella di lavoro non protetta: risposta ignorata".into());
+        return Err("working folder not protected: response ignored".into());
     }
     read_trusted(&scratch.join(name), protect, max).map_err(|e| match e {
-        ReadError::Missing => format!("{name} mancante"),
-        ReadError::Untrusted => format!("{name} non protetto: risposta ignorata"),
+        ReadError::Missing => format!("{name} missing"),
+        ReadError::Untrusted => format!("{name} not protected: response ignored"),
         ReadError::Other(e) => e,
     })
 }
@@ -1289,7 +1289,7 @@ fn parse_headers(raw: &str) -> Result<(u16, Option<String>), String> {
         }
     }
     code.map(|c| (c, etag))
-        .ok_or_else(|| "header senza riga di stato".to_string())
+        .ok_or_else(|| "server response without a status line".to_string())
 }
 
 #[cfg(test)]
@@ -1637,7 +1637,7 @@ mod tests {
     #[test]
     fn locate_curl_uses_the_given_system_dir_only() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(locate_curl(dir.path()), Err("curl.exe non trovato".to_string()));
+        assert_eq!(locate_curl(dir.path()), Err("curl.exe not found".to_string()));
         fs::write(dir.path().join("curl.exe"), b"x").unwrap();
         assert_eq!(locate_curl(dir.path()), Ok(dir.path().join("curl.exe")));
         // il percorso vero del sistema esiste su Windows 11 ed è assoluto
@@ -1701,7 +1701,7 @@ mod tests {
         ]);
         upd(dir.path(), &fake, "u");
         let out = upd(dir.path(), &fake, "u");
-        assert_eq!(out, UpdateOutcome::KeptOld("versione più vecchia ignorata".into()));
+        assert_eq!(out, UpdateOutcome::KeptOld("older version ignored".into()));
         assert_eq!(fs::read(dir.path().join("Winapp2.ini")).unwrap(), new);
         assert_eq!(fs::read_to_string(dir.path().join("etag.txt")).unwrap(), "\"e1\"");
     }
@@ -1843,24 +1843,25 @@ mod tests {
     }
 
     #[test]
-    fn curl_exit_codes_become_italian_text() {
+    fn curl_exit_codes_become_english_text() {
         for (code, words) in [
-            (6, "server non trovato"),
-            (7, "connessione al server non riuscita"),
-            (28, "tempo scaduto"),
-            (35, "connessione sicura"),
-            (60, "certificato del server non valido"),
-            (63, "più grande"),
+            (6, "server not found"),
+            (7, "connection to the server failed"),
+            (28, "timed out"),
+            (35, "secure connection"),
+            (60, "server certificate not valid"),
+            (63, "larger than the maximum"),
         ] {
             let t = curl_error_text(Some(code));
-            assert!(t.contains(words) && t.contains(&format!("codice {code}")), "{code}: {t}");
+            assert!(t.contains(words) && t.contains(&format!("code {code}")), "{code}: {t}");
         }
-        assert_eq!(curl_error_text(Some(99)), "scaricamento non riuscito (curl, codice 99)");
-        assert_eq!(curl_error_text(None), "scaricamento interrotto");
+        assert_eq!(curl_error_text(Some(99)), "download failed (curl, code 99)");
+        assert_eq!(curl_error_text(None), "download interrupted");
+        // Never curl's own text: every code gets one of our fixed sentences.
         for code in 0..100 {
             let t = curl_error_text(Some(code)).to_lowercase();
-            for english in ["could not", "couldn", "resolve", "failed", "timeout", "timed out"] {
-                assert!(!t.contains(english), "{code}: {t}");
+            for curl_own in ["could not", "couldn", "resolve host"] {
+                assert!(!t.contains(curl_own), "{code}: {t}");
             }
         }
     }
@@ -1909,7 +1910,7 @@ mod tests {
             quarantine_dir(dir)
         }
         fn secure(&self, _dir: &Path) -> Result<(), String> {
-            Err("icacls.exe non trovato".into())
+            Err("icacls.exe not found".into())
         }
         fn check(&self, _path: &Path) -> Result<(), String> {
             Ok(())
@@ -1955,7 +1956,7 @@ mod tests {
         assert_eq!(
             out,
             UpdateOutcome::NoCopyYet(
-                "cartella delle regole non protetta: icacls.exe non trovato".into()
+                "rules folder not protected: icacls.exe not found".into()
             )
         );
         assert!(!target.join(INI_NAME).exists());
@@ -1965,7 +1966,7 @@ mod tests {
         fs::write(target.join(INI_NAME), valid_ini("260900")).unwrap();
         let out = update_with(&target, &fake, "u", &CannotSecure);
         assert!(
-            matches!(out, UpdateOutcome::KeptOld(ref r) if r.starts_with("cartella delle regole non protetta")),
+            matches!(out, UpdateOutcome::KeptOld(ref r) if r.starts_with("rules folder not protected")),
             "{out:?}"
         );
     }
@@ -2227,9 +2228,9 @@ mod tests {
         fs::write(scratch.join("body.bin"), "corpo").unwrap();
         assert_eq!(read_scratch(&scratch, "body.bin", &Scripted::default(), 100).unwrap(), b"corpo");
         let err = read_scratch(&scratch, "body.bin", &Scripted::tainted(&[&scratch]), 100).unwrap_err();
-        assert!(err.starts_with("cartella di lavoro non protetta"), "{err}");
+        assert!(err.starts_with("working folder not protected"), "{err}");
         let p = Scripted { files_untrusted: true, ..Default::default() };
-        assert!(read_scratch(&scratch, "body.bin", &p, 100).unwrap_err().contains("non protetto"));
+        assert!(read_scratch(&scratch, "body.bin", &p, 100).unwrap_err().contains("not protected"));
     }
 
     #[test]

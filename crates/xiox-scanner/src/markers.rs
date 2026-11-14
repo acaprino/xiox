@@ -154,19 +154,19 @@ const fn amb_dep(dir: &'static str, label: &'static str, hint: &'static str) -> 
 
 use Class::{Build, Cache, Log, Personal};
 
-const HINT_VENV: &str = "Si ricrea con python -m venv e l'installazione dei requisiti";
-const HINT_TOX: &str = "Si ricrea al prossimo tox/nox";
+const HINT_VENV: &str = "Recreate with python -m venv and reinstalling the requirements";
+const HINT_TOX: &str = "Recreated on the next tox/nox run";
 
 static RUST: &[ArtifactSpec] = &[spec("target", ArtifactKind::RustTarget, "Build Rust (target)", Identity::RustTarget, Build)];
 static NODE: &[ArtifactSpec] = &[
     ArtifactSpec {
-        hint: "Si riscarica con npm install (o pnpm, yarn, bun install)",
-        ..spec("node_modules", ArtifactKind::NodeModules, "Dipendenze Node (node_modules)", Identity::NodeModules, Class::Dependency)
+        hint: "Download again with npm install (or pnpm, yarn, bun install)",
+        ..spec("node_modules", ArtifactKind::NodeModules, "Node dependencies (node_modules)", Identity::NodeModules, Class::Dependency)
     },
     cat(".parcel-cache", "Cache Parcel (.parcel-cache)", Cache),
     cat(".turbo", "Cache Turborepo (.turbo)", Cache),
-    cat("coverage", "Copertura dei test (coverage)", Log),
-    cat(".nyc_output", "Dati di copertura nyc (.nyc_output)", Log),
+    cat("coverage", "Test coverage (coverage)", Log),
+    cat(".nyc_output", "Coverage data from nyc (.nyc_output)", Log),
     amb("dist", "Build Node (dist)", Build),
     amb("build", "Build Node (build)", Build),
     amb("out", "Build Node (out)", Build),
@@ -178,93 +178,93 @@ static ANGULAR: &[ArtifactSpec] =
     &[cat(".angular", "Cache Angular (.angular)", Cache), amb("dist", "Build Angular (dist)", Build)];
 static NX: &[ArtifactSpec] = &[
     cat(".nx/cache", "Cache Nx (.nx/cache)", Cache),
-    cat(".nx/workspace-data", "Dati di lavoro Nx (.nx/workspace-data)", Cache),
+    cat(".nx/workspace-data", "Nx working data (.nx/workspace-data)", Cache),
 ];
 static ASTRO: &[ArtifactSpec] = &[cat(".astro", "Cache Astro (.astro)", Cache), amb("dist", "Build Astro (dist)", Build)];
 static DOCUSAURUS: &[ArtifactSpec] =
     &[cat(".docusaurus", "Cache Docusaurus (.docusaurus)", Cache), amb("build", "Build Docusaurus (build)", Build)];
 static STORYBOOK: &[ArtifactSpec] = &[cat("storybook-static", "Build Storybook (storybook-static)", Build)];
 static PLAYWRIGHT: &[ArtifactSpec] = &[
-    cat("playwright-report", "Report di Playwright (playwright-report)", Log),
-    cat("test-results", "Risultati dei test Playwright (test-results)", Log),
-    cat("blob-report", "Report blob di Playwright (blob-report)", Log),
+    cat("playwright-report", "Playwright report (playwright-report)", Log),
+    cat("test-results", "Playwright test results (test-results)", Log),
+    cat("blob-report", "Playwright blob report (blob-report)", Log),
 ];
 static CYPRESS: &[ArtifactSpec] = &[
-    cat("cypress/videos", "Video dei test Cypress (cypress/videos)", Log),
-    cat("cypress/screenshots", "Schermate dei test Cypress (cypress/screenshots)", Log),
+    cat("cypress/videos", "Cypress test videos (cypress/videos)", Log),
+    cat("cypress/screenshots", "Cypress test screenshots (cypress/screenshots)", Log),
 ];
 static PYTHON: &[ArtifactSpec] = &[
     ArtifactSpec {
         hint: HINT_VENV,
-        ..spec(".venv", ArtifactKind::PythonVenv, "Ambiente virtuale Python (.venv)", Identity::PythonVenv, Class::Dependency)
+        ..spec(".venv", ArtifactKind::PythonVenv, "Python virtual environment (.venv)", Identity::PythonVenv, Class::Dependency)
     },
     ArtifactSpec {
         hint: HINT_VENV,
-        ..spec("venv", ArtifactKind::PythonVenv, "Ambiente virtuale Python (venv)", Identity::PythonVenv, Class::Dependency)
+        ..spec("venv", ArtifactKind::PythonVenv, "Python virtual environment (venv)", Identity::PythonVenv, Class::Dependency)
     },
     spec("__pycache__", ArtifactKind::PythonCache, "Cache Python (__pycache__)", Identity::ParentMarker, Cache),
     spec(".pytest_cache", ArtifactKind::PythonCache, "Cache pytest (.pytest_cache)", Identity::ParentMarker, Cache),
     spec(".mypy_cache", ArtifactKind::PythonCache, "Cache mypy (.mypy_cache)", Identity::ParentMarker, Cache),
     spec(".ruff_cache", ArtifactKind::PythonCache, "Cache Ruff (.ruff_cache)", Identity::ParentMarker, Cache),
-    dep(".tox", "Ambienti tox (.tox)", HINT_TOX),
-    dep(".nox", "Ambienti nox (.nox)", HINT_TOX),
-    cat("*.egg-info", "Metadati del pacchetto Python (*.egg-info)", Build),
-    cat(".eggs", "Pacchetti di build Python (.eggs)", Cache),
-    cat("htmlcov", "Report di copertura (htmlcov)", Log),
+    dep(".tox", "Python tox environments (.tox)", HINT_TOX),
+    dep(".nox", "Python nox environments (.nox)", HINT_TOX),
+    cat("*.egg-info", "Python package metadata (*.egg-info)", Build),
+    cat(".eggs", "Python build packages (.eggs)", Cache),
+    cat("htmlcov", "Coverage report (htmlcov)", Log),
     cat(".pytype", "Cache pytype (.pytype)", Cache),
     cat(".pyre", "Cache Pyre (.pyre)", Cache),
-    dep("__pypackages__", "Pacchetti PDM (__pypackages__)", "Si riscarica con pdm install"),
+    dep("__pypackages__", "PDM packages (__pypackages__)", "Download again with pdm install"),
     amb("build", "Build Python (build)", Build),
-    amb("dist", "Pacchetti Python (dist)", Build),
-    cat(".hypothesis", "Esempi che hanno fatto fallire i test (.hypothesis)", Personal),
-    cat("wandb", "Esecuzioni di Weights & Biases (wandb)", Personal),
-    cat("mlruns", "Esecuzioni di MLflow (mlruns)", Personal),
-    cat("runs", "Esecuzioni di addestramento (runs)", Personal),
-    cat("checkpoint-*", "Checkpoint di addestramento (checkpoint-*)", Personal),
+    amb("dist", "Python packages (dist)", Build),
+    cat(".hypothesis", "Examples that made tests fail (.hypothesis)", Personal),
+    cat("wandb", "Weights & Biases runs (wandb)", Personal),
+    cat("mlruns", "MLflow runs (mlruns)", Personal),
+    cat("runs", "Training runs (runs)", Personal),
+    cat("checkpoint-*", "Training checkpoints (checkpoint-*)", Personal),
 ];
 static GRADLE: &[ArtifactSpec] = &[
     spec("build", ArtifactKind::Gradle, "Build Gradle (build)", Identity::ParentMarker, Build),
     spec(".gradle", ArtifactKind::Gradle, "Cache Gradle (.gradle)", Identity::ParentMarker, Cache),
     cat(".kotlin", "Cache Kotlin (.kotlin)", Cache),
-    cat(".cxx", "Build nativa Android (.cxx)", Build),
-    cat(".externalNativeBuild", "Build nativa Android (.externalNativeBuild)", Build),
+    cat(".cxx", "Android native build (.cxx)", Build),
+    cat(".externalNativeBuild", "Android native build (.externalNativeBuild)", Build),
 ];
 static MAVEN: &[ArtifactSpec] = &[spec("target", ArtifactKind::Maven, "Build Maven (target)", Identity::ParentMarker, Build)];
 static SBT: &[ArtifactSpec] =
-    &[cat("target", "Build sbt (target)", Build), cat("project/target", "Build sbt del progetto (project/target)", Build)];
+    &[cat("target", "Build sbt (target)", Build), cat("project/target", "Project build with sbt (project/target)", Build)];
 static LEININGEN: &[ArtifactSpec] = &[cat("target", "Build Leiningen (target)", Build)];
 static CLOJURE: &[ArtifactSpec] = &[cat(".cpcache", "Cache Clojure CLI (.cpcache)", Cache)];
 static DOTNET: &[ArtifactSpec] = &[
     spec("bin", ArtifactKind::DotNet, "Build .NET (bin)", Identity::ParentMarker, Build),
-    spec("obj", ArtifactKind::DotNet, "Build intermedia .NET (obj)", Identity::ParentMarker, Build),
-    cat("TestResults", "Risultati dei test .NET (TestResults)", Log),
-    cat("BenchmarkDotNet.Artifacts", "Risultati di BenchmarkDotNet (BenchmarkDotNet.Artifacts)", Log),
+    spec("obj", ArtifactKind::DotNet, "Intermediate .NET build (obj)", Identity::ParentMarker, Build),
+    cat("TestResults", "Results of .NET tests (TestResults)", Log),
+    cat("BenchmarkDotNet.Artifacts", "BenchmarkDotNet results (BenchmarkDotNet.Artifacts)", Log),
 ];
 static DOTNET_PROPS: &[ArtifactSpec] = &[amb("artifacts", "Build .NET (artifacts)", Build)];
 static CMAKE: &[ArtifactSpec] = &[spec("build", ArtifactKind::CMake, "Build CMake (build)", Identity::ParentMarker, Build)];
 static CLANGD: &[ArtifactSpec] =
-    &[cat(".cache/clangd", "Indice di clangd (.cache/clangd)", Cache), cat(".ccls-cache", "Cache ccls (.ccls-cache)", Cache)];
+    &[cat(".cache/clangd", "Index from clangd (.cache/clangd)", Cache), cat(".ccls-cache", "Cache ccls (.ccls-cache)", Cache)];
 static AUTOTOOLS: &[ArtifactSpec] = &[cat("autom4te.cache", "Cache Autotools (autom4te.cache)", Cache)];
 static MESON: &[ArtifactSpec] = &[ArtifactSpec { identity: Identity::MesonBuild, ..cat("*", "Build Meson", Build) }];
 static VCPKG: &[ArtifactSpec] =
-    &[dep("vcpkg_installed", "Pacchetti vcpkg (vcpkg_installed)", "Si ricrea con vcpkg install")];
+    &[dep("vcpkg_installed", "Packages from vcpkg (vcpkg_installed)", "Recreate with vcpkg install")];
 static PLATFORMIO: &[ArtifactSpec] =
-    &[dep(".pio", "Build e librerie PlatformIO (.pio)", "Si riscarica alla prossima build PlatformIO")];
+    &[dep(".pio", "PlatformIO build and libraries (.pio)", "Downloaded again on the next PlatformIO build")];
 static FLUTTER: &[ArtifactSpec] =
     &[cat(".dart_tool", "Cache Dart (.dart_tool)", Cache), amb("build", "Build Flutter (build)", Build)];
-static SWIFT: &[ArtifactSpec] = &[dep(".build", "Build e dipendenze Swift (.build)", "Si ricrea con swift build")];
-static GO: &[ArtifactSpec] = &[amb_dep("vendor", "Dipendenze Go (vendor)", "Si ricrea con go mod vendor")];
-static PHP: &[ArtifactSpec] = &[amb_dep("vendor", "Dipendenze Composer (vendor)", "Si riscarica con composer install")];
+static SWIFT: &[ArtifactSpec] = &[dep(".build", "Swift build and dependencies (.build)", "Recreate with swift build")];
+static GO: &[ArtifactSpec] = &[amb_dep("vendor", "Go dependencies (vendor)", "Recreate with go mod vendor")];
+static PHP: &[ArtifactSpec] = &[amb_dep("vendor", "Composer dependencies (vendor)", "Download again with composer install")];
 static RUBY: &[ArtifactSpec] =
-    &[amb_dep("vendor/bundle", "Gem di Bundler (vendor/bundle)", "Si riscarica con bundle install")];
+    &[amb_dep("vendor/bundle", "Bundler gems (vendor/bundle)", "Download again with bundle install")];
 static ELIXIR: &[ArtifactSpec] =
-    &[cat("_build", "Build Elixir (_build)", Build), dep("deps", "Dipendenze Elixir (deps)", "Si riscarica con mix deps.get")];
+    &[cat("_build", "Build Elixir (_build)", Build), dep("deps", "Elixir dependencies (deps)", "Download again with mix deps.get")];
 static ERLANG: &[ArtifactSpec] = &[cat("_build", "Build Erlang (_build)", Build)];
 static STACK: &[ArtifactSpec] = &[cat(".stack-work", "Build Stack (.stack-work)", Build)];
 static CABAL: &[ArtifactSpec] = &[cat("dist-newstyle", "Build Cabal (dist-newstyle)", Build)];
 static OCAML: &[ArtifactSpec] = &[
     cat("_build", "Build Dune (_build)", Build),
-    dep("_opam", "Switch opam locale (_opam)", "Si ricrea con opam install . --deps-only"),
+    dep("_opam", "Local opam switch (_opam)", "Recreate with opam install . --deps-only"),
 ];
 static ZIG: &[ArtifactSpec] = &[
     cat(".zig-cache", "Cache Zig (.zig-cache)", Cache),
@@ -273,47 +273,47 @@ static ZIG: &[ArtifactSpec] = &[
 ];
 static UNITY: &[ArtifactSpec] = &[
     cat("Library", "Cache Unity (Library)", Cache),
-    cat("Temp", "File temporanei di Unity (Temp)", Cache),
+    cat("Temp", "Unity temporary files (Temp)", Cache),
     cat("Obj", "Build Unity (Obj)", Build),
-    cat("Logs", "Log di Unity (Logs)", Log),
-    cat("UserSettings", "Impostazioni utente di Unity (UserSettings)", Personal),
+    cat("Logs", "Unity logs (Logs)", Log),
+    cat("UserSettings", "Unity user settings (UserSettings)", Personal),
 ];
 static UNREAL: &[ArtifactSpec] = &[
-    cat("Intermediate", "Build intermedia di Unreal (Intermediate)", Build),
-    cat("DerivedDataCache", "Cache dei dati derivati di Unreal (DerivedDataCache)", Cache),
-    cat("Saved", "Dati salvati di Unreal (Saved)", Personal),
-    cat("Binaries", "Binari di Unreal (Binaries)", Personal),
+    cat("Intermediate", "Unreal intermediate build (Intermediate)", Build),
+    cat("DerivedDataCache", "Unreal derived data cache (DerivedDataCache)", Cache),
+    cat("Saved", "Unreal saved data (Saved)", Personal),
+    cat("Binaries", "Unreal binaries (Binaries)", Personal),
 ];
 static GODOT: &[ArtifactSpec] =
-    &[cat(".godot", "Cache Godot (.godot)", Cache), cat(".import", "Risorse importate di Godot (.import)", Build)];
+    &[cat(".godot", "Cache Godot (.godot)", Cache), cat(".import", "Godot imported resources (.import)", Build)];
 static SPHINX: &[ArtifactSpec] = &[cat("_build", "Build Sphinx (_build)", Build)];
-static MKDOCS: &[ArtifactSpec] = &[amb("site", "Sito MkDocs (site)", Build)];
+static MKDOCS: &[ArtifactSpec] = &[amb("site", "MkDocs site (site)", Build)];
 static JEKYLL: &[ArtifactSpec] =
-    &[cat("_site", "Sito Jekyll (_site)", Build), cat(".jekyll-cache", "Cache Jekyll (.jekyll-cache)", Cache)];
+    &[cat("_site", "Jekyll site (_site)", Build), cat(".jekyll-cache", "Cache Jekyll (.jekyll-cache)", Cache)];
 static HUGO: &[ArtifactSpec] = &[
-    cat("resources/_gen", "Risorse generate da Hugo (resources/_gen)", Cache),
-    amb("public", "Sito Hugo (public)", Build),
+    cat("resources/_gen", "Hugo generated resources (resources/_gen)", Cache),
+    amb("public", "Hugo site (public)", Build),
 ];
 static TERRAFORM: &[ArtifactSpec] =
-    &[dep(".terraform", "Provider e moduli Terraform (.terraform)", "Si riscarica con terraform init")];
+    &[dep(".terraform", "Terraform providers and modules (.terraform)", "Download again with terraform init")];
 static TERRAGRUNT: &[ArtifactSpec] = &[cat(".terragrunt-cache", "Cache Terragrunt (.terragrunt-cache)", Cache)];
 static CDK: &[ArtifactSpec] = &[cat("cdk.out", "Build AWS CDK (cdk.out)", Build)];
 static SAM: &[ArtifactSpec] = &[cat(".aws-sam", "Build AWS SAM (.aws-sam)", Build)];
-static SERVERLESS: &[ArtifactSpec] = &[cat(".serverless", "Pacchetti Serverless (.serverless)", Build)];
+static SERVERLESS: &[ArtifactSpec] = &[cat(".serverless", "Serverless packages (.serverless)", Build)];
 static DBT: &[ArtifactSpec] = &[
     cat("target", "Build dbt (target)", Build),
-    dep("dbt_packages", "Pacchetti dbt (dbt_packages)", "Si riscarica con dbt deps"),
-    cat("logs", "Log di dbt (logs)", Log),
+    dep("dbt_packages", "Packages from dbt (dbt_packages)", "Download again with dbt deps"),
+    cat("logs", "Logs from dbt (logs)", Log),
 ];
-static RSTUDIO: &[ArtifactSpec] = &[cat(".Rproj.user", "Stato di RStudio (.Rproj.user)", Personal)];
-static YARN: &[ArtifactSpec] = &[cat(".yarn/cache", "Cache Yarn del progetto (.yarn/cache)", Personal)];
+static RSTUDIO: &[ArtifactSpec] = &[cat(".Rproj.user", "RStudio state (.Rproj.user)", Personal)];
+static YARN: &[ArtifactSpec] = &[cat(".yarn/cache", "Project Yarn cache (.yarn/cache)", Personal)];
 static DVC: &[ArtifactSpec] = &[cat(".dvc/cache", "Cache DVC (.dvc/cache)", Personal)];
 static LARAVEL: &[ArtifactSpec] = &[
-    cat("bootstrap/cache", "Cache di Laravel (bootstrap/cache)", Personal),
-    cat("storage/framework/cache", "Cache di Laravel (storage/framework/cache)", Personal),
-    cat("storage/framework/views", "Viste compilate di Laravel (storage/framework/views)", Personal),
+    cat("bootstrap/cache", "Laravel cache (bootstrap/cache)", Personal),
+    cat("storage/framework/cache", "Laravel cache (storage/framework/cache)", Personal),
+    cat("storage/framework/views", "Laravel compiled views (storage/framework/views)", Personal),
 ];
-static SYMFONY: &[ArtifactSpec] = &[cat("var/cache", "Cache di Symfony (var/cache)", Personal)];
+static SYMFONY: &[ArtifactSpec] = &[cat("var/cache", "Symfony cache (var/cache)", Personal)];
 
 const fn m(pattern: Pattern, ecosystem: &'static str, artifacts: &'static [ArtifactSpec]) -> Marker {
     Marker { pattern, ecosystem, artifacts }
@@ -410,9 +410,9 @@ pub static MARKERS: &[Marker] = &[
 
 /// Entries added to every recognised project (personal or mixed data: `Caution`).
 pub static COMMON: &[ArtifactSpec] = &[
-    cat(".idea", "Impostazioni di JetBrains (.idea)", Personal),
-    cat(".vs", "Impostazioni di Visual Studio (.vs)", Personal),
-    cat(".ipynb_checkpoints", "Checkpoint di Jupyter (.ipynb_checkpoints)", Personal),
+    cat(".idea", "JetBrains settings (.idea)", Personal),
+    cat(".vs", "Visual Studio settings (.vs)", Personal),
+    cat(".ipynb_checkpoints", "Jupyter checkpoints (.ipynb_checkpoints)", Personal),
 ];
 
 /// Directory names that are never entered, anywhere (they never contain projects we care about
