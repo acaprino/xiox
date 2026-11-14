@@ -12,7 +12,7 @@
 //! changes nothing. Services Xiox never touches (`protected`) are filtered out of every change,
 //! whatever the page ticked.
 
-use crate::dev::{BUSY, DIALOG_OPEN, NOTHING_SELECTED, NO_DIALOG};
+use crate::dev::{plural, BUSY, DIALOG_OPEN, NOTHING_SELECTED, NO_DIALOG};
 use crate::notify::{Outbox, SectionId, SharedNotifier};
 use crate::view::*;
 use crate::{services, sys};
@@ -265,6 +265,12 @@ impl ServicesState {
         self.confirm = None;
     }
 
+    /// The section is shown again: the result of the last change goes off the screen (`Core::show`).
+    pub fn clear_message(&mut self) {
+        self.msg.clear();
+        self.msg_error = false;
+    }
+
     // ---------- the view ----------
 
     pub fn view(&self) -> SectionView {
@@ -368,21 +374,35 @@ impl ServicesState {
         vec![NoticeView { tone: if self.msg_error { Tone::Error } else { Tone::Ok }, text: self.msg.clone(), more: Vec::new() }]
     }
 
+    /// The question. Disable and Set to Manual name what they change: the ticked, not protected
+    /// services, hidden ones included (they are changed too), one row each with its startup type now.
+    /// Restore puts back every saved original, whatever is ticked: its question lists nothing.
     fn dialog_view(&self) -> Option<DialogView> {
         let start = self.confirm?;
-        let (title, text) = match action_of(start)? {
-            ServiceAction::Restore => ("Restore the services?", "Every service Xiox changed goes back to how it was."),
-            ServiceAction::Manual => ("Set to Manual?", "The services stop now and Windows starts them only when needed."),
-            ServiceAction::Disable => {
-                ("Disable the services?", "The services stop now and will not start again. You can always use “Restore originals”.")
-            }
+        let action = action_of(start)?;
+        let chosen = self.chosen();
+        let count = plural(chosen.len(), "service", "services");
+        let (title, text) = match action {
+            ServiceAction::Restore => ("Restore the services?".to_string(), "Every service Xiox changed goes back to how it was."),
+            ServiceAction::Manual => (
+                format!("Set {count} to Manual?"),
+                "The services stop now and Windows starts them only when needed.",
+            ),
+            ServiceAction::Disable => (
+                format!("Disable {count}?"),
+                "The services stop now and will not start again. You can always use “Restore originals”.",
+            ),
+        };
+        let rows = match action {
+            ServiceAction::Restore => Vec::new(),
+            _ => chosen.iter().map(|s| (s.display.clone(), s.start_text().to_string())).collect(),
         };
         Some(DialogView {
             id: "confirm".into(),
-            title: title.into(),
+            title,
             text: vec![text.into()],
             summary: Vec::new(),
-            rows: Vec::new(),
+            rows,
             warnings_title: None,
             warnings: Vec::new(),
             caution_title: None,
@@ -863,11 +883,14 @@ mod tests {
         assert!(action(&v, "disable").primary && action(&v, "disable").key.as_deref() == Some("Enter"));
         assert!(action(&v, "disable").enabled && action(&v, "manual").enabled);
 
-        // The three questions.
-        for (action_kind, title, text) in [
-            (ServiceAction::Restore, "Restore the services?", "Every service Xiox changed goes back to how it was."),
-            (ServiceAction::Manual, "Set to Manual?", "The services stop now and Windows starts them only when needed."),
-            (ServiceAction::Disable, "Disable the services?", "The services stop now and will not start again. You can always use “Restore originals”."),
+        // The three questions. Fax and Spooler are ticked and RpcSs (protected, ticked by a bad page) is
+        // not counted; Spooler is hidden by the Recommended filter and is still changed, so it is listed.
+        assert!(!st.visible().contains(&2), "Spooler is hidden by the filter");
+        let two = vec![("Fax".to_string(), "Automatico".to_string()), ("Print Spooler".to_string(), "Automatico".to_string())];
+        for (action_kind, title, text, rows) in [
+            (ServiceAction::Restore, "Restore the services?", "Every service Xiox changed goes back to how it was.", Vec::new()),
+            (ServiceAction::Manual, "Set 2 services to Manual?", "The services stop now and Windows starts them only when needed.", two.clone()),
+            (ServiceAction::Disable, "Disable 2 services?", "The services stop now and will not start again. You can always use “Restore originals”.", two),
         ] {
             let mut st = state().with_workers(ServicesWorkers { saved: saved_two, ..NEVER });
             st.open_confirm(action_kind).unwrap();
@@ -875,10 +898,16 @@ mod tests {
             let d = v.dialog.as_ref().unwrap();
             assert_eq!((d.id.as_str(), d.title.as_str()), ("confirm", title));
             assert_eq!(d.text, vec![text.to_string()]);
+            assert_eq!(d.rows, rows, "{title}: the services it changes, the hidden one included, never the protected one");
             assert_eq!(d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary)).collect::<Vec<_>>(), vec![("continue", "Continue", true), ("cancel", "Cancel", false)]);
             assert!(button(d, "continue").enabled && d.ack.is_none());
             assert!(!action(&v, "disable").enabled, "the question is open: the buttons are off");
         }
+        // One service: singular.
+        let mut st = state().with_workers(NEVER);
+        st.services.iter_mut().for_each(|s| s.selected = s.name == "Fax");
+        st.open_confirm(ServiceAction::Disable).unwrap();
+        assert_eq!(st.view().dialog.unwrap().title, "Disable 1 service?");
 
         // First load: nothing to list yet.
         let mut st = ServicesState::new().with_workers(ServicesWorkers { load: held_load, ..NEVER });
@@ -998,7 +1027,7 @@ mod tests {
     /// for the job to end. Where the mock and the engine differ, the step is re-synchronised and
     /// counted: exactly TWO (below). When the script changes, re-count.
     ///   * `show` "the notice goes when the section is shown again": `ServicesState` has no `show`;
-    ///     the command layer (Task 11) has to clear `msg` itself (the replay does it, counted).
+    ///     `Core::show` calls `clear_message()` and so does the replay (counted).
     ///   * the notice TEXT ("Selected services set to Manual."): the moved worker writes Italian
     ///     until Task 18, so the replay compares the notice COUNT and tone, not the text.
     #[test]
@@ -1017,7 +1046,7 @@ mod tests {
                 "show" if step["section"] == "services" => {
                     let expect = step["expect"]["notices"].as_array().unwrap();
                     if expect.is_empty() && !st.msg.is_empty() {
-                        st.msg.clear();
+                        st.clear_message(); // what `Core::show` does when the section is shown again
                         shows += 1;
                     }
                     assert_eq!(st.view().notices.len(), expect.len(), "{note}");

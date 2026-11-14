@@ -9,18 +9,6 @@ use crate::view::*;
 use std::sync::atomic::Ordering::SeqCst;
 use std::time::Duration;
 
-/// The script's names for the nav ids of the fixture. The mock's list has one id per fixture group
-/// (`cat:system`...); the real categories come from `cleaner::CATEGORIES` and the rule groups, so the
-/// script's ids stand for the Rust ones here (an id the script has but the nav has not stays as it is).
-fn nav_alias(id: &str) -> &str {
-    match id {
-        "cat:system" => "builtin:Sistema",
-        "cat:windows" => "rules:Windows",
-        "cat:browser" => "rules:Sviluppo e AI",
-        other => other,
-    }
-}
-
 static FINISH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The worker of the replay: lands what the script's state needs once the replay lets it finish
@@ -46,6 +34,9 @@ fn script_job(job: CleanJob, out: Outbox<CleanMsg>) {
 /// The state the script calls `name` (`go`): its own selection, the first four categories.
 fn script_state(name: &str) -> CleanupState {
     let mut st = state_with(CleanupWorkers { job: script_job });
+    // The Browser group of the script's nav: the cookie item is only listed, the replay's worker
+    // never runs a native item.
+    st.natives.push(native::all().into_iter().find(|i| i.id == crate::browserdb::COOKIES_ID).expect("the cookie item"));
     st.clean_sel = (0..cleaner::CATEGORIES.len()).map(|i| i < 4).collect();
     if name == "idle" {
         return st;
@@ -65,7 +56,9 @@ fn script_state(name: &str) -> CleanupState {
     st
 }
 
-/// The script's name for what a state looks like.
+/// The script's name for what a state looks like. The two categories that have a state of their own
+/// in the fixture (`browser`, `applications`) are the analysis with that category open; an analysis
+/// that was cut short (cancelled or dead) is `interrupted`.
 fn shape(st: &CleanupState) -> &'static str {
     if st.busy() {
         return if st.clean_view == CleanView::Cleaned { "cleaning" } else { "analyzing" };
@@ -75,6 +68,9 @@ fn shape(st: &CleanupState) -> &'static str {
     }
     match st.clean_view {
         CleanView::Empty => "idle",
+        CleanView::Analyzed if matches!(st.clean_end, Some(CleanEnd::Cancelled | CleanEnd::Died)) => "interrupted",
+        CleanView::Analyzed if st.nav == WINAPP2 => "applications",
+        CleanView::Analyzed if st.nav == "rules:Browser" => "browser",
         CleanView::Analyzed => "analyzed",
         CleanView::Cleaned if st.clean_report.as_ref().is_some_and(|r| r.cancelled) => "cancelled",
         CleanView::Cleaned => "report",
@@ -85,7 +81,7 @@ fn shape(st: &CleanupState) -> &'static str {
 /// report the page's «Close» is `release()`.
 fn apply(st: &mut CleanupState, intent: CleanupIntent) -> Result<(), String> {
     match intent {
-        CleanupIntent::Select { category } => st.select_category(nav_alias(&category)),
+        CleanupIntent::Select { category } => st.select_category(&category),
         CleanupIntent::Toggle { row } => st.toggle(&row),
         CleanupIntent::SetOnlyOld { on } => st.set_only_old(on),
         CleanupIntent::Search { text } => {
@@ -120,14 +116,11 @@ fn check_of(st: &CleanupState, id: &str) -> &'static str {
 /// Replays the Cleanup steps of `apps/desktop/fixtures/intent-script.json` against the real state,
 /// through the worker seam. The script is the spec for the transitions; where the real state cannot
 /// say the same thing, the step is re-synchronised on the script's expectation, and each kind of
-/// re-synchronisation is counted and pinned at the end:
-/// - `blocked_accepted`: the script's fixture blocks `cat:6`; no built-in category is ever blocked
-///   (egui has no such state), so Rust toggles it (and the replay toggles it back);
+/// re-synchronisation is counted and pinned at the end (one now):
 /// - `copy_checks`: the fixture's `confirm` view is a copy that shows `cat:4` off after the analysed
-///   one had it switched on; the state has one selection, so that check is not compared;
-/// - `analyze_over_report`: the script refuses a new analysis over a finished report (its fixture
-///   report has Analyze off); Rust accepts it (egui does: the button is on when nothing runs), so the
-///   replay answers by rebuilding the report state.
+///     one had it switched on; the state has one selection, so that check is not compared.
+/// Not re-synchronised any more (the script follows Rust): no built-in category is ever blocked, a
+/// new analysis over a finished report is accepted, and a cancelled analysis ends `interrupted`.
 #[test]
 fn replays_the_cleanup_steps_of_the_shared_script() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
@@ -135,13 +128,17 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
     let mut st = script_state("idle");
     let mut compared = 0;
     let (mut landed, mut finished, mut cancelled_clean, mut cancelled_analysis) = (0, 0, 0, 0);
-    let (mut blocked_accepted, mut copy_checks, mut analyze_over_report) = (0, 0, 0);
+    let (mut copy_checks, mut interrupted) = (0, 0);
     for step in script["steps"].as_array().unwrap() {
         let note = step["note"].as_str().unwrap_or("");
         match step["op"].as_str().unwrap() {
             "go" if step["section"] == "cleanup" => {
                 // The open category is the page's memory: it survives a jump to another state.
                 let nav = st.nav.clone();
+                if st.busy() {
+                    st.cancel_job().unwrap();
+                    finish(&mut st);
+                }
                 st = script_state(step["state"].as_str().unwrap());
                 st.nav = nav;
             }
@@ -171,23 +168,16 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
                         finish(&mut st);
                         if was == "cleaning" { cancelled_clean += 1 } else { cancelled_analysis += 1 }
                     }
-                    ("analyzed", CleanupIntent::Toggle { row }, true) if row == "cat:6" => {
-                        st.toggle("cat:6").unwrap();
-                        blocked_accepted += 1;
-                    }
-                    ("report", CleanupIntent::Analyze, true) => {
-                        assert_eq!(shape(&st), "analyzing", "{note}");
-                        st.cancel_job().unwrap();
-                        finish(&mut st);
-                        let nav = st.nav.clone();
-                        st = script_state("report");
-                        st.nav = nav;
-                        analyze_over_report += 1;
-                    }
                     _ => {}
                 }
                 assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                 let v = st.view(false);
+                if expect == "interrupted" {
+                    // What was analysed stays, with the error notice and Clean still on.
+                    assert_eq!(v.notices.iter().map(|n| n.tone).collect::<Vec<_>>(), vec![Tone::Error], "{note}: the interrupted notice");
+                    assert!(v.actions.iter().any(|a| a.id.starts_with("clean") && a.enabled), "{note}: Clean stays enabled");
+                    interrupted += 1;
+                }
                 if let Some(checks) = step["expect"]["checks"].as_object() {
                     for (id, want) in checks {
                         if shape(&st) == "confirm" && id == "cat:4" {
@@ -198,7 +188,7 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
                     }
                 }
                 if let Some(active) = step["expect"]["active"].as_str() {
-                    assert!(v.nav.iter().any(|n| n.id == nav_alias(active) && n.active), "{note}: active category {active}");
+                    assert!(v.nav.iter().any(|n| n.id == active && n.active), "{note}: active category {active}");
                 }
                 for (key, got) in [("dialog", v.dialog.is_some()), ("report", v.report.is_some())] {
                     if let Some(want) = step["expect"][key].as_bool() {
@@ -215,7 +205,8 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
     }
     assert!(compared >= 25, "most of the script's intents were compared: {compared}");
     assert_eq!((landed, finished, cancelled_clean, cancelled_analysis), (1, 1, 1, 1), "analyses landed, cleanups finished, cleanups cancelled, analyses cancelled");
-    assert_eq!((blocked_accepted, copy_checks, analyze_over_report), (1, 1, 1), "re-synchronisations");
+    assert_eq!(copy_checks, 1, "re-synchronisations");
+    assert_eq!(interrupted, 4, "the cancelled analysis and the three steps that stay on it");
 }
 
 /// The fixture the TypeScript mock serves for Cleanup has to read through the Rust mirror of
