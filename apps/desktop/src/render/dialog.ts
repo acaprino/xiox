@@ -5,7 +5,7 @@
 
 import { button, fill, h } from '../dom.ts';
 import { buttonIntent } from '../intents.ts';
-import { cycleFocus } from '../keys.ts';
+import { cycleFocus, dialogKeySwallowed } from '../keys.ts';
 import type { ButtonView, DialogView, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
 
@@ -15,6 +15,8 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([di
 /** What was open on the last render, and who had the focus before it opened. */
 let shown: { id: string; section: string; opener: string | null } | null = null;
 let wired = false;
+/** When the dialog on screen opened (`performance.now()`): its buttons ignore Enter and Space for a moment (keys.ts). */
+let openedAt = 0;
 
 function host(): HTMLElement {
   const node = document.getElementById('modal');
@@ -30,6 +32,13 @@ function controls(root: HTMLElement): HTMLElement[] {
 function wire(): void {
   if (wired) return;
   wired = true;
+  // Enter / Space on a control become a click in the browser's own handler: stopped here while they are held
+  // or too soon after the dialog opened. Space clicks on key-up, so the key-up is held back too.
+  const guard = (event: KeyboardEvent): void => {
+    if (dialogKeySwallowed(event, performance.now() - openedAt)) { event.preventDefault(); event.stopPropagation(); }
+  };
+  host().addEventListener('keydown', guard);
+  host().addEventListener('keyup', (event) => { if (event.key === ' ') guard(event); });
   host().addEventListener('keydown', (event) => {
     if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey) return;
     const list = controls(host());
@@ -119,6 +128,7 @@ export function renderDialog(view: SectionView, on: Handlers, focusedBefore: str
   fill(root, h('div', { class: 'scrim' }, content(view, d, on)));
   root.hidden = false;
   setInert(true);
+  if (!same) openedAt = performance.now();
   shown = { id: d.id, section: view.section, opener };
   const body = root.querySelector('.dlg-body');
   if (body) body.scrollTop = scroll;

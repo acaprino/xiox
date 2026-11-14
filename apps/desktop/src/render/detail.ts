@@ -16,7 +16,9 @@ function pairs(list: [string, string][]): HTMLElement {
 export function renderDetail(root: HTMLElement, row: RowView | null): void {
   root.setAttribute('role', 'region');
   root.setAttribute('aria-label', 'Details');
-  if (!row) { fill(root); return; }
+  // A scrollable region the keyboard can reach (arrows scroll it), only while there is something in it.
+  if (!row) { root.removeAttribute('tabindex'); fill(root); return; }
+  root.tabIndex = 0;
   const main = row.detail.filter(([key]) => key !== 'why');
   const reason: [string, string][] = row.detail.filter(([key]) => key === 'why');
   if (reason.length === 0 && row.why && !row.detail.some(([, value]) => value === row.why)) reason.push(['why', row.why]);

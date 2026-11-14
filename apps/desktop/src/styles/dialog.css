@@ -2,8 +2,8 @@
    panes: cut-corner frame (clip-path, so the focus ring is drawn inside), amber text, ice titles. */
 
 /* The dialog. */
-#app > #modal { position: fixed; inset: 0; z-index: 20; }
-#modal[hidden] { display: none; }
+#app > #modal, #app > #about { position: fixed; inset: 0; z-index: 20; }
+#modal[hidden], #about[hidden] { display: none; }
 .scrim {
   position: absolute; inset: 0; display: grid; place-items: center; padding: 24px;
   background: rgba(5, 2, 12, .78);
@@ -67,3 +67,7 @@
 .rp-hrow .rp-n { font: 400 11px var(--font-body); }
 .rp-open { padding: 2px 0 6px 28px; border-bottom: 1px solid var(--line-soft); }
 .rp-item .nm { padding-left: 0; }
+
+/* About: the same frame, narrower; the licence line wraps. */
+.dlg.about { width: min(440px, 100%); }
+.about .dlg-text { overflow-wrap: anywhere; }

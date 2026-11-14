@@ -225,8 +225,9 @@ async function checkCopy(page, label, section, view) {
     return {
       badge: text('#badge'),
       actions: all('#actions .btn').map((b) => [b.querySelector('[data-fit]')?.textContent ?? '', b.querySelector('kbd')?.textContent ?? null, b.disabled]),
-      sections: all('#sections .nv').map((b) => [b.dataset.section, b.querySelector('[data-fit]')?.textContent, b.querySelector('kbd')?.textContent]),
+      sections: all('#sections .nv[data-section]').map((b) => [b.dataset.section, b.querySelector('[data-fit]')?.textContent, b.querySelector('kbd')?.textContent]),
       sectionsHead: text('#sections .hd-title'),
+      about: [text('#sections .nv.about [data-fit]'), text('#sections .nv.about kbd')],
       hint: text('#foot .foot-right'), footLeft: text('#foot .foot-left'), title: text('#list-head .hd-title'),
       notices: all('#notices .notice').map((n) => n.querySelector('.ellipsis')?.textContent),
       empty: document.querySelector('#rows .empty') ? [text('#rows .empty-title'), text('#rows .empty span')] : null,
@@ -266,6 +267,7 @@ async function checkCopy(page, label, section, view) {
   want('actions', found.actions, view.actions.map((a) => [a.label, a.key === null ? null : (KEY_LABELS[a.key] ?? a.key), !a.enabled]));
   want('section bar', found.sections, SECTION_NAMES.map(([id, name], i) => [id, name, String(i + 1)]));
   want('section bar heading', found.sectionsHead, 'Sections');
+  want('About button', found.about, ['About', '?']);
   want('footer hint', found.hint, FOOTER[section]);
   want('footer text', found.footLeft, view.footer ?? '');
   want('list title', found.title, view.title);
@@ -346,6 +348,8 @@ async function keyboardFlows(page, size, expect, shot) {
 
   // The keyboard focus ring is visible on Tab, from the top of the page.
   await goTo(page, 'cleanup', 'analyzed');
+  // Chromium starts Tab from where the last focus was, not from the top: put the starting point on the body.
+  await page.evaluate(() => { document.body.tabIndex = -1; document.body.focus(); document.body.removeAttribute('tabindex'); });
   const stops = [];
   for (let i = 0; i < 6; i += 1) {
     await page.keyboard.press('Tab');
@@ -366,7 +370,8 @@ async function keyboardFlows(page, size, expect, shot) {
   check(await ringOf(page) !== 'none', 'the focused button of the dialog has no visible ring');
   await page.screenshot({ path: `${shot}cleanup-confirm-keyboard-${size}.png` });
 
-  // Enter on Cancel closes without confirming: no job, the analysis is still there.
+  // Enter on Cancel closes without confirming: no job, the analysis is still there. (Past the 300 ms in which a dialog's buttons ignore Enter.)
+  await page.waitForTimeout(350);
   await page.locator('[data-key="dlg:cancel"]').focus();
   await page.keyboard.press('Enter');
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Enter on Cancel did not close the dialog`));
@@ -409,6 +414,40 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
   check(await focusKey(page) === 'action:clean', `after closing, the focus is on ${await focusKey(page)}, expected the Clean button that opened it`);
 
+  // Enter guard: the Enter that opens a confirmation, pressed again at once, held down, or repeated, never confirms it.
+  await goTo(page, 'cleanup', 'analyzed');
+  await clearCalls(page);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // at once: the dialog may not even be drawn yet, or is under 300 ms old
+  await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter did not open the confirmation (guard test)`));
+  await page.waitForTimeout(40);
+  check(await page.locator('[role=dialog]').count() === 1, 'a second Enter right after the first confirmed or closed the dialog');
+  check(await badgeOf(page) !== 'Cleaning', 'a second Enter right after the first started a clean');
+  await page.keyboard.press('Enter'); // still under 300 ms since the dialog opened: no
+  await page.waitForTimeout(60);
+  check(await page.locator('[role=dialog]').count() === 1 && await badgeOf(page) !== 'Cleaning', 'Enter under 300 ms after the dialog opened activated its primary button');
+  await page.waitForTimeout(400);
+  await page.keyboard.down('Enter'); // a fresh press: the dialog is armed
+  await page.keyboard.down('Enter'); // the second keydown of a held key carries repeat: true
+  await page.keyboard.up('Enter');
+  await page.waitForTimeout(150);
+  // The first of the two downs is a real press and confirms; what matters is that a held key does not press twice.
+  check(await page.locator('#modal[hidden]').count() === 1, 'Enter on the armed primary button did not close the dialog');
+  check(await sent(page, 'cleanup', 'confirm') && (await callsOf(page)).filter(([c, k]) => c === 'cleanup' && k === 'confirm').length === 1, 'the held Enter sent confirm more than once, or not at all');
+  await clearCalls(page);
+  // A held Enter alone, from a closed dialog: the first press opens it, the repeats do nothing more.
+  await goTo(page, 'cleanup', 'analyzed');
+  await clearCalls(page);
+  await page.keyboard.down('Enter');
+  for (let i = 0; i < 6; i += 1) await page.keyboard.down('Enter');
+  await page.keyboard.up('Enter');
+  await page.waitForTimeout(500);
+  check(await page.locator('[role=dialog]').count() === 1, 'a held Enter did not leave the confirmation open');
+  check(!(await sent(page, 'cleanup', 'confirm')), 'a held Enter confirmed the clean');
+  check((await callsOf(page)).filter(([c, k]) => c === 'cleanup' && k === 'openConfirm').length === 1, 'a held Enter opened the confirmation more than once');
+  await page.keyboard.press('Escape'); // Escape always works
+  await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close the dialog after a held Enter`));
+
   // Developers: the primary button stays disabled until the warnings are read; the ack box has the focus.
   await goTo(page, 'developers', 'projects');
   await page.keyboard.press('Enter');
@@ -416,6 +455,7 @@ async function keyboardFlows(page, size, expect, shot) {
   check(await focusKey(page) === 'dlg:ack', `Developers dialog focus is ${await focusKey(page)}, expected the ack box (primary disabled)`);
   check(await page.locator('[data-button="clean"]').isDisabled(), 'Clean is enabled before the warnings are read');
   await page.screenshot({ path: `${shot}developers-confirm-keyboard-${size}.png` });
+  await page.waitForTimeout(350);
   await page.keyboard.press('Enter'); // the ack box is a button: Enter presses it
   await page.waitForFunction(() => document.querySelector('.ack')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 }).catch(() => failures.push(`${size}: the ack box did not tick`));
   check(!(await page.locator('[data-button="clean"]').isDisabled()), 'Clean stayed disabled after the warnings were read');
@@ -746,6 +786,160 @@ async function sectionFlows(page, size, shot) {
 }
 
 /** No continuous animation; and with prefers-reduced-motion: reduce nothing animates or transitions at all. */
+/** The About window: opens from its button and from `?`, says what Rust says, closes with Escape or Close and gives the focus back. */
+async function aboutFlows(page, size, shot) {
+  const failures = [];
+  const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
+  const about = fixture.about;
+  const open = () => page.locator('#about:not([hidden]) [role=dialog]');
+  await goTo(page, 'cleanup', 'analyzed');
+  await page.locator('#sections .nv.about').click();
+  await open().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the About button did not open About`));
+  const text = (await open().innerText()).replace(/\s+/g, ' ');
+  for (const part of ['Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
+  check(await focusKey(page) === 'about:close', `About opens with the focus on ${await focusKey(page)}, expected Close`);
+  check(await page.evaluate(() => document.getElementById('body').inert && document.getElementById('top').inert), 'the page behind About is not inert');
+  failures.push(...await checkFit(page, `about-${size}`));
+  await page.screenshot({ path: `${shot}about-${size}.png` });
+  // Tab never leaves it (one control), Escape closes it and the focus goes back to the About button that opened it.
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  check(await focusKey(page) === 'about:close', `Tab left About (focus on ${await focusKey(page)})`);
+  check(await ringOf(page) !== 'none', 'the Close button of About has no visible ring');
+  await page.keyboard.press('Escape');
+  await page.locator('#about[hidden]').waitFor({ state: 'attached', timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close About`));
+  check(await focusKey(page) === 'about', `after Escape the focus is on ${await focusKey(page)}, expected the About button`);
+  check(await page.evaluate(() => !document.getElementById('body').inert && !document.getElementById('top').inert), 'the page stays inert after About closed');
+  check(await badgeOf(page) === 'Analysis done', 'Escape in About changed the section state');
+  // `?` opens it from anywhere outside a field; Close (the mouse) closes it.
+  await blur(page);
+  await page.keyboard.press('Shift+Slash');
+  await open().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the key ? did not open About`));
+  await page.keyboard.press('Shift+Slash');
+  check(await page.locator('#about [role=dialog]').count() === 1, 'a second ? opened a second About');
+  await page.locator('[data-key="about:close"]').click();
+  await page.locator('#about[hidden]').waitFor({ state: 'attached', timeout: 2000 }).catch(() => failures.push(`${size}: Close did not close About`));
+  // A question mark typed in the search box is typing.
+  const search = page.locator('input.search');
+  if (await search.count() > 0) {
+    await search.focus();
+    await page.keyboard.type('?');
+    await page.waitForTimeout(80);
+    check(await page.locator('#about[hidden]').count() === 1, 'a ? typed in the search box opened About');
+    await search.fill('');
+    await blur(page);
+  }
+  // A confirmation keeps the keyboard: ? does not stack About on it.
+  await goTo(page, 'cleanup', 'analyzed');
+  await page.keyboard.press('Enter');
+  await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => {});
+  await page.keyboard.press('Shift+Slash');
+  await page.waitForTimeout(100);
+  check(await page.locator('#about[hidden]').count() === 1, 'a ? opened About over a confirmation');
+  await page.keyboard.press('Escape');
+  await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
+  return failures;
+}
+
+/** The warning strip for a profile that is not the user's (`app.profileMismatch`): there only when Rust sends it, and everything still fits. */
+async function profileFlows(page, size, shot) {
+  const failures = [];
+  const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
+  const ready = () => page.locator('#sections [data-section="cleanup"].on').waitFor();
+  check(await page.locator('#profile[hidden]').count() === 1, 'the profile strip shows without a mismatch');
+  const message = 'Xiox is cleaning the profile of “Alfio”, not that of “Administrator”, who opened this Windows session.';
+  const long = `Xiox is cleaning the profile of “${'Averylongusername'.repeat(8)}”, not that of “${'Anotherlongname'.repeat(8)}”, who opened this Windows session.`;
+  for (const [label, text] of [['normal', message], ['long', long]]) {
+    await page.evaluate((t) => window.__xioxMock.setMismatch(t), text);
+    await page.reload();
+    await ready();
+    await page.waitForTimeout(150);
+    const strip = await page.evaluate(() => {
+      const node = document.getElementById('profile');
+      const r = node.getBoundingClientRect();
+      const body = document.getElementById('body').getBoundingClientRect();
+      const status = document.getElementById('status').getBoundingClientRect();
+      const foot = document.getElementById('foot').getBoundingClientRect();
+      return { hidden: node.hidden, text: node.textContent, color: getComputedStyle(node).color, top: r.top, bottom: r.bottom, bodyTop: body.top, statusBottom: status.bottom, footBottom: foot.bottom, bodyBottom: body.bottom, footTop: foot.top, vh: innerHeight };
+    });
+    check(!strip.hidden && strip.text === text, `the profile strip (${label}) does not show the mismatch text`);
+    check(strip.color === 'rgb(255, 106, 58)', `the profile strip is ${strip.color}, expected the warn colour`);
+    check(strip.top >= strip.statusBottom - 1 && strip.bottom <= strip.bodyTop + 1, `the profile strip (${label}) is not between the status row and the panes`);
+    check(strip.bodyBottom <= strip.footTop + 1 && strip.footBottom <= strip.vh + 1, `the panes or the footer are pushed out of the window by the profile strip (${label})`);
+    failures.push(...await checkFit(page, `profile-${label}-${size}`));
+    await page.screenshot({ path: `${shot}profile-${label}-${size}.png` });
+  }
+  await page.evaluate(() => window.__xioxMock.setMismatch(null));
+  await page.reload();
+  await ready();
+  check(await page.locator('#profile[hidden]').count() === 1, 'the profile strip stays after the mismatch is gone');
+  return failures;
+}
+
+/** Tab from the top of the page visits, in order: the sections, About, bar 2, the list header and search, the list (one stop), the detail, then the top-bar actions. Every stop has a visible ring that the cut corners cannot hide. */
+async function tabAudit(page, size, shot) {
+  const failures = [];
+  const REGIONS = ['#sections', '#bar2', '#list-head', '#rows .tools', '#rows .grid', '#detail', '#actions'];
+  for (const [section, state] of [['cleanup', 'analyzed'], ['developers', 'projects'], ['services', 'loaded'], ['registry', 'analyzed']]) {
+    const label = `${size} Tab audit ${section}:${state}`;
+    await goTo(page, section, state);
+    await page.evaluate(() => { document.body.tabIndex = -1; document.body.focus(); document.body.removeAttribute('tabindex'); });
+    const stops = [];
+    for (let i = 0; i < 80; i += 1) {
+      await page.keyboard.press('Tab');
+      const stop = await page.evaluate((regions) => {
+        const el = document.activeElement;
+        if (!el || el === document.body || el === document.documentElement) return null;
+        const style = getComputedStyle(el);
+        const ring = style.boxShadow;
+        const outlined = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+        let clipped = false;
+        for (let n = el; n; n = n.parentElement) if (getComputedStyle(n).clipPath !== 'none') clipped = true;
+        return {
+          key: el.getAttribute('data-key') ?? el.tagName.toLowerCase(), region: regions.findIndex((sel) => el.closest(sel) !== null),
+          ring, outlined, clipped, tab: el.tabIndex,
+        };
+      }, REGIONS);
+      if (stops.length > 0 && (stop === null || stop.key === stops[0].key)) break;
+      if (stop === null) { failures.push(`${label}: Tab ${i + 1} left the focus on the page body`); break; }
+      stops.push(stop);
+      // What the rings look like, once per stop worth looking at (Cleanup only).
+      if (section === 'cleanup' && (stop.key === 'about' || stop.region === 4 || stop.region === 5 || stop.key === 'action:clean')) {
+        await page.screenshot({ path: `${shot}tab-${stop.region}-${stop.key.replace(/[^a-z0-9]+/gi, "_")}-${size}.png` });
+        shots += 1;
+      }
+    }
+    const names = stops.map((s) => `${REGIONS[s.region] ?? '?'}:${s.key}`).join(' ');
+    for (const s of stops) {
+      if (s.region < 0) failures.push(`${label}: ${s.key} is a Tab stop outside every region`);
+      if (s.ring === 'none' && !s.outlined) failures.push(`${label}: ${s.key} has no visible focus ring`);
+      if (s.clipped && !s.outlined && !s.ring.includes('inset')) failures.push(`${label}: the ring of ${s.key} is drawn outside its box under a clip-path (${s.ring})`);
+    }
+    const order = stops.map((s) => s.region);
+    if (order.some((r, i) => i > 0 && r < order[i - 1])) failures.push(`${label}: the Tab order goes back: ${names}`);
+    const keys = stops.map((s) => s.key);
+    if (keys.slice(0, 5).join() !== 'section:cleanup,section:registry,section:services,section:developers,about') failures.push(`${label}: Tab starts with ${keys.slice(0, 5).join()}, expected the four sections then About`);
+    if (!stops.some((s) => s.region === 1)) failures.push(`${label}: Tab never reached bar 2`);
+    if (stops.filter((s) => s.region === 4).length !== 1) failures.push(`${label}: the list is not exactly one Tab stop (${stops.filter((s) => s.region === 4).length})`);
+    if (stops.filter((s) => s.region === 5).length !== 1) failures.push(`${label}: the detail is not exactly one Tab stop (${stops.filter((s) => s.region === 5).length})`);
+    if (stops.length === 0 || stops[stops.length - 1].region !== 6) failures.push(`${label}: Tab does not end on the top-bar actions: ${names}`);
+    // Arrows move inside the list once it has the focus, and the stop does not change.
+    if (state === 'analyzed' || state === 'projects') {
+      await page.locator('#rows .grid').focus();
+      await page.keyboard.press('Home');
+      await page.waitForTimeout(80);
+      const before = await page.locator('#rows .r.sel').getAttribute('data-row');
+      await page.keyboard.press('ArrowDown');
+      await page.waitForTimeout(80);
+      const after = await page.locator('#rows .r.sel').getAttribute('data-row');
+      if (before === after) failures.push(`${label}: ArrowDown in the list did not move the selection (${before} -> ${after}; rows ${await page.locator('#rows .r[data-row]').count()}; focus ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))})`);
+      if (!await focusIn(page, '#rows .grid')) failures.push(`${label}: the focus left the list on ArrowDown`);
+    }
+    if (section === 'cleanup') console.log(`${label}: ${names}`);
+  }
+  return failures;
+}
+
 async function motionFlows(page, size) {
   const failures = [];
   const running = () => page.evaluate(() => document.getAnimations().map((a) => `${a.constructor.name}:${a.animationName ?? a.transitionProperty ?? ''}:${a.effect?.getComputedTiming().iterations}`));
@@ -878,6 +1072,11 @@ try {
     // Keyboard, dialogs, report, progress bar and motion (Task 3).
     failures.push(...await keyboardFlows(page, size, expect, out));
     failures.push(...await reportFlows(page, size, out));
+    shots += 5;
+    // About, the profile strip and the Tab audit (Task 15).
+    failures.push(...await aboutFlows(page, size, out));
+    failures.push(...await tabAudit(page, size, out));
+    failures.push(...await profileFlows(page, size, out));
     shots += 5;
     failures.push(...await motionFlows(page, size));
     await page.close();

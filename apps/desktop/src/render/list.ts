@@ -20,7 +20,7 @@ function ellipsis(text: string, cls: string): HTMLElement {
 function checkbox(row: RowView, on: Handlers, section: SectionView['section'], busy: boolean): HTMLElement {
   if (row.check === 'none') return h('span');
   return h('button', {
-    type: 'button', class: 'ck', role: 'checkbox',
+    type: 'button', class: 'ck', role: 'checkbox', tabindex: -1,
     'aria-checked': row.check === 'on' ? 'true' : row.check === 'mixed' ? 'mixed' : 'false',
     'aria-label': row.name, disabled: !row.enabled || busy, title: row.enabled ? null : row.why, 'data-key': `ck:${row.id}`,
     onClick: (event: Event) => {
@@ -51,7 +51,7 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
     if (column.kind === 'name') {
       const caret = parents.has(row.id)
         ? h('button', {
-          type: 'button', class: 'caret', 'aria-expanded': String(ui.expanded.has(row.id)), 'aria-label': `${row.name}: show or hide the items inside`,
+          type: 'button', class: 'caret', tabindex: -1, 'aria-expanded': String(ui.expanded.has(row.id)), 'aria-label': `${row.name}: show or hide the items inside`,
           'data-key': `caret:${row.id}`, onClick: (event: Event) => { event.stopPropagation(); on.toggleExpanded(row.id); },
         })
         : anyParent ? h('span', { class: 'caret-gap' }) : null;
@@ -107,8 +107,11 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   syncSearch(tools, view, on);
 
   const rows = visibleRows(sortRows(view.rows), ui.expanded);
-  // The grid is where the focus goes back to when a dialog closes (and the arrow keys act from).
-  grid.tabIndex = -1;
+  // The grid is ONE Tab stop: the arrows move inside it, Space ticks, Left / Right fold (main.ts). The check boxes and
+  // carets of its rows are for the mouse and for the arrows' sake, not Tab stops of their own. It is also where the
+  // focus goes back to when a dialog closes.
+  grid.tabIndex = 0;
+  grid.setAttribute('aria-label', view.title);
   if (view.rows.length === 0 || view.empty !== null) {
     grid.style.gridTemplateColumns = '';
     fill(grid, h('div', { class: 'empty' },

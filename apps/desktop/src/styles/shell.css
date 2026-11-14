@@ -56,6 +56,8 @@ html, body { height: 100%; overflow: hidden; }
 }
 .nv kbd { color: var(--muted); }
 .nv.on { background: var(--sel); color: var(--text-hi); }
+/* About ends the bar, lifted from the bottom edge so its focus ring clears the cut corners of the frame. */
+#sections .nv.about { margin: auto 0 14px; }
 
 /* Bar 2. */
 .items { overflow: auto; min-height: 0; }

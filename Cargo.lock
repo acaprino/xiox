@@ -6563,6 +6563,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tempfile",
  "windows-sys 0.61.2",
+ "xiox-app",
  "xiox-core",
 ]
 

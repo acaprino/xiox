@@ -16,6 +16,16 @@ export function onMockView(handler: (view: SectionView) => void): void {
   listeners.add(handler);
 }
 
+/**
+ * The profile warning (`AppInfo.profileMismatch`). The page reads app info once at start, so the smoke script sets
+ * it with `setMismatch` and reloads; sessionStorage carries it across the reload (and is only a convenience: without it the warning is simply absent).
+ */
+const MISMATCH_KEY = 'xioxMock.mismatch';
+function storedMismatch(): string | null {
+  try { return sessionStorage.getItem(MISMATCH_KEY); } catch { return null; }
+}
+let mismatch: string | null = storedMismatch();
+
 type Args = Record<string, unknown> | undefined;
 const section = (args: Args): SectionId => (args as { section: SectionId }).section;
 const intent = (args: Args): AnyIntent => (args as { intent: AnyIntent }).intent;
@@ -26,7 +36,7 @@ const calls: { command: string; args: unknown }[] = [];
 export async function answer(command: string, args?: Args): Promise<unknown> {
   calls.push({ command, args: structuredClone(args ?? null) });
   switch (command) {
-    case 'app_info': return structuredClone((fixture as unknown as Fixture).app);
+    case 'app_info': return { ...structuredClone((fixture as unknown as Fixture).app), ...(mismatch === null ? {} : { profileMismatch: mismatch }) };
     case 'about': return structuredClone((fixture as unknown as Fixture).about);
     case 'show': return model.show(section(args));
     case 'view': return model.view(section(args));
@@ -49,6 +59,13 @@ setInterval(() => { if (!paused) for (const view of model.tick()) emit(view); },
   clearCalls(): void { calls.length = 0; },
   /** The smoke script holds the timer while it inspects a busy state. */
   pause(on: boolean): void { paused = on; },
+  /** The next app info (the next page load) carries this profile warning; `null` removes it. */
+  setMismatch(text: string | null): void {
+    mismatch = text;
+    try {
+      if (text === null) sessionStorage.removeItem(MISMATCH_KEY); else sessionStorage.setItem(MISMATCH_KEY, text);
+    } catch { /* no storage: the warning only lasts until the reload */ }
+  },
   go(target: SectionId, state: string): SectionView {
     const view = model.go(target, state);
     emit(view);

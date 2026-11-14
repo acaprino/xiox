@@ -6,22 +6,25 @@
 import { SECTION_ORDER } from './state.ts';
 import type { ActionView, SectionId, SectionView } from './types.ts';
 
-export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean }
+export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; repeat?: boolean }
 
 /** The keys an action can carry (`ActionView.key`): `a` analyze, `s` scan, `r` refresh, Enter clean / fix, Esc cancel. */
 export type ActionKey = 'a' | 's' | 'r' | 'Enter' | 'Esc';
 
 export type KeyAction =
   | { kind: 'section'; section: SectionId } | { kind: 'move'; delta: number } | { kind: 'toggle' }
-  | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' };
+  | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' } | { kind: 'about' };
 
 const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 's', 'r', 'Enter']);
 
 /**
  * What a key press means. `inField`: a text field has the focus; `dialog`: a confirmation is open.
  * A chord (Ctrl, Alt, Meta) is never ours. Escape is the only key a field or a dialog leaves to us:
- * it closes the dialog, else it is the `Esc` action (main.ts turns it into a blur inside a field).
- * In a dialog the browser does the rest: Enter / Space press the focused button, Tab is trapped.
+ * it closes the dialog (the About window counts as one), else it is the `Esc` action (main.ts turns it
+ * into a blur inside a field). `?` opens About.
+ * A key that is held down (`repeat`) never presses an action: one Enter is one press, so a held Enter cannot run
+ * on past the dialog it just opened. Arrows keep repeating (that is how a long list is crossed).
+ * In a dialog the browser does the rest: Enter / Space press the focused button (guarded by `dialogKeySwallowed`), Tab is trapped.
  */
 export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }): KeyAction | null {
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
@@ -37,9 +40,10 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
     case 'Home': return { kind: 'move', delta: -Infinity };
     case 'End': return { kind: 'move', delta: Infinity };
     case ' ': return { kind: 'toggle' };
+    case '?': return { kind: 'about' };
     case 'ArrowRight': return { kind: 'expand', open: true };
     case 'ArrowLeft': return { kind: 'expand', open: false };
-    default: return ACTION_KEYS.has(e.key) ? { kind: 'action', key: e.key as ActionKey } : null;
+    default: return ACTION_KEYS.has(e.key) && e.repeat !== true ? { kind: 'action', key: e.key as ActionKey } : null;
   }
 }
 
@@ -72,4 +76,18 @@ export function cycleFocus(count: number, current: number, backwards: boolean): 
   if (count <= 0) return null;
   if (current < 0 || current >= count) return backwards ? count - 1 : 0;
   return (current + (backwards ? count - 1 : 1)) % count;
+}
+
+/** How long after a confirmation opens its buttons ignore Enter and Space (a mouse click is never held back). */
+export const DIALOG_ARM_MS = 300;
+
+/**
+ * Whether a key press on a control of an open dialog must be swallowed before the browser turns it into a click:
+ * Enter or Space that is held down (`repeat`), or that comes within `DIALOG_ARM_MS` of the dialog opening (the
+ * Enter that opened it, repeating or pressed twice in a hurry, must not also confirm it). Escape and Tab are
+ * never swallowed. `ageMs`: time since the dialog opened.
+ */
+export function dialogKeySwallowed(e: { key: string; repeat?: boolean }, ageMs: number): boolean {
+  if (e.key !== 'Enter' && e.key !== ' ') return false;
+  return e.repeat === true || ageMs < DIALOG_ARM_MS;
 }

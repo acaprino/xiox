@@ -6,6 +6,7 @@ import './styles/dialog.css';
 import { api, errorText, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, keyAction } from './keys.ts';
+import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { rowParents, sortRows, visibleRows } from './rows.ts';
 import { acceptView, createGate, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from './state.ts';
@@ -70,8 +71,21 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
   render();
 }
 
+/** The About window: the page's own, with no intent. A confirmation that is open keeps the keyboard, so About waits. */
+async function openAbout(): Promise<void> {
+  if (aboutOpen() || ui.views[ui.section]?.dialog != null) return;
+  const from = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key ?? null : null;
+  try {
+    showAbout(await api.about(), from, closeAbout);
+  } catch (failure) {
+    error = { section: ui.section, text: errorText(failure) };
+    render();
+  }
+}
+
 const handlers: Handlers = {
   openSection: (id) => { void open(id); },
+  openAbout: () => { void openAbout(); },
   send: (section, intent) => { void send(section, intent); },
   focusRow: (id) => { ui.focus[ui.section] = id; render(); },
   toggleExpanded: (id) => {
@@ -105,7 +119,7 @@ function onKey(event: KeyboardEvent): void {
   if (!view || event.defaultPrevented) return;
   const target = event.target instanceof Element ? event.target : null;
   const inField = target?.closest(FIELD) != null;
-  const act = keyAction(event, { inField, dialog: view.dialog !== null });
+  const act = keyAction(event, { inField, dialog: view.dialog !== null || aboutOpen() });
   if (act === null) return;
   if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
   const section = view.section;
@@ -116,7 +130,10 @@ function onKey(event: KeyboardEvent): void {
       if (act.section !== section) void open(act.section);
       break;
     case 'closeDialog':
-      handlers.send(section, { kind: 'closeDialog' });
+      if (aboutOpen()) closeAbout(); else handlers.send(section, { kind: 'closeDialog' });
+      break;
+    case 'about':
+      void openAbout();
       break;
     case 'move': {
       if (!listed) return;

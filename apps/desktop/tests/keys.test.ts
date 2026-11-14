@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { actionForKey, cycleFocus, footerHint, keyAction } from '../src/keys.ts';
+import { actionForKey, cycleFocus, DIALOG_ARM_MS, dialogKeySwallowed, footerHint, keyAction } from '../src/keys.ts';
 import type { ActionView, SectionId, SectionView } from '../src/types.ts';
 
 const free = { inField: false, dialog: false };
@@ -105,4 +105,47 @@ test('Tab and Shift+Tab cycle inside a dialog and never leave it', () => {
   assert.equal(cycleFocus(1, 0, false), 0);
   assert.equal(cycleFocus(1, 0, true), 0);
   assert.equal(cycleFocus(0, -1, false), null);
+});
+
+test('question mark opens About outside fields and dialogs', () => {
+  assert.deepEqual(keyAction({ key: '?' }, free), { kind: 'about' });
+  // Shift is how a keyboard types it: still ours.
+  assert.deepEqual(keyAction({ key: '?', shiftKey: true }, free), { kind: 'about' });
+  // Typing a question mark in a search box is typing, and an open dialog (About included) keeps the keyboard.
+  assert.equal(keyAction({ key: '?' }, typing), null);
+  assert.equal(keyAction({ key: '?' }, modal), null);
+  assert.equal(keyAction({ key: '?', ctrlKey: true }, free), null);
+  // Only the question mark itself: the slash key unshifted is not it.
+  assert.equal(keyAction({ key: '/' }, free), null);
+});
+
+test('a held key presses no action, but arrows and Escape keep repeating', () => {
+  for (const key of ['Enter', 'a', 's', 'r']) {
+    assert.equal(keyAction({ key, repeat: true }, free), null, `${key} held down`);
+    assert.deepEqual(keyAction({ key, repeat: false }, free), { kind: 'action', key }, `${key} pressed once`);
+  }
+  assert.deepEqual(keyAction({ key: 'ArrowDown', repeat: true }, free), { kind: 'move', delta: 1 });
+  assert.deepEqual(keyAction({ key: 'Escape', repeat: true }, free), { kind: 'action', key: 'Esc' });
+  assert.deepEqual(keyAction({ key: 'Escape', repeat: true }, modal), { kind: 'closeDialog' });
+});
+
+test('a dialog button ignores held keys and keys within 300 ms of the dialog opening, never Escape or Tab', () => {
+  assert.equal(DIALOG_ARM_MS, 300);
+  // The Enter that opened the dialog, held: every repeat is swallowed, however late it comes.
+  assert.equal(dialogKeySwallowed({ key: 'Enter', repeat: true }, 5000), true);
+  assert.equal(dialogKeySwallowed({ key: ' ', repeat: true }, 5000), true);
+  // A second Enter in a hurry lands on the primary button before the dialog is armed.
+  assert.equal(dialogKeySwallowed({ key: 'Enter' }, 0), true);
+  assert.equal(dialogKeySwallowed({ key: 'Enter', repeat: false }, 299), true);
+  assert.equal(dialogKeySwallowed({ key: ' ' }, 120), true);
+  // After 300 ms Enter and Space press the focused button.
+  assert.equal(dialogKeySwallowed({ key: 'Enter' }, 300), false);
+  assert.equal(dialogKeySwallowed({ key: 'Enter', repeat: false }, 2000), false);
+  assert.equal(dialogKeySwallowed({ key: ' ' }, 300), false);
+  // Escape and Tab always work.
+  for (const age of [0, 100, 299, 300, 5000]) {
+    assert.equal(dialogKeySwallowed({ key: 'Escape' }, age), false, `Escape at ${age} ms`);
+    assert.equal(dialogKeySwallowed({ key: 'Escape', repeat: true }, age), false, `held Escape at ${age} ms`);
+    assert.equal(dialogKeySwallowed({ key: 'Tab' }, age), false, `Tab at ${age} ms`);
+  }
 });

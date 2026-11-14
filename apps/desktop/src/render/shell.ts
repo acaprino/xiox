@@ -10,6 +10,7 @@ import { footerHint } from '../keys.ts';
 import { sortRows, visibleRows } from '../rows.ts';
 import { currentFocus, SECTION_ORDER, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
+import { ABOUT_KEY } from './about.ts';
 import { renderBar2 } from './bar2.ts';
 import { renderDetail } from './detail.ts';
 import { renderDialog } from './dialog.ts';
@@ -19,6 +20,8 @@ import { renderReport } from './report.ts';
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
   openSection(id: SectionId): void;
+  /** The About window (the button of the sections bar; `?` opens it too). */
+  openAbout(): void;
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
   focusRow(id: string): void;
@@ -121,7 +124,8 @@ export function renderShell(screen: Screen, on: Handlers): void {
     ...SECTION_ORDER.map((id, index) => h('button', {
       type: 'button', class: id === view.section ? 'nv on' : 'nv', 'data-section': id, 'data-key': `section:${id}`,
       'aria-current': id === view.section ? 'page' : null, onClick: () => on.openSection(id),
-    }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))));
+    }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))),
+    h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'About'), kbd('?')));
 
   // Bar 2: categories and options.
   renderBar2(byId('bar2'), view, on);
