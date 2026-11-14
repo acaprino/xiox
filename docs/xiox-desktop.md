@@ -64,7 +64,7 @@ interrupted (see [Cleanup](#cleanup)).
 │ Cleaning…  ████████░░░░  64%  Windows temporary files                        │  progress (while a job runs)
 │ Xiox is cleaning the profile of “…”, not that of “…” …                       │  profile strip (when it applies)
 ├──────────┬────────────┬─────────────────────────────────────────────────────┤
-│ SECTIONS │ CATEGORIES │ title ................................  All  None    │
+│ SECTIONS │ CATEGORIES │ title ....................................         │
 │ Cleanup 1│ System     │ ☐  Item         Level          Files        Size    │  list
 │ Registry2│ Explorer   │ ☑  …                                                │
 │ Services3│ …          │                                                     │
@@ -103,15 +103,29 @@ Developers `4`, and `About` (`?`). The number is the key that opens the section.
 item count and, after an analysis, its size (`System`, `Explorer`, ...; for Developers
 `Projects`, `Worktrees`, `Archived sessions`). Under them, `Options`: the choices that belong to
 the section. Registry and Services & RAM have no categories: for them this bar is only
-`Options`.
+`Options`. In Cleanup the list shows every category one after another, so the bar is a menu: a
+click scrolls the list to that category (opening it if it was folded) and the entry of the
+category the list is at is highlighted as you scroll. A small box in front of each entry shows
+at a glance how much of the category is ticked. In Developers each category is a list of its own
+and a click opens it.
 
-**List.** The rows of the open category, largest first (rows without a size keep the order in
-which the engine found them, and rows inside a parent stay under it). Each row has a box (ticked,
-empty, or half-ticked when only some of its children are), a name with a second line that says
-what it is or, for a blocked row, why it cannot be chosen, and the columns of the section. In
-Registry and Developers, `All` and `None` above the list tick or untick every row that can be
-ticked. A caret folds and unfolds the rows under a parent. Where a section has many rows
-(Applications, Services) a search box above the list filters them.
+**List.** The rows of the section, largest first (rows without a size keep the order in which the
+engine found them, and rows inside a parent stay under it). Each row has a box (ticked, empty, or
+half-ticked when only some of its children are), a name with a second line that says what it is
+or, for a blocked row, why it cannot be chosen, and the columns of the section. The whole cell
+around the box is the button, so you do not have to aim at the square; a click on the rest of the
+row selects it (the detail panel follows). The box in the header of the check column ticks or
+clears everything that can be ticked, in every section that has boxes (it is half-ticked when
+only some rows are on); items marked `caution` are never ticked by it, nor by a category box,
+only by their own box. A caret folds and unfolds the rows under a parent. Where a section has
+many rows (Cleanup, Services) a search box above the list filters them.
+
+**Categories in the list (Cleanup).** Each category starts with a header row that stays at the
+top while its rows scroll: its own box (ticks or clears the whole category), a caret (folds it),
+how many items are ticked, and the files and size found. A click on the header folds or opens
+it. A category with more than 40 rows (`Applications`) starts folded; `Fold all` / `Open all`
+above the list does every category at once, and a search opens the categories it found
+something in.
 
 **Detail.** Under the list: what the selected row says about itself, as `item`, `files`,
 `size`, `level`, `mode` (`permanently`, `empties the Recycle Bin`, `to the Recycle Bin`,
@@ -141,7 +155,8 @@ leave behind. This is the section the app opens in.
 rows of a category are its entries: the built-in ones (`Recycle Bin`, `User temporary files`,
 `Windows temporary files`, `Memory dumps`, `Windows log files`, ...), a few special entries
 described below and, in `Applications`, the rules of the Winapp2 catalog, grouped under headers
-such as `Internet (3)`. `Applications` has a search box that filters those rules.
+such as `Internet (3)`. All of them are in one list, one category after another. The search box
+above the list looks through every category (name and description).
 
 **How it works.** Three steps, in this order:
 
@@ -510,7 +525,7 @@ The footer shows the keys of the open section, taken from the buttons themselves
 and what the keys do agree.
 
 **Tab order.** The sections bar (the four sections and `About`), the categories and options of
-the second sidebar, then the main panel (`All` and `None`, the search box, the list, the detail),
+the second sidebar, then the main panel (the search box, the list with its top check box, the detail),
 and last the buttons of the top bar. The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The detail
 panel can be reached too, so a long reason can be scrolled with the arrows. A visible ring shows

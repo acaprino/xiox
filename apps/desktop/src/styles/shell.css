@@ -40,7 +40,7 @@ html, body { height: 100%; overflow: hidden; }
 .job-detail { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; font-weight: 400; }
 
 #body {
-  display: grid; grid-template-columns: 170px 200px minmax(0, 1fr); gap: 8px; padding: 0 8px 8px; min-height: 0;
+  display: grid; grid-template-columns: 164px 236px minmax(0, 1fr); gap: 8px; padding: 0 8px 8px; min-height: 0;
 }
 #body > .frame { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 

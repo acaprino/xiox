@@ -16,7 +16,7 @@ mkdirSync(out, { recursive: true });
 // Every state of the fixture is drawn and fit-checked; the ones below also get the click checks.
 const fixture = JSON.parse(readFileSync(`${here}../fixtures/views.json`, 'utf8'));
 export const SECTIONS = Object.entries(fixture.views).flatMap(([section, states]) => Object.keys(states).map((state) => [section, state]));
-const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'cleanup:browser', 'cleanup:applications', 'registry:analyzed', 'services:loaded', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
+const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'services:loaded', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
 const VIEWPORTS = [[1000, 640], [1440, 900]];
 
 /** Tokens the whole look rests on: a wrong value here means the palette drifted from the mock-up. */
@@ -110,7 +110,7 @@ export async function checkFit(page, label) {
     }
     // Inside a row: name, cells, level and size each keep their own column.
     for (const row of document.querySelectorAll('#rows .r:not(.h):not(.sec)')) {
-      overlaps([...row.querySelectorAll(':scope > .nm, :scope > .cell, :scope > .lv, :scope > .sz, :scope > .ck')]);
+      overlaps([...row.querySelectorAll(':scope > .nm, :scope > .cell, :scope > .lv, :scope > .sz, :scope > .ckc')]);
     }
     // The list never runs under the detail panel.
     const grid = document.querySelector('#rows .grid');
@@ -481,8 +481,8 @@ async function keyboardFlows(page, size, expect, shot) {
   check(await page.locator('#rows .grid .r[data-row]').count() > 0, 'the list did not come back after the report closed');
   await page.evaluate(() => window.__xioxMock.pause(false));
 
-  // Keys are ignored while typing; Escape leaves the field. (Only Applications has a search box.)
-  await goTo(page, 'cleanup', 'applications');
+  // Keys are ignored while typing; Escape leaves the field. (Cleanup's search box looks through every category.)
+  await goTo(page, 'cleanup', 'analyzed');
   const search = page.locator('#rows input.search');
   await search.focus();
   await page.keyboard.type('a1 ');
@@ -636,12 +636,14 @@ async function sectionFlows(page, size, shot) {
   await page.locator('[data-key="opt:scanRoots"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'developers', 'setRemoveMode', (a) => a.mode === 'permanent') && await sent(page, 'developers', 'setScanRoots', (a) => a.on === false), 'the removal mode and the scan-folders box did not send their intents');
-  // The bulk buttons send selectAll.
+  // The check box at the top of the list sends selectAll: on while something is left to tick, off once everything is ticked.
   await clearCalls(page);
-  await page.locator('[data-key="bulk:all"]').click();
-  await page.locator('[data-key="bulk:none"]').click();
+  await page.locator('[data-key="bulk:master"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-key="bulk:master"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 })
+    .catch(() => failures.push(`${size}: the top check box of Developers did not turn on after selectAll`));
+  await page.locator('[data-key="bulk:master"]').click();
   await page.waitForTimeout(100);
-  check(await sent(page, 'developers', 'selectAll', (a) => a.on === true) && await sent(page, 'developers', 'selectAll', (a) => a.on === false), 'All / None did not send selectAll');
+  check(await sent(page, 'developers', 'selectAll', (a) => a.on === true) && await sent(page, 'developers', 'selectAll', (a) => a.on === false), 'the top check box did not send selectAll on, then off');
   // A project row: Space ticks the parent (the mock changes that row only, as the script says), a blocked project and its child stay off.
   await goTo(page, 'developers', 'projects');
   await page.locator('#rows [data-row="p:2"] .nm').click();
@@ -689,12 +691,47 @@ async function sectionFlows(page, size, shot) {
   await page.locator('#rows .report .rp-saved').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Save as text… showed no answer in Developers`));
   check((await page.locator('#rows .report .rp-lines').count()) === 2, 'the Developers report does not list its skipped and failed lines');
 
-  // ---- Cleanup: Applications (search box, headers, blocked row, long lines), Browser (keep list, native lines), the partial analysis.
+  // ---- Cleanup: every category in one list (group rows, the menu scrolls, folding), Applications (search box, headers, blocked row, long lines), Browser (keep list, native lines), the partial analysis.
   await goTo(page, 'cleanup', 'analyzed');
+  check(await page.locator('#rows .r.grp').count() === 7, 'the Cleanup list does not hold its seven categories');
+  check(await page.locator('#rows .r.grp[data-row="winapp2"] .caret[aria-expanded="false"]').count() === 1, 'the long Applications category does not start folded');
+  check(await page.locator('#rows [data-row="opera/cache"]').count() === 0, 'a folded category still draws its rows');
+  check(await page.locator('#rows [data-row="cat:0"]').count() === 1 && await page.locator('#rows [data-row="npm/cache"]').count() === 1, 'the short categories are not open');
+  // The menu scrolls to a category and marks the one the list is at.
+  await page.evaluate(() => window.__xioxMock.pause(true));
+  await page.locator('[data-key="nav:rules:Browser"]').click();
+  await page.waitForTimeout(900);
+  const atTop = await page.evaluate(() => {
+    const grid = document.querySelector('#rows .grid');
+    const anchor = document.querySelector('#rows .anchor[data-anchor="rules:Browser"]');
+    const head = grid.querySelector('.r.h').getBoundingClientRect().bottom;
+    return Math.abs(anchor.getBoundingClientRect().top - head);
+  });
+  check(atTop < 4, `the menu did not scroll Browser to the top of the list (${atTop}px off)`);
+  check((await page.locator('#bar2 [data-key="nav:rules:Browser"][aria-current="true"]').count()) === 1 && await page.locator('#bar2 .it.menu[aria-current]').count() === 1, 'the menu does not mark Browser as the category the list is at');
+  // Scrolling by hand moves the mark.
+  await page.locator('#rows .grid').evaluate((n) => { n.scrollTop = 0; });
+  await page.waitForTimeout(250);
+  check((await page.locator('#bar2 [data-key="nav:builtin:System"][aria-current="true"]').count()) === 1, 'the menu did not follow the list back to System');
+  // A group box ticks what it may: System is mixed (4 of 6), one click ticks all six, another clears them.
+  await clearCalls(page);
+  await page.locator('#rows [data-key="ck:builtin:System"]').click();
+  await page.waitForFunction(() => document.querySelector('#rows [data-key="ck:builtin:System"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 })
+    .catch(() => failures.push(`${size}: the System box did not turn on`));
+  check(await sent(page, 'cleanup', 'toggle', (a) => a.row === 'builtin:System'), 'the group box did not send toggle { row: builtin:System }');
+  check(await page.locator('#rows [data-row="cat:5"] [role=checkbox]').getAttribute('aria-checked') === 'true', 'the group box did not tick the rows of its category');
+  // The caret and a click on the header fold it; Fold all / Open all do every category.
+  await page.locator('#rows .r.grp[data-row="builtin:System"] .caret').click();
+  check(await page.locator('#rows [data-row="cat:0"]').count() === 0, 'the caret of a category did not fold it');
+  await page.locator('#rows .r.grp[data-row="builtin:System"] .nm').click();
+  check(await page.locator('#rows [data-row="cat:0"]').count() === 1, 'a click on the category header did not open it again');
+  await page.locator('[data-key="fold:all"]').click();
+  check(await page.locator('#rows .r[data-row]:not(.grp):not(.sec)').count() === 0 && (await page.locator('[data-key="fold:all"]').textContent()) === 'Open all', 'Fold all did not fold every category');
+  await page.locator('[data-key="fold:all"]').click();
+  check(await page.locator('#rows [data-row="opera/cache"]').count() === 1, 'Open all did not open Applications');
   await page.locator('[data-key="nav:winapp2"]').click();
-  await page.locator('#rows input.search').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: selecting Applications showed no search box`));
-  check((await page.locator('#bar2 [data-key="nav:winapp2"][aria-current="true"]').count()) === 1, 'Applications did not become the current category');
-  check(await page.locator('#rows .r.sec').count() === 3, 'Applications does not list its three Winapp2 sections');
+  check((await page.locator('#bar2 [data-key="nav:winapp2"]').count()) === 1, 'the Applications entry is gone from the menu');
+  check(await page.locator('#rows .r.sec').count() === 6, 'Applications does not list its six Winapp2 sections');
   const search = page.locator('#rows input.search');
   await clearCalls(page);
   await search.click();
@@ -702,7 +739,7 @@ async function sectionFlows(page, size, shot) {
   await page.waitForTimeout(450);
   check(await sent(page, 'cleanup', 'search', (a) => a.text === 'chrome'), 'the search box did not send search { text: "chrome" } after the pause');
   await search.evaluate((n) => n.setSelectionRange(2, 2));
-  await page.evaluate(() => window.__xioxMock.go('cleanup', 'applications')); // another view comes back (its search value is empty)
+  await page.evaluate(() => window.__xioxMock.go('cleanup', 'analyzed')); // another view comes back (its search value is empty)
   await page.waitForTimeout(150);
   check(await search.inputValue() === 'chrome', 'the search box lost its text when the next view came back');
   check(await search.evaluate((n) => [n.selectionStart, n.selectionEnd, document.activeElement === n].join()) === '2,2,true', 'the search box lost its caret or focus when the next view came back');
@@ -718,7 +755,8 @@ async function sectionFlows(page, size, shot) {
   await page.screenshot({ path: `${shot}cleanup-applications-lines-${size}.png` });
   // Browser: the keep list button sends its intent and explains itself.
   await page.locator('[data-key="nav:rules:Browser"]').click();
-  await page.locator('[data-key="opt:keepList"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: selecting Browser showed no keep list button`));
+  await page.waitForTimeout(900);
+  await page.locator('[data-key="opt:keepList"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the options show no keep list button`));
   check(((await page.locator('[data-key="opt:keepList"]').getAttribute('title')) ?? '').length > 20, 'the keep list button has no explanation');
   await clearCalls(page);
   await page.locator('[data-key="opt:keepList"]').click();
@@ -745,10 +783,10 @@ async function sectionFlows(page, size, shot) {
   // ---- Registry: bulk buttons, the backup dialog, the ok notice with its extra line.
   await goTo(page, 'registry', 'analyzed');
   await clearCalls(page);
-  await page.locator('[data-key="bulk:all"]').click();
-  await page.locator('[data-key="bulk:none"]').click();
+  await page.locator('[data-key="bulk:master"]').click();
+  await page.locator('[data-key="bulk:master"]').click();
   await page.waitForTimeout(100);
-  check(await sent(page, 'registry', 'selectAll', (a) => a.on === true) && await sent(page, 'registry', 'selectAll', (a) => a.on === false), 'Registry All / None did not send selectAll');
+  check(await sent(page, 'registry', 'selectAll', (a) => a.on === true) && await sent(page, 'registry', 'selectAll', (a) => a.on === false), 'the Registry top check box did not send selectAll on, then off');
   await page.locator('[data-key="opt:cat:11"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'registry', 'toggleCategory', (a) => a.index === 11), 'a category box did not send toggleCategory { index: 11 }');
@@ -839,15 +877,15 @@ async function fixWaveFlows(page, size, shot) {
   check(await page.locator('#rows .report [role=table] [role=row] > [role=cell], #rows .report [role=table] [role=row] > [role=columnheader]').count() > 0, 'the report tables have no cells');
   await page.screenshot({ path: `${shot}cleanup-report-paths-${size}.png` });
 
-  // All / None wait while a job runs (checked on a view Rust would not send: bulk buttons with a job).
+  // The top check box waits while a job runs (checked on a view Rust would not send: bulk with a job).
   await page.evaluate(() => window.__xioxMock.patch('registry', 'analyzed', { job: { label: 'Fixing…', fraction: 0.5, detail: null } }));
   await goTo(page, 'registry', 'analyzed');
   await page.waitForTimeout(100);
-  check(await page.locator('[data-key="bulk:all"]').isDisabled() && await page.locator('[data-key="bulk:none"]').isDisabled(), 'All / None are enabled while a job runs');
+  check(await page.locator('[data-key="bulk:master"]').isDisabled(), 'the top check box is enabled while a job runs');
   await page.evaluate(() => window.__xioxMock.patch('registry', 'analyzed', { job: null }));
   await goTo(page, 'registry', 'analyzed');
   await page.waitForTimeout(100);
-  check(await page.locator('[data-key="bulk:all"]').isEnabled() && await page.locator('[data-key="bulk:none"]').isEnabled(), 'All / None stay disabled after the job');
+  check(await page.locator('[data-key="bulk:master"]').isEnabled(), 'the top check box stays disabled after the job');
 
   // A double click on a dialog button sends its intent once (the second one is dropped while the first is in flight).
   await goTo(page, 'cleanup', 'confirm');
@@ -1144,7 +1182,7 @@ try {
     await page.evaluate(() => window.__xioxMock.pause(false));
     await resetAll(page);
 
-    // Cleanup: a category click goes through the model and moves aria-current; a row click moves the selection.
+    // Cleanup: a category click scrolls the list and moves aria-current; a row click moves the selection.
     await page.locator('#sections [data-section="cleanup"]').click();
     await page.evaluate(() => window.__xioxMock.go('cleanup', 'analyzed'));
     await page.locator('#bar2 [data-key="nav:rules:Development & AI"]').click();
@@ -1152,6 +1190,7 @@ try {
       await page.locator('#bar2 [data-key="nav:rules:Development & AI"][aria-current="true"]').waitFor({ timeout: 2000 });
       expect(await page.locator('#bar2 .it[aria-current]').count() === 1, `${size}: more than one category is marked current`);
     } catch { failures.push(`${size}: the clicked category did not become current`); }
+    await page.waitForTimeout(900);
     await page.locator('#rows [data-row="cat:3"] .nm').click();
     await page.locator('#rows [data-row="cat:3"].sel').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the clicked row is not selected`));
     expect((await page.locator('#detail .kv b').first().textContent()) === 'Memory dumps', `${size}: the detail does not describe the clicked row`);
@@ -1160,9 +1199,10 @@ try {
 
     // The check box keeps the keyboard focus through the round trip (the view is redrawn).
     const box = page.locator('#rows [data-row="cat:4"] [role=checkbox]');
+    const boxBefore = await box.getAttribute('aria-checked');
     await box.focus();
     await page.keyboard.press('Space');
-    await page.waitForFunction(() => document.querySelector('#rows [data-row="cat:4"] [role=checkbox]')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 })
+    await page.waitForFunction((was) => document.querySelector('#rows [data-row="cat:4"] [role=checkbox]')?.getAttribute('aria-checked') !== was, boxBefore, { timeout: 2000 })
       .catch(() => failures.push(`${size}: Space on a focused check box did not toggle it`));
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-key')) === 'ck:cat:4', `${size}: the check box lost the keyboard focus after the redraw`);
 

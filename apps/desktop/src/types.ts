@@ -5,7 +5,8 @@ export type SectionId = 'cleanup' | 'registry' | 'services' | 'developers';
 export type Tone = 'info' | 'ok' | 'warn' | 'error';
 export type LevelView = 'recommended' | 'optional' | 'caution';
 export type Check = 'on' | 'off' | 'mixed' | 'none';
-export type RowKind = 'item' | 'header' | 'child';
+/** `group` is a category header of a list that shows its categories one after another: it carries the category's own check box, count and size. `header` is a plain sub-heading. */
+export type RowKind = 'item' | 'header' | 'child' | 'group';
 export type ColumnKind = 'name' | 'cell' | 'level' | 'size';
 
 export interface AppInfo { version: string; admin: boolean; ramTotalBytes: number; profileMismatch: string | null; fake: boolean }
@@ -57,14 +58,14 @@ export interface SectionView {
 export interface CmdError { kind: 'refused' | 'failed'; message: string }
 
 export type CleanupIntent =
-  | { kind: 'select'; category: string } | { kind: 'toggle'; row: string } | { kind: 'setOnlyOld'; on: boolean }
+  | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean } | { kind: 'setOnlyOld'; on: boolean }
   | { kind: 'search'; text: string } | { kind: 'analyze' } | { kind: 'openConfirm' } | { kind: 'confirm' }
   | { kind: 'closeDialog' } | { kind: 'cancel' } | { kind: 'openKeepList' };
 export type RegistryIntent =
   | { kind: 'toggleCategory'; index: number } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean }
   | { kind: 'scan' } | { kind: 'openFix' } | { kind: 'fix'; backup: boolean } | { kind: 'closeDialog' };
 export type ServicesIntent =
-  | { kind: 'setAll'; all: boolean } | { kind: 'search'; text: string } | { kind: 'toggle'; row: string } | { kind: 'refresh' }
+  | { kind: 'setAll'; all: boolean } | { kind: 'search'; text: string } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean } | { kind: 'refresh' }
   | { kind: 'openConfirm'; action: 'disable' | 'manual' | 'restore' } | { kind: 'confirm' } | { kind: 'closeDialog' };
 export type DevIntent =
   | { kind: 'select'; category: 'projects' | 'worktrees' | 'sessions' } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean }

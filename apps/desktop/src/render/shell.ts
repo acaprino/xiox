@@ -5,10 +5,9 @@
 
 import { button, fill, h, kbd } from '../dom.ts';
 import { ramText } from '../format.ts';
-import { actionIntent, bulkIntent } from '../intents.ts';
+import { actionIntent } from '../intents.ts';
 import { footerHint } from '../keys.ts';
-import { sortRows, visibleRows } from '../rows.ts';
-import { bulkLocked, currentFocus, noticeKey, SECTION_ORDER, type UiState } from '../state.ts';
+import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
 import { ABOUT_KEY } from './about.ts';
 import { renderBar2 } from './bar2.ts';
@@ -25,7 +24,14 @@ export interface Handlers {
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
   focusRow(id: string): void;
+  /** A click on a check cell: the row takes the focus and its tick is asked for (a group header's id ticks the whole category). */
+  toggleRow(id: string, section: SectionId): void;
   toggleExpanded(id: string): void;
+  /** Folds or opens a category of the list; `foldAll` does it for every category. */
+  toggleFold(id: string): void;
+  foldAll(fold: boolean): void;
+  /** The menu of the categories: scrolls the list to one of them (opening it if it was folded). */
+  goToGroup(id: string): void;
   /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
   addRoot(): void;
   /** `Save as text…` of a report: the save dialog opens in Rust and the answer is the section's view with `report.saved`. */
@@ -145,16 +151,12 @@ export function renderShell(screen: Screen, on: Handlers): void {
     h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'About'), kbd('?')));
 
   // Bar 2: categories and options.
-  renderBar2(byId('bar2'), view, on);
+  renderBar2(byId('bar2'), view, ui, on);
 
-  // List header: title, subtitle and, where the section has bulk selection, All / None.
-  const bulk = view.bulk && view.report === null && bulkIntent(view.section, true) !== null;
+  // List header: title and subtitle (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
     h('span', { class: 'hd-title', 'data-fit': '' }, view.title),
-    h('span', { class: 'hd-right' },
-      h('span', { class: 'sub' }, ellipsis(view.subtitle)),
-      bulk ? button(h('span', { 'data-fit': '' }, 'All'), { class: 'btn sm', 'data-key': 'bulk:all', disabled: bulkLocked(view), onClick: () => on.send(view.section, bulkIntent(view.section, true)) }) : null,
-      bulk ? button(h('span', { 'data-fit': '' }, 'None'), { class: 'btn sm', 'data-key': 'bulk:none', disabled: bulkLocked(view), onClick: () => on.send(view.section, bulkIntent(view.section, false)) }) : null));
+    h('span', { class: 'hd-right' }, h('span', { class: 'sub' }, ellipsis(view.subtitle))));
 
   // Notices, then the list and the detail of the focused row.
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
@@ -171,7 +173,9 @@ export function renderShell(screen: Screen, on: Handlers): void {
     if (rowsArea.classList.contains('is-report')) { rowsArea.classList.remove('is-report'); fill(rowsArea); }
     renderList(rowsArea, view, ui, on);
     const focus = currentFocus(ui, view);
-    renderDetail(byId('detail'), visibleRows(sortRows(view.rows), ui.expanded).find((r) => r.id === focus) ?? null);
+    const focused = shownRows(ui, view).find((r) => r.id === focus) ?? null;
+    // A category header has nothing to add to its own line (its note is on it).
+    renderDetail(byId('detail'), focused?.kind === 'group' ? null : focused);
   }
 
   // Footer.

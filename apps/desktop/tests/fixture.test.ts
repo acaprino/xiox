@@ -31,7 +31,7 @@ test('counts are grouped with a comma, never bare digits of four or more', () =>
     }
   }
   assert.equal(fixture.views.cleanup.analyzed.status.text, '13.48 GB to delete (46,999 files)');
-  assert.deepEqual(fixture.views.cleanup.analyzed.rows.slice(0, 3).map((r) => r.cells[0]), ['2,311', '9,870', '18,204']);
+  assert.deepEqual(fixture.views.cleanup.analyzed.rows.slice(1, 4).map((r) => r.cells[0]), ['2,311', '9,870', '18,204']);
 });
 
 test('a count of one agrees with its word', () => {

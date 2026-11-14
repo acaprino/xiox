@@ -7,8 +7,7 @@
 // current state, a revision counter, and a few memories (below). Fixture states are fixed copies:
 // a toggle or an ack changes the view it was made in and nothing else (the confirm / cleaning /
 // report copies of a list do not follow the toggles made in the analysed one); the list does not
-// change with the Cleanup category except for the two categories that have a state of their own
-// (`select`, below).
+// change with anything but the ticks (`toggle`, `selectAll`, below).
 //
 // REVISIONS. `rev` starts at 0 and grows by one on EVERY view the model returns or pushes: `show`,
 // `view`, `go`, each `intent` (also an ignored or refused one: the same state with a new rev) and
@@ -25,10 +24,11 @@
 // "Home" (where cancel / closeDialog fall back when nothing was recorded, e.g. after `go`):
 //   cleanup analyzed, registry analyzed, services loaded, developers projects.
 // "Empty" (where closeDialog goes from a report, whose analysis was dropped): cleanup idle, developers idle.
-// "Analyzed-like" (where a dialog can be opened): cleanup analyzed / interrupted / browser / applications,
+// "Analyzed-like" (where a dialog can be opened): cleanup analyzed / interrupted,
 //   registry analyzed, services loaded, developers projects / worktrees / sessions.
-// Cleanup has two more list states, `browser` (the Browser category: native rows, a blocked row, the keep
-// list button) and `applications` (Winapp2: headers, the search box, a blocked row); `select` goes there.
+// The Cleanup list holds ALL its categories one after another (contract v2): each starts with a `group` row (its own
+// check box, count and size), Winapp2 keeps its `header` sub-headings, and the menu of bar 2 only scrolls (the page's
+// business: Cleanup has no `select` intent any more).
 // FROZEN = a job runs (busy state) OR the view has a dialog OR the view has a report.
 // CANCELLED (cleanup:cancelled, developers:cancelled) = the report of a clean that was cancelled
 //   (`report.cancelled` true). It is FROZEN like any report, with the differences the engine has: the
@@ -46,18 +46,18 @@
 //       a section that is not busy pushes nothing. A busy section counts its ticks: tick 1, 2, 3 push the
 //       busy view with job.fraction 1/3, 2/3, 1 (same state); tick 4 goes to the landing state and
 //       pushes that view (no job). Every pushed view bumps the rev.
-//   select{category} (cleanup)       refused when FROZEN or when the category is not in nav. `rules:Browser`
-//       and `winapp2` have their own states (`browser`, `applications`): from analyzed / interrupted / browser /
-//       applications it goes there (from any other state, e.g. idle, it changes nothing). Any other category:
-//       from `browser` / `applications` it goes back to `analyzed`, from any other state it stays; and from now
-//       on every view that is not `browser` / `applications` has nav[].active moved to that id (the model
-//       remembers it across states and revs and rewrites nav[].active on every view it returns; it applies
-//       only to views whose nav has that id).
 //   select{category} (developers)    only from projects / worktrees / sessions to one of the three
 //       (so never when FROZEN); goes to that state. No memory is needed: each state's nav marks its own.
 //   toggle{row}                      refused when FROZEN, or when the row is missing, disabled
 //       (enabled false: blocked rows) or has check 'none'. Otherwise that row's check goes on<->off
-//       (mixed -> on) in the current fixture state; nothing else is recounted.
+//       (mixed -> on) in the current fixture state. A `group` row ticks (or, when it was on, clears) its ELIGIBLE rows,
+//       the rows after it up to the next group row that are items or children, enabled, with a check and not level
+//       `caution`. Afterwards the check of every group row is recounted from its rows: `on` when
+//       every eligible row is on, `off` when none is, else `mixed` (`none` when there is no eligible row); nothing
+//       else (parent rows, nav notes, subtitle, status) is recounted.
+//   selectAll{on}                    refused when FROZEN or when the view's `bulk` is false. Otherwise every eligible
+//       row (above) of the view goes on / off, then the checks are recounted as above. A `caution` row and a blocked row
+//       keep what they had, in every state.
 //   openConfirm (cleanup, developers) | openFix (registry) | openConfirm{action} (services)
 //       only from an analyzed-like state AND only when the action is enabled in the current view
 //       (cleanup / developers action `clean`; registry `fix`; services the action named by `action`:
@@ -94,7 +94,7 @@
 //       any other busy state (cleanup analyzing, registry scanning / fixing, services loading): goes to
 //         `back` (the state before the job), else Home.
 //       A cancelled job stops ticking.
-//   anything else (search, setOnlyOld, selectAll, setAll, setInactiveDays, ...)   the same state.
+//   anything else (search, setOnlyOld, setAll, setInactiveDays, ...)   the same state.
 // An intent that is refused or does not apply is IGNORED: same state, new rev, nothing else changes.
 //
 // WHAT NO INTENT DOES (the FakeBackend must not invent it either).
@@ -110,7 +110,7 @@
 //       Rust FakeBackend rejects it at the type level (no such variant).
 //   cancel of a developers scan, closeDialog with no dialog and no report, cancel when nothing is busy, select of a category that is
 //       not in the nav, toggle of a row whose check is `none` (a header: the OTHER WORKTREES row of
-//       developers:worktrees), openConfirm from a state that is not analyzed-like: all refused, as above
+//       developers:worktrees) or that does not exist, openConfirm from a state that is not analyzed-like: all refused, as above
 //       (steps at the end of fixtures/intent-script.json).
 //
 // SERVICES NOTICE. The notice of `services:loaded` is cleared when a refresh starts, when a dialog opens
@@ -122,7 +122,7 @@
 //
 // `go(s, state)` jumps to a named state (smoke only): resets the tick counter and `back`.
 
-import type { AboutView, AnyIntent, AppInfo, DialogView, SectionId, SectionView } from './types.ts';
+import type { AboutView, AnyIntent, AppInfo, Check, DialogView, RowView, SectionId, SectionView } from './types.ts';
 
 export interface Fixture {
   app: AppInfo;
@@ -135,12 +135,9 @@ const SECTIONS: readonly SectionId[] = ['cleanup', 'registry', 'services', 'deve
 const INITIAL: Record<SectionId, string> = { cleanup: 'idle', registry: 'idle', services: 'loaded', developers: 'idle' };
 const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
 const ANALYZED: Record<SectionId, readonly string[]> = {
-  cleanup: ['analyzed', 'interrupted', 'browser', 'applications'], registry: ['analyzed'], services: ['loaded'],
+  cleanup: ['analyzed', 'interrupted'], registry: ['analyzed'], services: ['loaded'],
   developers: ['projects', 'worktrees', 'sessions'],
 };
-/** The Cleanup categories that have a state of their own, and that state's own nav is what the page draws. */
-const CATEGORY_STATE: Record<string, string> = { 'rules:Browser': 'browser', winapp2: 'applications' };
-const CATEGORY_STATES: readonly string[] = Object.values(CATEGORY_STATE);
 /** What the Save as text… command writes (Rust names the real file; the page never sees a path). */
 const SAVED = 'Report saved.';
 const LANDS: Record<SectionId, Record<string, string>> = {
@@ -178,6 +175,27 @@ function runRule(s: SectionId, intent: AnyIntent): { from: string; button: strin
   return null;
 }
 
+/** A row that a group box or «select all» may change: an item or a child, enabled, with a check, and not a `caution` one. */
+const eligible = (r: RowView): boolean => (r.kind === 'item' || r.kind === 'child') && r.enabled && r.check !== 'none' && r.level !== 'caution';
+
+/** The rows after a `group` row, up to the next one, that it may change. */
+function groupRows(rows: RowView[], group: RowView): RowView[] {
+  const at = rows.indexOf(group);
+  const out: RowView[] = [];
+  for (const r of rows.slice(at + 1)) {
+    if (r.kind === 'group') break;
+    if (eligible(r)) out.push(r);
+  }
+  return out;
+}
+
+const tally = (checks: Check[]): Check => (checks.length === 0 ? 'none' : checks.every((c) => c === 'on') ? 'on' : checks.every((c) => c === 'off') ? 'off' : 'mixed');
+
+/** The check of every group row, counted again from the rows it covers (a parent row is not recounted: the engine's own figures stay). */
+function recount(rows: RowView[]): void {
+  for (const r of rows) if (r.kind === 'group') r.check = tally(groupRows(rows, r).map((x) => x.check));
+}
+
 export class MockModel {
   private readonly work: Fixture['views'];
   private readonly state: Record<SectionId, string>;
@@ -185,8 +203,6 @@ export class MockModel {
   /** Where closeDialog and cancel go back to; undefined = Home. */
   private readonly back: Partial<Record<SectionId, string>> = {};
   private readonly ticks: Record<SectionId, number> = { cleanup: 0, registry: 0, services: 0, developers: 0 };
-  /** The Cleanup category chosen by `select`, applied to every view whose nav has it. */
-  private readonly active: Partial<Record<SectionId, string>> = {};
   /** The Services action whose dialog is open (decides the notice text). */
   private pendingAction = 'disable';
 
@@ -269,10 +285,6 @@ export class MockModel {
   private stamp(s: SectionId): SectionView {
     this.revs[s] += 1;
     const view: SectionView = { ...structuredClone(this.current(s)), rev: this.revs[s] };
-    const active = this.active[s];
-    if (active !== undefined && !(s === 'cleanup' && CATEGORY_STATES.includes(this.state[s])) && view.nav.some((n) => n.id === active)) {
-      view.nav = view.nav.map((n) => ({ ...n, active: n.id === active }));
-    }
     if (view.job && LANDS[s][this.state[s]] !== undefined) {
       view.job = { ...view.job, fraction: Math.min(this.ticks[s], TICKS) / TICKS };
     }
@@ -319,22 +331,14 @@ export class MockModel {
       this.back[s] = here;
       if (s === 'services') this.clearNotice();
       this.goTo(s, ANALYZE_BUSY[s]);
-    } else if (kind === 'select' && (s === 'cleanup' || s === 'developers')) {
+    } else if (kind === 'select' && s === 'developers') {
       if (this.frozen(s)) return;
       const category = (intent as { category: string }).category;
-      if (s === 'developers') {
-        if (DEV_CATEGORIES.includes(here) && DEV_CATEGORIES.includes(category)) this.goTo(s, category);
-      } else if (this.current(s).nav.some((n) => n.id === category)) {
-        const own = CATEGORY_STATE[category];
-        if (own !== undefined) {
-          if (ANALYZED.cleanup.includes(here)) this.goTo(s, own);
-        } else {
-          this.active[s] = category;
-          if (CATEGORY_STATES.includes(here)) this.goTo(s, HOME.cleanup);
-        }
-      }
+      if (DEV_CATEGORIES.includes(here) && DEV_CATEGORIES.includes(category)) this.goTo(s, category);
     } else if (kind === 'toggle') {
       if (!this.frozen(s)) this.toggle(s, (intent as { row: string }).row);
+    } else if (kind === 'selectAll') {
+      if (!this.frozen(s) && this.current(s).bulk) this.selectAll(s, (intent as { on: boolean }).on);
     } else if (kind === OPEN_KIND[s]) {
       const action = s === 'services' ? (intent as { action: string }).action : s === 'registry' ? 'fix' : 'clean';
       if (!ANALYZED[s].includes(here) || !this.actionEnabled(s, action)) return;
@@ -366,9 +370,22 @@ export class MockModel {
   }
 
   private toggle(s: SectionId, id: string): void {
-    const row = this.current(s).rows.find((r) => r.id === id);
+    const rows = this.current(s).rows;
+    const row = rows.find((r) => r.id === id);
     if (!row || !row.enabled || row.check === 'none') return;
-    row.check = row.check === 'on' ? 'off' : 'on';
+    if (row.kind === 'group') {
+      const to = row.check === 'on' ? 'off' : 'on';
+      for (const r of groupRows(rows, row)) r.check = to;
+    } else {
+      row.check = row.check === 'on' ? 'off' : 'on';
+    }
+    recount(rows);
+  }
+
+  private selectAll(s: SectionId, on: boolean): void {
+    const rows = this.current(s).rows;
+    for (const r of rows) if (eligible(r)) r.check = on ? 'on' : 'off';
+    recount(rows);
   }
 
   private setAck(on: boolean): void {

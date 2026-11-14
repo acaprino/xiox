@@ -63,7 +63,7 @@ fn natives_for_test() -> Vec<native::NativeItem> {
     native::all().into_iter().filter(|i| i.id == "env_path" || i.id == "clipboard").collect()
 }
 
-fn opt(id: &str, label: &str, description: &str) -> Opt {
+pub(super) fn opt(id: &str, label: &str, description: &str) -> Opt {
     Opt {
         id: id.into(),
         label: label.into(),
@@ -76,7 +76,7 @@ fn opt(id: &str, label: &str, description: &str) -> Opt {
     }
 }
 
-fn cleaner(id: &str, label: &str, origin: Origin, group: &str, options: Vec<Opt>) -> Cleaner {
+pub(super) fn cleaner(id: &str, label: &str, origin: Origin, group: &str, options: Vec<Opt>) -> Cleaner {
     Cleaner { id: id.into(), label: label.into(), group: group.into(), origin, description: String::new(), running: vec![], options }
 }
 
@@ -141,8 +141,10 @@ fn analyzed(workers: CleanupWorkers) -> CleanupState {
     st
 }
 
-fn open(st: &mut CleanupState, nav: &str) {
-    st.select_category(nav).unwrap_or_else(|e| panic!("{nav}: {e}"));
+/// The ids of the rows a category holds in the view: after its `Group` row, up to the next one.
+fn rows_of<'a>(v: &'a SectionView, group: &str) -> Vec<&'a str> {
+    let at = v.rows.iter().position(|r| r.kind == RowKind::Group && r.id == group).unwrap_or_else(|| panic!("no category {group} in the list"));
+    v.rows[at + 1..].iter().take_while(|r| r.kind != RowKind::Group).map(|r| r.id.as_str()).collect()
 }
 
 /// The view as JSON and back: every view these tests look at has to read through the contract.
@@ -166,7 +168,6 @@ fn blocker(rs: &mut rules::RuleSet) {
 #[test]
 fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
     let mut st = state();
-    assert_eq!(st.nav, "builtin:System");
     assert!(st.clean_sel[0]);
     st.toggle("cat:0").unwrap();
     assert!(!st.clean_sel[0]);
@@ -178,12 +179,9 @@ fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
     st.toggle("t_tool/history").unwrap();
     assert!(!st.rule_sel.contains("t_tool/history"));
     // The keys of the view are the keys of the selection.
-    open(&mut st, "rules:Development & AI");
     let v = view(&st, false);
-    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["t_tool/history", "t_tool/legacy"]);
-    open(&mut st, "rules:Windows");
-    let v = view(&st, false);
-    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["native:clipboard", "native:env_path"]);
+    assert_eq!(rows_of(&v, "rules:Development & AI"), ["t_tool/history", "t_tool/legacy"]);
+    assert_eq!(rows_of(&v, "rules:Windows"), ["native:clipboard", "native:env_path"]);
 
     // Unknown ids and headers change nothing.
     let before = (st.clean_sel.clone(), st.rule_sel.clone());
@@ -215,10 +213,11 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     let mut st = state_with(HOLD);
     st.analyze(notifier()).unwrap();
     assert!(st.busy());
-    let before = (st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone());
+    let before = (st.clean_sel.clone(), st.rule_sel.clone(), st.only_old);
     for (name, r) in [
         ("toggle", st.toggle("cat:0")),
-        ("select", st.select_category("builtin:Advanced")),
+        ("category box", st.toggle("builtin:Advanced")),
+        ("select all", st.select_all(true)),
         ("only old", st.set_only_old(false)),
         ("analyze", st.analyze(notifier())),
         ("clean", st.request_clean()),
@@ -226,7 +225,7 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     ] {
         assert_eq!(err(r), BUSY, "{name} while a job runs");
     }
-    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone()), before);
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old), before);
     let v = view(&st, false);
     assert!(!action(&v, "analyze").enabled && !action(&v, "clean").enabled);
     st.cancel_job().unwrap();
@@ -237,14 +236,15 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     assert!(st.confirm_clean);
     for (name, r) in [
         ("toggle", st.toggle("cat:0")),
-        ("select", st.select_category("builtin:Advanced")),
+        ("category box", st.toggle("builtin:Advanced")),
+        ("select all", st.select_all(false)),
         ("only old", st.set_only_old(false)),
         ("analyze", st.analyze(notifier())),
         ("clean", st.request_clean()),
     ] {
         assert_eq!(err(r), DIALOG_OPEN, "{name} with the confirmation open");
     }
-    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone()), before);
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old), before);
     let v = view(&st, false);
     assert!(v.options.iter().all(|o| !matches!(o, OptionView::Toggle { enabled: true, .. })), "the box is off while the dialog is open");
     st.close_confirm();
@@ -254,7 +254,8 @@ fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
     st.clean_view = CleanView::Cleaned;
     st.clean_report = Some(Default::default());
     assert_eq!(err(st.toggle("cat:0")), REPORT_OPEN);
-    assert_eq!(err(st.select_category("builtin:Advanced")), REPORT_OPEN);
+    assert_eq!(err(st.toggle("builtin:Advanced")), REPORT_OPEN);
+    assert_eq!(err(st.select_all(true)), REPORT_OPEN);
     assert_eq!(err(st.set_only_old(false)), REPORT_OPEN);
     st.release();
     assert!(st.clean_report.is_none() && st.clean_view == CleanView::Empty);
@@ -385,7 +386,7 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!(
         nav,
         [
-            ("builtin:System", "System", true),
+            ("builtin:System", "System", false),
             ("builtin:Explorer", "Explorer", false),
             ("builtin:Advanced", "Advanced", false),
             ("rules:Windows", "Windows", false),
@@ -405,8 +406,12 @@ fn cleanup_view_groups_levels_and_modes() {
         ("Files", ColumnKind::Cell),
         ("Size", ColumnKind::Size),
     ]);
-    assert_eq!((v.section, v.rev, v.title.as_str()), (SectionId::Cleanup, 0, "System"));
-    assert!(!v.bulk && v.search.is_none() && v.dialog.is_none() && v.report.is_none() && v.job.is_none());
+    assert_eq!((v.section, v.rev, v.title.as_str()), (SectionId::Cleanup, 0, "Cleanup"));
+    assert!(v.bulk && v.dialog.is_none() && v.report.is_none() && v.job.is_none());
+    assert_eq!(v.search, Some(SearchView { placeholder: "Search all categories".into(), value: String::new() }));
+    // The subtitle counts what the list shows: 6 + 1 + 2 + 2 + 2 + 4 rows, the ticked ones.
+    let ticked = v.rows.iter().filter(|r| r.kind == RowKind::Item && r.check == Check::On).count();
+    assert_eq!(v.subtitle, format!("17 items · {ticked} selected"));
     // Built-in rows: the Recycle Bin empties, a default-on category is recommended.
     let bin = row(&v, "cat:0");
     assert_eq!((bin.level, bin.check, bin.enabled), (Some(LevelView::Recommended), Check::On, true));
@@ -418,24 +423,18 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!(detail(bin, "item"), Some(cleaner::CATEGORIES[0].name));
     assert!(bin.cells.is_empty() && bin.bytes.is_none(), "no figures before an analysis");
     // Default-off: optional. Needs administrator: said for a standard user, not for an administrator.
-    open(&mut st, "builtin:Explorer");
-    let thumbs = view(&st, false);
-    assert_eq!((row(&thumbs, "cat:6").level, row(&thumbs, "cat:6").check), (Some(LevelView::Optional), Check::Off));
-    open(&mut st, "builtin:Advanced");
+    let thumbs = row(&v, "cat:6");
+    assert_eq!((thumbs.level, thumbs.check), (Some(LevelView::Optional), Check::Off));
     let why = "Needs administrator: some folders are skipped";
     assert_eq!(row(&view(&st, false), "cat:7").why.as_deref(), Some(why));
     assert_eq!(row(&view(&st, true), "cat:7").why, None);
     // Natives and options: caution for a warning, the blocked reason for an unsupported one.
-    open(&mut st, "rules:Windows");
-    let v = view(&st, false);
     let (clip, path) = (row(&v, "native:clipboard"), row(&v, "native:env_path"));
     assert_eq!((clip.level, clip.check, clip.sub.as_deref()), (Some(LevelView::Recommended), Check::On, Some(st.natives[0].description)));
     assert_eq!((path.level, path.check, path.enabled), (Some(LevelView::Caution), Check::Off, true));
     assert_eq!(path.why.as_deref(), st.natives[1].warning);
     assert_eq!(detail(path, "warning"), st.natives[1].warning);
     assert_eq!(detail(path, "mode"), Some("permanently"));
-    open(&mut st, "rules:Development & AI");
-    let v = view(&st, false);
     let (history, legacy) = (row(&v, "t_tool/history"), row(&v, "t_tool/legacy"));
     assert_eq!((history.name.as_str(), history.level, history.enabled), ("Toolchain – History", Some(LevelView::Caution), true));
     assert_eq!(history.sub, None, "neither the option nor its cleaner has a description");
@@ -446,10 +445,11 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!((legacy.enabled, legacy.muted, legacy.check, legacy.level), (false, true, Check::Off, Some(LevelView::Optional)));
     assert_eq!(legacy.why.as_deref(), Some(blocked.as_str()));
     assert_eq!((legacy.sub.as_deref(), detail(legacy, "why")), (Some("Old files."), Some("Old files.")));
-    // The box, the buttons.
+    // The box, the status line of Winapp2 (the rules are loaded), no cookie list without the item, the buttons.
+    assert_eq!(v.options.len(), 2, "no cookie list: this build has no cookie item");
     assert!(matches!(&v.options[0], OptionView::Toggle { id, label, on: true, enabled: true, .. }
         if id == "onlyOld" && label == "Only delete Temp files older than 24 hours"));
-    assert_eq!(v.options.len(), 1, "no cookie list in this category");
+    assert!(matches!(&v.options[1], OptionView::Text { .. }));
     assert_eq!((action(&v, "analyze").label.as_str(), action(&v, "analyze").key.as_deref(), action(&v, "analyze").enabled), ("Analyze", Some("a"), true));
     let clean = action(&v, "clean");
     assert_eq!((clean.label.as_str(), clean.key.as_deref(), clean.primary, clean.enabled), ("Clean 7 items", Some("Enter"), true, false));
@@ -467,14 +467,12 @@ fn cleanup_view_groups_levels_and_modes() {
     assert_eq!((history.cells.as_slice(), history.bytes), (&["4".to_string()][..], Some(77)));
     assert_eq!(detail(history, "left"), Some("3 items left (protected or unreadable)"));
     assert_eq!(history.lines, ["a", "b"]);
-    open(&mut st, "rules:Windows");
-    let clip = view(&st, false).rows.into_iter().find(|r| r.id == "native:clipboard").unwrap();
+    let clip = row(&v, "native:clipboard");
     assert_eq!((clip.cells.as_slice(), clip.lines.len()), (&["—".to_string()][..], 2), "not files: a dash, the lines are the detail");
-    open(&mut st, "builtin:System");
-    let bin = view(&st, false).rows.into_iter().find(|r| r.id == "cat:0").unwrap();
+    let bin = row(&v, "cat:0");
     assert_eq!((bin.cells.as_slice(), bin.bytes), (&["5".to_string()][..], Some(1000)));
-    assert!(detail(&bin, "skipped").is_some(), "folders were skipped without administrator rights");
-    assert_eq!(view(&st, true).rows[0].detail.iter().any(|(k, _)| k == "skipped"), false);
+    assert!(detail(bin, "skipped").is_some(), "folders were skipped without administrator rights");
+    assert_eq!(detail(row(&view(&st, true), "cat:0"), "skipped"), None);
 }
 
 #[test]
@@ -533,7 +531,9 @@ fn cleanup_view_report_and_items_after_cleaning() {
     let job = v.job.as_ref().unwrap();
     assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Cleaning…", 0.5, Some("Cleaning – Recycle Bin")));
     assert!(action(&v, "cancel").enabled && !action(&v, "clean").enabled && !action(&v, "analyze").enabled);
-    assert!(v.report.is_none() && view(&st, false).rows.len() == 6);
+    assert!(v.report.is_none() && v.rows.iter().any(|r| r.id == "cat:0"), "the list stays while it runs");
+    assert!(!v.bulk && v.search.is_none(), "the box of the list and its search wait for the job");
+    assert!(v.rows.iter().filter(|r| r.kind == RowKind::Group).all(|r| !r.enabled), "so do the boxes of the categories");
     assert_eq!(st.report_text(), None, "nothing to save while it runs");
     tx.send(CleanMsg::Done).unwrap();
     st.poll();
@@ -647,11 +647,231 @@ fn keep_list_belongs_to_the_cookie_item() {
         OptionView::Button { id, label, enabled, hint } => Some((id.clone(), label.clone(), *enabled, hint.is_some())),
         _ => None,
     }).collect::<Vec<_>>();
-    assert!(ids(&view(&st, false)).is_empty());
-    open(&mut st, "rules:Browser");
+    // The button is in the view whatever part of the list is on screen: no category is open any more.
     assert_eq!(ids(&view(&st, false)), [("keepList".to_string(), "Edit cookie keep list".to_string(), true, true)]);
-    open(&mut st, "rules:Windows");
-    assert!(ids(&view(&st, false)).is_empty());
+    st.set_search("zzz");
+    assert_eq!(ids(&view(&st, false)), [("keepList".to_string(), "Edit cookie keep list".to_string(), true, true)], "a search does not take it away");
+}
+
+// ---------- one list, every category ----------
+
+/// The ids of the built-in categories of a group, as the list keys them.
+fn builtin_ids(group: &str) -> Vec<String> {
+    (0..cleaner::CATEGORIES.len()).filter(|&i| cleaner::CATEGORIES[i].group == group).map(|i| format!("cat:{i}")).collect()
+}
+
+#[test]
+fn every_category_is_in_the_list_led_by_a_group_row() {
+    let st = state();
+    let v = view(&st, false);
+    // The menu and the list name the same categories in the same order; the first row is a category.
+    let groups: Vec<(&str, &str)> = v.rows.iter().filter(|r| r.kind == RowKind::Group).map(|r| (r.id.as_str(), r.name.as_str())).collect();
+    assert_eq!(groups, v.nav.iter().map(|n| (n.id.as_str(), n.name.as_str())).collect::<Vec<_>>());
+    assert_eq!(groups.len(), 6);
+    assert_eq!(v.rows[0].id, "builtin:System");
+    assert!(v.nav.iter().all(|n| !n.active), "no category is open: the page follows the scroll");
+    assert_eq!(rows_of(&v, "builtin:System"), builtin_ids("System"));
+    assert_eq!(rows_of(&v, "builtin:Explorer"), builtin_ids("Explorer"));
+    assert_eq!(rows_of(&v, "builtin:Advanced"), builtin_ids("Advanced"));
+    assert_eq!(rows_of(&v, "winapp2"), ["section:Browsers", "w_gamma/cache", "section:Utilities", "w_alpha/cache", "w_beta/logs", "w_beta/temp"]);
+    // The line of a category carries no description, level or detail: it is a heading with a box.
+    let g = row(&v, "builtin:System");
+    assert_eq!((g.kind, g.parent.as_deref(), g.sub.as_deref(), g.level, g.muted), (RowKind::Group, None, None, None, false));
+    assert!(g.detail.is_empty() && g.lines.is_empty() && g.size_text.is_none());
+    // Two groups side by side keep their own rows: the same list holds them all.
+    assert!(v.rows.iter().any(|r| r.id == "cat:0") && v.rows.iter().any(|r| r.id == "native:clipboard") && v.rows.iter().any(|r| r.id == "w_beta/temp"));
+    // Rules not loaded: the groups of the natives are there, Winapp2 is not.
+    let mut st = state();
+    st.rules = None;
+    let v = view(&st, false);
+    assert_eq!(v.rows.iter().filter(|r| r.kind == RowKind::Group).map(|r| r.id.as_str()).collect::<Vec<_>>(), ["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows"]);
+}
+
+#[test]
+fn a_category_line_says_what_its_box_ticks() {
+    let mut st = state();
+    let v = view(&st, false);
+    // System is all default-on, Explorer all off.
+    let system = row(&v, "builtin:System");
+    assert_eq!((system.check, system.enabled), (Check::On, true));
+    assert_eq!(row(&v, "builtin:Explorer").check, Check::Off);
+    // Windows holds a ticked native and a Caution one: its box looks at the first only, and says so.
+    let windows = row(&v, "rules:Windows");
+    assert_eq!((windows.check, windows.enabled), (Check::On, true));
+    assert_eq!(windows.why.as_deref(), Some("Caution items are not ticked by this box: tick them one by one."));
+    assert_eq!(row(&v, "builtin:System").why, None, "no Caution row, nothing to say");
+    // Ticking the Caution row by hand moves nothing on the box; unticking the other makes it Off.
+    st.toggle("native:env_path").unwrap();
+    assert_eq!(row(&view(&st, false), "rules:Windows").check, Check::On);
+    st.toggle("native:clipboard").unwrap();
+    assert_eq!(row(&view(&st, false), "rules:Windows").check, Check::Off);
+    // Some of them: Mixed.
+    st.toggle("cat:0").unwrap();
+    assert_eq!(row(&view(&st, false), "builtin:System").check, Check::Mixed);
+    // A category with nothing the box can tick (a Caution row and an unsupported one): no box.
+    let dev = row(&v, "rules:Development & AI");
+    assert_eq!((dev.check, dev.enabled), (Check::None, false));
+    assert!(dev.why.is_some());
+    // Winapp2's sub-headings have no box; its category does.
+    assert_eq!(row(&v, "section:Browsers").check, Check::None);
+    assert_eq!(row(&v, "winapp2").check, Check::Off);
+
+    // Figures appear once the analysis has answered there: files and bytes of the rows.
+    let mut st = state();
+    assert!(row(&view(&st, false), "builtin:System").cells.is_empty() && row(&view(&st, false), "builtin:System").bytes.is_none());
+    st.clean_view = CleanView::Analyzed;
+    st.found[0] = Some(cleaner::Found { count: 5, bytes: 1000, ..Default::default() });
+    st.found[1] = Some(cleaner::Found { count: 2_000, bytes: 24, ..Default::default() });
+    let v = view(&st, false);
+    let system = row(&v, "builtin:System");
+    assert_eq!((system.cells.as_slice(), system.bytes), (&["2,005".to_string()][..], Some(1024)));
+    let explorer = row(&v, "builtin:Explorer");
+    assert!(explorer.cells.is_empty() && explorer.bytes.is_none(), "nothing answered there yet");
+    // A cleaning drops the figures: the report that follows is not an analysis.
+    st.clean_view = CleanView::Cleaned;
+    assert!(row(&view(&st, false), "builtin:System").bytes.is_none());
+}
+
+#[test]
+fn a_category_box_ticks_what_it_can_and_never_a_caution_or_blocked_row() {
+    let mut st = state();
+    // Windows: the clipboard is on, the PATH item (Caution) is off. The box is On, so a click clears the ticked ones.
+    st.toggle("rules:Windows").unwrap();
+    assert!(!st.rule_sel.contains("native:clipboard") && !st.rule_sel.contains("native:env_path"));
+    // Off: a click ticks the one it can, never the Caution row.
+    st.toggle("rules:Windows").unwrap();
+    assert!(st.rule_sel.contains("native:clipboard"));
+    assert!(!st.rule_sel.contains("native:env_path"), "a Caution row is ticked one by one");
+    // A Caution row ticked by hand stays when the box clears the others.
+    st.toggle("native:env_path").unwrap();
+    st.toggle("rules:Windows").unwrap();
+    assert!(st.rule_sel.contains("native:env_path") && !st.rule_sel.contains("native:clipboard"));
+    // Mixed: a click ticks them all.
+    st.toggle("cat:0").unwrap();
+    assert_eq!(row(&view(&st, false), "builtin:System").check, Check::Mixed);
+    st.toggle("builtin:System").unwrap();
+    assert!(builtin_ids("System").iter().all(|id| st.clean_sel[id[4..].parse::<usize>().unwrap()]));
+    assert_eq!(row(&view(&st, false), "builtin:System").check, Check::On);
+    st.toggle("builtin:System").unwrap();
+    assert!(builtin_ids("System").iter().all(|id| !st.clean_sel[id[4..].parse::<usize>().unwrap()]));
+    // The other categories did not move.
+    assert!(st.rule_sel.contains("native:env_path"));
+
+    // Nothing in Development & AI can be ticked in one go (Caution and unsupported): the box is refused.
+    assert_eq!(err(st.toggle("rules:Development & AI")), NOTHING_TO_TICK);
+    assert!(!st.rule_sel.contains("t_tool/history") && !st.rule_sel.contains("t_tool/legacy"));
+
+    // A blocked option (its program runs) is left alone by the Winapp2 box.
+    let mut rs = rule_set();
+    blocker(&mut rs);
+    st.rules = Some(rs);
+    st.processes = vec!["blocker.exe".into()];
+    st.toggle("winapp2").unwrap();
+    assert_eq!(
+        ["w_gamma/cache", "w_beta/logs", "w_beta/temp"].map(|k| st.rule_sel.contains(k)),
+        [true, true, true],
+        "the options that can run are ticked"
+    );
+    assert!(!st.rule_sel.contains("w_alpha/cache"), "a blocked option is not");
+    let v = view(&st, false);
+    assert_eq!((row(&v, "winapp2").check, row(&v, "w_alpha/cache").check, row(&v, "w_alpha/cache").enabled), (Check::On, Check::Off, false));
+
+    // A category the search hides cannot be ticked, and an unknown id is still unknown.
+    st.set_search("zzz");
+    assert_eq!(err(st.toggle("builtin:System")), CATEGORY_HIDDEN);
+    assert!(st.toggle("builtin:Nope").is_err());
+}
+
+#[test]
+fn select_all_ticks_every_row_it_can_and_none_clears_them() {
+    let mut st = state();
+    st.select_all(true).unwrap();
+    assert!(st.clean_sel.iter().all(|&b| b), "every built-in category");
+    for key in ["native:clipboard", "w_alpha/cache", "w_beta/logs", "w_beta/temp", "w_gamma/cache"] {
+        assert!(st.rule_sel.contains(key), "{key} is ticked");
+    }
+    for key in ["native:env_path", "t_tool/history"] {
+        assert!(!st.rule_sel.contains(key), "{key} is Caution: never ticked in one go");
+    }
+    assert!(!st.rule_sel.contains("t_tool/legacy"), "an unsupported option is not either");
+    let v = view(&st, false);
+    assert!(v.bulk);
+    for id in ["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows", "winapp2"] {
+        assert_eq!(row(&v, id).check, Check::On, "{id}");
+    }
+    assert_eq!(row(&v, "rules:Development & AI").check, Check::None);
+    assert_eq!(v.subtitle, format!("17 items · {} selected", v.rows.iter().filter(|r| r.kind == RowKind::Item && r.check == Check::On).count()));
+
+    // A Caution row ticked by hand survives «None»; everything else it could tick goes.
+    st.toggle("native:env_path").unwrap();
+    st.select_all(false).unwrap();
+    assert!(st.clean_sel.iter().all(|&b| !b));
+    assert_eq!(st.rule_sel.iter().map(String::as_str).collect::<Vec<_>>(), ["native:env_path"]);
+    let v = view(&st, false);
+    assert!(["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows", "winapp2"].iter().all(|id| row(&v, id).check == Check::Off));
+
+    // Only what the list shows: the search keeps the rest as it was.
+    st.set_search("beta");
+    st.select_all(true).unwrap();
+    assert_eq!(st.rule_sel.iter().cloned().collect::<std::collections::BTreeSet<_>>(), ["native:env_path", "w_beta/logs", "w_beta/temp"].map(String::from).into());
+    assert!(st.clean_sel.iter().all(|&b| !b));
+    // Nothing shown, or nothing that can be ticked: refused, and nothing changes.
+    st.set_search("zzz");
+    let before = (st.clean_sel.clone(), st.rule_sel.clone());
+    assert_eq!(err(st.select_all(true)), NOTHING_TO_TICK);
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone()), before);
+    assert!(!view(&st, false).bulk);
+    st.set_search("toolchain");
+    assert_eq!(err(st.select_all(true)), NOTHING_TO_TICK, "Caution and unsupported only");
+    assert!(!view(&st, false).bulk);
+}
+
+#[test]
+fn the_search_filters_every_category_and_leaves_the_menu_alone() {
+    let mut st = state();
+    // By name: only the categories that have a matching row are in the list, each with its matching rows.
+    st.set_search("toolchain");
+    let v = view(&st, false);
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["rules:Development & AI", "t_tool/history", "t_tool/legacy"]);
+    assert_eq!(v.nav.len(), 6, "the menu still lists every category");
+    assert_eq!(v.subtitle, "2 items · 0 selected");
+    assert!(v.empty.is_none());
+    // By description (any case, trimmed): the unsupported option is described as «Old files.».
+    st.set_search("  OLD FILES ");
+    let v = view(&st, false);
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["rules:Development & AI", "t_tool/legacy"]);
+    // A built-in category is found by its name too.
+    st.set_search(cleaner::CATEGORIES[0].name);
+    let v = view(&st, false);
+    assert_eq!(v.rows.first().map(|r| r.id.as_str()), Some("builtin:System"));
+    assert!(v.rows.iter().any(|r| r.id == "cat:0"));
+    // No filter: everything again.
+    st.set_search("");
+    assert_eq!(view(&st, false).rows.iter().filter(|r| r.kind == RowKind::Group).count(), 6);
+    // The boxes follow the rows that are shown: the box of a category with some rows hidden reads its shown ones.
+    st.toggle("cat:0").unwrap();
+    st.set_search(cleaner::CATEGORIES[0].name);
+    let v = view(&st, false);
+    assert_eq!(row(&v, "builtin:System").check, Check::Off, "the only shown row is off");
+}
+
+#[test]
+fn the_list_boxes_and_the_search_wait_while_a_job_runs_or_a_report_shows() {
+    let mut st = state_with(HOLD);
+    st.analyze(notifier()).unwrap();
+    let v = view(&st, false);
+    assert!(!v.bulk && v.search.is_none());
+    assert!(v.rows.iter().filter(|r| r.kind == RowKind::Group).all(|r| !r.enabled));
+    st.cancel_job().unwrap();
+    finish(&mut st);
+    let v = view(&st, false);
+    assert!(v.bulk && v.search.is_some(), "back after the job");
+    assert!(v.rows.iter().filter(|r| r.kind == RowKind::Group && r.check != Check::None).all(|r| r.enabled));
+    // A report on screen replaces the list: no box, no search.
+    st.clean_view = CleanView::Cleaned;
+    st.clean_report = Some(Default::default());
+    let v = view(&st, false);
+    assert!(!v.bulk && v.search.is_none() && v.report.is_some());
 }
 
 // ---------- Winapp2 ----------
@@ -668,16 +888,17 @@ fn winapp2_search_matches_section_cleaner_or_option() {
     assert_eq!(m(" Logs "), [("Utilities".to_string(), vec![2])], "an option label, any case, trimmed");
     assert!(m("zzz").is_empty());
 
-    // In the view: a header per section with the number of cleaners, its options after it, the box
-    // only in this category, and the status line of Winapp2 with its reasons.
+    // In the view: the Winapp2 category is the last of the list, a header per section with the number
+    // of cleaners, its options after it, and the status line of Winapp2 with its reasons.
     let mut st = state();
     st.winapp2_update = Some(xiox_rules::updater::UpdateOutcome::NoCopyYet("rete assente".into()));
-    open(&mut st, "winapp2");
     let v = view(&st, false);
-    assert_eq!(v.title, rules::WINAPP2_GROUP);
-    assert_eq!(v.search, Some(SearchView { placeholder: "Search".into(), value: String::new() }));
-    let shown: Vec<(&str, RowKind, &str)> = v.rows.iter().map(|r| (r.id.as_str(), r.kind, r.name.as_str())).collect();
+    assert_eq!(v.title, "Cleanup");
+    assert_eq!(v.search, Some(SearchView { placeholder: "Search all categories".into(), value: String::new() }));
+    let last = v.rows.iter().position(|r| r.id == "winapp2").expect("the Winapp2 category");
+    let shown: Vec<(&str, RowKind, &str)> = v.rows[last..].iter().map(|r| (r.id.as_str(), r.kind, r.name.as_str())).collect();
     assert_eq!(shown, [
+        ("winapp2", RowKind::Group, rules::WINAPP2_GROUP),
         ("section:Browsers", RowKind::Header, "Browsers (1)"),
         ("w_gamma/cache", RowKind::Item, "Gamma"),
         ("section:Utilities", RowKind::Header, "Utilities (2)"),
@@ -692,25 +913,27 @@ fn winapp2_search_matches_section_cleaner_or_option() {
         _ => None,
     });
     assert_eq!(status, Some((text, Some(format!("{}\nWinapp2: 2 regole scartate", why.unwrap())))));
-    st.set_search("logs");
+    // The search keeps the Winapp2 sections as before (here: a cleaner's label), now across every category.
+    st.set_search("beta");
     let v = view(&st, false);
-    assert_eq!(v.search.as_ref().unwrap().value, "logs");
-    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["section:Utilities", "w_beta/logs", "w_beta/temp"]);
+    assert_eq!(v.search.as_ref().unwrap().value, "beta");
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["winapp2", "section:Utilities", "w_beta/logs", "w_beta/temp"]);
     assert_eq!(row(&v, "section:Utilities").name, "Utilities (1)");
-    // Headers are not choosable, rows are, and a search that finds nothing says so.
+    // Sub-headings are not choosable, rows are, and a search that finds nothing says so.
     assert!(st.toggle("section:Utilities").is_err());
     st.toggle("w_beta/logs").unwrap();
     assert_eq!(row(&view(&st, false), "w_beta/logs").check, Check::On);
     st.set_search("zzz");
     let v = view(&st, false);
-    assert!(v.rows.is_empty() && v.empty.is_some());
-    open(&mut st, "builtin:System");
-    assert!(view(&st, false).search.is_none(), "the box exists only in this category");
-    // Rules not loaded yet: no Winapp2 entry, the natives are there already.
+    assert!(v.rows.is_empty() && !v.bulk);
+    assert_eq!(v.empty, Some(EmptyView { title: "No matches".into(), text: "Nothing matches “zzz”.".into() }));
+    assert_eq!(v.nav.len(), 6, "the menu is not filtered");
+    // Rules not loaded yet: no Winapp2 entry (and no status line), the natives are there already.
+    st.set_search("");
     st.rules = None;
     let v = view(&st, false);
     assert_eq!(v.nav.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["builtin:System", "builtin:Explorer", "builtin:Advanced", "rules:Windows"]);
-    assert!(st.select_category("winapp2").is_err());
+    assert!(v.rows.iter().all(|r| r.id != "winapp2") && v.options.iter().all(|o| !matches!(o, OptionView::Text { .. })));
 }
 
 // ---------- «Save as text…» ----------
@@ -777,8 +1000,9 @@ fn cleanup_counts_are_grouped_and_agree_with_their_word() {
 
     // The words of the nav note and the subtitle.
     let v = view(&state(), false);
-    let items = v.rows.iter().filter(|r| r.kind != RowKind::Header).count();
-    assert_eq!(v.subtitle, sys::plural(items, "item", "items"));
+    let items = v.rows.iter().filter(|r| r.kind == RowKind::Item).count();
+    let ticked = v.rows.iter().filter(|r| r.kind == RowKind::Item && r.check == Check::On).count();
+    assert_eq!(v.subtitle, format!("{} · {ticked} selected", sys::plural(items, "item", "items")));
     let one_row = sys::plural(1usize, "item", "items");
     assert_eq!(one_row, "1 item");
     assert!(v.nav.iter().all(|n| n.note.as_deref().is_some_and(|t| t.contains(" selected"))));

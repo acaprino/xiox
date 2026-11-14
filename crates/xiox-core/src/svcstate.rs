@@ -48,6 +48,7 @@ impl ServicesWorkers {
 pub const PROTECTED: &str = "Needed by Windows: protected";
 pub const UNKNOWN_SERVICE: &str = "That service is not in the list.";
 pub const NOT_SHOWN: &str = "That service is hidden by the filter.";
+pub const NOTHING_TO_TICK: &str = "No service in the list can be ticked.";
 pub const NOTHING_SAVED: &str = "No original startup types are saved: there is nothing to restore.";
 pub const UNKNOWN_ACTION: &str = "That action is not offered.";
 pub const APPLY_DIED: &str = "The worker stopped: some services may already have been changed. The list was reloaded.";
@@ -230,6 +231,20 @@ impl ServicesState {
         Ok(())
     }
 
+    /// «Select all» / «None»: the services the list shows (after the Recommended / All filter and the
+    /// search) that can be chosen, on or off. Protected ones keep their state, and so do the hidden ones.
+    pub fn select_all(&mut self, on: bool) -> Result<(), String> {
+        self.editable()?;
+        let rows: Vec<usize> = self.visible().into_iter().filter(|&i| !self.services[i].protected).collect();
+        if rows.is_empty() {
+            return Err(NOTHING_TO_TICK.into());
+        }
+        for i in rows {
+            self.services[i].selected = on;
+        }
+        Ok(())
+    }
+
     /// «Refresh»: reads the list again. The result of the last change goes off the screen.
     pub fn refresh(&mut self, n: SharedNotifier) -> Result<(), String> {
         self.editable()?;
@@ -324,7 +339,7 @@ impl ServicesState {
                 ColumnView { title: "Memory".into(), kind: ColumnKind::Cell },
             ],
             rows: visible.iter().map(|&i| service_row(&self.services[i])).collect(),
-            bulk: false,
+            bulk: !busy && visible.iter().any(|&i| !self.services[i].protected),
             empty: if first_load {
                 Some(EmptyView { title: "Reading services…".into(), text: "This takes a moment.".into() })
             } else {
@@ -639,16 +654,56 @@ mod tests {
     }
 
     #[test]
+    fn select_all_ticks_the_services_the_list_shows_and_none_clears_them() {
+        let mut st = state();
+        st.services[0].selected = false;
+        st.services[2].selected = false;
+        st.services[3].selected = false;
+        assert!(st.view().bulk);
+        // Recommended: Fax and DiagTrack are shown; Spooler (hidden) and RpcSs (protected) stay as they are.
+        st.select_all(true).unwrap();
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [true, true, false, false]);
+        st.select_all(false).unwrap();
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, false, false, false]);
+        // A protected row ticked by a bad page is not cleared either; a hidden one keeps its tick.
+        st.services[2].selected = true;
+        st.services[3].selected = true;
+        st.select_all(false).unwrap();
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, false, true, true]);
+        // All: Spooler too, never the protected one.
+        st.set_all(true);
+        st.services[3].selected = false;
+        st.select_all(true).unwrap();
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [true, true, true, false]);
+        // Only what the search shows.
+        st.select_all(false).unwrap();
+        st.set_search("spool");
+        st.select_all(true).unwrap();
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, false, true, false]);
+        // Nothing the list shows can be ticked (a protected row only, or no match): refused, no box.
+        st.set_search("remote procedure");
+        assert!(!st.view().bulk);
+        assert_eq!(err(st.select_all(true)), NOTHING_TO_TICK);
+        st.set_search("zzz");
+        assert!(!st.view().bulk);
+        assert_eq!(err(st.select_all(false)), NOTHING_TO_TICK);
+        assert_eq!(st.services.iter().map(|s| s.selected).collect::<Vec<_>>(), [false, false, true, false], "a refused one changes nothing");
+    }
+
+    #[test]
     fn services_toggles_are_refused_while_busy_or_with_the_dialog_open() {
         let mut st = state();
         st.open_confirm(ServiceAction::Disable).unwrap();
         assert_eq!(err(st.toggle("svc:DiagTrack")), DIALOG_OPEN);
+        assert_eq!(err(st.select_all(true)), DIALOG_OPEN);
         assert_eq!(err(st.refresh(notifier())), DIALOG_OPEN);
         assert_eq!(err(st.open_confirm(ServiceAction::Manual)), DIALOG_OPEN);
         assert!(!st.services[1].selected);
         st.close_confirm();
         st.job = Some(std::sync::mpsc::channel().1);
         assert_eq!(err(st.toggle("svc:DiagTrack")), BUSY);
+        assert_eq!(err(st.select_all(false)), BUSY);
+        assert!(!st.view().bulk, "no box while a job runs");
         assert_eq!(err(st.refresh(notifier())), BUSY);
         assert_eq!(err(st.open_confirm(ServiceAction::Disable)), BUSY);
         assert_eq!(err(st.confirm(notifier())), BUSY);
@@ -1131,7 +1186,8 @@ mod tests {
         st.services[0].shared = 3;
         let v = st.view();
         assert_eq!(v.section, SectionId::Services);
-        assert!(v.nav.is_empty() && !v.bulk && v.empty.is_none() && v.report.is_none() && v.dialog.is_none());
+        assert!(v.nav.is_empty() && v.empty.is_none() && v.report.is_none() && v.dialog.is_none());
+        assert!(v.bulk, "Fax and DiagTrack are shown and can be ticked");
         match &v.options[1] {
             OptionView::Choice { id, value, choices, enabled, .. } => {
                 assert_eq!((id.as_str(), value.as_str(), *enabled), ("filter", "recommended", true));
@@ -1292,6 +1348,7 @@ mod tests {
                 Ok(())
             }
             ServicesIntent::Toggle { row } => st.toggle(&row),
+            ServicesIntent::SelectAll { on } => st.select_all(on),
             ServicesIntent::Refresh => st.refresh(n),
             ServicesIntent::OpenConfirm { action } => st.open_confirm(action),
             ServicesIntent::Confirm => st.confirm(n),

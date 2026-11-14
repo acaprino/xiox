@@ -914,9 +914,9 @@ mod tests {
     static SCAN_GATE: AtomicU8 = AtomicU8::new(0);
     static FIX_GATE: AtomicU8 = AtomicU8::new(0);
 
-    /// The five issues of the fixture's `analyzed` state: two ticked, three not.
+    /// The forty issues of the fixture's `analyzed` state: two ticked, the rest not.
     fn script_issues() -> Vec<Issue> {
-        (0..5).map(|n| issue(n, n < 2)).collect()
+        (0..40).map(|n| issue(n, n < 2)).collect()
     }
 
     fn script_scan(_: Vec<usize>, out: Outbox<RegMsg>) {

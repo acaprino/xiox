@@ -5,6 +5,7 @@
   --line: #3f6fb5; --line-strong: #6aa0e6; --line-soft: #3f6fb555; --ice: #9cc4f5; --live: #8fd6ff;
   --text: #ffb21e; --text-2: #f0a020; --text-hi: #ffd257; --muted: #7f9fd0; --warn: #ff6a3a; --ok: #7fe0a0; --err: #ff6b6b;
   --sel: #2a4f8f; --sel-soft: #2a4f8f99; --button: #24457a; --button-primary: #2f5aa0;
+  --band: #15234c; --band-hi: #1b2e60; --band-sel: #234483; --hover: #2a4f8f33;
   --grid: #2a4a8018; --glow: #2b4f9a40; --inner: #6aa0e633; --box: #1b2c5266; --box-line: #3f6fb588;
   --font-display: Bahnschrift, 'Segoe UI', sans-serif; --font-body: 'Segoe UI', sans-serif;
   --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; --text-size: 13px;

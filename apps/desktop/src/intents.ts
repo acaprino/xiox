@@ -64,9 +64,11 @@ export function toggleIntent(_s: SectionId, row: string): AnyIntent {
   return { kind: 'toggle', row };
 }
 
-/** A category of bar 2: Cleanup groups, Developers projects / worktrees / sessions. */
+/**
+ * A category of bar 2 that is a list of its own: Developers projects / worktrees / sessions. Cleanup shows all its categories in
+ * one list and its bar 2 only scrolls to one (the page's own business, no intent).
+ */
 export function selectIntent(s: SectionId, nav: string): AnyIntent | null {
-  if (s === 'cleanup') return { kind: 'select', category: nav };
   if (s === 'developers' && (nav === 'projects' || nav === 'worktrees' || nav === 'sessions')) return { kind: 'select', category: nav };
   return null;
 }
@@ -75,7 +77,7 @@ export function searchIntent(s: SectionId, text: string): AnyIntent | null {
   return s === 'cleanup' || s === 'services' ? { kind: 'search', text } : null;
 }
 
-/** The `All` / `None` buttons of the list header. */
-export function bulkIntent(s: SectionId, on: boolean): AnyIntent | null {
-  return s === 'registry' || s === 'developers' ? { kind: 'selectAll', on } : null;
+/** The check box at the top of the list: every section with ticks has one (Rust ticks what can be ticked, and never a «caution» item). */
+export function bulkIntent(_s: SectionId, on: boolean): AnyIntent | null {
+  return { kind: 'selectAll', on };
 }

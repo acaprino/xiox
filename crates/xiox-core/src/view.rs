@@ -56,8 +56,13 @@ pub enum Check {
 #[serde(rename_all = "camelCase")]
 pub enum RowKind {
     Item,
+    /// A sub-heading inside a group (the sections of Winapp2): no check box.
     Header,
     Child,
+    /// A category of a list that shows all its categories one after another (Cleanup): its check
+    /// box ticks what the category holds. Its `id` is the id of the category's `NavItem`, which the
+    /// page scrolls to.
+    Group,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,8 +326,8 @@ pub struct SectionView {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum CleanupIntent {
-    Select { category: String },
     Toggle { row: String },
+    SelectAll { on: bool },
     SetOnlyOld { on: bool },
     Search { text: String },
     Analyze,
@@ -360,6 +365,7 @@ pub enum ServicesIntent {
     SetAll { all: bool },
     Search { text: String },
     Toggle { row: String },
+    SelectAll { on: bool },
     Refresh,
     OpenConfirm { action: ServiceAction },
     Confirm,
@@ -545,7 +551,7 @@ mod tests {
             title: "Projects".into(),
             subtitle: "sub".into(),
             columns: vec![ColumnView { title: "Size".into(), kind: ColumnKind::Size }],
-            rows: vec![row("p:a")],
+            rows: vec![RowView { kind: RowKind::Group, ..row("g:a") }, row("p:a")],
             bulk: true,
             empty: Some(EmptyView { title: "t".into(), text: "x".into() }),
             notices: vec![NoticeView { tone: Tone::Info, text: "n".into(), more: vec!["m".into()] }],
@@ -600,6 +606,8 @@ mod tests {
         assert!(json["options"][3].get("addLabel").is_some());
         assert!(json["options"][5].get("usedBytes").is_some());
         assert_eq!(json["rows"][0]["check"], "mixed");
+        assert_eq!(json["rows"][0]["kind"], "group");
+        assert_eq!(json["rows"][1]["kind"], "item");
         assert_eq!(json["rows"][0]["level"], "caution");
         assert_eq!(json["columns"][0]["kind"], "size");
         assert_eq!(json["rows"][0]["detail"], json!([["item", "acme"]]));
@@ -648,6 +656,11 @@ mod tests {
         assert_eq!(intent, ServicesIntent::OpenConfirm { action: ServiceAction::Restore });
         assert_eq!(serde_json::to_value(RegistryIntent::Fix { backup: true }).unwrap(), json!({ "kind": "fix", "backup": true }));
         assert_eq!(serde_json::to_value(CleanupIntent::SetOnlyOld { on: true }).unwrap(), json!({ "kind": "setOnlyOld", "on": true }));
+        // Cleanup and Services select all the way Registry and Developers do; Cleanup has no `select` any more.
+        assert_eq!(serde_json::to_value(CleanupIntent::SelectAll { on: true }).unwrap(), json!({ "kind": "selectAll", "on": true }));
+        let intent: ServicesIntent = serde_json::from_value(json!({ "kind": "selectAll", "on": false })).unwrap();
+        assert_eq!(intent, ServicesIntent::SelectAll { on: false });
+        assert!(serde_json::from_value::<CleanupIntent>(json!({ "kind": "select", "category": "builtin:System" })).is_err());
         assert!(serde_json::from_value::<DevIntent>(json!({ "kind": "format-c" })).is_err());
     }
 }

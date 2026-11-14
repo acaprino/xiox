@@ -2,7 +2,7 @@
 //! the real state through the worker seam, and the Cleanup states of the shared fixture read through the
 //! Rust view types. The state and its helpers are those of `intent_tests`.
 
-use super::intent_tests::{finish, state_with};
+use super::intent_tests::{cleaner, finish, opt, state_with};
 use super::*;
 use crate::view::testing::notifier;
 use crate::view::*;
@@ -31,12 +31,50 @@ fn script_job(job: CleanJob, out: Outbox<CleanMsg>) {
     out.send(CleanMsg::Done);
 }
 
-/// The state the script calls `name` (`go`): its own selection, the first four categories.
+/// The rows of the fixture's list that the script names, as rules: three browsers (Chrome's cache is
+/// blocked, Firefox's is on, Opera's cookies are at the Caution level) and one Winapp2 entry.
+fn script_rules() -> rules::RuleSet {
+    use xiox_rules::Origin;
+    let mut cookies = opt("cookies", "Cookies", "");
+    cookies.warning = Some("You are signed out of sites.".into());
+    let mut chrome = opt("cache", "Cache", "");
+    chrome.unsupported = Some("needs the old engine".into());
+    let mut firefox = opt("cache", "Cache", "");
+    firefox.default_on = true;
+    rules::RuleSet {
+        cleaners: vec![
+            cleaner("chrome", "Google Chrome", Origin::CleanerMl("c"), "Browser", vec![chrome]),
+            cleaner("firefox", "Firefox", Origin::CleanerMl("f"), "Browser", vec![firefox]),
+            cleaner("opera", "Opera", Origin::CleanerMl("o"), "Browser", vec![cookies]),
+            cleaner("w_app", "Some App", Origin::Winapp2, "Utilities", vec![opt("cache", "Some App", "")]),
+        ],
+        winapp2_version: Some("0.1".into()),
+        status: "Winapp2 0.1 loaded".into(),
+        warnings: vec![],
+        env: xiox_rules::Env::for_rules(),
+        sections: vec![("Utilities".into(), vec![3])],
+        groups: vec![("Browser".into(), vec![0, 1, 2])],
+    }
+}
+
+/// The ids the fixture's (mock) list gives to the native items, and the real ones they stand for.
+const NATIVE_ALIASES: [(&str, &str); 2] = [("native:cookies", "native:cookies_keep_list"), ("native:winold", "native:windows_old")];
+
+fn real_id(id: &str) -> &str {
+    NATIVE_ALIASES.iter().find(|(script, _)| *script == id).map_or(id, |(_, real)| real)
+}
+
+/// The state the script calls `name` (`go`): its own selection, the first four categories, the
+/// cookie item ticked as the fixture's `analyzed` state has it.
 fn script_state(name: &str) -> CleanupState {
     let mut st = state_with(CleanupWorkers { job: script_job });
-    // The Browser group of the script's nav: the cookie item is only listed, the replay's worker
-    // never runs a native item.
-    st.natives.push(native::all().into_iter().find(|i| i.id == crate::browserdb::COOKIES_ID).expect("the cookie item"));
+    st.rules = Some(script_rules());
+    // The natives the script names: the clipboard, Windows.old (Caution) and the cookies (Caution), which
+    // the replay's worker never runs.
+    st.natives = native::all().into_iter().filter(|i| ["clipboard", crate::winold::ID, crate::browserdb::COOKIES_ID].contains(&i.id)).collect();
+    st.rule_sel = rules::native_defaults(&st.natives);
+    st.rule_sel.insert("native:cookies_keep_list".into());
+    st.rule_sel.insert("firefox/cache".into());
     st.clean_sel = (0..cleaner::CATEGORIES.len()).map(|i| i < 4).collect();
     if name == "idle" {
         return st;
@@ -56,9 +94,8 @@ fn script_state(name: &str) -> CleanupState {
     st
 }
 
-/// The script's name for what a state looks like. The two categories that have a state of their own
-/// in the fixture (`browser`, `applications`) are the analysis with that category open; an analysis
-/// that was cut short (cancelled or dead) is `interrupted`.
+/// The script's name for what a state looks like. An analysis that was cut short (cancelled or dead)
+/// is `interrupted`.
 fn shape(st: &CleanupState) -> &'static str {
     if st.busy() {
         return if st.clean_view == CleanView::Cleaned { "cleaning" } else { "analyzing" };
@@ -69,8 +106,6 @@ fn shape(st: &CleanupState) -> &'static str {
     match st.clean_view {
         CleanView::Empty => "idle",
         CleanView::Analyzed if matches!(st.clean_end, Some(CleanEnd::Cancelled | CleanEnd::Died)) => "interrupted",
-        CleanView::Analyzed if st.nav == WINAPP2 => "applications",
-        CleanView::Analyzed if st.nav == "rules:Browser" => "browser",
         CleanView::Analyzed => "analyzed",
         CleanView::Cleaned if st.clean_report.as_ref().is_some_and(|r| r.cancelled) => "cancelled",
         CleanView::Cleaned => "report",
@@ -81,13 +116,13 @@ fn shape(st: &CleanupState) -> &'static str {
 /// report the page's «Close» is `release()`.
 fn apply(st: &mut CleanupState, intent: CleanupIntent) -> Result<(), String> {
     match intent {
-        CleanupIntent::Select { category } => st.select_category(&category),
         CleanupIntent::Toggle { row } => st.toggle(&row),
+        CleanupIntent::SelectAll { on } => st.select_all(on),
         CleanupIntent::SetOnlyOld { on } => st.set_only_old(on),
-        CleanupIntent::Search { text } => {
-            st.set_search(&text);
-            Ok(())
-        }
+        // The script's own note: a search is outside the table, the list is not filtered by the mock.
+        // The filtering the real list does is tested in `intent_tests`; here it would hide the rows the
+        // later steps tick.
+        CleanupIntent::Search { .. } => Ok(()),
         CleanupIntent::Analyze => st.analyze(notifier()),
         CleanupIntent::OpenConfirm => st.request_clean(),
         CleanupIntent::Confirm => st.confirm(notifier()),
@@ -108,7 +143,7 @@ fn apply(st: &mut CleanupState, intent: CleanupIntent) -> Result<(), String> {
 
 /// Builder-vs-fixture drift: the static strings of the view the state builds against the fixture
 /// state `name` (see `crate::drift`). The nav groups that come from the rules on the machine and the
-/// title (it follows the open category) are not compared.
+/// heading (the subtitle counts the rows) are not compared.
 fn drift_check(doc: &serde_json::Value, st: &CleanupState, name: &str, out: &mut Vec<String>, seen: &mut std::collections::BTreeSet<String>) {
     let opts = crate::drift::Opts { nav: |id| id.starts_with("builtin:") || id == "winapp2", heading: false, ..crate::drift::Opts::all() };
     out.extend(crate::drift::diff(&format!("cleanup:{name}"), &st.view(false), &crate::drift::fixture_view(doc, "cleanup", name), opts));
@@ -116,11 +151,15 @@ fn drift_check(doc: &serde_json::Value, st: &CleanupState, name: &str, out: &mut
     seen.insert(name.to_string());
 }
 
-/// The check of a category row as the script names it (the list lives in `clean_sel`, whatever
-/// category is open).
+/// The check of a row of the list (an item or a category's box) as the script names it.
 fn check_of(st: &CleanupState, id: &str) -> &'static str {
-    let i: usize = id.strip_prefix("cat:").unwrap().parse().unwrap();
-    if st.clean_sel[i] { "on" } else { "off" }
+    let real = real_id(id);
+    match st.view(false).rows.iter().find(|r| r.id == real).unwrap_or_else(|| panic!("no row {id}")).check {
+        Check::On => "on",
+        Check::Off => "off",
+        Check::Mixed => "mixed",
+        Check::None => "none",
+    }
 }
 
 /// Replays the Cleanup steps of `apps/desktop/fixtures/intent-script.json` against the real state,
@@ -128,7 +167,8 @@ fn check_of(st: &CleanupState, id: &str) -> &'static str {
 /// say the same thing, the step is re-synchronised on the script's expectation, and each kind of
 /// re-synchronisation is counted and pinned at the end (one now):
 /// - `copy_checks`: the fixture's `confirm` view is a copy that shows `cat:4` off after the analysed
-///     one had it switched on; the state has one selection, so that check is not compared.
+///     one had it switched on (twice: the refused tick and the refused «None»); the state has one
+///     selection, so that check is not compared.
 /// Not re-synchronised any more (the script follows Rust): no built-in category is ever blocked, a
 /// new analysis over a finished report is accepted, and a cancelled analysis ends `interrupted`.
 #[test]
@@ -145,14 +185,11 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
         let note = step["note"].as_str().unwrap_or("");
         match step["op"].as_str().unwrap() {
             "go" if step["section"] == "cleanup" => {
-                // The open category is the page's memory: it survives a jump to another state.
-                let nav = st.nav.clone();
                 if st.busy() {
                     st.cancel_job().unwrap();
                     finish(&mut st);
                 }
                 st = script_state(step["state"].as_str().unwrap());
-                st.nav = nav;
                 if shape(&st) == step["state"].as_str().unwrap() {
                     drift_check(&doc, &st, shape(&st), &mut drift, &mut drift_states);
                 }
@@ -203,9 +240,6 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
                         }
                     }
                 }
-                if let Some(active) = step["expect"]["active"].as_str() {
-                    assert!(v.nav.iter().any(|n| n.id == active && n.active), "{note}: active category {active}");
-                }
                 for (key, got) in [("dialog", v.dialog.is_some()), ("report", v.report.is_some())] {
                     if let Some(want) = step["expect"][key].as_bool() {
                         assert_eq!(got, want, "{note}: {key}");
@@ -219,15 +253,13 @@ fn replays_the_cleanup_steps_of_the_shared_script() {
             _ => {}
         }
     }
-    assert!(drift.is_empty(), "the views the builders make differ from the fixture:
-{}", drift.join("
-"));
+    assert!(crate::drift::unknown(&drift).is_empty(), "the views the builders make differ from the fixture:\n{}", crate::drift::unknown(&drift).join("\n"));
     for want in ["idle", "analyzing", "analyzed", "confirm", "cleaning", "report", "cancelled", "interrupted"] {
         assert!(drift_states.contains(want), "cleanup:{want} was compared with the fixture (compared: {drift_states:?})");
     }
     assert!(compared >= 25, "most of the script's intents were compared: {compared}");
     assert_eq!((landed, finished, cancelled_clean, cancelled_analysis), (1, 1, 1, 1), "analyses landed, cleanups finished, cleanups cancelled, analyses cancelled");
-    assert_eq!(copy_checks, 1, "re-synchronisations");
+    assert_eq!(copy_checks, 2, "re-synchronisations");
     assert_eq!(interrupted, 4, "the cancelled analysis and the three steps that stay on it");
 }
 

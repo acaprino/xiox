@@ -8,8 +8,8 @@ import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, keyAction } from './keys.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
-import { rowParents, sortRows, visibleRows } from './rows.ts';
-import { acceptView, createGate, createInflight, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from './state.ts';
+import { rowParents } from './rows.ts';
+import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SERVICES_POLL_MS, shouldPollServices, shownRows } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -22,6 +22,64 @@ const opening = createGate();
 const inflight = createInflight();
 
 const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
+
+/**
+ * Where the list of categories is scrolled to, for the menu beside it. Each category header is preceded by an empty `.anchor`
+ * that does not stick, so its place is its real place in the list (the sticky header itself moves while it is stuck).
+ */
+const SPY_PIN_MS = 900;
+/** After a click on the menu the marked entry is the one clicked, however far the scroll gets (the last categories cannot reach the top). */
+let spyPinUntil = 0;
+const gridNode = (): HTMLElement | null => document.querySelector<HTMLElement>('#rows .grid');
+const headHeight = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('.r.h')?.offsetHeight ?? 24;
+const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function anchorTop(grid: HTMLElement, anchor: HTMLElement): number {
+  return anchor.getBoundingClientRect().top - grid.getBoundingClientRect().top + grid.scrollTop;
+}
+
+function scrollToGroup(id: string): void {
+  const grid = gridNode();
+  const anchor = grid?.querySelector<HTMLElement>(`.anchor[data-anchor="${CSS.escape(id)}"]`);
+  if (!grid || !anchor) return;
+  grid.scrollTo({ top: Math.max(0, anchorTop(grid, anchor) - headHeight(grid)), behavior: reducedMotion() ? 'auto' : 'smooth' });
+}
+
+/** Marks, in the menu, the category the list is at: the last one whose header has reached the top. */
+function updateSpy(): void {
+  const view = ui.views[ui.section];
+  const grid = gridNode();
+  if (!view || !grid) return;
+  const anchors = [...grid.querySelectorAll<HTMLElement>('.anchor')];
+  if (anchors.length === 0) return;
+  let id = ui.spy[ui.section];
+  if (performance.now() >= spyPinUntil || id === undefined) {
+    const line = grid.getBoundingClientRect().top + headHeight(grid) + 8;
+    id = anchors[0]?.dataset.anchor;
+    for (const anchor of anchors) {
+      if (anchor.getBoundingClientRect().top <= line) id = anchor.dataset.anchor; else break;
+    }
+  }
+  if (id === undefined) return;
+  // The menu follows the list into view only when the category changed: a render must not pull the bar back from the options the user scrolled to.
+  const moved = ui.spy[ui.section] !== id;
+  ui.spy[ui.section] = id;
+  for (const entry of document.querySelectorAll<HTMLElement>('#bar2 .it.menu')) {
+    const here = entry.dataset.group === id;
+    entry.classList.toggle('on', here);
+    if (here) { entry.setAttribute('aria-current', 'true'); if (moved) entry.scrollIntoView({ block: 'nearest' }); } else entry.removeAttribute('aria-current');
+  }
+}
+
+let spyFrame = 0;
+const rowsArea = document.getElementById('rows');
+rowsArea?.addEventListener('scroll', () => {
+  cancelAnimationFrame(spyFrame);
+  spyFrame = requestAnimationFrame(updateSpy);
+}, { capture: true, passive: true });
+// The user takes the scroll back from a click on the menu.
+rowsArea?.addEventListener('wheel', () => { spyPinUntil = 0; }, { passive: true });
+rowsArea?.addEventListener('touchmove', () => { spyPinUntil = 0; }, { passive: true });
 /** Whether the last render drew a report: when that changes the list (or the report) is rebuilt and the focused control is gone. */
 let reportShown = false;
 
@@ -44,6 +102,7 @@ function render(): void {
   if (view.dialog === null && active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
     document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
   }
+  updateSpy();
   // A report opening or closing replaces the list: if the focus fell to the page, put it where the user is working
   // (the report, then the list again) instead of leaving a screen reader on nothing.
   const reporting = view.report !== null;
@@ -102,9 +161,36 @@ const handlers: Handlers = {
   openAbout: () => { void openAbout(); },
   send: (section, intent) => { void send(section, intent); },
   focusRow: (id) => { ui.focus[ui.section] = id; render(); },
+  toggleRow: (id, section) => {
+    ui.focus[section] = id;
+    void send(section, toggleIntent(section, id));
+  },
   toggleExpanded: (id) => {
     if (!ui.expanded.delete(id)) ui.expanded.add(id);
     render();
+  },
+  toggleFold: (id) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    ui.fold.set(id, !foldedGroups(ui, view).has(id));
+    ui.focus[ui.section] = id;
+    render();
+  },
+  foldAll: (fold) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    for (const row of view.rows) if (row.kind === 'group') ui.fold.set(row.id, fold);
+    render();
+  },
+  goToGroup: (id) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    if (foldedGroups(ui, view).has(id)) ui.fold.set(id, false);
+    ui.focus[ui.section] = id;
+    ui.spy[ui.section] = id;
+    spyPinUntil = performance.now() + SPY_PIN_MS;
+    render();
+    scrollToGroup(id);
   },
   saveReport: (section) => {
     void api.saveReport(section).then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section, text: errorText(failure) }; render(); });
@@ -137,7 +223,7 @@ function onKey(event: KeyboardEvent): void {
   if (act === null) return;
   if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
   const section = view.section;
-  const rows = visibleRows(sortRows(view.rows), ui.expanded);
+  const rows = shownRows(ui, view);
   const listed = view.report === null;
   switch (act.kind) {
     case 'section':
@@ -163,7 +249,13 @@ function onKey(event: KeyboardEvent): void {
     }
     case 'expand': {
       const id = currentFocus(ui, view);
-      if (!listed || id === null || !rowParents(view.rows).has(id)) return;
+      if (!listed || id === null) return;
+      if (rows.find((r) => r.id === id)?.kind === 'group') {
+        ui.fold.set(id, !act.open);
+        render();
+        break;
+      }
+      if (!rowParents(view.rows).has(id)) return;
       if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
       render();
       break;

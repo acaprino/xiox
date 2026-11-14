@@ -159,8 +159,8 @@ impl Core {
         let n = self.notifier.clone();
         let st = &mut self.cleanup;
         match i {
-            CleanupIntent::Select { category } => st.select_category(&category),
             CleanupIntent::Toggle { row } => st.toggle(&row),
+            CleanupIntent::SelectAll { on } => st.select_all(on),
             CleanupIntent::SetOnlyOld { on } => st.set_only_old(on),
             CleanupIntent::Search { text } => {
                 st.set_search(&text);
@@ -224,6 +224,7 @@ impl Core {
                 Ok(())
             }
             ServicesIntent::Toggle { row } => st.toggle(&row),
+            ServicesIntent::SelectAll { on } => st.select_all(on),
             ServicesIntent::Refresh => st.refresh(n),
             ServicesIntent::OpenConfirm { action } => st.open_confirm(action),
             ServicesIntent::Confirm => st.confirm(n),

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gridTemplate, rowParents, sortRows, visibleRows } from '../src/rows.ts';
+import { gridTemplate, groupSizes, rowParents, sortRows, visibleRows } from '../src/rows.ts';
 import type { ColumnView, RowView } from '../src/types.ts';
 
 function row(id: string, bytes: number | null, extra: Partial<RowView> = {}): RowView {
@@ -49,7 +49,7 @@ test('gridTemplate adds the check column only when rows have checks', () => {
   const columns: ColumnView[] = [
     { title: 'Item', kind: 'name' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
   ];
-  assert.equal(gridTemplate(columns, true), '16px minmax(0,1fr) 96px minmax(74px,max-content)');
+  assert.equal(gridTemplate(columns, true), '34px minmax(0,1fr) 96px minmax(74px,max-content)');
   assert.equal(gridTemplate(columns, false), 'minmax(0,1fr) 96px minmax(74px,max-content)');
   const cells: ColumnView[] = [{ title: 'Service', kind: 'name' }, { title: 'Startup', kind: 'cell' }, { title: 'State', kind: 'cell' }];
   assert.equal(gridTemplate(cells, false), 'minmax(0,1fr) fit-content(260px) fit-content(260px)');
@@ -66,4 +66,28 @@ test('rowParents lists the rows that have children', () => {
   const rows = [row('p1', 100), child('c1', 'p1', 10), child('c2', 'p1', 90), row('p2', 300)];
   assert.deepEqual([...rowParents(rows)], ['p1']);
   assert.equal(rowParents([row('a', 1)]).size, 0);
+});
+
+const group = (id: string): RowView => row(id, null, { kind: 'group' });
+
+test('categories keep the engine order and are sorted only inside', () => {
+  const rows = [
+    group('g:a'), row('a1', 10), row('a2', 90),
+    group('g:b'), row('b1', 500),
+    group('g:c'), header('h:small'), row('c1', 1), header('h:big'), row('c2', 7), row('c3', 70),
+  ];
+  assert.deepEqual(ids(sortRows(rows)), ['g:a', 'a2', 'a1', 'g:b', 'b1', 'g:c', 'h:big', 'c3', 'c2', 'h:small', 'c1']);
+});
+
+test('a folded category shows its own row and none of its rows', () => {
+  const rows = [group('g:a'), row('a1', 1), group('g:b'), row('b1', 2), child('b2', 'b1', 1)];
+  assert.deepEqual(ids(visibleRows(rows, new Set(), new Set(['g:a']))), ['g:a', 'g:b', 'b1']);
+  assert.deepEqual(ids(visibleRows(rows, new Set(['b1']), new Set(['g:b']))), ['g:a', 'a1', 'g:b']);
+  assert.deepEqual(ids(visibleRows(rows, new Set(), new Set())), ['g:a', 'a1', 'g:b', 'b1']);
+});
+
+test('groupSizes counts the items of a category, not its sub-headings', () => {
+  const rows = [group('g:a'), header('h'), row('a1', 1), row('a2', 2), group('g:b'), row('b1', 3), child('b2', 'b1', 1), group('g:c')];
+  assert.deepEqual([...groupSizes(rows)], [['g:a', 2], ['g:b', 2], ['g:c', 0]]);
+  assert.equal(groupSizes([row('x', 1)]).size, 0);
 });

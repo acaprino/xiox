@@ -32,7 +32,7 @@
 #notices:not(:empty) { padding: 0 16px 4px; }
 .notice {
   margin-top: 4px; padding: 4px 10px; min-width: 0;
-  border-left: 3px solid var(--tone, var(--line)); background: var(--box); color: var(--tone, var(--text-2));
+  border: 1px solid var(--tone, var(--line)); background: var(--box); color: var(--tone, var(--text-2));
 }
 .notice-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .notice-line > .ellipsis { flex: 0 1 auto; }
@@ -50,29 +50,61 @@
 
 /* The list. */
 #rows { display: flex; flex-direction: column; overflow: hidden; }
-#rows .tools { flex: none; padding: 0 16px 6px; }
+#rows .tools { flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px 8px; }
 #rows .tools:empty { display: none; }
-.search { width: 100%; }
-#rows .grid { flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; column-gap: 8px; padding: 0 10px; }
+.search { flex: 1; width: 100%; padding: 5px 8px; }
+.foldall { flex: none; }
+#rows .grid { position: relative; flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; column-gap: 8px; padding: 0 10px 0 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+/* A list of categories ends in room to spare, so that even the last, shortest one can be scrolled up to the top by the menu. */
+#rows .grid.grouped::after { content: ""; grid-column: 1 / -1; height: 45vh; }
+.anchor { grid-column: 1 / -1; height: 0; }
 
 .r {
-  scroll-margin-top: 26px; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
-  padding: 5px 0; border-bottom: 1px solid var(--line-soft); cursor: default;
+  scroll-margin-top: 64px; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center;
+  min-height: 36px; padding: 3px 0; border-bottom: 1px solid var(--line-soft); cursor: default;
 }
+/* The column header stays at the top and the category header under it: whatever is scrolled, the list says where it is. */
 .r.h {
-  position: sticky; top: 0; z-index: 1; padding: 2px 0 3px; background: var(--pane);
+  position: sticky; top: 0; z-index: 3; min-height: 26px; padding: 2px 0 3px; background: var(--pane);
   color: var(--muted); font: 400 11px var(--font-body); text-transform: lowercase; letter-spacing: 0;
 }
 .r.h .col-size { text-align: right; }
+.r.h .col-name { grid-column: 2; }
+.r.grp {
+  position: sticky; top: 26px; z-index: 2; min-height: 40px; padding: 4px 0; cursor: pointer;
+  background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.r.grp:hover { background: var(--band-hi); }
+/* A sticky header is never see-through: the ones scrolled past stack under it. */
+.r.grp.sel { background: var(--band-sel); }
+.r.grp .nm-text .t { color: var(--ice); font: 700 13px var(--font-display); letter-spacing: .08em; text-transform: uppercase; }
+.r.grp .nm-text .s { color: var(--muted); }
+.r.grp .cell, .r.grp .sz { color: var(--ice); font-weight: 600; }
 .r.sec {
-  display: block; padding: 9px 0 3px; color: var(--ice);
+  display: block; padding: 9px 0 3px 34px; color: var(--ice);
   font: 700 11px var(--font-display); letter-spacing: .08em; text-transform: uppercase;
 }
+.r:not(.h):not(.grp):not(.sec):not(.sel):hover { background: var(--hover); }
 .r.sel { background: var(--sel-soft); }
 /* A blocked row is dimmed, but its text keeps 4.5:1 (tests/contrast.test.ts); the reason under its name is not dimmed at all. */
 .r.muted > :not(.nm), .r.muted .nm-text .t, .r.muted .caret { opacity: .7; }
 /* On the selected row's lighter ground the dimming is gentler for the same reason. */
 .r.muted.sel > :not(.nm), .r.muted.sel .nm-text .t, .r.muted.sel .caret { opacity: .9; }
+
+/* The check cell: a 34 px button with the box drawn inside it. */
+.ckc {
+  appearance: none; align-self: stretch; display: grid; place-items: center; min-height: 30px; padding: 0; border: 0; background: none; cursor: pointer;
+}
+.ckc .box { position: relative; width: 18px; height: 18px; border: 2px solid var(--line-strong); background: var(--button); }
+.ckc:hover:not(:disabled) .box { border-color: var(--live); }
+.ckc[aria-checked="true"] .box, .ckc[aria-checked="mixed"] .box { border-color: var(--ice); }
+.ckc[aria-checked="true"] .box::after { content: ""; position: absolute; inset: 2px; background: var(--ok); }
+.ckc[aria-checked="mixed"] .box::after { content: ""; position: absolute; left: 2px; right: 2px; top: 6px; height: 2px; background: var(--ice); }
+.ckc:disabled { opacity: .4; cursor: not-allowed; }
+.r.h .ckc { min-height: 22px; }
+.r.h .ckc .box { width: 14px; height: 14px; }
+.r.h .ckc[aria-checked="true"] .box::after { inset: 1px; }
+.r.h .ckc[aria-checked="mixed"] .box::after { left: 1px; right: 1px; top: 4px; }
 
 .nm { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .r.child .nm { padding-left: 14px; }
@@ -146,3 +178,19 @@
 
 /* The active category (mock-up .it.on). */
 .it.on { background: var(--sel); color: var(--text-hi); }
+
+/* Cleanup's menu of categories: it scrolls the list; the pip tells at a glance how much of a category is ticked. */
+.it.menu {
+  grid-template-columns: 12px minmax(0, 1fr) auto; grid-template-areas: "pip name name" ". note size";
+  column-gap: 8px; row-gap: 1px; align-items: center; padding: 7px 12px 7px 14px;
+}
+.it.menu .pip { grid-area: pip; align-self: start; margin-top: 4px; }
+.it.menu .it-name { grid-area: name; }
+.it.menu small { grid-area: note; }
+.it.menu b { grid-area: size; justify-self: end; }
+.it.menu:hover:not(:disabled):not(.on) { background: var(--hover); }
+.it.menu:disabled { opacity: .55; cursor: default; }
+.pip { width: 10px; height: 10px; border: 2px solid var(--line-strong); background: none; }
+.pip.on { border-color: var(--ice); background: var(--ok); }
+.pip.mixed { border-color: var(--ice); background: linear-gradient(var(--ice), var(--ice)) center / 100% 2px no-repeat; }
+.pip.none { border-style: dotted; border-color: var(--line); }

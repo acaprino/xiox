@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptView, bulkLocked, createGate, createInflight, createUi, currentFocus, moveFocus, noticeKey, SERVICES_POLL_MS, shouldPollServices } from '../src/state.ts';
+import { acceptView, bulkCheck, bulkLocked, createGate, createInflight, createUi, currentFocus, foldedGroups, LONG_GROUP, moveFocus, noticeKey, SERVICES_POLL_MS, shouldPollServices, shownRows } from '../src/state.ts';
 import { visibleRows } from '../src/rows.ts';
 import type { DialogView, RowView, SectionId, SectionView } from '../src/types.ts';
 
@@ -145,4 +145,50 @@ test('All and None are locked while a job runs', () => {
 test('a notice is remembered by its text, apart from the rows', () => {
   assert.equal(noticeKey('Fixed 2 issues.'), 'notice:Fixed 2 issues.');
   assert.notEqual(noticeKey('a'), noticeKey('b'));
+});
+
+const group = (id: string, check: RowView['check'] = 'off', extra: Partial<RowView> = {}): RowView => row(id, { kind: 'group', check, ...extra });
+
+test('a long category starts folded, a short one open, and the user choice wins', () => {
+  const ui = createUi();
+  const many = Array.from({ length: LONG_GROUP + 1 }, (_, i) => row(`l${i}`));
+  const v = view('cleanup', 1, [group('g:short'), row('s1'), group('g:long'), ...many]);
+  assert.deepEqual([...foldedGroups(ui, v)], ['g:long']);
+  assert.deepEqual(shownRows(ui, v).map((r) => r.id), ['g:short', 's1', 'g:long']);
+  ui.fold.set('g:long', false);
+  ui.fold.set('g:short', true);
+  assert.deepEqual([...foldedGroups(ui, v)], ['g:short']);
+  assert.equal(shownRows(ui, v).length, 2 + LONG_GROUP + 1);
+});
+
+test('a search opens every category, so that no match stays folded', () => {
+  const ui = createUi();
+  const many = Array.from({ length: LONG_GROUP + 1 }, (_, i) => row(`l${i}`));
+  const v = { ...view('cleanup', 1, [group('g:long'), ...many]), search: { placeholder: 'Search', value: ' app ' } };
+  assert.equal(foldedGroups(ui, v).size, 0);
+  ui.fold.set('g:long', true);
+  assert.equal(foldedGroups(ui, v).size, 0, 'even one the user folded');
+});
+
+test('the focus can rest on a category row, and moves past a folded category', () => {
+  const ui = createUi();
+  const v = view('cleanup', 1, [group('g:a'), row('a1'), group('g:b'), row('b1')]);
+  acceptView(ui, v);
+  assert.equal(currentFocus(ui, v), 'g:a');
+  ui.fold.set('g:a', true);
+  ui.focus.cleanup = 'a1';
+  assert.equal(currentFocus(ui, v), 'g:a', 'the focused row is hidden: the first row takes over');
+  assert.equal(moveFocus(shownRows(ui, v), 'g:a', 1), 'g:b');
+});
+
+test('the check box at the top of the list sums the categories, or the rows of a plain list', () => {
+  assert.equal(bulkCheck(view('cleanup', 1, [group('a', 'on'), row('x'), group('b', 'on')])), 'on');
+  assert.equal(bulkCheck(view('cleanup', 1, [group('a', 'on'), group('b', 'off')])), 'mixed');
+  assert.equal(bulkCheck(view('cleanup', 1, [group('a', 'mixed'), group('b', 'off')])), 'mixed');
+  assert.equal(bulkCheck(view('cleanup', 1, [group('a', 'off'), group('b', 'off')])), 'off');
+  assert.equal(bulkCheck(view('cleanup', 1, [group('a', 'none'), group('b', 'on', { enabled: false })])), 'none', 'a category with nothing to tick does not count');
+  assert.equal(bulkCheck(view('registry', 1, [row('i:0', { check: 'on' }), row('i:1', { check: 'on' })])), 'on');
+  assert.equal(bulkCheck(view('registry', 1, [row('i:0', { check: 'on' }), row('i:1', { check: 'off' })])), 'mixed');
+  assert.equal(bulkCheck(view('developers', 1, [row('p', { check: 'mixed' }), row('c', { kind: 'child', parent: 'p', check: 'off' })])), 'mixed', 'children do not count');
+  assert.equal(bulkCheck(view('services', 1, [])), 'none');
 });

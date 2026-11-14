@@ -219,7 +219,7 @@ test('a dialog that is reopened starts with its ack box off', () => {
 // Rust blocks: Winapp2 / browser options of a running program, native items, a worktree with unsaved changes, a project in use,
 // a session in use. It never blocks a built-in category, a registry issue or (but for the protected ones) a service.
 const BLOCKED: [SectionId, string, string][] = [
-  ['cleanup', 'applications', 'steam/downloadcache'], ['cleanup', 'browser', 'chrome/cache'],
+  ['cleanup', 'analyzed', 'steam/downloadcache'], ['cleanup', 'analyzed', 'chrome/cache'],
   ['developers', 'worktrees', 'w:3'], ['developers', 'projects', 'p:3'], ['developers', 'projects', 'a:5'], ['developers', 'sessions', 's:claude:3a7c15'],
   ['services', 'loaded', 'svc:wuauserv'],
 ];

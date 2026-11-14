@@ -120,11 +120,12 @@ test('toggle flips one row only', () => {
   const model = fresh();
   model.go('cleanup', 'analyzed');
   const before = model.view('cleanup');
-  const first = before.rows[0];
+  const first = before.rows.find((r) => r.kind === 'item');
   assert.ok(first);
   const after = model.intent('cleanup', { kind: 'toggle', row: first.id });
   const flipped = checks(after);
-  for (const row of before.rows) {
+  // (The group row above it is recounted: see the group test below.)
+  for (const row of before.rows.filter((r) => r.kind !== 'group')) {
     const want = row.id === first.id ? (row.check === 'on' ? 'off' : 'on') : row.check;
     assert.equal(flipped[row.id], want, row.id);
   }
@@ -144,12 +145,8 @@ test('toggle flips one row only', () => {
   assert.deepEqual(checks(model.intent('developers', { kind: 'toggle', row: 'p:nope' })), checks(model.view('developers')));
 });
 
-test('select moves the active category, or the Developers state', () => {
+test('select moves the Developers state (Cleanup has no select: its menu only scrolls)', () => {
   const model = fresh();
-  model.go('cleanup', 'analyzed');
-  const after = model.intent('cleanup', { kind: 'select', category: 'rules:Development & AI' });
-  assert.deepEqual(after.nav.filter((n) => n.active).map((n) => n.id), ['rules:Development & AI']);
-  assert.equal(model.stateOf('cleanup'), 'analyzed');
   model.go('developers', 'projects');
   assert.equal(model.intent('developers', { kind: 'select', category: 'worktrees' }).title, fixture.views.developers.worktrees?.title);
   assert.equal(model.stateOf('developers'), 'worktrees');
@@ -158,6 +155,11 @@ test('select moves the active category, or the Developers state', () => {
   model.go('developers', 'idle');
   model.intent('developers', { kind: 'select', category: 'sessions' });
   assert.equal(model.stateOf('developers'), 'idle', 'select needs an analysis to show');
+  model.go('cleanup', 'analyzed');
+  const before = model.view('cleanup');
+  const after = model.intent('cleanup', { kind: 'select', category: 'rules:Browser' } as never);
+  assert.equal(model.stateOf('cleanup'), 'analyzed');
+  assert.deepEqual(after.nav, before.nav);
 });
 
 test('closeDialog returns to the state the dialog was opened from', () => {
@@ -314,42 +316,85 @@ test('registry fixes through the backup dialog and services confirm goes straigh
   assert.deepEqual(model.tick(), []);
 });
 
-test('selecting Applications shows its sections and the search box', () => {
+test('the Cleanup list holds every category one after another, each under its own group row', () => {
   const model = fresh();
   model.go('cleanup', 'analyzed');
-  const plain = model.view('cleanup');
-  assert.equal(plain.search, null, 'only Applications has a search box');
-  const apps = model.intent('cleanup', { kind: 'select', category: 'winapp2' });
-  assert.equal(model.stateOf('cleanup'), 'applications');
-  assert.deepEqual(apps.nav.filter((n) => n.active).map((n) => n.id), ['winapp2']);
-  assert.deepEqual(apps.search, { placeholder: 'Search', value: '' });
-  assert.ok(apps.rows.some((r) => r.kind === 'header' && r.id.startsWith('section:')), 'rows are grouped under Winapp2 section headers');
-  assert.ok(apps.options.some((o) => o.kind === 'text'), 'the Winapp2 status line is an option');
-  assert.ok(apps.rows.some((r) => r.muted && !r.enabled && r.why), 'a blocked row says why');
-  assert.ok(apps.rows.some((r) => r.lines.length > 20), 'a row with a long list of lines');
+  const view = model.view('cleanup');
+  assert.deepEqual(view.rows.filter((r) => r.kind === 'group').map((r) => r.id), view.nav.map((n) => n.id), 'one group row per menu entry, in the menu order');
+  assert.ok(view.nav.every((n) => !n.active), 'the menu only scrolls: no entry is the open one');
+  assert.equal(view.title, 'Cleanup');
+  assert.equal(view.bulk, true);
+  assert.deepEqual(view.search, { placeholder: 'Search all categories', value: '' });
+  assert.ok(view.options.some((o) => o.kind === 'button' && o.id === 'keepList'), 'the cookie keep list button is always there');
+  assert.ok(view.options.some((o) => o.kind === 'text'), 'so is the Winapp2 status line');
+  assert.ok(view.rows.some((r) => r.kind === 'header' && r.id.startsWith('section:')), 'Applications keeps its section headings');
+  assert.ok(view.rows.some((r) => r.muted && !r.enabled && r.why), 'a blocked row says why');
+  assert.ok(view.rows.some((r) => r.lines.length > 20), 'a native row with its own list of lines');
+  const apps = view.rows.slice(view.rows.findIndex((r) => r.id === 'winapp2'));
+  assert.ok(apps.filter((r) => r.kind === 'item').length > 40, 'Applications is long enough to start folded');
+  // A group row carries the count and size of what it holds, and a note about the caution rows it leaves alone.
+  const system = view.rows.find((r) => r.id === 'builtin:System')!;
+  assert.equal(system.check, 'mixed');
+  assert.equal(system.bytes, view.nav.find((n) => n.id === 'builtin:System')?.bytes);
+  assert.equal(system.why, null);
+  assert.match(view.rows.find((r) => r.id === 'rules:Browser')!.why ?? '', /Caution items are not ticked/);
   // A blocked row cannot be ticked, an ordinary one can.
-  const blocked = apps.rows.find((r) => !r.enabled)!;
+  const blocked = view.rows.find((r) => !r.enabled)!;
   assert.equal(checks(model.intent('cleanup', { kind: 'toggle', row: blocked.id }))[blocked.id], 'off');
-  const open = apps.rows.find((r) => r.kind === 'item' && r.enabled && r.check === 'off')!;
+  const open = view.rows.find((r) => r.kind === 'item' && r.enabled && r.check === 'off' && r.level !== 'caution')!;
   assert.equal(checks(model.intent('cleanup', { kind: 'toggle', row: open.id }))[open.id], 'on');
-  // Another category goes back to the plain analysis; the Browser category has a state too (keep list button).
-  const back = model.intent('cleanup', { kind: 'select', category: 'builtin:System' });
-  assert.equal(model.stateOf('cleanup'), 'analyzed');
-  assert.equal(back.search, null);
-  assert.deepEqual(back.nav.filter((n) => n.active).map((n) => n.id), ['builtin:System']);
-  const browser = model.intent('cleanup', { kind: 'select', category: 'rules:Browser' });
-  assert.equal(model.stateOf('cleanup'), 'browser');
-  assert.ok(browser.options.some((o) => o.kind === 'button' && o.id === 'keepList'));
-  assert.ok(browser.rows.some((r) => r.lines.length > 20), 'a native row with its own list of lines');
-  // Before an analysis there is nothing to show of them, and the confirmation can be opened from them.
-  model.go('cleanup', 'idle');
-  model.intent('cleanup', { kind: 'select', category: 'winapp2' });
-  assert.equal(model.stateOf('cleanup'), 'idle');
-  model.go('cleanup', 'applications');
+  // The dialog opens from the list and goes back to it.
   model.intent('cleanup', { kind: 'openConfirm' });
   assert.equal(model.stateOf('cleanup'), 'confirm');
   model.intent('cleanup', { kind: 'closeDialog' });
-  assert.equal(model.stateOf('cleanup'), 'applications', 'the dialog goes back to the list it was opened from');
+  assert.equal(model.stateOf('cleanup'), 'analyzed');
+});
+
+test('a group box ticks what it may, and clears it again; select all and none leave caution and blocked rows as they are', () => {
+  const model = fresh();
+  model.go('cleanup', 'analyzed');
+  const state = (id: string): string => checks(model.view('cleanup'))[id] ?? 'gone';
+  // Mixed turns on, then off; the group row follows its rows.
+  assert.equal(state('builtin:System'), 'mixed');
+  let after = checks(model.intent('cleanup', { kind: 'toggle', row: 'builtin:System' }));
+  assert.deepEqual(['cat:0', 'cat:4', 'cat:5', 'builtin:System'].map((id) => after[id]), ['on', 'on', 'on', 'on']);
+  after = checks(model.intent('cleanup', { kind: 'toggle', row: 'builtin:System' }));
+  assert.deepEqual(['cat:0', 'cat:4', 'cat:5', 'builtin:System'].map((id) => after[id]), ['off', 'off', 'off', 'off']);
+  // Ticking the rows one by one turns the group row on by itself.
+  for (const id of ['cat:0', 'cat:1', 'cat:2', 'cat:3', 'cat:4']) model.intent('cleanup', { kind: 'toggle', row: id });
+  assert.equal(state('builtin:System'), 'mixed');
+  model.intent('cleanup', { kind: 'toggle', row: 'cat:5' });
+  assert.equal(state('builtin:System'), 'on');
+  // Select all: caution rows keep what they had (Cookies was ticked, Windows.old was not), a blocked row stays off.
+  const all = checks(model.intent('cleanup', { kind: 'selectAll', on: true }));
+  assert.equal(all['native:clipboard'], 'on');
+  assert.equal(all['native:winold'], 'off');
+  assert.equal(all['native:cookies'], 'on');
+  assert.equal(all['chrome/cache'], 'off');
+  assert.equal(all['rules:Browser'], 'on');
+  assert.equal(all['rules:Windows'], 'on');
+  const none = checks(model.intent('cleanup', { kind: 'selectAll', on: false }));
+  assert.equal(none['native:cookies'], 'on', 'a caution row that was ticked stays ticked');
+  assert.equal(none['rules:Browser'], 'off');
+  assert.equal(none['builtin:System'], 'off');
+  // A group row with nothing to tick does nothing; select all is refused where `bulk` is off.
+  model.go('cleanup', 'cancelled');
+  assert.equal(model.intent('cleanup', { kind: 'selectAll', on: true }).rows.length, 0);
+});
+
+test('select all works in the Registry list too (every issue is eligible), and in Services', () => {
+  const model = fresh();
+  model.go('registry', 'analyzed');
+  const reg = checks(model.intent('registry', { kind: 'selectAll', on: true }));
+  assert.ok(Object.values(reg).every((c) => c === 'on'));
+  assert.ok(Object.values(checks(model.intent('registry', { kind: 'selectAll', on: false }))).every((c) => c === 'off'));
+  model.go('services', 'loaded');
+  const before = model.view('services');
+  const after = model.intent('services', { kind: 'selectAll', on: false });
+  for (const row of before.rows) assert.equal(after.rows.find((r) => r.id === row.id)?.check, row.enabled && row.check !== 'none' ? 'off' : row.check, row.id);
+  model.go('services', 'loading');
+  const frozen = model.view('services');
+  assert.deepEqual(checks(model.intent('services', { kind: 'selectAll', on: true })), checks(frozen), 'refused while the job runs');
 });
 
 test('Analyze is on over a finished report and starts a new analysis (Rust enables it when nothing runs)', () => {

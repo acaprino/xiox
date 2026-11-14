@@ -122,36 +122,87 @@
    }
   },
   {
-   "note": "select moves nav active, same state",
+   "note": "a click on a category header ticks every eligible row of it (mixed -> on) and recounts that header",
    "op": "intent",
    "section": "cleanup",
    "intent": {
-    "kind": "select",
-    "category": "rules:Development & AI"
+    "kind": "toggle",
+    "row": "builtin:System"
    },
    "expect": {
     "state": "analyzed",
-    "active": "rules:Development & AI",
+    "checks": {
+     "builtin:System": "on",
+     "cat:4": "on",
+     "cat:5": "on"
+    },
     "rev": 10
    }
   },
   {
-   "note": "a category with a state of its own (Winapp2) opens it: its rows, headers and search box",
+   "note": "selectAll ticks every eligible row of every category; a caution row (Cookies was on, Opera cookies off) and a blocked row keep what they had",
    "op": "intent",
    "section": "cleanup",
    "intent": {
-    "kind": "select",
-    "category": "winapp2"
+    "kind": "selectAll",
+    "on": true
    },
    "expect": {
-    "state": "applications",
-    "active": "winapp2",
-    "dialog": false,
+    "state": "analyzed",
+    "checks": {
+     "builtin:System": "on",
+     "rules:Browser": "on",
+     "winapp2": "on",
+     "rules:Windows": "on",
+     "cat:0": "on",
+     "native:clipboard": "on",
+     "native:winold": "off",
+     "native:cookies": "on",
+     "opera/cookies": "off",
+     "chrome/cache": "off"
+    },
     "rev": 11
    }
   },
   {
-   "note": "the search box only does something there: the same state",
+   "note": "selectAll off clears the eligible rows only: a caution row that was ticked stays ticked",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "selectAll",
+    "on": false
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "builtin:System": "off",
+     "rules:Browser": "off",
+     "cat:0": "off",
+     "native:cookies": "on",
+     "firefox/cache": "off"
+    },
+    "rev": 12
+   }
+  },
+  {
+   "note": "and on again (the next steps expect the tick of cat:4)",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "selectAll",
+    "on": true
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "cat:4": "on",
+     "builtin:System": "on"
+    },
+    "rev": 13
+   }
+  },
+  {
+   "note": "a search is outside the table: the same state, the list is not filtered by the mock",
    "op": "intent",
    "section": "cleanup",
    "intent": {
@@ -159,35 +210,7 @@
     "text": "opera"
    },
    "expect": {
-    "state": "applications",
-    "rev": 12
-   }
-  },
-  {
-   "note": "Browser has its own state too (native rows, the keep list button)",
-   "op": "intent",
-   "section": "cleanup",
-   "intent": {
-    "kind": "select",
-    "category": "rules:Browser"
-   },
-   "expect": {
-    "state": "browser",
-    "active": "rules:Browser",
-    "rev": 13
-   }
-  },
-  {
-   "note": "any other category goes back to the plain analysis and the open category moves",
-   "op": "intent",
-   "section": "cleanup",
-   "intent": {
-    "kind": "select",
-    "category": "rules:Development & AI"
-   },
-   "expect": {
     "state": "analyzed",
-    "active": "rules:Development & AI",
     "rev": 14
    }
   },
@@ -221,16 +244,18 @@
    }
   },
   {
-   "note": "so is the category",
+   "note": "selectAll is frozen too",
    "op": "intent",
    "section": "cleanup",
    "intent": {
-    "kind": "select",
-    "category": "rules:Windows"
+    "kind": "selectAll",
+    "on": false
    },
    "expect": {
     "state": "confirm",
-    "active": "rules:Development & AI",
+    "checks": {
+     "cat:4": "off"
+    },
     "rev": 17
    }
   },
@@ -247,7 +272,7 @@
    }
   },
   {
-   "note": "closeDialog returns to where it was opened from; the nav memory survives",
+   "note": "closeDialog returns to where it was opened from",
    "op": "intent",
    "section": "cleanup",
    "intent": {
@@ -258,7 +283,6 @@
     "checks": {
      "cat:4": "on"
     },
-    "active": "rules:Development & AI",
     "dialog": false,
     "rev": 19
    }
@@ -1103,7 +1127,7 @@
    }
   },
   {
-   "note": "selectAll is outside the table",
+   "note": "selectAll ticks every entry (the engine has no protected registry entries)",
    "op": "intent",
    "section": "registry",
    "intent": {
@@ -1112,6 +1136,10 @@
    },
    "expect": {
     "state": "analyzed",
+    "checks": {
+     "i:0": "on",
+     "i:39": "on"
+    },
     "rev": 10
    }
   },
@@ -1570,16 +1598,15 @@
    }
   },
   {
-   "note": "select of a category that is not in the nav changes nothing (the remembered one stays)",
+   "note": "toggle of a row that is not in the list changes nothing",
    "op": "intent",
    "section": "cleanup",
    "intent": {
-    "kind": "select",
-    "category": "cat:cleanup"
+    "kind": "toggle",
+    "row": "gone"
    },
    "expect": {
     "state": "interrupted",
-    "active": "rules:Development & AI",
     "rev": 45
    }
   },

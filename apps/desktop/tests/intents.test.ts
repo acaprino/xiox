@@ -84,7 +84,7 @@ test('rows, categories, search and bulk selection map to their section\'s intent
   for (const s of ['cleanup', 'registry', 'services', 'developers'] as const) {
     assert.deepEqual(toggleIntent(s, 'row:1'), { kind: 'toggle', row: 'row:1' });
   }
-  assert.deepEqual(selectIntent('cleanup', 'cat:browser'), { kind: 'select', category: 'cat:browser' });
+  assert.equal(selectIntent('cleanup', 'cat:browser'), null, 'Cleanup lists every category: its menu only scrolls');
   assert.deepEqual(selectIntent('developers', 'worktrees'), { kind: 'select', category: 'worktrees' });
   assert.deepEqual(selectIntent('developers', 'projects'), { kind: 'select', category: 'projects' });
   assert.deepEqual(selectIntent('developers', 'sessions'), { kind: 'select', category: 'sessions' });
@@ -99,6 +99,6 @@ test('rows, categories, search and bulk selection map to their section\'s intent
 
   assert.deepEqual(bulkIntent('registry', true), { kind: 'selectAll', on: true });
   assert.deepEqual(bulkIntent('developers', false), { kind: 'selectAll', on: false });
-  assert.equal(bulkIntent('cleanup', true), null);
-  assert.equal(bulkIntent('services', true), null);
+  assert.deepEqual(bulkIntent('cleanup', true), { kind: 'selectAll', on: true });
+  assert.deepEqual(bulkIntent('services', false), { kind: 'selectAll', on: false });
 });

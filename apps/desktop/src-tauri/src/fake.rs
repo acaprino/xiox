@@ -5,8 +5,9 @@
 //! by the tests, as the TypeScript mock replays it.
 //!
 //! A VIEW is a fixture state (`cleanup:analyzed`...). The model holds, per section, the name of the
-//! current state, a revision counter and a few memories. Fixture states are fixed copies: a toggle
-//! or an ack changes the view it was made in and nothing else.
+//! current state, a revision counter and a few memories. Fixture states are fixed copies: a toggle,
+//! a `selectAll` or an ack changes the view it was made in and nothing else (but the check of the
+//! `group` rows, which are counted again from the rows they cover).
 
 use crate::backend::Backend;
 use crate::error::CmdResult;
@@ -59,23 +60,13 @@ fn home(s: SectionId) -> &'static str {
 /// The states a dialog can be opened from.
 fn analyzed(s: SectionId) -> &'static [&'static str] {
     match s {
-        SectionId::Cleanup => &["analyzed", "interrupted", "browser", "applications"],
+        SectionId::Cleanup => &["analyzed", "interrupted"],
         SectionId::Registry => &["analyzed"],
         SectionId::Services => &["loaded"],
         SectionId::Developers => &["projects", "worktrees", "sessions"],
     }
 }
 
-/// The Cleanup categories that have a state of their own.
-fn category_state(category: &str) -> Option<&'static str> {
-    match category {
-        "rules:Browser" => Some("browser"),
-        "winapp2" => Some("applications"),
-        _ => None,
-    }
-}
-
-const CATEGORY_STATES: [&str; 2] = ["browser", "applications"];
 const DEV_CATEGORIES: [&str; 3] = ["projects", "worktrees", "sessions"];
 
 /// The state a busy state lands on after its ticks; `None`: the state is not busy.
@@ -173,6 +164,42 @@ fn run_rule(s: SectionId, kind: &str, intent: &Value) -> Option<Run> {
     }
 }
 
+/// A row that a group box or «select all» may change: an item or a child, enabled, with a check, and not a
+/// `caution` one (a blocked row is not enabled).
+fn eligible(r: &RowView) -> bool {
+    matches!(r.kind, RowKind::Item | RowKind::Child) && r.enabled && r.check != Check::None && r.level != Some(LevelView::Caution)
+}
+
+/// The indexes of the rows after the `group` row at `at`, up to the next group row, that it may change.
+fn group_rows(rows: &[RowView], at: usize) -> Vec<usize> {
+    let after = &rows[at + 1..];
+    let end = after.iter().position(|r| r.kind == RowKind::Group).unwrap_or(after.len());
+    (at + 1..at + 1 + end).filter(|&i| eligible(&rows[i])).collect()
+}
+
+fn tally(checks: &[Check]) -> Check {
+    if checks.is_empty() {
+        Check::None
+    } else if checks.iter().all(|c| *c == Check::On) {
+        Check::On
+    } else if checks.iter().all(|c| *c == Check::Off) {
+        Check::Off
+    } else {
+        Check::Mixed
+    }
+}
+
+/// The check of every group row, counted again from the rows it covers (a parent row is not recounted:
+/// the engine's own figures stay).
+fn recount(rows: &mut [RowView]) {
+    for at in 0..rows.len() {
+        if rows[at].kind == RowKind::Group {
+            let checks: Vec<Check> = group_rows(rows, at).iter().map(|&i| rows[i].check).collect();
+            rows[at].check = tally(&checks);
+        }
+    }
+}
+
 // ---------- the model ----------
 
 pub struct FakeModel {
@@ -185,8 +212,6 @@ pub struct FakeModel {
     /// Where `closeDialog` and `cancel` go back to; none = Home.
     back: BTreeMap<SectionId, String>,
     ticks: BTreeMap<SectionId, u32>,
-    /// The Cleanup category chosen by `select`, applied to every view whose nav has it.
-    active: BTreeMap<SectionId, String>,
     /// The Services action whose dialog is open (decides the notice text).
     pending_action: String,
 }
@@ -209,7 +234,6 @@ impl FakeModel {
             revs: SECTIONS.iter().map(|s| (*s, 0)).collect(),
             back: BTreeMap::new(),
             ticks: SECTIONS.iter().map(|s| (*s, 0)).collect(),
-            active: BTreeMap::new(),
             pending_action: "disable".into(),
         })
     }
@@ -317,13 +341,6 @@ impl FakeModel {
         let state = self.state[&s].clone();
         let mut view = self.current(s).clone();
         view.rev = rev;
-        if let Some(active) = self.active.get(&s) {
-            if !(s == SectionId::Cleanup && CATEGORY_STATES.contains(&state.as_str())) && view.nav.iter().any(|n| &n.id == active) {
-                for n in view.nav.iter_mut() {
-                    n.active = &n.id == active;
-                }
-            }
-        }
         if let Some(job) = view.job.as_mut().filter(|_| lands(s, &state).is_some()) {
             job.fraction = self.ticks[&s].min(TICKS) as f32 / TICKS as f32;
         }
@@ -372,33 +389,21 @@ impl FakeModel {
                 self.clear_notice();
             }
             self.go_to(s, analyze_busy(s));
-        } else if kind == "select" && (s == SectionId::Cleanup || s == SectionId::Developers) {
+        } else if kind == "select" && s == SectionId::Developers {
             if self.frozen(s) {
                 return;
             }
             let category = intent["category"].as_str().unwrap_or("");
-            if s == SectionId::Developers {
-                if DEV_CATEGORIES.contains(&here.as_str()) && DEV_CATEGORIES.contains(&category) {
-                    self.go_to(s, category);
-                }
-            } else if self.current(s).nav.iter().any(|n| n.id == category) {
-                match category_state(category) {
-                    Some(own) => {
-                        if analyzed(SectionId::Cleanup).contains(&here.as_str()) {
-                            self.go_to(s, own);
-                        }
-                    }
-                    None => {
-                        self.active.insert(s, category.to_string());
-                        if CATEGORY_STATES.contains(&here.as_str()) {
-                            self.go_to(s, home(SectionId::Cleanup));
-                        }
-                    }
-                }
+            if DEV_CATEGORIES.contains(&here.as_str()) && DEV_CATEGORIES.contains(&category) {
+                self.go_to(s, category);
             }
         } else if kind == "toggle" {
             if !self.frozen(s) {
                 self.toggle(s, intent["row"].as_str().unwrap_or(""));
+            }
+        } else if kind == "selectAll" {
+            if !self.frozen(s) && self.current(s).bulk {
+                self.select_all(s, intent["on"].as_bool().unwrap_or(false));
             }
         } else if kind == open_kind(s) {
             let action = match s {
@@ -451,12 +456,33 @@ impl FakeModel {
         }
     }
 
+    /// A row's check goes on <-> off (mixed -> on). A `group` row ticks (or, when it was on, clears) the
+    /// eligible rows it covers. Afterwards the group rows are counted again.
     fn toggle(&mut self, s: SectionId, id: &str) {
-        let Some(row) = self.current_mut(s).rows.iter_mut().find(|r| r.id == id) else { return };
-        if !row.enabled || row.check == Check::None {
+        let rows = &mut self.current_mut(s).rows;
+        let Some(at) = rows.iter().position(|r| r.id == id) else { return };
+        if !rows[at].enabled || rows[at].check == Check::None {
             return;
         }
-        row.check = if row.check == Check::On { Check::Off } else { Check::On };
+        if rows[at].kind == RowKind::Group {
+            let to = if rows[at].check == Check::On { Check::Off } else { Check::On };
+            for i in group_rows(rows, at) {
+                rows[i].check = to;
+            }
+        } else {
+            rows[at].check = if rows[at].check == Check::On { Check::Off } else { Check::On };
+        }
+        recount(rows);
+    }
+
+    /// Every eligible row of the view goes on / off; a caution row and a blocked row keep what they had.
+    fn select_all(&mut self, s: SectionId, on: bool) {
+        let rows = &mut self.current_mut(s).rows;
+        let to = if on { Check::On } else { Check::Off };
+        for r in rows.iter_mut().filter(|r| eligible(r)) {
+            r.check = to;
+        }
+        recount(rows);
     }
 
     fn set_ack(&mut self, on: bool) {
@@ -610,7 +636,7 @@ mod tests {
     const STATES: [(SectionId, &[&str]); 4] = [
         (
             SectionId::Cleanup,
-            &["idle", "analyzing", "analyzed", "interrupted", "browser", "applications", "confirm", "cleaning", "report", "cancelled"],
+            &["idle", "analyzing", "analyzed", "interrupted", "confirm", "cleaning", "report", "cancelled"],
         ),
         (SectionId::Registry, &["idle", "scanning", "analyzed", "backup", "fixing", "fixed"]),
         (SectionId::Services, &["loading", "loaded", "confirm"]),

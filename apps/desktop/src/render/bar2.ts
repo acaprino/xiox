@@ -1,13 +1,31 @@
 // Bar 2: the section's categories (nav) with their count and size, then the section's options.
+// Where the list shows every category one after another (Cleanup) the categories are a menu that scrolls the list to one of
+// them, and marks the one the list is at; where each category is a list of its own (Developers) a click asks Rust for it.
 // A control only reports what the user did through `optionIntent`; Rust decides what it means.
 
 import { button, fill, h } from '../dom.ts';
 import { formatBytes } from '../format.ts';
 import { optionIntent, selectIntent } from '../intents.ts';
+import type { UiState } from '../state.ts';
 import type { ChoiceItem, NavItem, OptionView, SectionId, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
 
 type OptionOf<K extends OptionView['kind']> = Extract<OptionView, { kind: K }>;
+
+/** The menu of a list of categories: one entry per `group` row, the entry of the category the list is at is marked. */
+function menuRow(item: NavItem, view: SectionView, spy: string | null, on: Handlers): HTMLElement {
+  const group = view.rows.find((r) => r.kind === 'group' && r.id === item.id);
+  const here = spy === item.id;
+  return h('button', {
+    type: 'button', class: here ? 'it menu on' : 'it menu', 'data-key': `nav:${item.id}`, 'data-group': item.id, 'aria-current': here ? 'true' : null,
+    disabled: group === undefined, title: group === undefined ? 'Nothing in this category matches the search' : `Go to ${item.name}`,
+    onClick: () => on.goToGroup(item.id),
+  },
+  h('i', { class: `pip ${group?.check ?? 'none'}`, 'aria-hidden': 'true' }),
+  h('span', { class: 'it-name', 'data-fit': '' }, item.name),
+  item.bytes === null ? null : h('b', { class: 'num', 'data-fit': '' }, formatBytes(item.bytes)),
+  item.note ? h('small', { 'data-fit': '' }, item.note) : null);
+}
 
 function navRow(s: SectionId, item: NavItem, on: Handlers): HTMLElement {
   return h('button', {
@@ -107,11 +125,13 @@ function heading(title: string, count: number): HTMLElement {
   return h('div', { class: 'hd' }, h('span', { class: 'hd-title', 'data-fit': '' }, title), h('span', { class: 'count' }, count));
 }
 
-export function renderBar2(root: HTMLElement, view: SectionView, on: Handlers): void {
+export function renderBar2(root: HTMLElement, view: SectionView, ui: UiState, on: Handlers): void {
   const s = view.section;
   const parts: HTMLElement[] = [];
   if (view.nav.length > 0) {
-    parts.push(h('div', { class: 'cats' }, ...view.nav.map((item) => navRow(s, item, on))));
+    const menu = view.rows.some((r) => r.kind === 'group');
+    const spy = ui.spy[s] ?? view.rows.find((r) => r.kind === 'group')?.id ?? null;
+    parts.push(h('div', { class: 'cats' }, ...view.nav.map((item) => (menu ? menuRow(item, view, spy, on) : navRow(s, item, on)))));
     if (view.options.length > 0) parts.push(h('div', { class: 'hd hd-sub' }, h('span', { class: 'hd-title', 'data-fit': '' }, 'Options')));
   }
   parts.push(h('div', { class: 'opts' }, ...view.options.map((o) => optionControl(s, o, on))));

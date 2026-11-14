@@ -11,6 +11,8 @@ use std::path::Path;
 const MODE: &str = "permanently";
 const MODE_BIN: &str = "empties the Recycle Bin";
 const NEEDS_ADMIN: &str = "Needs administrator: some folders are skipped";
+/// What a category's box says when the category holds Caution rows: those are not ticked by it.
+const CAUTION_BOX: &str = "Caution items are not ticked by this box: tick them one by one.";
 /// The hover text of the «keep list» button.
 const KEEP_LIST_HINT: &str = "Opens Documents\\Xiox\\cookie-keep-list.txt in Notepad (creates it if missing). \
                               One domain per line: their cookies stay.";
@@ -33,6 +35,25 @@ impl Tally {
     }
 }
 
+/// A row of a category and the number of files it stands for (what the category's line adds up).
+pub(super) struct Entry {
+    pub row: RowView,
+    pub files: u64,
+}
+
+/// A category as the list shows it: the rows left by the search.
+pub(super) struct Shown {
+    pub id: String,
+    pub name: String,
+    pub entries: Vec<Entry>,
+}
+
+/// A row that a category's box and «select all» may tick: an item that can be chosen (not blocked)
+/// and is not at the Caution level (a free-space wipe is never one click away).
+pub(super) fn eligible(r: &RowView) -> bool {
+    r.kind == RowKind::Item && r.enabled && r.level != Some(LevelView::Caution)
+}
+
 fn level_text(l: LevelView) -> &'static str {
     match l {
         LevelView::Recommended => "recommended",
@@ -43,37 +64,33 @@ fn level_text(l: LevelView) -> &'static str {
 
 impl CleanupState {
     /// The whole section for the page. `rev` is 0: `Core` numbers the views it publishes. `admin`
-    /// is whether the program runs as administrator (what the built-in categories say of it).
+    /// is whether the program runs as administrator (what the built-in categories say of it). Every
+    /// category is in the list, one after another, each led by a `Group` row; the page scrolls to the
+    /// category a `NavItem` names, so no category is "open" and `active` is never set.
     pub fn view(&self, admin: bool) -> SectionView {
         let busy = self.busy();
-        let open = self.open_nav();
-        let rows = self.rows(&open, admin);
-        let items = rows.iter().filter(|r| r.kind != RowKind::Header).count();
-        let nav = self.nav_view(&open);
         let report = self.report_view();
-        let analysed = self.clean_view == CleanView::Analyzed && !busy;
+        let rows = self.list_rows(self.shown_groups(admin), busy);
+        let items = rows.iter().filter(|r| matches!(r.kind, RowKind::Item | RowKind::Child)).count();
+        let selected = rows.iter().filter(|r| matches!(r.kind, RowKind::Item | RowKind::Child) && r.check == Check::On).count();
         SectionView {
             section: SectionId::Cleanup,
             rev: 0,
             job: self.job_view(),
             status: self.status_view(),
-            title: nav.iter().find(|n| n.active).map_or_else(String::new, |n| n.name.clone()),
-            nav,
-            options: self.options_view(&open),
-            subtitle: match (items, analysed) {
-                (0, _) => String::new(),
-                (n, true) => format!("{} · largest first", sys::plural(n, "item", "items")),
-                (n, false) => sys::plural(n, "item", "items"),
-            },
+            nav: self.nav_view(),
+            options: self.options_view(),
+            title: "Cleanup".into(),
+            subtitle: if items == 0 { String::new() } else { format!("{} · {} selected", sys::plural(items, "item", "items"), sys::fmt_count(selected as u64)) },
             columns: [("Item", ColumnKind::Name), ("Level", ColumnKind::Level), ("Files", ColumnKind::Cell), ("Size", ColumnKind::Size)]
                 .map(|(title, kind)| ColumnView { title: title.into(), kind })
                 .into(),
-            bulk: false,
-            empty: self.empty_view(&open, rows.is_empty() && report.is_none()),
+            bulk: !busy && report.is_none() && rows.iter().any(eligible),
+            empty: self.empty_view(rows.is_empty() && report.is_none()),
             rows,
             notices: self.notices_view(),
             actions: self.actions_view(),
-            search: (open == WINAPP2).then(|| SearchView { placeholder: "Search".into(), value: self.rule_search.clone() }),
+            search: (!busy && report.is_none()).then(|| SearchView { placeholder: "Search all categories".into(), value: self.rule_search.clone() }),
             dialog: self.dialog_view(),
             report,
             footer: None,
@@ -105,50 +122,47 @@ impl CleanupState {
 
     // ---------- nav ----------
 
-    fn nav_view(&self, open: &str) -> Vec<NavItem> {
-        let mut nav = Vec::new();
-        let mut item = |id: String, name: String, t: Tally| {
-            let shown = self.clean_view == CleanView::Analyzed && (!self.busy() || t.answered);
-            nav.push(NavItem {
-                note: Some(format!("{} · {} selected", sys::plural(t.items, "item", "items"), sys::fmt_count(t.selected as u64))),
-                bytes: shown.then_some(t.bytes),
-                active: id == open,
-                id,
-                name,
-            });
-        };
-        let mut groups: Vec<&str> = Vec::new();
-        for c in cleaner::CATEGORIES {
-            if !groups.contains(&c.group) {
-                groups.push(c.group);
-            }
-        }
-        for g in groups {
-            let mut t = Tally::default();
-            for (i, _) in cleaner::CATEGORIES.iter().enumerate().filter(|(_, c)| c.group == g) {
-                t.add(self.clean_sel[i], self.found_of(i).map(|f| f.bytes));
-            }
-            item(format!("{BUILTIN}{g}"), g.to_string(), t);
-        }
-        for (g, nat, idx) in self.rule_groups() {
-            let mut t = Tally::default();
-            for n in nat {
-                let it = &self.natives[n];
-                t.add(self.native_on(it), self.native_found_of(&rules::native_key(it)).map(|f| f.bytes));
-            }
-            for &i in &idx {
-                self.tally_cleaner(&mut t, i);
-            }
-            item(format!("{RULES}{g}"), g, t);
-        }
-        if let Some(rs) = self.rules.as_ref().filter(|rs| !rs.sections.is_empty()) {
-            let mut t = Tally::default();
-            for &i in rs.sections.iter().flat_map(|(_, idx)| idx) {
-                self.tally_cleaner(&mut t, i);
-            }
-            item(WINAPP2.into(), rules::WINAPP2_GROUP.into(), t);
-        }
-        nav
+    /// The menu of the page: one item per category, in the order of the list, with what it holds and
+    /// what the analysis found there. The search does not touch it, and none is `active` (the page
+    /// follows the scroll).
+    fn nav_view(&self) -> Vec<NavItem> {
+        self.groups()
+            .into_iter()
+            .map(|g| {
+                let mut t = Tally::default();
+                match &g.members {
+                    Members::Builtin(idx) => {
+                        for &i in idx {
+                            t.add(self.clean_sel[i], self.found_of(i).map(|f| f.bytes));
+                        }
+                    }
+                    Members::Rules(nat, idx) => {
+                        for &n in nat {
+                            let it = &self.natives[n];
+                            t.add(self.native_on(it), self.native_found_of(&rules::native_key(it)).map(|f| f.bytes));
+                        }
+                        for &i in idx {
+                            self.tally_cleaner(&mut t, i);
+                        }
+                    }
+                    Members::Winapp2 => {
+                        if let Some(rs) = &self.rules {
+                            for &i in rs.sections.iter().flat_map(|(_, idx)| idx) {
+                                self.tally_cleaner(&mut t, i);
+                            }
+                        }
+                    }
+                }
+                let shown = self.clean_view == CleanView::Analyzed && (!self.busy() || t.answered);
+                NavItem {
+                    note: Some(format!("{} · {} selected", sys::plural(t.items, "item", "items"), sys::fmt_count(t.selected as u64))),
+                    bytes: shown.then_some(t.bytes),
+                    active: false,
+                    id: g.id,
+                    name: g.name,
+                }
+            })
+            .collect()
     }
 
     fn tally_cleaner(&self, t: &mut Tally, i: usize) {
@@ -161,33 +175,103 @@ impl CleanupState {
 
     // ---------- rows ----------
 
-    /// The rows of the open category. A cleaning that was cancelled or stopped leaves no analysis to
-    /// choose from: the report fills the place of the list.
-    fn rows(&self, open: &str, admin: bool) -> Vec<RowView> {
+    /// The categories as the list shows them, in order: each with the rows the search leaves. A
+    /// cleaning that was cancelled or stopped leaves no analysis to choose from: the report fills the
+    /// place of the list. A category the search leaves empty is not there; the rows of a category
+    /// are kept when the search is in their name or in their description (Winapp2: in the name of
+    /// the section, of the cleaner or of one of its options, as before).
+    pub(super) fn shown_groups(&self, admin: bool) -> Vec<Shown> {
         let dropped = self.clean_view == CleanView::Cleaned && !self.busy() && self.clean_report.as_ref().is_some_and(|r| r.cancelled);
         if dropped {
             return Vec::new();
         }
-        if open == WINAPP2 {
-            let Some(rs) = &self.rules else { return Vec::new() };
-            let mut rows = Vec::new();
-            for (section, idx) in winapp2_matches(rs, &self.rule_search) {
-                rows.push(RowView { name: format!("{section} ({})", sys::fmt_count(idx.len() as u64)), ..blank_row(format!("section:{section}"), RowKind::Header) });
-                rows.extend(idx.iter().flat_map(|&i| rs.cleaners[i].options.iter().map(move |o| (i, o))).map(|(i, o)| self.option_row(&rs.cleaners[i], o)));
+        let needle = self.rule_search.trim().to_lowercase();
+        let hit = |text: &str| text.to_lowercase().contains(&needle);
+        let keep = |r: &RowView| needle.is_empty() || hit(&r.name) || r.sub.as_deref().is_some_and(hit);
+        let mut shown = Vec::new();
+        for g in self.groups() {
+            let mut entries: Vec<Entry> = match &g.members {
+                Members::Builtin(idx) => idx
+                    .iter()
+                    .map(|&i| Entry { row: self.category_row(i, admin), files: self.found_of(i).map_or(0, |f| f.count) })
+                    .collect(),
+                Members::Rules(nat, idx) => {
+                    let mut entries: Vec<Entry> = nat
+                        .iter()
+                        .map(|&n| {
+                            let item = &self.natives[n];
+                            Entry { row: self.native_row(item), files: self.native_found_of(&rules::native_key(item)).map_or(0, |f| f.files) }
+                        })
+                        .collect();
+                    if let Some(rs) = &self.rules {
+                        entries.extend(
+                            idx.iter().flat_map(|&i| rs.cleaners[i].options.iter().map(move |o| (i, o))).map(|(i, o)| self.option_entry(&rs.cleaners[i], o)),
+                        );
+                    }
+                    entries
+                }
+                Members::Winapp2 => {
+                    let Some(rs) = &self.rules else { continue };
+                    let mut entries = Vec::new();
+                    for (section, idx) in winapp2_matches(rs, &self.rule_search) {
+                        entries.push(Entry {
+                            row: RowView { name: format!("{section} ({})", sys::fmt_count(idx.len() as u64)), ..blank_row(format!("section:{section}"), RowKind::Header) },
+                            files: 0,
+                        });
+                        entries.extend(
+                            idx.iter().flat_map(|&i| rs.cleaners[i].options.iter().map(move |o| (i, o))).map(|(i, o)| self.option_entry(&rs.cleaners[i], o)),
+                        );
+                    }
+                    entries
+                }
+            };
+            if !matches!(g.members, Members::Winapp2) {
+                entries.retain(|e| keep(&e.row));
             }
-            return rows;
+            if entries.iter().any(|e| e.row.kind != RowKind::Header) {
+                shown.push(Shown { id: g.id, name: g.name, entries });
+            }
         }
-        if let Some(group) = open.strip_prefix(BUILTIN) {
-            return (0..cleaner::CATEGORIES.len()).filter(|&i| cleaner::CATEGORIES[i].group == group).map(|i| self.category_row(i, admin)).collect();
-        }
-        let Some((_, nat, idx)) = self.rule_groups().into_iter().find(|(g, _, _)| Some(g.as_str()) == open.strip_prefix(RULES)) else {
-            return Vec::new();
-        };
-        let mut rows: Vec<RowView> = nat.iter().map(|&n| self.native_row(&self.natives[n])).collect();
-        if let Some(rs) = &self.rules {
-            rows.extend(idx.iter().flat_map(|&i| rs.cleaners[i].options.iter().map(move |o| (i, o))).map(|(i, o)| self.option_row(&rs.cleaners[i], o)));
+        shown
+    }
+
+    fn option_entry(&self, c: &xiox_rules::Cleaner, o: &xiox_rules::Opt) -> Entry {
+        Entry { row: self.option_row(c, o), files: self.rule_found_of(&rules::key(c, o)).map_or(0, |f| f.count) }
+    }
+
+    /// The flat list the page draws: a `Group` row, then the rows of its category.
+    fn list_rows(&self, shown: Vec<Shown>, busy: bool) -> Vec<RowView> {
+        let mut rows = Vec::new();
+        for g in shown {
+            rows.push(self.group_row(&g, busy));
+            rows.extend(g.entries.into_iter().map(|e| e.row));
         }
         rows
+    }
+
+    /// The line of a category: its box (what it can tick: on, off or some), and once the analysis has
+    /// answered there, the files and bytes of its rows. Rows at the Caution level are not ticked by
+    /// the box, and the line says so.
+    fn group_row(&self, g: &Shown, busy: bool) -> RowView {
+        let ticks: Vec<&RowView> = g.entries.iter().map(|e| &e.row).filter(|r| eligible(r)).collect();
+        let on = ticks.iter().filter(|r| r.check == Check::On).count();
+        let check = match (ticks.len(), on) {
+            (0, _) => Check::None,
+            (n, o) if n == o => Check::On,
+            (_, 0) => Check::Off,
+            _ => Check::Mixed,
+        };
+        let analysed = g.entries.iter().any(|e| e.row.bytes.is_some());
+        let caution = g.entries.iter().any(|e| e.row.kind == RowKind::Item && e.row.level == Some(LevelView::Caution));
+        RowView {
+            check,
+            enabled: !ticks.is_empty() && !busy,
+            name: g.name.clone(),
+            cells: if analysed { vec![sys::fmt_count(g.entries.iter().map(|e| e.files).sum())] } else { Vec::new() },
+            bytes: analysed.then(|| g.entries.iter().filter_map(|e| e.row.bytes).sum()),
+            why: caution.then(|| CAUTION_BOX.to_string()),
+            ..blank_row(g.id.clone(), RowKind::Group)
+        }
     }
 
     fn category_row(&self, i: usize, admin: bool) -> RowView {
@@ -294,7 +378,7 @@ impl CleanupState {
 
     // ---------- the rest of the view ----------
 
-    fn options_view(&self, open: &str) -> Vec<OptionView> {
+    fn options_view(&self) -> Vec<OptionView> {
         let mut v = vec![OptionView::Toggle {
             id: "onlyOld".into(),
             label: format!("Only delete Temp files older than {} hours", cleaner::TEMP_MIN_AGE_HOURS),
@@ -302,14 +386,11 @@ impl CleanupState {
             enabled: self.editable().is_ok(),
             hint: None,
         }];
-        let holds_cookies = self
-            .rule_groups()
-            .iter()
-            .any(|(g, nat, _)| Some(g.as_str()) == open.strip_prefix(RULES) && nat.iter().any(|&n| self.natives[n].id == browserdb::COOKIES_ID));
-        if holds_cookies {
+        if self.natives.iter().any(|i| i.id == browserdb::COOKIES_ID) {
             v.push(OptionView::Button { id: "keepList".into(), label: "Edit cookie keep list".into(), enabled: true, hint: Some(KEEP_LIST_HINT.into()) });
         }
-        if let (true, Some(rs)) = (open == WINAPP2, &self.rules) {
+        // Winapp2's own line: when no copy came (offline at the first start) it is the only place that says why.
+        if let Some(rs) = &self.rules {
             let (text, why) = rules::status_line(rs, self.winapp2_update.as_ref());
             let hint: Vec<&str> = why.as_deref().into_iter().chain(rs.warnings.iter().map(String::as_str)).collect();
             v.push(OptionView::Text { text, tone: Tone::Info, hint: (!hint.is_empty()).then(|| hint.join("\n")) });
@@ -386,14 +467,16 @@ impl CleanupState {
         note.map(|text| NoticeView { tone: Tone::Error, text: text.into(), more: Vec::new() }).into_iter().collect()
     }
 
-    fn empty_view(&self, open: &str, nothing: bool) -> Option<EmptyView> {
+    fn empty_view(&self, nothing: bool) -> Option<EmptyView> {
         if !nothing {
             return None;
         }
-        let title = self.nav_view(open).into_iter().find(|n| n.active).map_or_else(String::new, |n| n.name);
         let search = self.rule_search.trim();
-        let text = if open == WINAPP2 && !search.is_empty() { format!("Nothing matches “{search}”.") } else { "Nothing to choose in this list.".to_string() };
-        Some(EmptyView { title, text })
+        Some(if search.is_empty() {
+            EmptyView { title: "Cleanup".into(), text: "Nothing to choose in this list.".into() }
+        } else {
+            EmptyView { title: "No matches".into(), text: format!("Nothing matches “{search}”.") }
+        })
     }
 
     /// Selected built-in categories, native items and options that will run: the number on «Clean».

@@ -48,7 +48,7 @@ function flatten(group: RowView[]): { rows: RowView[]; bytes: number | null } {
  * Largest group first, children under their parent. Rows before the first header stay first; each
  * header moves with the rows after it up to the next header, and the header groups go by summed bytes.
  */
-export function sortRows(rows: RowView[]): RowView[] {
+function sortBlock(rows: RowView[]): RowView[] {
   const lead: RowView[] = [];
   const groups: { header: RowView; rows: RowView[] }[] = [];
   for (const row of rows) {
@@ -59,8 +59,28 @@ export function sortRows(rows: RowView[]): RowView[] {
   return [...flatten(lead).rows, ...bySize(built, (g) => g.bytes).flatMap((g) => [g.header, ...g.rows])];
 }
 
-/** The rows on screen: a child shows only while every parent above it is expanded. */
-export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>): RowView[] {
+/**
+ * The list in the order it is drawn. A list of categories (`group` rows) keeps the categories in the engine's order (the
+ * menu beside it is in that order too) and sorts only inside each one; any other list is one block, largest first.
+ */
+export function sortRows(rows: RowView[]): RowView[] {
+  if (!rows.some((r) => r.kind === 'group')) return sortBlock(rows);
+  const out: RowView[] = [];
+  let group: RowView | null = null;
+  let block: RowView[] = [];
+  const flush = (): void => { out.push(...(group ? [group] : []), ...sortBlock(block)); block = []; };
+  for (const row of rows) {
+    if (row.kind === 'group') { flush(); group = row; } else block.push(row);
+  }
+  flush();
+  return out;
+}
+
+/**
+ * The rows on screen: a child shows only while every parent above it is expanded, and the rows of a folded category
+ * (`folded` holds the ids of its `group` rows) are not shown at all, its own row stays.
+ */
+export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, folded: ReadonlySet<string> = new Set()): RowView[] {
   const byId = new Map(rows.map((r) => [r.id, r]));
   const shown = (row: RowView, seen: Set<string>): boolean => {
     if (row.parent === null) return true;
@@ -69,7 +89,21 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>): Row
     if (!expanded.has(parent.id) || seen.has(parent.id)) return false;
     return shown(parent, seen.add(row.id));
   };
-  return rows.filter((row) => shown(row, new Set()));
+  let hidden = false;
+  return rows.filter((row) => {
+    if (row.kind === 'group') { hidden = folded.has(row.id); return true; }
+    return !hidden && shown(row, new Set());
+  });
+}
+
+/** How many rows a category holds (its items and their children, not its sub-headings): the key of «long categories start folded». */
+export function groupSizes(rows: RowView[]): Map<string, number> {
+  const sizes = new Map<string, number>();
+  let current: string | null = null;
+  for (const row of rows) {
+    if (row.kind === 'group') { current = row.id; sizes.set(current, 0); } else if (current !== null && row.kind !== 'header') sizes.set(current, (sizes.get(current) ?? 0) + 1);
+  }
+  return sizes;
 }
 
 /**
@@ -80,9 +114,12 @@ const COLUMN_WIDTH: Record<ColumnView['kind'], string> = {
   name: 'minmax(0,1fr)', cell: 'fit-content(260px)', level: '96px', size: 'minmax(74px,max-content)',
 };
 
+/** The check column is a 34 px target, not the 14 px box: a click anywhere in it ticks the row. */
+const CHECK_COLUMN = '34px';
+
 /** The `grid-template-columns` of the header and every row: a check column first when rows have checks. */
 export function gridTemplate(columns: ColumnView[], checks: boolean): string {
-  return [...(checks ? ['16px'] : []), ...columns.map((c) => COLUMN_WIDTH[c.kind])].join(' ');
+  return [...(checks ? [CHECK_COLUMN] : []), ...columns.map((c) => COLUMN_WIDTH[c.kind])].join(' ');
 }
 
 /** The ids of the rows that have children (they get a caret). */

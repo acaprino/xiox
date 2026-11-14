@@ -2,7 +2,7 @@
 //! report and the dynamic options. The threads wake whoever shows the section with a
 //! [`SharedNotifier`].
 //!
-//! On top of the state sit the page's intents (`select_category`, `toggle`, `analyze`,
+//! On top of the state sit the page's intents (`toggle`, `select_all`, `analyze`,
 //! `request_clean`, `confirm`...): each refuses, with a sentence in English, whatever the page
 //! must not do now, and a refusal changes nothing. The real work runs behind [`CleanupWorkers`],
 //! so the tests go from «Continue» to the start without touching the engine.
@@ -32,12 +32,36 @@ pub const NOTHING: &str = "Select something to analyze or clean first.";
 pub const NO_ANALYSIS: &str = "Analyze first: Clean works on the analysis on screen.";
 pub const REPORT_OPEN: &str = "Close the report first.";
 pub const NO_KEEP_LIST: &str = "There is no cookie keep list in this build.";
+/// A category box or «select all» that has nothing to tick: whatever is in reach is blocked or at the
+/// Caution level, and those are chosen one by one.
+pub const NOTHING_TO_TICK: &str = "Nothing here can be ticked in one go: blocked and caution items are chosen one by one.";
+/// The box of a category the search hides.
+pub const CATEGORY_HIDDEN: &str = "That category is hidden by the search.";
 
 /// Prefix of the nav ids: a group of the built-in categories, a group of the rules.
 const BUILTIN: &str = "builtin:";
 const RULES: &str = "rules:";
 /// The nav id of the Winapp2 entries.
 pub const WINAPP2: &str = "winapp2";
+
+/// A category of the list: what the page's menu names and its box ticks.
+pub(crate) struct Group {
+    /// `builtin:<group>`, `rules:<group>` or `winapp2`: the id of its `NavItem` and of its `Group` row.
+    pub id: String,
+    pub name: String,
+    pub members: Members,
+}
+
+/// What a category holds.
+pub(crate) enum Members {
+    /// Indexes into `cleaner::CATEGORIES`.
+    Builtin(Vec<usize>),
+    /// The native items (indexes into `natives`), then the cleaners that came with the program
+    /// (indexes into the rule set's cleaners).
+    Rules(Vec<usize>, Vec<usize>),
+    /// The sections of Winapp2.
+    Winapp2,
+}
 
 pub enum CleanMsg {
     Progress(String, f32),
@@ -119,8 +143,6 @@ pub struct CleanupState {
     native_cleaned: Vec<(String, String, native::NativeCleaned)>,
     /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
     processes: Vec<String>,
-    /// La categoria aperta nell'elenco a sinistra (id di [`CleanupState::nav_ids`]).
-    nav: String,
     /// Il lavoro del thread di analisi e pulizia (quello vero per default).
     workers: CleanupWorkers,
 }
@@ -187,7 +209,6 @@ impl CleanupState {
             native_found: vec![],
             native_cleaned: vec![],
             processes,
-            nav: format!("{BUILTIN}{}", cleaner::CATEGORIES[0].group),
             workers,
         }
     }
@@ -445,22 +466,25 @@ impl CleanupState {
         Ok(())
     }
 
-    /// The ids of the categories the page can open, in the order it shows them: a group of the
-    /// built-in categories (`builtin:<group>`), a group of the rules (`rules:<group>`: the natives
-    /// first, then the cleaners that came with the program), and Winapp2 when it has sections.
-    pub fn nav_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = Vec::new();
-        for c in cleaner::CATEGORIES {
+    /// The categories of the list, in the order the page shows them (and its menu lists them): a
+    /// group of the built-in categories (`builtin:<group>`), a group of the rules (`rules:<group>`: the
+    /// natives first, then the cleaners that came with the program), and Winapp2 when it has sections.
+    pub(crate) fn groups(&self) -> Vec<Group> {
+        let mut groups: Vec<Group> = Vec::new();
+        for (i, c) in cleaner::CATEGORIES.iter().enumerate() {
             let id = format!("{BUILTIN}{}", c.group);
-            if !ids.contains(&id) {
-                ids.push(id);
+            match groups.iter_mut().find(|g| g.id == id) {
+                Some(Group { members: Members::Builtin(idx), .. }) => idx.push(i),
+                _ => groups.push(Group { id, name: c.group.to_string(), members: Members::Builtin(vec![i]) }),
             }
         }
-        ids.extend(self.rule_groups().into_iter().map(|(g, _, _)| format!("{RULES}{g}")));
+        groups.extend(
+            self.rule_groups().into_iter().map(|(g, nat, idx)| Group { id: format!("{RULES}{g}"), name: g, members: Members::Rules(nat, idx) }),
+        );
         if self.rules.as_ref().is_some_and(|rs| !rs.sections.is_empty()) {
-            ids.push(WINAPP2.into());
+            groups.push(Group { id: WINAPP2.into(), name: rules::WINAPP2_GROUP.into(), members: Members::Winapp2 });
         }
-        ids
+        groups
     }
 
     /// The groups of the rules panel: (group, natives, cleaners) as `rules::panel_groups` has them.
@@ -468,30 +492,15 @@ impl CleanupState {
         rules::panel_groups(self.rules.as_ref().map_or(&[][..], |rs| &rs.groups[..]), &self.natives)
     }
 
-    /// The category on screen: the chosen one if it is still there (the rules can reload), else the first.
-    pub fn open_nav(&self) -> String {
-        let mut ids = self.nav_ids();
-        if ids.contains(&self.nav) {
-            self.nav.clone()
-        } else {
-            ids.swap_remove(0)
-        }
-    }
-
-    pub fn select_category(&mut self, id: &str) -> Result<(), String> {
-        self.editable()?;
-        if !self.nav_ids().iter().any(|n| n == id) {
-            return Err(format!("“{id}” is not a category of this list."));
-        }
-        self.nav = id.to_string();
-        Ok(())
-    }
-
     /// A row id of the contract: `cat:<index>` a built-in category, `native:<id>` a native item,
-    /// `<cleaner>/<option>` a rule. Headers (`section:`) and anything unknown are not choosable,
-    /// and neither is a row the list shows disabled (an unsupported option, a program that runs).
+    /// `<cleaner>/<option>` a rule, or the id of a category of the list (`builtin:<group>`,
+    /// `rules:<group>`, `winapp2`: its box). Headers (`section:`) and anything unknown are not
+    /// choosable, and neither is a row the list shows disabled (an unsupported option, a program that runs).
     pub fn toggle(&mut self, row: &str) -> Result<(), String> {
         self.editable()?;
+        if self.groups().iter().any(|g| g.id == row) {
+            return self.toggle_group(row);
+        }
         let unknown = || format!("“{row}” is not a row that can be chosen.");
         if let Some(n) = row.strip_prefix("cat:") {
             let i = n.parse::<usize>().ok().filter(|i| i.to_string() == n && *i < self.clean_sel.len()).ok_or_else(unknown)?;
@@ -520,13 +529,58 @@ impl CleanupState {
         Ok(())
     }
 
+    /// The box of a category: when every row it can tick is ticked they all go off, otherwise they all
+    /// go on. It acts on what the list shows (the search may hide some rows) and never on a row that
+    /// is blocked or at the Caution level.
+    fn toggle_group(&mut self, id: &str) -> Result<(), String> {
+        let shown = self.shown_groups(false);
+        let group = shown.iter().find(|g| g.id == id).ok_or_else(|| CATEGORY_HIDDEN.to_string())?;
+        let ticks: Vec<&view::Entry> = group.entries.iter().filter(|e| view::eligible(&e.row)).collect();
+        if ticks.is_empty() {
+            return Err(NOTHING_TO_TICK.into());
+        }
+        let on = !ticks.iter().all(|e| e.row.check == crate::view::Check::On);
+        let ids: Vec<String> = ticks.iter().map(|e| e.row.id.clone()).collect();
+        for row in &ids {
+            self.set_chosen(row, on);
+        }
+        Ok(())
+    }
+
+    /// «Select all» / «None» of the list: every row it shows that can be ticked in one go, on or off.
+    pub fn select_all(&mut self, on: bool) -> Result<(), String> {
+        self.editable()?;
+        let ids: Vec<String> =
+            self.shown_groups(false).into_iter().flat_map(|g| g.entries).filter(|e| view::eligible(&e.row)).map(|e| e.row.id).collect();
+        if ids.is_empty() {
+            return Err(NOTHING_TO_TICK.into());
+        }
+        for row in &ids {
+            self.set_chosen(row, on);
+        }
+        Ok(())
+    }
+
+    /// Sets the choice of a row of the list (`cat:<index>`, a native or an option key) without the
+    /// checks of `toggle`: the ids come from rows the list shows ticked-able.
+    fn set_chosen(&mut self, row: &str, on: bool) {
+        if let Some(i) = row.strip_prefix("cat:").and_then(|n| n.parse::<usize>().ok()).filter(|&i| i < self.clean_sel.len()) {
+            self.clean_sel[i] = on;
+        } else if on {
+            self.rule_sel.insert(row.to_string());
+        } else {
+            self.rule_sel.remove(row);
+        }
+    }
+
     pub fn set_only_old(&mut self, on: bool) -> Result<(), String> {
         self.editable()?;
         self.only_old = on;
         Ok(())
     }
 
-    /// The Winapp2 search box: it only filters what is shown, so it is never refused.
+    /// The search box: it filters every category of the list and only changes what is shown, so it is
+    /// never refused.
     pub fn set_search(&mut self, text: &str) {
         self.rule_search = text.to_string();
     }
