@@ -18,7 +18,7 @@ fn report(root: &str, agent_worktree: bool, linked: bool) -> ProjectReport {
         inactive_days: Some(100),
         status: ProjectStatus::Inactive,
         blocked_by: vec![],
-        reason: "Inattivo da 100 giorni".into(),
+        reason: "Inactive for 100 days".into(),
         artifacts: vec![Artifact {
             id: path_key(&root.join("target")),
             path: root.join("target"),
@@ -93,7 +93,7 @@ fn execute_plan_refuses_paths_not_in_the_last_scan() {
         let shown = bad.path.display().to_string();
         let ok = item(Path::new(r"C:\xiox-app-test-missing\proj\target"), ArtifactKind::RustTarget);
         let err = execute_plan(&scan, &plan_of(vec![ok, bad]), &|_| {}, &Cancel::default()).expect_err(&shown);
-        assert!(err.contains("rifiutato"), "{shown}: {err}");
+        assert!(err.contains("refused"), "{shown}: {err}");
         assert!(err.contains(&shown), "{shown}: {err}");
     }
 }
@@ -164,7 +164,7 @@ fn a_plan_from_an_old_analysis_is_refused_before_anything_runs() {
     // Dialog opened at T, «Continua» pressed 31 minutes later.
     let err = execute_plan_with(&scan, &plan, t + 31 * 60 * 1000, &remover).unwrap_err();
     assert_eq!(err, STALE_ANALYSIS);
-    assert_eq!(err, "L'analisi è troppo vecchia: premi «Analizza» di nuovo.");
+    assert_eq!(err, "The analysis is too old: press “Analyze” again.");
     assert_eq!(*remover.runs.lock().unwrap(), 0, "nothing executed");
     let late = execute_plan_at(&scan, &plan, t + 31 * 60 * 1000, &|_| {}, &Cancel::default());
     assert_eq!(late.unwrap_err(), STALE_ANALYSIS);
@@ -181,7 +181,7 @@ fn a_plan_from_an_old_analysis_is_refused_before_anything_runs() {
 /// Refused by both `checked_plan` and `execute_plan`, with the same "rifiutato" error.
 fn refused(scan: &DevScan, items: Vec<PlanItem>) -> String {
     let err = checked_plan(scan, &plan_of(items.clone())).expect_err("must be refused");
-    assert!(err.contains("rifiutato"), "{err}");
+    assert!(err.contains("refused"), "{err}");
     assert_eq!(execute_plan(scan, &plan_of(items), &|_| {}, &Cancel::default()).unwrap_err(), err);
     err
 }
@@ -209,7 +209,7 @@ fn execute_plan_refuses_a_swapped_action_or_kind() {
     let (scan, proj, wt) = canonical_scan();
     // The worktree root as a plain delete: git would keep a dangling worktree entry.
     let err = refused(&scan, vec![item_for(&wt, &wt, ArtifactKind::WorktreeDir, PlanAction::RemoveDir)]);
-    assert!(err.contains("non corrisponde all'ultima analisi"), "{err}");
+    assert!(err.contains("does not match the latest analysis"), "{err}");
     let target = proj.join("target");
     // Another kind for a real artifact (the remover checks the folder name against the kind).
     refused(&scan, vec![item_for(&proj, &target, ArtifactKind::NodeModules, PlanAction::RemoveDir)]);
@@ -226,7 +226,7 @@ fn execute_plan_refuses_a_wrong_repo() {
     let (scan, _, wt) = canonical_scan();
     let action = PlanAction::GitWorktreeRemove { repo: PathBuf::from(r"C:\xiox-app-test-missing\other-repo") };
     let err = refused(&scan, vec![item_for(&wt, &wt, ArtifactKind::WorktreeDir, action)]);
-    assert!(err.contains("non corrisponde all'ultima analisi"), "{err}");
+    assert!(err.contains("does not match the latest analysis"), "{err}");
 }
 
 #[test]
@@ -314,7 +314,7 @@ fn delete_archived_refuses_unknown_or_blocked_ids() {
     let scan = DevScan {
         archived: vec![
             archived(Agent::Codex, "free", None),
-            archived(Agent::Codex, "busy", Some("sessione in uso")),
+            archived(Agent::Codex, "busy", Some("session in use")),
         ],
         ..Default::default()
     };
@@ -346,7 +346,7 @@ fn delete_archived_refuses_a_session_listed_twice() {
     let trash = FakeTrash::default();
     let picked = [pick(Agent::Opencode, "twin")];
     let err = delete_archived(&scan, &picked, RemoveMode::Permanent, &cli, &trash).unwrap_err();
-    assert!(err.contains("rifiutata"), "{err}");
+    assert!(err.contains("refused"), "{err}");
     assert!(cli.calls.lock().unwrap().is_empty());
     assert!(trash.calls.lock().unwrap().is_empty());
 }
@@ -392,7 +392,7 @@ fn revalidation_keeps_only_sessions_still_archived_and_free() {
             Agent::Codex => vec![
                 with_file(archived(Agent::Codex, "fine", None), &fine_other_spelling),
                 // Reopened (live) or with an open descendant since the analysis.
-                with_file(archived(Agent::Codex, "reopened", Some("sessione in uso")), r"C:\s\reopened.jsonl"),
+                with_file(archived(Agent::Codex, "reopened", Some("session in use")), r"C:\s\reopened.jsonl"),
                 // Continued into a new rollout: not the session the analysis saw.
                 with_file(archived(Agent::Codex, "moved", None), r"C:\s\moved-2.jsonl"),
             ],
@@ -434,7 +434,7 @@ fn revalidation_refuses_a_pick_the_scan_never_listed() {
     let scan = DevScan { archived: vec![archived(Agent::Codex, "free", None)], ..Default::default() };
     let fresh = |_: Agent| vec![archived(Agent::Codex, "other", None)];
     let err = revalidate_archived(&scan, &[pick(Agent::Codex, "other")], &fresh).unwrap_err();
-    assert!(err.contains("rifiutata"), "{err}");
+    assert!(err.contains("refused"), "{err}");
 }
 
 #[test]
@@ -591,13 +591,13 @@ fn a_forged_child_of_a_picked_folder_or_a_changed_kind_is_refused() {
     let mut child = plan.clone();
     child.items[0].path = proj.root.join("target").join("debug");
     let err = checked_plan(&scan, &child).unwrap_err();
-    assert!(err.contains("Percorso non presente nell'ultima analisi, rifiutato"), "{err}");
+    assert!(err.contains("Path not in the latest analysis, refused"), "{err}");
     assert_eq!(execute_plan(&scan, &child, &|_| {}, &Cancel::default()).unwrap_err(), err);
 
     let mut kind = plan.clone();
     kind.items[0].kind = ArtifactKind::NodeModules;
     let err = checked_plan(&scan, &kind).unwrap_err();
-    assert!(err.contains("Piano rifiutato: l'elemento non corrisponde all'ultima analisi"), "{err}");
+    assert!(err.contains("Plan refused: the item does not match the latest analysis"), "{err}");
     assert_eq!(execute_plan(&scan, &kind, &|_| {}, &Cancel::default()).unwrap_err(), err);
 }
 
@@ -611,7 +611,7 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
     let mut nm = proj1.artifacts[0].clone();
     nm.path = p1.join("node_modules");
     nm.id = path_key(&nm.path);
-    nm.label = "Dipendenze npm".into();
+    nm.label = "npm dependencies".into();
     proj1.artifacts.push(nm);
     let scan = DevScan {
         projects: vec![proj1, report(p2.to_str().unwrap(), false, false)],
@@ -640,11 +640,11 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
             removed(wt.clone(), 1000),
             ItemResult {
                 path: p2.join("node_modules"),
-                outcome: ItemOutcome::Skipped { reason: "Annullato: liberati 7 byte".into() },
+                outcome: ItemOutcome::Skipped { reason: "Cancelled: 7 B freed".into() },
             },
             ItemResult {
                 path: p1.join("dist"),
-                outcome: ItemOutcome::Failed { error: "bloccato".into(), locked_by: vec!["code.exe (pid 4)".into()] },
+                outcome: ItemOutcome::Failed { error: "locked".into(), locked_by: vec!["code.exe (pid 4)".into()] },
             },
         ],
         bytes_freed: 1900,
@@ -661,14 +661,14 @@ fn report_sums_by_label_largest_first_and_splits_recycled_from_freed() {
         vec![
             (WORKTREE_CATEGORY.to_string(), 1000),
             ("Build Rust (target)".to_string(), 500),
-            ("Dipendenze npm".to_string(), 400),
+            ("npm dependencies".to_string(), 400),
         ]
     );
     // Recycle plan: the folders went to the Recycle Bin, the worktree was removed by git.
     assert_eq!((r.recycled_bytes, r.freed_bytes), (900, 1000));
     assert_eq!((r.files, r.dirs, r.elapsed_ms, r.cancelled), (1234, 56, 789, true));
-    assert_eq!(r.skipped, vec![(p2.join("node_modules"), "Annullato: liberati 7 byte".to_string())]);
-    assert_eq!(r.failed, vec![(p1.join("dist"), "bloccato (in uso da: code.exe (pid 4))".to_string())]);
+    assert_eq!(r.skipped, vec![(p2.join("node_modules"), "Cancelled: 7 B freed".to_string())]);
+    assert_eq!(r.failed, vec![(p1.join("dist"), "locked (in use by: code.exe (pid 4))".to_string())]);
 
     // A permanent run: nothing went to the Recycle Bin, everything is freed.
     let permanent = CleanPlan { mode: RemoveMode::Permanent, ..plan };
@@ -891,17 +891,17 @@ fn a_panicking_index_build_falls_back_to_the_walker() {
     let mut warnings = vec!["before".to_string()];
     let ix: Option<u8> = guarded_index(|| panic!("mft"), &mut warnings);
     assert!(ix.is_none());
-    assert_eq!(warnings, ["before", "Lettura veloce del disco non riuscita: uso la scansione normale."]);
-    let ok = guarded_index(|| (Some(7u8), vec!["Unità E: non disponibile".to_string()]), &mut warnings);
+    assert_eq!(warnings, ["before", "Fast disk read failed: using the normal scan."]);
+    let ok = guarded_index(|| (Some(7u8), vec!["Drive E: not available".to_string()]), &mut warnings);
     assert_eq!(ok, Some(7));
-    assert_eq!(warnings.last().unwrap(), "Unità E: non disponibile");
+    assert_eq!(warnings.last().unwrap(), "Drive E: not available");
 }
 
 #[test]
 fn a_panicking_analysis_gives_no_reports_and_a_warning() {
     let r = guarded_analysis(|| panic!("engine"));
     assert!(r.reports.is_empty());
-    assert_eq!(r.warnings, ["Errore interno durante l'analisi dei progetti."]);
+    assert_eq!(r.warnings, ["Internal error while analyzing the projects."]);
     let ok = guarded_analysis(|| AnalysisResult { reports: vec![report(r"C:\x\p", false, false)], warnings: vec![] });
     assert_eq!(ok.reports.len(), 1);
 }

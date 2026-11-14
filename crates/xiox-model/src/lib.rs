@@ -515,17 +515,17 @@ pub trait Remover: Send + Sync {
     fn execute(&self, plan: &CleanPlan, dry_run: bool) -> CleanResult;
 }
 
-/// Size as shown in the UI: "1,50 GB", "12,3 MB", "640 KB", "512 byte" (Italian decimal comma).
+/// Size as shown in the UI: "1.50 GB", "12.3 MB", "640 KB", "512 B".
 pub fn fmt_size(bytes: u64) -> String {
     let b = bytes as f64;
     if b >= 1024.0 * 1024.0 * 1024.0 {
-        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0)).replace('.', ",")
+        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0))
     } else if b >= 1024.0 * 1024.0 {
-        format!("{:.1} MB", b / (1024.0 * 1024.0)).replace('.', ",")
+        format!("{:.1} MB", b / (1024.0 * 1024.0))
     } else if b >= 1024.0 {
         format!("{:.0} KB", b / 1024.0)
     } else {
-        format!("{} byte", bytes)
+        format!("{} B", bytes)
     }
 }
 
@@ -565,28 +565,28 @@ pub struct CleanReport {
 impl CleanReport {
     /// Plain text, one item per line.
     pub fn to_text(&self) -> String {
-        let mut out = vec!["Resoconto della pulizia".to_string()];
+        let mut out = vec!["Cleanup report".to_string()];
         if self.cancelled {
-            out.push("Annullato: la pulizia è stata interrotta prima della fine".into());
+            out.push("Cancelled: the cleanup stopped before the end".into());
         }
-        out.push(format!("Spazio liberato: {}", fmt_size(self.freed_bytes)));
+        out.push(format!("Space freed: {}", fmt_size(self.freed_bytes)));
         if self.recycled_bytes > 0 {
             out.push(format!(
-                "Nel Cestino: {} (si libera svuotando il Cestino)",
+                "In the Recycle Bin: {} (freed by emptying the Recycle Bin)",
                 fmt_size(self.recycled_bytes)
             ));
         }
-        out.push(format!("File eliminati: {}", self.files));
-        out.push(format!("Cartelle eliminate: {}", self.dirs));
-        out.push(format!("Durata: {}", fmt_duration(self.elapsed_ms)));
+        out.push(format!("Files deleted: {}", self.files));
+        out.push(format!("Folders deleted: {}", self.dirs));
+        out.push(format!("Duration: {}", fmt_duration(self.elapsed_ms)));
         if !self.by_category.is_empty() {
             out.push(String::new());
-            out.push("Per categoria:".into());
+            out.push("By category:".into());
             for (label, bytes) in &self.by_category {
                 out.push(format!("  {label}: {}", fmt_size(*bytes)));
             }
         }
-        for (title, list) in [("Saltati", &self.skipped), ("Non riusciti", &self.failed)] {
+        for (title, list) in [("Skipped", &self.skipped), ("Failed", &self.failed)] {
             if !list.is_empty() {
                 out.push(String::new());
                 out.push(format!("{title} ({}):", list.len()));
@@ -651,27 +651,27 @@ mod tests {
             elapsed_ms: 65_000,
             cancelled: false,
             by_category: vec![("Build Rust".into(), 1024 * 1024 * 1024), ("Cache npm".into(), 512 * 1024)],
-            skipped: vec![(PathBuf::from(r"C:\p\dist"), "Non verificata".into())],
-            failed: vec![(PathBuf::from(r"C:\p\target"), "File in uso".into())],
+            skipped: vec![(PathBuf::from(r"C:\p\dist"), "Not verified".into())],
+            failed: vec![(PathBuf::from(r"C:\p\target"), "File in use".into())],
         };
         let t = r.to_text();
-        assert!(t.contains("Spazio liberato: 1,50 GB"), "{t}");
-        assert!(t.contains("Build Rust: 1,00 GB"), "{t}");
+        assert!(t.contains("Space freed: 1.50 GB"), "{t}");
+        assert!(t.contains("Build Rust: 1.00 GB"), "{t}");
         assert!(t.contains("Cache npm: 512 KB"), "{t}");
-        assert!(t.contains("Saltati (1)"), "{t}");
-        assert!(t.contains("Non riusciti (1)"), "{t}");
-        assert!(t.contains("200,0 MB (si libera svuotando il Cestino)"), "{t}");
-        assert!(t.contains("File eliminati: 1234"), "{t}");
-        assert!(t.contains("Cartelle eliminate: 56"), "{t}");
-        assert!(t.contains("Durata: 1 min 05 s"), "{t}");
-        assert!(!t.contains("Annullato"), "{t}");
+        assert!(t.contains("Skipped (1)"), "{t}");
+        assert!(t.contains("Failed (1)"), "{t}");
+        assert!(t.contains("200.0 MB (freed by emptying the Recycle Bin)"), "{t}");
+        assert!(t.contains("Files deleted: 1234"), "{t}");
+        assert!(t.contains("Folders deleted: 56"), "{t}");
+        assert!(t.contains("Duration: 1 min 05 s"), "{t}");
+        assert!(!t.contains("Cancelled"), "{t}");
         println!("{t}");
 
         let c = CleanReport { cancelled: true, elapsed_ms: 300, ..Default::default() };
         let t = c.to_text();
-        assert!(t.contains("Annullato"), "{t}");
-        assert!(t.contains("Durata: 300 ms"), "{t}");
-        assert!(!t.contains("Cestino") && !t.contains("Saltati"), "{t}");
+        assert!(t.contains("Cancelled"), "{t}");
+        assert!(t.contains("Duration: 300 ms"), "{t}");
+        assert!(!t.contains("Recycle Bin") && !t.contains("Skipped"), "{t}");
     }
 
     #[test]

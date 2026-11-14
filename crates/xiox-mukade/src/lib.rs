@@ -168,10 +168,10 @@ pub fn aggregate(
         }
     }
     if no_cwd > 0 {
-        warnings.push(format!("{agent:?}: {no_cwd} sessioni senza cartella di lavoro ignorate"));
+        warnings.push(format!("{agent:?}: {no_cwd} sessions without a working folder ignored"));
     }
     if no_time > 0 {
-        warnings.push(format!("{agent:?}: {no_time} sessioni senza data ignorate"));
+        warnings.push(format!("{agent:?}: {no_time} sessions without a date ignored"));
     }
     by.into_values().collect()
 }
@@ -602,22 +602,22 @@ pub fn select_archived(
                 .iter()
                 .any(|c| !c.archived || c.live == Some(true));
             let blocked = if i.live == Some(true) {
-                Some("sessione in uso".to_string())
+                Some("session in use".to_string())
             } else if has_open_child {
-                Some("ha una sessione figlia non archiviata o in uso".to_string())
+                Some("has a child session that is not archived or is in use".to_string())
             } else if agent == Agent::Opencode && path_key(&path) != store_key {
-                Some("la sessione è in un altro database di OpenCode".to_string())
+                Some("the session is in another OpenCode database".to_string())
             } else if agent == Agent::Codex && file.is_none() && is_transcript_file(&path) {
                 // A real rollout outside `sessions/` and `archived_sessions/`: `codex delete`
                 // would remove it with no copy in the Recycle Bin. A row whose rollout is gone
                 // (or that names the database) has no file and stays deletable.
-                Some("file della sessione fuori dallo store".to_string())
+                Some("session file outside the store".to_string())
             } else if matches!(agent, Agent::Claude | Agent::Pi) && file.is_none() {
                 // Claude Code and Pi sessions ARE their transcript: without it nothing may be
                 // removed. Codex and OpenCode go through their CLI, which deletes a session
                 // without a file too (a Codex `threads` row whose rollout is gone,
                 // `codex delete --force <id>`; OpenCode never has one).
-                Some("nessun file della sessione".to_string())
+                Some("no session file".to_string())
             } else {
                 None
             };
@@ -923,7 +923,7 @@ mod tests {
         let mut a = ainfo("a", &p, true);
         a.live = Some(true);
         let got = select_archived(Agent::Codex, td.path(), vec![a.clone()], &[a]);
-        assert_eq!(got[0].blocked.as_deref(), Some("sessione in uso"));
+        assert_eq!(got[0].blocked.as_deref(), Some("session in use"));
     }
 
     #[test]
@@ -938,7 +938,7 @@ mod tests {
         child.parent = Some("p".into());
         let all = vec![parent.clone(), child.clone()];
         let got = select_archived(Agent::Codex, td.path(), vec![parent.clone()], &all);
-        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+        assert!(got[0].blocked.as_deref().unwrap().contains("child session"), "{:?}", got[0].blocked);
 
         child.archived = true;
         let all = vec![parent.clone(), child];
@@ -961,14 +961,14 @@ mod tests {
         grandchild.parent = Some("c".into());
         let all = vec![root.clone(), child.clone(), grandchild.clone()];
         let got = select_archived(Agent::Codex, td.path(), vec![root.clone()], &all);
-        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+        assert!(got[0].blocked.as_deref().unwrap().contains("child session"), "{:?}", got[0].blocked);
 
         // Archived but live, two levels down: still blocked.
         grandchild.archived = true;
         grandchild.live = Some(true);
         let all = vec![root.clone(), child.clone(), grandchild.clone()];
         let got = select_archived(Agent::Codex, td.path(), vec![root.clone()], &all);
-        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+        assert!(got[0].blocked.as_deref().unwrap().contains("child session"), "{:?}", got[0].blocked);
 
         grandchild.live = None;
         let all = vec![root.clone(), child, grandchild];
@@ -1003,7 +1003,7 @@ mod tests {
         let mut all = all;
         all.push(open);
         let got = select_archived(Agent::Codex, td.path(), vec![root], &all);
-        assert!(got[0].blocked.as_deref().unwrap().contains("figlia"), "{:?}", got[0].blocked);
+        assert!(got[0].blocked.as_deref().unwrap().contains("child session"), "{:?}", got[0].blocked);
     }
 
     #[test]
@@ -1069,7 +1069,7 @@ mod tests {
             let a = ainfo("a", &gone, true);
             let got = select_archived(agent, td.path(), vec![a.clone()], &[a]);
             assert_eq!(got[0].file, None, "{agent:?}");
-            assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"), "{agent:?}");
+            assert_eq!(got[0].blocked.as_deref(), Some("no session file"), "{agent:?}");
         }
         // A Codex `threads` row whose rollout is gone: `codex delete` still removes it.
         let a = ainfo("a", &gone, true);
@@ -1095,7 +1095,7 @@ mod tests {
             let a = ainfo("a", p, true);
             let got = select_archived(Agent::Claude, store, vec![a.clone()], &[a]);
             assert_eq!(got[0].file, None, "{p:?}");
-            assert_eq!(got[0].blocked.as_deref(), Some("nessun file della sessione"), "{p:?}");
+            assert_eq!(got[0].blocked.as_deref(), Some("no session file"), "{p:?}");
         }
         let a = ainfo("a", &own, true);
         let got = select_archived(Agent::Claude, store, vec![a.clone()], &[a]);
@@ -1119,7 +1119,7 @@ mod tests {
         assert_eq!(a.file, None);
         assert_eq!(a.blocked, None);
         assert_eq!(b.file, None);
-        assert!(b.blocked.as_deref().unwrap().contains("altro database"), "{:?}", b.blocked);
+        assert!(b.blocked.as_deref().unwrap().contains("another OpenCode database"), "{:?}", b.blocked);
     }
 
     #[test]
@@ -1181,7 +1181,7 @@ mod tests {
         for p in [&out, &other] {
             let s = one(Agent::Codex, p);
             assert_eq!((s.file, s.bytes), (None, 0), "{p:?}");
-            assert!(s.blocked.as_deref().unwrap_or("").contains("fuori dallo store"), "{p:?}: {:?}", s.blocked);
+            assert!(s.blocked.as_deref().unwrap_or("").contains("outside the store"), "{p:?}: {:?}", s.blocked);
         }
         // Codex rows with no rollout on disk (gone, or naming the database): still deletable.
         let db = store.join("state_5.sqlite");
@@ -1198,7 +1198,7 @@ mod tests {
         let pi_out = store.join("auth").join("x.jsonl");
         touch(&pi_out, "1");
         let s = one(Agent::Pi, &pi_out);
-        assert_eq!((s.file, s.bytes, s.blocked.as_deref()), (None, 0, Some("nessun file della sessione")));
+        assert_eq!((s.file, s.bytes, s.blocked.as_deref()), (None, 0, Some("no session file")));
         let pi_in = store.join("sessions").join("--c--x").join("x.jsonl");
         touch(&pi_in, "1");
         assert_eq!(one(Agent::Pi, &pi_in).file.as_deref(), Some(pi_in.as_path()));
@@ -1209,14 +1209,14 @@ mod tests {
         let sneaky = store.join("projects").join("..").join("secret.jsonl");
         let s = one(Agent::Claude, &sneaky);
         assert_eq!((s.file, s.bytes), (None, 0));
-        assert_eq!(s.blocked.as_deref(), Some("nessun file della sessione"));
+        assert_eq!(s.blocked.as_deref(), Some("no session file"));
 
         // Claude: a .jsonl under sessions/ (outside projects/): the projects guard alone.
         let reg = store.join("sessions").join("x.jsonl");
         touch(&reg, "1");
         let s = one(Agent::Claude, &reg);
         assert_eq!(s.file, None);
-        assert_eq!(s.blocked.as_deref(), Some("nessun file della sessione"));
+        assert_eq!(s.blocked.as_deref(), Some("no session file"));
     }
 
     #[cfg(windows)]

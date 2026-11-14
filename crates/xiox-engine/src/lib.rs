@@ -86,26 +86,26 @@ fn source_of(a: Agent) -> ActivitySource {
 }
 
 fn giorni(n: u32) -> String {
-    if n == 1 { "1 giorno".into() } else { format!("{n} giorni") }
+    if n == 1 { "1 day".into() } else { format!("{n} days") }
 }
 
 fn fa(n: u32) -> String {
     match n {
-        0 => "oggi".into(),
-        1 => "1 giorno fa".into(),
-        n => format!("{n} giorni fa"),
+        0 => "today".into(),
+        1 => "1 day ago".into(),
+        n => format!("{n} days ago"),
     }
 }
 
 /// Italian description of where the last activity came from, used inside parentheses.
 fn source_phrase(s: ActivitySource) -> String {
     match s {
-        ActivitySource::Claude => "ultima sessione Claude".into(),
-        ActivitySource::Codex => "ultima sessione Codex".into(),
-        ActivitySource::Opencode => "ultima sessione OpenCode".into(),
-        ActivitySource::Pi => "ultima sessione Pi".into(),
-        ActivitySource::Git => "ultimo commit git".into(),
-        ActivitySource::Files => "ultima modifica ai file".into(),
+        ActivitySource::Claude => "last Claude session".into(),
+        ActivitySource::Codex => "last Codex session".into(),
+        ActivitySource::Opencode => "last OpenCode session".into(),
+        ActivitySource::Pi => "last Pi session".into(),
+        ActivitySource::Git => "last git commit".into(),
+        ActivitySource::Files => "last file change".into(),
     }
 }
 
@@ -183,13 +183,13 @@ pub fn analyze(
                 sessions.extend(loaded.items);
             }
             Err(_) => warnings.push(
-                "Una sorgente di sessioni ha causato un errore interno ed è stata ignorata".to_string(),
+                "A session source had an internal error and was ignored".to_string(),
             ),
         }
         match catch_unwind(AssertUnwindSafe(|| src.managed_worktrees())) {
             Ok(dirs) => worktree_keys.extend(dirs.iter().map(|d| path_key(d))),
             Err(_) => warnings.push(
-                "Impossibile leggere i worktree gestiti da una sorgente di sessioni".to_string(),
+                "Could not read the worktrees managed by a session source".to_string(),
             ),
         }
     }
@@ -203,7 +203,7 @@ pub fn analyze(
     for cand in scanned.items {
         let id = path_key(&cand.root);
         if !seen.insert(id.clone()) {
-            warnings.push(format!("Progetto duplicato ignorato: {}", cand.root.display()));
+            warnings.push(format!("Duplicate project ignored: {}", cand.root.display()));
             continue;
         }
         unique.push((id, cand));
@@ -328,9 +328,9 @@ fn analyze_one(
         blocked_by.push(BlockReason::LiveSession);
         let names: Vec<&str> = live_agents.iter().map(|a| agent_name(*a)).collect();
         block_msgs.push(if names.len() == 1 {
-            format!("Sessione {} attiva ora", names[0])
+            format!("{} session active now", names[0])
         } else {
-            format!("Sessioni attive ora ({})", names.join(", "))
+            format!("Sessions active now ({})", names.join(", "))
         });
     }
     let dirty = gs.dirty == Some(true);
@@ -338,14 +338,14 @@ fn analyze_one(
     if is_agent_worktree {
         if dirty {
             blocked_by.push(BlockReason::DirtyGit);
-            block_msgs.push("Modifiche git non committate nel worktree".to_string());
+            block_msgs.push("Uncommitted git changes in the worktree".to_string());
         }
         if let Some(n) = unpushed {
             blocked_by.push(BlockReason::UnpushedCommits);
             block_msgs.push(if n == 1 {
-                "1 commit non pushato nel worktree".to_string()
+                "1 unpushed commit in the worktree".to_string()
             } else {
-                format!("{n} commit non pushati nel worktree")
+                format!("{n} unpushed commits in the worktree")
             });
         }
     }
@@ -371,31 +371,31 @@ fn analyze_one(
             block_msgs.join("; ")
         }
         ProjectStatus::Inactive => format!(
-            "Inattivo da {} ({})",
+            "Inactive for {} ({})",
             giorni(inactive_days.unwrap_or(0)),
             src_phrase.clone().unwrap_or_default()
         ),
         ProjectStatus::Recent => format!(
-            "Attività recente: {} ({})",
+            "Recent activity: {} ({})",
             fa(inactive_days.unwrap_or(0)),
             src_phrase.clone().unwrap_or_default()
         ),
         ProjectStatus::NoSessions => match (inactive_days, last_activity_source) {
             (Some(d), Some(ActivitySource::Git)) => {
-                format!("Nessuna sessione trovata; ultimo commit {}", fa(d))
+                format!("No sessions found; last commit {}", fa(d))
             }
             (Some(d), _) => {
-                format!("Nessuna sessione trovata; ultima modifica ai file {}", fa(d))
+                format!("No sessions found; last file change {}", fa(d))
             }
-            (None, _) => "Nessuna sessione trovata; data dell'ultima modifica sconosciuta".to_string(),
+            (None, _) => "No sessions found; date of the last change unknown".to_string(),
         },
     };
     if blocked_by.is_empty() && !is_agent_worktree {
         if dirty {
-            reason.push_str("; modifiche git non committate (non impediscono la pulizia)");
+            reason.push_str("; uncommitted git changes (they do not block the cleanup)");
         }
         if let Some(n) = unpushed {
-            reason.push_str(&format!("; {n} commit non pushati (non impediscono la pulizia)"));
+            reason.push_str(&format!("; {n} unpushed {} (they do not block the cleanup)", if n == 1 { "commit" } else { "commits" }));
         }
     }
 
@@ -468,20 +468,20 @@ fn assess(a: &mut Artifact, tracked: bool, ignored: Option<bool>, project_inacti
     a.level = a.class.base_level();
     if tracked {
         a.level = Level::Caution;
-        add_note(a, "Contiene file tracciati da git");
+        add_note(a, "Contains files tracked by git");
     }
     if !a.verified {
         a.level = Level::Caution;
-        add_note(a, "Cartella non riconosciuta con certezza");
+        add_note(a, "Folder not recognized with certainty");
     }
     if a.ambiguous && ignored != Some(true) {
         a.level = Level::Caution;
         add_note(
             a,
             if ignored == Some(false) {
-                "Potrebbe contenere sorgenti: git non la ignora"
+                "May contain sources: git does not ignore it"
             } else {
-                "Potrebbe contenere sorgenti: non è in un repository git"
+                "May contain sources: not in a git repository"
             },
         );
     }
@@ -527,19 +527,19 @@ fn check_cleanable(report: &ProjectReport) -> Result<()> {
     match report.status {
         ProjectStatus::InUse => {
             return Err(Error::Other(format!(
-                "«{}» è in uso da una sessione attiva e non può essere pulito",
+                "“{}” is in use by an active session and cannot be cleaned",
                 report.name
             )));
         }
         ProjectStatus::Blocked => {
             return Err(Error::Other(format!(
-                "«{}» è bloccato e non può essere pulito: {}",
+                "“{}” is blocked and cannot be cleaned: {}",
                 report.name, report.reason
             )));
         }
         ProjectStatus::Unreachable => {
             return Err(Error::Other(format!(
-                "«{}» non è raggiungibile e non può essere pulito",
+                "“{}” is not reachable and cannot be cleaned",
                 report.name
             )));
         }
@@ -547,7 +547,7 @@ fn check_cleanable(report: &ProjectReport) -> Result<()> {
     }
     if !report.blocked_by.is_empty() {
         return Err(Error::Other(format!(
-            "«{}» ha dei blocchi attivi e non può essere pulito: {}",
+            "“{}” has active blocks and cannot be cleaned: {}",
             report.name, report.reason
         )));
     }
@@ -596,11 +596,11 @@ pub fn build_plan(reports: &[ProjectReport], sel: &Selection, mode: RemoveMode) 
         let (report, a) = reports
             .iter()
             .find_map(|r| r.artifacts.iter().find(|a| &a.id == id).map(|a| (r, a)))
-            .ok_or_else(|| Error::Other(format!("Cartella non trovata nell'analisi: {id}")))?;
+            .ok_or_else(|| Error::Other(format!("Folder not found in the analysis: {id}")))?;
         check_cleanable(report)?;
         if whole_worktree_repo(report).is_some() {
             return Err(Error::Other(format!(
-                "«{}» è un worktree che si rimuove solo per intero: {}",
+                "“{}” is a worktree that can only be removed whole: {}",
                 report.name,
                 a.path.display()
             )));
@@ -618,9 +618,9 @@ pub fn build_plan(reports: &[ProjectReport], sel: &Selection, mode: RemoveMode) 
         let report = reports
             .iter()
             .find(|r| &r.id == id)
-            .ok_or_else(|| Error::Other(format!("Progetto non trovato nell'analisi: {id}")))?;
+            .ok_or_else(|| Error::Other(format!("Project not found in the analysis: {id}")))?;
         if !report.is_agent_worktree {
-            return Err(Error::Other(format!("«{}» non è un worktree di un agente", report.name)));
+            return Err(Error::Other(format!("“{}” is not an agent worktree", report.name)));
         }
         check_cleanable(report)?;
         if let Some(repo) = whole_worktree_repo(report) {

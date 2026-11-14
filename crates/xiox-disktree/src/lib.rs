@@ -443,7 +443,7 @@ pub fn fixed_drives() -> Vec<FixedDrive> {
 pub fn volume_index(letter: char, progress: &Progress) -> Result<DiskIndex, String> {
     let letter = letter.to_ascii_uppercase();
     if !letter.is_ascii_alphabetic() {
-        return Err(format!("unità non valida: {letter}"));
+        return Err(format!("invalid drive: {letter}"));
     }
     let nodes = mft::read_volume(letter, progress)?;
     Ok(DiskIndex::from_nodes(&format!("{letter}:\\"), nodes))
@@ -472,7 +472,7 @@ pub fn build_for_roots(roots: &[PathBuf], admin: bool, progress: &Progress) -> (
             Some(l) if !letters.contains(&l) => letters.push(l),
             Some(_) => {}
             None => warnings.push(format!(
-                "{} non disponibile per la lettura veloce: uso la scansione normale.",
+                "{} not available for the fast read: using the normal scan.",
                 normalize_path(r).display()
             )),
         }
@@ -486,7 +486,7 @@ pub fn build_for_roots(roots: &[PathBuf], admin: bool, progress: &Progress) -> (
                 None => index = Some(ix),
             },
             Err(_) if progress.cancel.load(Ordering::Relaxed) => return (None, warnings),
-            Err(_) => warnings.push(format!("Unità {l}: non disponibile per la lettura veloce: uso la scansione normale.")),
+            Err(_) => warnings.push(format!("Drive {l}: not available for the fast read: using the normal scan.")),
         }
     }
     (index, warnings)

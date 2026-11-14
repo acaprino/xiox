@@ -494,12 +494,12 @@ fn a_locked_file_fails_only_its_item_and_the_others_go() {
     assert!(!res.cancelled);
 }
 
-/// "Annullato: liberati {n} byte" -> n; "Annullato" -> 0.
+/// "Cancelled: {n} B freed" -> n; "Cancelled" -> 0.
 fn cancelled_bytes(reason: &str) -> u64 {
-    match reason.strip_prefix("Annullato: liberati ") {
-        Some(rest) => rest.strip_suffix(" byte").unwrap().parse().unwrap(),
+    match reason.strip_prefix("Cancelled: ") {
+        Some(rest) => rest.strip_suffix(" B freed").unwrap().parse().unwrap(),
         None => {
-            assert_eq!(reason, "Annullato");
+            assert_eq!(reason, "Cancelled");
             0
         }
     }
@@ -546,7 +546,7 @@ fn a_cancel_before_the_start_touches_nothing() {
         &|_| {},
         &cancel,
     );
-    assert_eq!(skipped_reason(&res.items[0].outcome), "Annullato");
+    assert_eq!(skipped_reason(&res.items[0].outcome), "Cancelled");
     assert!(res.cancelled && res.bytes_freed == 0 && res.files_removed == 0);
     assert_eq!(measure_dir(&t).logical_bytes, 30_000);
 }

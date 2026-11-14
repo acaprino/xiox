@@ -69,7 +69,7 @@ fn le_uint(b: &[u8]) -> u64 {
 /// Data runs of a non-resident attribute (header of 0x40 bytes): (first cluster, cluster
 /// count); -1 = sparse. Malformed run lists are an error, never a panic.
 fn data_runs(attr: &[u8]) -> Result<Vec<(i64, u64)>, String> {
-    const BAD: &str = "elenco dei segmenti non valido";
+    const BAD: &str = "invalid segment list";
     if attr.len() < 0x40 {
         return Err(BAD.into());
     }
@@ -226,7 +226,7 @@ fn parse_record(rec: &[u8], no: usize, recs: &mut [Rec]) {
 fn into_nodes(recs: Vec<Rec>) -> Result<Vec<Node>, String> {
     let total = recs.len();
     if ROOT_RECORD >= total || !recs[ROOT_RECORD].in_use || !recs[ROOT_RECORD].is_dir {
-        return Err("radice della MFT non trovata".into());
+        return Err("MFT root not found".into());
     }
     let keep = |i: usize, r: &Rec| {
         i == ROOT_RECORD || (r.in_use && if r.is_dir { r.name.is_some() } else { r.name_rank > 0 })
@@ -280,13 +280,13 @@ trait ReadAt {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, String>;
 }
 
-const BAD_VOLUME: &str = "dati volume non validi";
+const BAD_VOLUME: &str = "invalid volume data";
 
 /// Fill `buf` from `offset`; anything short of that is an error, not a shorter table.
 fn read_exact(vol: &impl ReadAt, offset: u64, buf: &mut [u8]) -> Result<(), String> {
     let got = vol.read_at(offset, buf)?;
     if got != buf.len() {
-        return Err(format!("lettura MFT incompleta ({got} di {} byte)", buf.len()));
+        return Err(format!("incomplete MFT read ({got} of {} bytes)", buf.len()));
     }
     Ok(())
 }
@@ -297,12 +297,12 @@ fn mft_data(rec0: &[u8]) -> Result<(u64, Vec<(i64, u64)>), String> {
         if kind == 0x80 && a[8] != 0 && a[9] == 0 {
             // Non-resident header (0x40 bytes) starting at VCN 0.
             if a.len() < 0x40 || u64_at(a, 0x10) != 0 {
-                return Err("$DATA della MFT non valido".into());
+                return Err("invalid MFT $DATA".into());
             }
             return Ok((u64_at(a, 0x30), data_runs(a)?));
         }
     }
-    Err("$DATA della MFT non trovato".into())
+    Err("MFT $DATA not found".into())
 }
 
 /// Read the MFT described by `g` from `vol`. Errors (never panics, never returns a partial
@@ -327,25 +327,25 @@ fn read_mft(vol: &impl ReadAt, g: Geometry, progress: &Progress) -> Result<Vec<N
     read_exact(vol, g.mft_start_lcn.checked_mul(cluster).ok_or(BAD_VOLUME)?, &mut first)?;
     let rec0 = &mut first[..rec_size];
     if !fixup(rec0) {
-        return Err("record MFT 0 non valido".into());
+        return Err("invalid MFT record 0".into());
     }
     let (mft_size, runs) = mft_data(rec0)?;
     drop(first);
 
     let total = mft_size.min(g.mft_valid) / rs;
     if total >= NONE as u64 {
-        return Err("MFT troppo grande".into());
+        return Err("MFT too large".into());
     }
     let mut covered = 0u64;
     for &(_, clusters) in &runs {
         let run_bytes = clusters.checked_mul(cluster).ok_or(BAD_VOLUME)?;
         if run_bytes % rs != 0 {
-            return Err("segmento della MFT non allineato ai record".into());
+            return Err("MFT segment not aligned to the records".into());
         }
         covered = covered.checked_add(run_bytes / rs).ok_or(BAD_VOLUME)?;
     }
     if covered < total {
-        return Err(format!("MFT frammentata oltre il record 0: i segmenti coprono {covered} record su {total}"));
+        return Err(format!("MFT fragmented beyond record 0: the segments cover {covered} records out of {total}"));
     }
 
     let total = total as usize;
@@ -366,7 +366,7 @@ fn read_mft(vol: &impl ReadAt, g: Geometry, progress: &Progress) -> Result<Vec<N
         let mut done = 0u64;
         while done < run_bytes && rec_no < total {
             if progress.cancel.load(Ordering::Relaxed) {
-                return Err("annullata".into());
+                return Err("cancelled".into());
             }
             // A multiple of `rec_size`: so are `run_bytes` and READ_CHUNK.
             let want = (run_bytes - done).min(READ_CHUNK as u64) as usize;
@@ -428,7 +428,7 @@ mod volume {
                 )
             };
             if h == INVALID_HANDLE_VALUE {
-                return Err(format!("apertura unità non riuscita ({})", unsafe { GetLastError() }));
+                return Err(format!("could not open the drive ({})", unsafe { GetLastError() }));
             }
             Ok(Volume(h))
         }
@@ -450,7 +450,7 @@ mod volume {
                 )
             };
             if ok == 0 {
-                return Err(format!("non è NTFS ({})", unsafe { GetLastError() }));
+                return Err(format!("not NTFS ({})", unsafe { GetLastError() }));
             }
             Ok(vd)
         }
@@ -464,13 +464,13 @@ mod volume {
             let mut moved = 0i64;
             // SAFETY: valid handle; `moved` is a live out-parameter.
             if unsafe { SetFilePointerEx(self.0, offset, &mut moved, FILE_BEGIN) } == 0 {
-                return Err(format!("posizionamento non riuscito ({})", unsafe { GetLastError() }));
+                return Err(format!("seek failed ({})", unsafe { GetLastError() }));
             }
             let mut got = 0u32;
             // SAFETY: `buf` is writable for `len` bytes; synchronous read.
             let ok = unsafe { ReadFile(self.0, buf.as_mut_ptr(), len, &mut got, std::ptr::null_mut()) };
             if ok == 0 {
-                return Err(format!("lettura non riuscita ({})", unsafe { GetLastError() }));
+                return Err(format!("read failed ({})", unsafe { GetLastError() }));
             }
             Ok(got as usize)
         }
@@ -496,7 +496,7 @@ pub fn read_volume(letter: char, progress: &Progress) -> Result<Vec<Node>, Strin
 
 #[cfg(not(windows))]
 pub fn read_volume(_letter: char, _progress: &Progress) -> Result<Vec<Node>, String> {
-    Err("lettura MFT disponibile solo su Windows".into())
+    Err("MFT read is available on Windows only".into())
 }
 
 #[cfg(test)]
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(sizes(&ix, r"X:\Projects\target"), Some((5010, 8192, 2)));
         // The cap is the valid length, not the claimed size: 32 valid records, 16 on disk.
         let err = read_mft(&vol, geometry(4096, 4, 32), &Progress::default()).unwrap_err();
-        assert!(err.contains("frammentata"), "{err}");
+        assert!(err.contains("fragmented"), "{err}");
     }
 
     #[test]
@@ -705,7 +705,7 @@ mod tests {
         let list = resident(0x20, &[0u8; 64]);
         let vol = volume(4096, &[(4, 2)], 16 * REC as u64, &[list], &sample_records());
         let err = read_mft(&vol, geometry(4096, 4, 16), &Progress::default()).unwrap_err();
-        assert_eq!(err, "MFT frammentata oltre il record 0: i segmenti coprono 8 record su 16");
+        assert_eq!(err, "MFT fragmented beyond record 0: the segments cover 8 records out of 16");
     }
 
     #[test]
@@ -713,14 +713,14 @@ mod tests {
         let mut vol = volume(4096, &[(4, 2), (10, 2)], 16 * REC as u64, &[], &sample_records());
         vol.short_at = Some(10 * 4096);
         let err = read_mft(&vol, geometry(4096, 4, 16), &Progress::default()).unwrap_err();
-        assert_eq!(err, "lettura MFT incompleta (4096 di 8192 byte)");
+        assert_eq!(err, "incomplete MFT read (4096 of 8192 bytes)");
         vol.short_at = Some(4 * 4096);
         let err = read_mft(&vol, geometry(4096, 4, 16), &Progress::default()).unwrap_err();
-        assert!(err.starts_with("lettura MFT incompleta"), "{err}");
+        assert!(err.starts_with("incomplete MFT read"), "{err}");
         // Past the end of the volume.
         let vol = volume(4096, &[(4, 2), (10, 2)], 16 * REC as u64, &[], &sample_records());
         let err = read_mft(&vol, geometry(4096, 40, 16), &Progress::default()).unwrap_err();
-        assert!(err.starts_with("lettura MFT incompleta"), "{err}");
+        assert!(err.starts_with("incomplete MFT read"), "{err}");
     }
 
     #[test]
@@ -728,7 +728,7 @@ mod tests {
         // 512-byte clusters, 1 KiB records: a run of 3 clusters splits a record in two.
         let vol = volume(512, &[(8, 3), (20, 29)], 16 * REC as u64, &[], &sample_records());
         let err = read_mft(&vol, geometry(512, 8, 16), &Progress::default()).unwrap_err();
-        assert_eq!(err, "segmento della MFT non allineato ai record");
+        assert_eq!(err, "MFT segment not aligned to the records");
         // Same layout with whole records per run reads fine.
         let vol = volume(512, &[(8, 4), (20, 28)], 16 * REC as u64, &[], &sample_records());
         assert!(read_mft(&vol, geometry(512, 8, 16), &Progress::default()).is_ok());
@@ -775,16 +775,16 @@ mod tests {
         put32(&mut short, 4, 0x38);
         short[8] = 1;
         put64(&mut short, 0x30, 1 << 40);
-        assert_eq!(with_rec0(record(1, 0, &[short])), "$DATA della MFT non valido");
+        assert_eq!(with_rec0(record(1, 0, &[short])), "invalid MFT $DATA");
         // $DATA that does not start at VCN 0 (a later piece of the run list).
         let mut later = data_nonres(16384, 16384, &pairs(&[(4, 4)]));
         put64(&mut later, 0x10, 4);
-        assert_eq!(with_rec0(record(1, 0, &[later])), "$DATA della MFT non valido");
-        assert_eq!(with_rec0(record(1, 0, &[std_info(6)])), "$DATA della MFT non trovato");
-        assert_eq!(with_rec0(vec![0u8; REC]), "record MFT 0 non valido");
+        assert_eq!(with_rec0(record(1, 0, &[later])), "invalid MFT $DATA");
+        assert_eq!(with_rec0(record(1, 0, &[std_info(6)])), "MFT $DATA not found");
+        assert_eq!(with_rec0(vec![0u8; REC]), "invalid MFT record 0");
         // Run list with a 9-byte length field.
         let bad = data_nonres(16384, 16384, &[0x19, 1, 2, 3, 4, 5, 6, 7, 8, 9, 4]);
-        assert_eq!(with_rec0(record(1, 0, &[bad])), "elenco dei segmenti non valido");
+        assert_eq!(with_rec0(record(1, 0, &[bad])), "invalid segment list");
     }
 
     #[test]

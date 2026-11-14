@@ -68,18 +68,18 @@ fn find_in_path(names: &[&str]) -> Option<PathBuf> {
 }
 
 fn check_id(id: &str) -> Result<(), String> {
-    if crate::valid_id(id) { Ok(()) } else { Err(format!("identificativo di sessione non valido: {id}")) }
+    if crate::valid_id(id) { Ok(()) } else { Err(format!("invalid session id: {id}")) }
 }
 
 impl crate::HarnessCli for SystemCli {
     fn codex_delete(&self, id: &str) -> Result<(), String> {
-        let exe = self.codex.as_ref().ok_or("CLI di Codex non trovata")?;
+        let exe = self.codex.as_ref().ok_or("Codex CLI not found")?;
         check_id(id)?;
         run(exe, &["delete".into(), "--force".into(), id.into()], Stdio::null(), self.timeout)
     }
 
     fn opencode_export(&self, id: &str, out: &Path) -> Result<(), String> {
-        let exe = self.opencode.as_ref().ok_or("CLI di OpenCode non trovata")?;
+        let exe = self.opencode.as_ref().ok_or("OpenCode CLI not found")?;
         check_id(id)?;
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -98,7 +98,7 @@ impl crate::HarnessCli for SystemCli {
     }
 
     fn opencode_delete(&self, id: &str) -> Result<(), String> {
-        let exe = self.opencode.as_ref().ok_or("CLI di OpenCode non trovata")?;
+        let exe = self.opencode.as_ref().ok_or("OpenCode CLI not found")?;
         check_id(id)?;
         run(
             exe,
@@ -124,7 +124,7 @@ fn run(exe: &Path, args: &[OsString], stdout: Stdio, timeout: Duration) -> Resul
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let name = exe.file_name().unwrap_or(OsStr::new("cli")).to_string_lossy().into_owned();
-    let mut child = cmd.spawn().map_err(|e| format!("{name}: avvio non riuscito: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("{name}: could not start: {e}"))?;
 
     // stderr is drained on a thread (a full pipe would block the child). The result is
     // awaited with a bounded wait: a grandchild (node behind a .cmd shim) can keep the
@@ -149,7 +149,7 @@ fn run(exe: &Path, args: &[OsString], stdout: Stdio, timeout: Duration) -> Resul
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = collect_stderr();
-                return Err(format!("{name}: tempo scaduto dopo {} s", timeout.as_secs()));
+                return Err(format!("{name}: timed out after {} s", timeout.as_secs()));
             }
             Ok(None) => thread::sleep(Duration::from_millis(25)),
             Err(e) => {
@@ -168,9 +168,9 @@ fn run(exe: &Path, args: &[OsString], stdout: Stdio, timeout: Duration) -> Resul
     let tail = last_lines(&err_text, 5);
     let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
     if tail.is_empty() {
-        Err(format!("{name}: uscita con codice {code}"))
+        Err(format!("{name}: exited with code {code}"))
     } else {
-        Err(format!("{name}: uscita con codice {code}: {tail}"))
+        Err(format!("{name}: exited with code {code}: {tail}"))
     }
 }
 

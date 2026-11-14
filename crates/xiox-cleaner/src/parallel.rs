@@ -11,7 +11,7 @@
 //! 4. Recycle Bin: one task per item, same pool.
 //! 5. `GitWorktreeRemove`: in sequence, after the rest.
 //! 6. «Annulla» ([`Cancel`]) is checked before every file: an interrupted item is
-//!    `Skipped { "Annullato: liberati {n} byte" }`, an item never started `Skipped { "Annullato" }`.
+//!    `Skipped { "Cancelled: {n} B freed" }`, an item never started `Skipped { "Cancelled" }`.
 //! 7. Progress: atomic counters, read by one thread that calls `tick` at most every 100 ms.
 
 use crate::{failed, fsops, guard, locks, permanent_failure, skipped};
@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 /// Shortest interval between two calls of `tick`.
 const TICK_EVERY: Duration = Duration::from_millis(100);
 
-const CANCELLED: &str = "Annullato";
+const CANCELLED: &str = "Cancelled";
 
 /// Worker threads for a cleanup: `min(available_parallelism, 8)`, at least 1.
 pub fn worker_count() -> usize {
@@ -246,7 +246,7 @@ impl Ctx<'_> {
     /// The outcome of an item «Annulla» stopped: `n` = bytes already deleted.
     fn cancelled_outcome(&self, started: bool, n: u64) -> ItemOutcome {
         self.any_cancelled.store(true, SeqCst);
-        if started { skipped(format!("{CANCELLED}: liberati {n} byte")) } else { skipped(CANCELLED) }
+        if started { skipped(format!("{CANCELLED}: {n} B freed")) } else { skipped(CANCELLED) }
     }
 
     fn item_done(&self) {
@@ -574,20 +574,20 @@ impl ParallelRemover {
 /// Removes one file (a link: only the link). `Ok(false)` = it was already gone.
 fn remove_one_file(p: &Path, patient: bool) -> Result<bool, String> {
     if !p.is_absolute() {
-        return Err("percorso non assoluto".into());
+        return Err("path is not absolute".into());
     }
     let v = fsops::verbatim(p);
     let r = match fs::symlink_metadata(&v) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => Err(e),
         Ok(m) if m.file_type().is_symlink() => fsops::remove_link_entry(&v, patient),
-        Ok(m) if m.is_dir() => return Err("è una cartella: non viene eliminata".into()),
+        Ok(m) if m.is_dir() => return Err("it is a folder: not deleted".into()),
         Ok(_) => fsops::with_retry(&v, patient, || fs::remove_file(&v)),
     };
     r.map(|()| true).map_err(|e| {
         let locked_by =
             if matches!(e.raw_os_error(), Some(5 | 32 | 33)) { locks::locking_processes(p) } else { vec![] };
-        if locked_by.is_empty() { e.to_string() } else { format!("{e} (in uso da: {})", locked_by.join(", ")) }
+        if locked_by.is_empty() { e.to_string() } else { format!("{e} (in use by: {})", locked_by.join(", ")) }
     })
 }
 
@@ -623,7 +623,7 @@ pub fn remove_files_parallel(
                 }
                 let patient = failures.load(SeqCst) == 0;
                 let r = catch_unwind(AssertUnwindSafe(|| remove_one_file(p, patient)))
-                    .unwrap_or_else(|_| Err("errore interno".into()));
+                    .unwrap_or_else(|_| Err("internal error".into()));
                 match r {
                     Ok(true) => {
                         bytes.fetch_add(*len, SeqCst);

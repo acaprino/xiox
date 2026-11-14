@@ -165,7 +165,7 @@ pub struct DevScan {
 pub const MAX_SCAN_AGE_MS: i64 = 30 * 60 * 1000;
 
 /// Why a plan from an analysis older than [`MAX_SCAN_AGE_MS`] is refused.
-pub const STALE_ANALYSIS: &str = "L'analisi è troppo vecchia: premi «Analizza» di nuovo.";
+pub const STALE_ANALYSIS: &str = "The analysis is too old: press “Analyze” again.";
 
 impl DevScan {
     /// Too old to plan a cleanup from: more than [`MAX_SCAN_AGE_MS`] before `now_ms`, or of
@@ -206,10 +206,10 @@ pub fn load_sessions(cache_dir: Option<PathBuf>) -> (Vec<Preloaded>, Vec<String>
         let src = MukadeSessions::from_env(agent).with_cache_dir(cache_dir.clone());
         let loaded = catch_unwind(AssertUnwindSafe(|| src.load())).unwrap_or_else(|_| Loaded {
             items: Vec::new(),
-            warnings: vec![format!("{agent:?}: errore interno nella lettura delle sessioni, ignorate")],
+            warnings: vec![format!("{agent:?}: internal error while reading the sessions, ignored")],
         });
         let worktrees = catch_unwind(AssertUnwindSafe(|| src.managed_worktrees())).unwrap_or_else(|_| {
-            warnings.push(format!("{agent:?}: impossibile leggere i worktree gestiti"));
+            warnings.push(format!("{agent:?}: could not read the managed worktrees"));
             Vec::new()
         });
         let worktrees = worktrees.into_iter().filter(|p| p.is_dir()).collect();
@@ -230,7 +230,7 @@ fn load_archived(cache_dir: Option<PathBuf>) -> Loaded<ArchivedSession> {
             }
             Err(_) => out
                 .warnings
-                .push(format!("{agent:?}: errore interno nella lettura delle sessioni archiviate, ignorate")),
+                .push(format!("{agent:?}: internal error while reading the archived sessions, ignored")),
         }
     }
     out
@@ -331,8 +331,8 @@ impl ProjectScanner for SplitScanner<'_> {
     }
 }
 
-const FAST_READ_FAILED: &str = "Lettura veloce del disco non riuscita: uso la scansione normale.";
-pub const ANALYSIS_FAILED: &str = "Errore interno durante l'analisi dei progetti.";
+const FAST_READ_FAILED: &str = "Fast disk read failed: using the normal scan.";
+pub const ANALYSIS_FAILED: &str = "Internal error while analyzing the projects.";
 
 /// Runs the MFT index build; a panic becomes a warning and no index (the walker does it all).
 fn guarded_index<I>(build: impl FnOnce() -> (Option<I>, Vec<String>), warnings: &mut Vec<String>) -> Option<I> {
@@ -387,7 +387,7 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     let scanned_at_ms = now_ms();
     let cache = Some(cache_dir());
 
-    step("Lettura delle sessioni…", 0.05);
+    step("Reading sessions…", 0.05);
     let (sessions, mut warnings) = load_sessions(cache.clone());
     let home = home_dir();
     let fixed = if settings.all_drives { xiox_disktree::fixed_drives() } else { Vec::new() };
@@ -396,7 +396,7 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     let base = plan_roots(settings, &sessions, home.as_deref(), &[]);
 
     // Always reported, so the UI shows the same four steps; without admin nothing is read here.
-    step("Lettura veloce del disco…", 0.25);
+    step("Fast disk read…", 0.25);
     let drive_keys: Vec<String> = fixed.iter().map(|d| path_key(&d.root())).collect();
     let mut index_roots: Vec<PathBuf> = fixed.iter().filter(|d| d.ntfs).map(|d| d.root()).collect();
     // A root on a fixed drive is read with its drive (NTFS) or walked with it (not NTFS).
@@ -420,14 +420,14 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     let plan = if drives.is_empty() { base } else { plan_roots(settings, &sessions, home.as_deref(), &drives) };
     if plan.roots.is_empty() {
         warnings.push(if settings.session_projects {
-            "Nessun progetto trovato nelle sessioni degli agenti: aggiungi delle cartelle da analizzare nelle impostazioni.".into()
+            "No project found in the agents' sessions: add folders to analyze in the settings.".into()
         } else {
-            "Nessuna cartella da analizzare.".into()
+            "No folders to analyze.".into()
         });
     }
     let backend = index.as_ref().map_or("walker", |i| i.backend_name()).to_string();
 
-    step("Analisi dei progetti…", 0.45);
+    step("Analyzing projects…", 0.45);
     let cfg = EngineConfig {
         roots: plan.roots.clone(),
         container_roots: plan.container_roots.clone(),
@@ -444,7 +444,7 @@ pub fn run_scan(settings: &Settings, admin: bool, step: &dyn Fn(&str, f32)) -> D
     warnings.extend(analysis.warnings);
     let (projects, worktrees, other_worktrees) = split_reports(analysis.reports);
 
-    step("Sessioni archiviate…", 0.9);
+    step("Archived sessions…", 0.9);
     let archived = load_archived(cache);
     warnings.extend(archived.warnings);
 
@@ -588,7 +588,7 @@ fn drive_letter(path: &Path) -> Option<char> {
 }
 
 /// Category of the agent worktrees removed whole, in [`report`].
-pub const WORKTREE_CATEGORY: &str = "Worktree degli agenti";
+pub const WORKTREE_CATEGORY: &str = "Agent worktrees";
 
 /// The final summary of an [`execute_plan`] run. Category = the artifact's `label` (an agent
 /// worktree: [`WORKTREE_CATEGORY`]), largest first. `recycled_bytes` and `freed_bytes` come
@@ -632,7 +632,7 @@ pub fn report(scan: &DevScan, plan: &CleanPlan, res: &CleanResult) -> CleanRepor
                 let why = if locked_by.is_empty() {
                     error.clone()
                 } else {
-                    format!("{error} (in uso da: {})", locked_by.join(", "))
+                    format!("{error} (in use by: {})", locked_by.join(", "))
                 };
                 out.failed.push((it.path.clone(), why));
             }
@@ -675,7 +675,7 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
     let allowed: HashSet<String> =
         artifact_ids.keys().cloned().chain(scan.worktrees.iter().map(|r| path_key(&r.root))).collect();
     if let Some(bad) = plan.items.iter().find(|i| !allowed.contains(&path_key(&i.path))) {
-        return Err(format!("Percorso non presente nell'ultima analisi, rifiutato: {}", bad.path.display()));
+        return Err(format!("Path not in the latest analysis, refused: {}", bad.path.display()));
     }
 
     let mut sel = Selection::default();
@@ -691,7 +691,7 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
             PlanAction::GitWorktreeRemove { .. } => sel.worktrees.push(i.project_id.clone()),
         }
     }
-    let canonical = build_plan(scan, &sel, plan.mode).map_err(|e| format!("Piano rifiutato: {e}"))?;
+    let canonical = build_plan(scan, &sel, plan.mode).map_err(|e| format!("Plan refused: {e}"))?;
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut items: Vec<PlanItem> = Vec::new();
@@ -708,7 +708,7 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
             })
         else {
             return Err(format!(
-                "Piano rifiutato: l'elemento non corrisponde all'ultima analisi: {}",
+                "Plan refused: the item does not match the latest analysis: {}",
                 i.path.display()
             ));
         };
@@ -721,7 +721,7 @@ fn checked_plan(scan: &DevScan, plan: &CleanPlan) -> Result<CleanPlan, String> {
 }
 
 /// Why a picked session is left out by [`revalidate_archived`] (shown as «Saltato (…)»).
-pub const NO_LONGER_ARCHIVED: &str = "non più archiviata o in uso";
+pub const NO_LONGER_ARCHIVED: &str = "no longer archived or in use";
 
 /// The picks that can still go, and those dropped (each with a `Skipped` outcome).
 #[derive(Debug, Default)]
@@ -757,7 +757,7 @@ pub fn revalidate_archived(
             continue;
         }
         let Some(old) = scan.archived.iter().find(|s| s.agent == *agent && s.id == *id) else {
-            return Err(format!("Sessione non presente nell'ultima analisi, rifiutata: {agent:?} {id}"));
+            return Err(format!("Session not in the latest analysis, refused: {agent:?} {id}"));
         };
         if !now.iter().any(|(a, _)| a == agent) {
             now.push((*agent, fresh(*agent)));
@@ -801,15 +801,15 @@ pub fn delete_archived(
         }
         let mut found = scan.archived.iter().filter(|s| s.agent == *agent && s.id == *id);
         let Some(s) = found.next() else {
-            return Err(format!("Sessione non presente nell'ultima analisi, rifiutata: {agent:?} {id}"));
+            return Err(format!("Session not in the latest analysis, refused: {agent:?} {id}"));
         };
         if found.next().is_some() {
             return Err(format!(
-                "Sessione presente più volte nell'ultima analisi, rifiutata per sicurezza: {agent:?} {id}"
+                "Session listed more than once in the latest analysis, refused for safety: {agent:?} {id}"
             ));
         }
         if let Some(why) = &s.blocked {
-            return Err(format!("Sessione non cancellabile, rifiutata ({why}): {agent:?} {id}"));
+            return Err(format!("Session cannot be deleted, refused ({why}): {agent:?} {id}"));
         }
         items.push(s.clone());
     }

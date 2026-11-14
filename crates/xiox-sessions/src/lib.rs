@@ -93,7 +93,7 @@ fn delete_one(
         return ItemOutcome::Skipped { reason: reason.clone() };
     }
     if !valid_id(&s.id) {
-        return failed("identificativo non valido");
+        return failed("invalid id");
     }
     match s.agent {
         Agent::Claude | Agent::Pi => delete_file_session(s, mode, trash),
@@ -109,7 +109,7 @@ fn is_gone(p: &Path) -> bool {
 
 fn delete_file_session(s: &ArchivedSession, mode: RemoveMode, trash: &dyn Trash) -> ItemOutcome {
     let Some(file) = &s.file else {
-        return failed("file della sessione non indicato");
+        return failed("session file not given");
     };
     let res = match mode {
         RemoveMode::Recycle => trash.to_bin(file),
@@ -118,7 +118,7 @@ fn delete_file_session(s: &ArchivedSession, mode: RemoveMode, trash: &dyn Trash)
     // Success is measured: the call must have succeeded AND the file must really be gone.
     match res {
         Ok(()) if is_gone(file) => ItemOutcome::Removed { bytes_freed: s.bytes },
-        Ok(()) => failed("il file esiste ancora dopo la rimozione"),
+        Ok(()) => failed("the file still exists after the removal"),
         Err(e) => failed(e),
     }
 }
@@ -131,12 +131,12 @@ fn delete_codex(
     scratch: &Path,
 ) -> ItemOutcome {
     if !cli.codex_available() {
-        return failed("CLI di Codex non trovata");
+        return failed("Codex CLI not found");
     }
     // The analysis saw a rollout that is gone now: the CLI would delete the thread with no copy
     // in the Recycle Bin. Leave it alone; a new analysis shows what it has become.
     if s.file.as_ref().is_some_and(|f| !f.exists()) {
-        return failed("il file della sessione non c'è più: sessione non toccata");
+        return failed("the session file is gone: session left untouched");
     }
     let rollout = s.file.as_ref().filter(|f| f.exists());
     // A paginated thread keeps earlier pages beside its rollout and the CLI deletes them all:
@@ -188,11 +188,11 @@ fn delete_opencode(
         }
         if let Err(e) = cli.opencode_export(&s.id, &export) {
             let _ = std::fs::remove_file(&export);
-            return failed(format!("esportazione non riuscita: {e}"));
+            return failed(format!("export failed: {e}"));
         }
         if !export_is_valid(&export, &s.id) {
             let _ = std::fs::remove_file(&export);
-            return failed("esportazione non valida: la sessione non è stata toccata");
+            return failed("invalid export: the session was left untouched");
         }
         if let Err(e) = trash.to_bin(&export) {
             let _ = std::fs::remove_file(&export);
@@ -267,7 +267,7 @@ mod tests {
         fn codex_delete(&self, id: &str) -> Result<(), String> {
             self.log.push(format!("codex_delete {id}"));
             if self.codex_missing {
-                return Err("CLI di Codex non trovata".into());
+                return Err("Codex CLI not found".into());
             }
             if let Some(e) = &self.error {
                 return Err(e.clone());
@@ -306,7 +306,7 @@ mod tests {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if self.fail {
                 self.log.push(format!("to_bin_failed {name}"));
-                return Err("cestino non disponibile".into());
+                return Err("Recycle Bin not available".into());
             }
             let content = std::fs::read(path).map_err(|e| e.to_string())?;
             self.log.push(format!("to_bin {name}"));
@@ -400,9 +400,9 @@ mod tests {
         let f = env.file("a.jsonl", b"x");
         for agent in [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi] {
             let mut s = session(agent, "t-blocked", Some(f.clone()), 1);
-            s.blocked = Some("sessione in uso".into());
+            s.blocked = Some("session in use".into());
             let r = env.run(&[s], RemoveMode::Permanent);
-            assert!(matches!(outcome(&r), ItemOutcome::Skipped { reason } if reason == "sessione in uso"));
+            assert!(matches!(outcome(&r), ItemOutcome::Skipped { reason } if reason == "session in use"));
         }
         assert!(env.log.all().is_empty());
         assert!(f.exists());
@@ -437,7 +437,7 @@ mod tests {
         let f = env.file("p.jsonl", b"hello");
         let s = session(Agent::Pi, "t-pi-trashfail", Some(f.clone()), 5);
         let r = env.run(&[s], RemoveMode::Recycle);
-        assert!(failed_text(outcome(&r)).contains("cestino non disponibile"));
+        assert!(failed_text(outcome(&r)).contains("Recycle Bin not available"));
         assert!(f.exists());
     }
 
@@ -523,7 +523,7 @@ mod tests {
         for mode in [RemoveMode::Recycle, RemoveMode::Permanent] {
             let s = session(Agent::Codex, "t-codex-vanished", Some(gone.clone()), 5);
             let r = env.run(&[s], mode);
-            assert!(failed_text(outcome(&r)).contains("non c'è più"), "{mode:?}");
+            assert!(failed_text(outcome(&r)).contains("is gone"), "{mode:?}");
         }
         assert!(env.log.all().is_empty(), "CLI never called, nothing binned");
         assert!(env.scratch_is_empty());
@@ -567,7 +567,7 @@ mod tests {
         let f = env.file("rollout.jsonl", b"rollout-data");
         let s = session(Agent::Codex, "t-codex-binfail", Some(f.clone()), 12);
         let r = env.run(&[s], RemoveMode::Recycle);
-        assert!(failed_text(outcome(&r)).contains("cestino non disponibile"));
+        assert!(failed_text(outcome(&r)).contains("Recycle Bin not available"));
         assert_eq!(env.log.all(), vec!["to_bin_failed t-codex-binfail.jsonl"]);
         assert!(f.exists());
         assert!(env.scratch_is_empty(), "the temp copy must be removed");
@@ -580,7 +580,7 @@ mod tests {
         let f = env.file("rollout.jsonl", b"data");
         let s = session(Agent::Codex, "t-codex-nocli", Some(f.clone()), 4);
         let r = env.run(&[s], RemoveMode::Recycle);
-        assert_eq!(failed_text(outcome(&r)), "CLI di Codex non trovata");
+        assert_eq!(failed_text(outcome(&r)), "Codex CLI not found");
         assert!(env.log.all().is_empty());
         assert!(env.scratch_is_empty());
         assert!(f.exists());
@@ -635,7 +635,7 @@ mod tests {
             let r = env.run(&[s], RemoveMode::Recycle);
             assert_eq!(
                 failed_text(outcome(&r)),
-                "esportazione non valida: la sessione non è stata toccata",
+                "invalid export: the session was left untouched",
                 "{label}"
             );
             assert_eq!(env.log.all(), vec![format!("export {id}")], "{label}");
@@ -663,7 +663,7 @@ mod tests {
                 for mode in [RemoveMode::Recycle, RemoveMode::Permanent] {
                     let s = session(agent.clone(), id, Some(f.clone()), 1);
                     let r = env.run(&[s], mode);
-                    assert_eq!(failed_text(outcome(&r)), "identificativo non valido", "{id:?}");
+                    assert_eq!(failed_text(outcome(&r)), "invalid id", "{id:?}");
                 }
             }
         }
@@ -675,11 +675,11 @@ mod tests {
     #[test]
     fn missing_codex_cli_fails_only_codex() {
         let cli = SystemCli { codex: None, opencode: None, timeout: Duration::from_secs(1) };
-        assert_eq!(cli.codex_delete("abc"), Err("CLI di Codex non trovata".into()));
-        assert_eq!(cli.opencode_delete("abc"), Err("CLI di OpenCode non trovata".into()));
+        assert_eq!(cli.codex_delete("abc"), Err("Codex CLI not found".into()));
+        assert_eq!(cli.opencode_delete("abc"), Err("OpenCode CLI not found".into()));
         assert_eq!(
             cli.opencode_export("abc", Path::new("x.json")),
-            Err("CLI di OpenCode non trovata".into())
+            Err("OpenCode CLI not found".into())
         );
         assert!(!cli.codex_available());
     }
@@ -696,7 +696,7 @@ mod tests {
         ];
         let r = env.run(&items, RemoveMode::Permanent);
         assert_eq!(r.len(), 2);
-        assert_eq!(failed_text(&r[0].outcome), "CLI di Codex non trovata");
+        assert_eq!(failed_text(&r[0].outcome), "Codex CLI not found");
         assert_removed(&r[1].outcome, 5);
         assert!(codex_file.exists());
         assert!(!claude_file.exists());

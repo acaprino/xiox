@@ -186,7 +186,7 @@ fn session_in_subfolder_joins_project() {
     assert_eq!(p.status, ProjectStatus::Inactive);
     assert_eq!(p.last_activity_source, Some(ActivitySource::Claude));
     assert_eq!(p.inactive_days, Some(30));
-    assert!(p.reason.starts_with("Inattivo da 30 giorni (ultima sessione Claude)"), "{}", p.reason);
+    assert!(p.reason.starts_with("Inactive for 30 days (last Claude session)"), "{}", p.reason);
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn live_session_means_in_use() {
     assert_eq!(p.status, ProjectStatus::InUse);
     assert_eq!(p.blocked_by, vec![BlockReason::LiveSession]);
     assert!(!p.preselected);
-    assert_eq!(p.reason, "Sessione Claude attiva ora");
+    assert_eq!(p.reason, "Claude session active now");
     assert_eq!(p.reclaimable_bytes, 100);
 }
 
@@ -270,8 +270,8 @@ fn tracked_artifact_is_caution_not_blocked() {
     assert!(p.blocked_by.is_empty());
     let a = &p.artifacts[0];
     assert_eq!(a.level, Level::Caution);
-    assert!(a.note.contains("tracciati da git"), "{}", a.note);
-    assert_eq!(a.note, "Contiene file tracciati da git");
+    assert!(a.note.contains("tracked by git"), "{}", a.note);
+    assert_eq!(a.note, "Contains files tracked by git");
     assert!(!a.preselected);
     assert!(!p.preselected);
     assert_eq!(p.reclaimable_bytes, 500);
@@ -287,7 +287,7 @@ fn unverified_artifact_is_caution_not_blocked() {
     assert_eq!(p.status, ProjectStatus::Inactive);
     assert!(p.blocked_by.is_empty());
     assert_eq!(p.artifacts[0].level, Level::Caution);
-    assert_eq!(p.artifacts[0].note, "Cartella non riconosciuta con certezza");
+    assert_eq!(p.artifacts[0].note, "Folder not recognized with certainty");
     assert!(!p.preselected);
 }
 
@@ -296,14 +296,14 @@ fn notes_add_up_after_the_catalog_one() {
     let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), false)]);
     let mut c = cand(r"C:\dev\app", 500, None);
     c.artifacts[0].verified = false;
-    c.artifacts[0].note = "Nota del catalogo".into();
+    c.artifacts[0].note = "Catalog note".into();
     let git = FakeGit::default().with_tracked(r"C:\dev\app", "target");
     let r = run(vec![c], &[&src], &git);
     let a = &only(&r).artifacts[0];
     assert_eq!(a.level, Level::Caution);
     assert_eq!(
         a.note,
-        "Nota del catalogo; Contiene file tracciati da git; Cartella non riconosciuta con certezza"
+        "Catalog note; Contains files tracked by git; Folder not recognized with certainty"
     );
 }
 
@@ -320,13 +320,13 @@ fn ambiguous_name_is_caution_unless_git_ignores_it() {
     let r = run(vec![ambiguous()], &[&src], &FakeGit::default().with_ignored(root, "target", false));
     let a = &only(&r).artifacts[0];
     assert_eq!(a.level, Level::Caution);
-    assert_eq!(a.note, "Potrebbe contenere sorgenti: git non la ignora");
+    assert_eq!(a.note, "May contain sources: git does not ignore it");
     assert!(!a.preselected);
 
     let r = run(vec![ambiguous()], &[&src], &FakeGit::default());
     let a = &only(&r).artifacts[0];
     assert_eq!(a.level, Level::Caution);
-    assert_eq!(a.note, "Potrebbe contenere sorgenti: non è in un repository git");
+    assert_eq!(a.note, "May contain sources: not in a git repository");
 
     let r = run(vec![ambiguous()], &[&src], &FakeGit::default().with_ignored(root, "target", true));
     let a = &only(&r).artifacts[0];
@@ -367,7 +367,7 @@ fn dirty_ordinary_project_is_not_blocked() {
     assert!(p.blocked_by.is_empty());
     assert!(!p.preselected, "dirty git: selectable but never preselected");
     assert!(p.artifacts.iter().all(|a| !a.preselected && a.level == Level::Recommended));
-    assert!(p.reason.contains("modifiche git non committate"), "{}", p.reason);
+    assert!(p.reason.contains("uncommitted git changes"), "{}", p.reason);
     assert!(!p.is_agent_worktree);
 }
 
@@ -395,7 +395,7 @@ fn dirty_agent_worktree_is_blocked() {
     assert!(p.is_agent_worktree);
     assert_eq!(p.status, ProjectStatus::Blocked);
     assert_eq!(p.blocked_by, vec![BlockReason::DirtyGit, BlockReason::UnpushedCommits]);
-    assert!(p.reason.contains("Modifiche git non committate nel worktree"), "{}", p.reason);
+    assert!(p.reason.contains("Uncommitted git changes in the worktree"), "{}", p.reason);
     assert!(!p.preselected);
 }
 
@@ -427,7 +427,7 @@ fn no_sessions_old_project_is_preselected() {
     assert!(p.artifacts[0].preselected);
     assert!(p.blocked_by.is_empty());
     assert_eq!(p.last_activity_source, Some(ActivitySource::Files));
-    assert_eq!(p.reason, "Nessuna sessione trovata; ultima modifica ai file 61 giorni fa");
+    assert_eq!(p.reason, "No sessions found; last file change 61 days ago");
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn no_sessions_with_git_commit_names_the_commit() {
     let r = run(vec![cand(r"C:\dev\app", 100, Some(ago(61)))], &[], &git);
     let p = only(&r);
     assert_eq!(p.last_activity_source, Some(ActivitySource::Git));
-    assert_eq!(p.reason, "Nessuna sessione trovata; ultimo commit 12 giorni fa");
+    assert_eq!(p.reason, "No sessions found; last commit 12 days ago");
 }
 
 #[test]
@@ -498,7 +498,7 @@ fn inactive_threshold_boundary() {
     assert!(only(&r).preselected);
     let r = run(vec![cand(r"C:\dev\a", 1, Some(NOW - 14 * DAY_MS + 1))], &[], &FakeGit::default());
     assert!(!only(&r).preselected);
-    assert!(p.reason.starts_with("Attività recente: 13 giorni fa"), "{}", p.reason);
+    assert!(p.reason.starts_with("Recent activity: 13 days ago"), "{}", p.reason);
 }
 
 #[test]
@@ -570,19 +570,19 @@ fn allocated_bytes_preferred_and_summed() {
 #[test]
 fn sources_failing_or_warning_never_abort() {
     let mut ok = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\a", ago(30), false)]);
-    ok.warnings = vec!["claude: file X corrotto".into()];
+    ok.warnings = vec!["claude: file X corrupt".into()];
     let mut bad = FakeSource::new(Agent::Codex, vec![]);
     bad.panics = true;
     let mut warn = FakeSource::new(Agent::Opencode, vec![]);
-    warn.warnings = vec!["opencode: db bloccato".into()];
+    warn.warnings = vec!["opencode: db locked".into()];
 
-    let scanner = FakeScanner { items: vec![cand(r"C:\dev\a", 1, None)], warnings: vec!["scan: accesso negato".into()] };
+    let scanner = FakeScanner { items: vec![cand(r"C:\dev\a", 1, None)], warnings: vec!["scan: access denied".into()] };
     let dyns: Vec<&dyn SessionSource> = vec![&ok, &bad, &warn];
     let r = analyze(&cfg(), &scanner, None, &dyns, &FakeGit::default());
     assert_eq!(only(&r).status, ProjectStatus::Inactive);
-    assert!(r.warnings.contains(&"scan: accesso negato".to_string()));
-    assert!(r.warnings.contains(&"claude: file X corrotto".to_string()));
-    assert!(r.warnings.contains(&"opencode: db bloccato".to_string()));
+    assert!(r.warnings.contains(&"scan: access denied".to_string()));
+    assert!(r.warnings.contains(&"claude: file X corrupt".to_string()));
+    assert!(r.warnings.contains(&"opencode: db locked".to_string()));
     assert_eq!(r.warnings.len(), 4, "panicking source adds exactly one warning: {:?}", r.warnings);
 }
 
@@ -634,7 +634,7 @@ fn report(root: &str, status: ProjectStatus, bytes: &[u64]) -> ProjectReport {
         inactive_days: Some(30),
         status,
         blocked_by: vec![],
-        reason: "Inattivo da 30 giorni (ultima sessione Claude)".into(),
+        reason: "Inactive for 30 days (last Claude session)".into(),
         reclaimable_bytes: bytes.iter().sum(),
         artifacts,
         preselected: status == ProjectStatus::Inactive,
@@ -778,17 +778,17 @@ fn plan_worktree_fallback_plans_only_recommended_folders() {
 fn plan_refuses_a_folder_of_a_worktree_removed_whole() {
     let rep = worktree_report(r"C:\wt\a", Some(r"C:\dev\proj"), Some(false), ProjectStatus::Inactive);
     let err = build_plan(std::slice::from_ref(&rep), &folders(&rep), RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("solo per intero"), "{err}");
+    assert!(err.to_string().contains("only be removed whole"), "{err}");
 }
 
 #[test]
 fn plan_worktrees_must_be_agent_worktrees() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
     let err = build_plan(std::slice::from_ref(&rep), &whole(&rep), RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("non è un worktree"), "{err}");
+    assert!(err.to_string().contains("not an agent worktree"), "{err}");
     let sel = Selection { worktrees: vec!["c:\\nope".into()], ..Default::default() };
     let err = build_plan(std::slice::from_ref(&rep), &sel, RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("non trovato"), "{err}");
+    assert!(err.to_string().contains("not found"), "{err}");
 }
 
 #[test]
@@ -822,16 +822,16 @@ fn plan_rejects_unknown_id() {
     let rep = report(r"C:\dev\app", ProjectStatus::Inactive, &[1]);
     let sel = Selection { artifacts: vec!["c:\\nope".into()], ..Default::default() };
     let err = build_plan(&[rep], &sel, RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("Cartella non trovata nell'analisi"), "{err}");
-    assert_eq!(err.to_string(), "Cartella non trovata nell'analisi: c:\\nope");
+    assert!(err.to_string().contains("Folder not found in the analysis"), "{err}");
+    assert_eq!(err.to_string(), "Folder not found in the analysis: c:\\nope");
 }
 
 #[test]
 fn plan_rejects_in_use_blocked_and_unreachable() {
     for (status, needle) in [
-        (ProjectStatus::InUse, "in uso"),
-        (ProjectStatus::Blocked, "bloccato"),
-        (ProjectStatus::Unreachable, "raggiungibile"),
+        (ProjectStatus::InUse, "in use"),
+        (ProjectStatus::Blocked, "blocked"),
+        (ProjectStatus::Unreachable, "reachable"),
     ] {
         let rep = report(r"C:\dev\app", status, &[1]);
         let ok = report(r"C:\dev\ok", ProjectStatus::Inactive, &[1]);
@@ -852,7 +852,7 @@ fn plan_rejects_a_folder_of_a_project_with_a_live_session() {
     let src = FakeSource::new(Agent::Claude, vec![sess(Agent::Claude, r"C:\dev\app", ago(60), true)]);
     let r = run(vec![cand(r"C:\dev\app", 500, None)], &[&src], &FakeGit::default());
     let err = build_plan(&r.reports, &folders(&r.reports[0]), RemoveMode::Recycle).unwrap_err();
-    assert!(err.to_string().contains("in uso"), "{err}");
+    assert!(err.to_string().contains("in use"), "{err}");
 }
 
 #[test]

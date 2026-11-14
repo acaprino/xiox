@@ -1,0 +1,7 @@
+# Literals that scripts/italian-check.mjs must not flag: data, not text for the user.
+#
+# Format: one literal per line, exactly as it appears between the quotes in the source
+# (case-sensitive, no surrounding quotes, no escaping). Blank lines and lines starting
+# with `#` are ignored. Add an entry only for a literal that code consumes (rule id,
+# registry path, file name, JSON key, serde tag, service name, protocol string) or that
+# is an Italian input of a test; put a one-line reason in a comment above it.
