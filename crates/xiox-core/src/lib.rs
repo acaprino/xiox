@@ -4,6 +4,7 @@
 pub mod account;
 pub mod browserdb;
 pub mod cleaner;
+pub mod cleanup;
 pub mod dev;
 pub mod envpath;
 #[cfg(test)]

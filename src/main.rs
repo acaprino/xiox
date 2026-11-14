@@ -4,12 +4,12 @@ mod dev;
 mod theme;
 
 use xiox_core::{browserdb, cleaner, native, registry, rules, services, sys, wipe};
+use xiox_core::cleanup::{analysis_title, clean_report, Chosen, CleanEnd, CleanView, CleanupState};
 use xiox_core::notify::{Notifier, SectionId};
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, Margin, RichText, Stroke, TextStyle, Ui, Vec2};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
@@ -32,17 +32,6 @@ enum Tab {
     Dev,
 }
 
-enum CleanMsg {
-    Progress(String, f32),
-    Analyzed(usize, cleaner::Found),
-    Cleaned(usize, cleaner::Found, cleaner::Cleaned),
-    /// Opzione dinamica: chiave `"<cleaner>/<opzione>"`, etichetta, raccolta e (in pulizia) esito.
-    Rule(String, String, rules::RuleFound, Option<rules::RuleCleaned>),
-    /// Voce nativa: chiave `"native:<id>"`, etichetta, analisi e (in pulizia) esito.
-    Native(String, String, native::NativeFound, Option<native::NativeCleaned>),
-    Done,
-}
-
 enum RegMsg {
     Progress(String, f32),
     Found(Vec<registry::Issue>),
@@ -54,33 +43,6 @@ enum RegMsg {
 enum SvcMsg {
     Loaded(Vec<services::Service>),
     Message(String),
-}
-
-/// Come è finita l'ultima analisi o pulizia di Pulizia file.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum CleanEnd {
-    Done,
-    Cancelled,
-    /// Il thread di lavoro è morto (panic) prima di mandare `CleanMsg::Done`.
-    Died,
-}
-
-/// Testo per una pulizia fermata da un errore interno (come in Sviluppatori).
-const CLEAN_DIED: &str = "Pulizia interrotta da un errore interno: alcuni elementi potrebbero essere già stati rimossi. Premi «Analizza» per vedere cosa resta.";
-
-/// Le voci scelte all'avvio: le categorie e (chiave, etichetta) delle voci native e delle
-/// opzioni dinamiche, per elencare nel resoconto quelle che non hanno mai risposto.
-#[derive(Default, Clone)]
-struct Chosen {
-    cats: Vec<usize>,
-    others: Vec<(String, String)>,
-}
-
-#[derive(PartialEq)]
-enum CleanView {
-    Empty,
-    Analyzed,
-    Cleaned,
 }
 
 struct App {
@@ -95,48 +57,9 @@ struct App {
     mem: sys::Memory,
     mem_at: Instant,
 
-    clean_sel: Vec<bool>,
-    only_old: bool,
-    clean_job: Option<Receiver<CleanMsg>>,
-    clean_text: String,
-    clean_progress: f32,
-    found: Vec<Option<cleaner::Found>>,
-    cleaned: Vec<Option<cleaner::Cleaned>>,
-    clean_view: CleanView,
-    /// «Annulla» della pulizia o dell'analisi in corso: lo stesso clic ferma le categorie
-    /// (`xiox_cleaner::Cancel`) e le voci native e dinamiche (`AtomicBool`).
-    clean_cancel: Option<(xiox_cleaner::Cancel, Arc<AtomicBool>)>,
-    clean_started: Instant,
-    /// Resoconto della pulizia, costruito quando tutte le voci hanno finito.
-    clean_report: Option<xiox_model::CleanReport>,
-    /// Voci scelte all'avvio dell'ultima analisi o pulizia.
-    clean_chosen: Chosen,
-    /// Come è finita l'ultima analisi o pulizia (`None` = in corso o mai partita).
-    clean_end: Option<CleanEnd>,
-    /// Esito di «Salva come testo…»: (testo, riuscito).
-    clean_saved: Option<(String, bool)>,
-    confirm_clean: bool,
-    /// Avvisi della finestra di conferma, calcolati una volta all'apertura
-    /// (la lista dei cookie si legge lì, non a ogni fotogramma).
-    confirm_warnings: Vec<String>,
-
-    rules: Option<rules::RuleSet>,
-    /// Aperto finché il thread delle regole (caricamento e aggiornamento di Winapp2) vive.
-    rules_rx: Option<Receiver<rules::RulesMsg>>,
-    /// Esito dell'aggiornamento di Winapp2 di questo avvio (`None` = in corso o non partito).
-    winapp2_update: Option<xiox_rules::updater::UpdateOutcome>,
+    cleanup: CleanupState,
     /// Finestra Informazioni aperta.
     about_open: bool,
-    rule_sel: HashSet<String>,
-    rule_found: Vec<(String, String, rules::RuleFound)>,
-    rule_cleaned: Vec<(String, String, rules::RuleCleaned)>,
-    rule_search: String,
-    /// Voci native (Appunti, DNS…): selezione `native:<id>` in `rule_sel`.
-    natives: Vec<native::NativeItem>,
-    native_found: Vec<(String, String, native::NativeFound)>,
-    native_cleaned: Vec<(String, String, native::NativeCleaned)>,
-    /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
-    processes: Vec<String>,
 
     reg_sel: Vec<bool>,
     issues: Vec<registry::Issue>,
@@ -160,8 +83,6 @@ struct App {
 
 impl App {
     fn new(screenshot: Option<PathBuf>, tab: Tab, dev: dev::DevState, about_open: bool) -> Self {
-        let n = cleaner::CATEGORIES.len();
-        let natives = native::all();
         let mut app = App {
             tab,
             admin: sys::is_admin(),
@@ -172,34 +93,8 @@ impl App {
             shot_sent: false,
             mem: sys::memory(),
             mem_at: Instant::now(),
-            clean_sel: cleaner::CATEGORIES.iter().map(|c| c.default_on).collect(),
-            only_old: true,
-            clean_job: None,
-            clean_text: String::new(),
-            clean_progress: 0.0,
-            found: vec![None; n],
-            cleaned: vec![None; n],
-            clean_view: CleanView::Empty,
-            clean_cancel: None,
-            clean_started: Instant::now(),
-            clean_report: None,
-            clean_chosen: Chosen::default(),
-            clean_end: None,
-            clean_saved: None,
-            confirm_clean: false,
-            confirm_warnings: vec![],
-            rules: None,
-            rules_rx: None,
-            winapp2_update: None,
+            cleanup: CleanupState::new(),
             about_open,
-            rule_sel: rules::native_defaults(&natives),
-            rule_found: vec![],
-            rule_cleaned: vec![],
-            rule_search: String::new(),
-            natives,
-            native_found: vec![],
-            native_cleaned: vec![],
-            processes: rules::processes(),
             reg_sel: registry::CATEGORIES.iter().map(|c| c.default_on).collect(),
             issues: vec![],
             reg_job: None,
@@ -225,195 +120,14 @@ impl App {
 
     // ---------- background jobs ----------
 
-    /// Carica le regole esterne in un thread; finché non arrivano, i gruppi dinamici non ci sono.
-    /// Poi, tranne con --screenshot, aggiorna Winapp2 in sottofondo (nessun `join`:
-    /// l'uscita non lo aspetta) e ricarica le regole se è arrivata una copia nuova.
+    /// Avvia il caricamento delle regole e, tranne con --screenshot, l'aggiornamento di Winapp2.
     fn start_rules(&mut self, ctx: &egui::Context) {
-        let (tx, rx) = channel();
-        self.rules_rx = Some(rx);
-        // Con --screenshot non si aggiorna Winapp2; solo nella build di debug le
-        // regole usano l'ambiente del processo, così un profilo finto
-        // (USERPROFILE, LOCALAPPDATA…) vale anche per loro.
         let fake_profile = self.screenshot.is_some();
-        let from_process = rules::rules_env_from_process(fake_profile);
-        let update = rules::should_update(fake_profile).then(rules::real_update);
-        let ctx = ctx.clone();
-        rules::start(
-            xiox_rules::updater::data_dir(),
-            rules::own_folders,
-            move || if from_process { xiox_rules::Env::from_process() } else { xiox_rules::Env::for_rules() },
-            rules::load,
-            update,
-            move |m| {
-                let _ = tx.send(m);
-                ctx.request_repaint();
-            },
+        self.cleanup.start_rules(
+            Arc::new(Repaint(ctx.clone())),
+            rules::rules_env_from_process(fake_profile),
+            rules::should_update(fake_profile),
         );
-    }
-
-    /// Opzioni dinamiche spuntate (cleaner e opzione clonati per il job).
-    fn chosen_rules(&self) -> Vec<(xiox_rules::Cleaner, xiox_rules::Opt)> {
-        let Some(rs) = &self.rules else { return vec![] };
-        rs.cleaners
-            .iter()
-            .flat_map(|c| c.options.iter().map(move |o| (c, o)))
-            .filter(|(c, o)| self.rule_sel.contains(&rules::key(c, o)))
-            .map(|(c, o)| (c.clone(), o.clone()))
-            .collect()
-    }
-
-    fn start_clean(&mut self, also_clean: bool, ctx: &egui::Context) {
-        let cats: Vec<usize> = (0..self.clean_sel.len()).filter(|&i| self.clean_sel[i]).collect();
-        self.processes = rules::processes();
-        let dynamic = self.chosen_rules();
-        let natives: Vec<native::NativeItem> = self.natives.iter().filter(|i| self.rule_sel.contains(&rules::native_key(i))).copied().collect();
-        let env = self.rules.as_ref().map(|r| r.env.clone());
-        self.clean_chosen = Chosen {
-            cats: cats.clone(),
-            others: natives
-                .iter()
-                .map(|i| (rules::native_key(i), i.label.to_string()))
-                .chain(dynamic.iter().map(|(c, o)| (rules::key(c, o), rules::row_label(c, o))))
-                .collect(),
-        };
-        self.clean_end = None;
-        // «Pulisci spazio libero» gira dopo tutto il resto (anche le opzioni
-        // dinamiche), perché sovrascriva anche ciò che le altre voci cancellano.
-        let (natives, natives_last) = native::split_last(natives);
-        let (tx, rx) = channel();
-        self.clean_job = Some(rx);
-        self.found = vec![None; self.clean_sel.len()];
-        self.cleaned = vec![None; self.clean_sel.len()];
-        self.rule_found.clear();
-        self.rule_cleaned.clear();
-        // Voci con anteprima obbligatoria (PATH): con «Pulizia» agiscono solo su
-        // ciò che l'ultima «Analisi» ha mostrato, se la vista è ancora quella.
-        let previews: std::collections::HashMap<String, native::NativeFound> =
-            if also_clean && self.clean_view == CleanView::Analyzed {
-                self.native_found.iter().map(|(k, _, f)| (k.clone(), f.clone())).collect()
-            } else {
-                std::collections::HashMap::new()
-            };
-        self.native_found.clear();
-        self.native_cleaned.clear();
-        self.clean_view = if also_clean { CleanView::Cleaned } else { CleanView::Analyzed };
-        self.clean_report = None;
-        self.clean_saved = None;
-        self.clean_started = Instant::now();
-        let files_cancel = xiox_cleaner::Cancel::default();
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.clean_cancel = Some((files_cancel.clone(), cancel.clone()));
-        let only_old = self.only_old;
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let verb = if also_clean { "Pulizia" } else { "Analisi" };
-            let total = (cats.len() + natives.len() + dynamic.len() + natives_last.len()).max(1) as f32;
-            for (k, &i) in cats.iter().enumerate() {
-                let name = cleaner::CATEGORIES[i].name;
-                if files_cancel.is_cancelled() || cancel.load(Ordering::SeqCst) {
-                    // Annullata prima di iniziare: nel resoconto tra i saltati.
-                    if also_clean {
-                        let c = cleaner::Cleaned { cancelled: true, ..Default::default() };
-                        let _ = tx.send(CleanMsg::Cleaned(i, cleaner::Found::default(), c));
-                    }
-                    continue;
-                }
-                let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
-                ctx.request_repaint();
-                let f = cleaner::analyze(i, only_old);
-                if also_clean {
-                    // L'avanzamento dentro la categoria affina la barra.
-                    let tick = |t: xiox_cleaner::Tick| {
-                        if t.total_items > 0 {
-                            let part = t.done_items as f32 / t.total_items as f32;
-                            let _ = tx.send(CleanMsg::Progress(format!("{verb} – {name}"), (k as f32 + part) / total));
-                            ctx.request_repaint();
-                        }
-                    };
-                    let c = cleaner::clean(i, &f, &tick, &files_cancel);
-                    let _ = tx.send(CleanMsg::Cleaned(i, f, c));
-                } else {
-                    let _ = tx.send(CleanMsg::Analyzed(i, f));
-                }
-            }
-            // Voci native e opzioni dinamiche: in sequenza, un solo Guard per tutta
-            // la pulizia; i processi si rileggono prima dell'analisi e della pulizia
-            // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
-            let env = env.unwrap_or_else(xiox_rules::Env::for_rules);
-            let guard = xiox_rules::Guard::new(&env);
-            let processes = rules::processes;
-            let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
-            let nprogress = |k: usize, text: String| {
-                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
-                ctx.request_repaint();
-            };
-            let previews = |item: &native::NativeItem| previews.get(&rules::native_key(item)).cloned();
-            native::run_natives(&natives, also_clean, &nctx, &previews, &processes, &nprogress, &mut |item, f, done| {
-                let _ = tx.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
-            });
-            let run = rules::RunCtx {
-                env: &env,
-                guard: &guard,
-                reg: &rules::RealRegistry,
-                reg_exists: &rules::reg_exists,
-                processes: &processes,
-                cancel: &*cancel,
-            };
-            let progress = |k: usize, text: String| {
-                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));
-                ctx.request_repaint();
-            };
-            rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
-                let _ = tx.send(CleanMsg::Rule(key, label, f, done));
-            });
-            let lprogress = |k: usize, text: String| {
-                let _ = tx.send(CleanMsg::Progress(text, (cats.len() + natives.len() + dynamic.len() + k) as f32 / total));
-                ctx.request_repaint();
-            };
-            native::run_natives(&natives_last, also_clean, &nctx, &previews, &processes, &lprogress, &mut |item, f, done| {
-                let _ = tx.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
-            });
-            let _ = tx.send(CleanMsg::Done);
-            ctx.request_repaint();
-        });
-    }
-
-    /// Fine dell'analisi o della pulizia (`died`: il thread è morto senza `Done`): dopo una
-    /// pulizia, il resoconto di tutte le voci, anche di quelle che non hanno mai risposto.
-    fn finish_clean(&mut self, died: bool) {
-        self.clean_job = None;
-        let cancelled = self.clean_cancel.take().is_some_and(|(f, a)| f.is_cancelled() || a.load(Ordering::SeqCst));
-        let end = if died {
-            CleanEnd::Died
-        } else if cancelled {
-            CleanEnd::Cancelled
-        } else {
-            CleanEnd::Done
-        };
-        self.clean_end = Some(end);
-        if self.clean_view == CleanView::Cleaned {
-            let elapsed = self.clean_started.elapsed().as_millis() as u64;
-            self.clean_report = Some(clean_report(
-                &self.cleaned,
-                &self.native_cleaned,
-                &self.rule_cleaned,
-                &self.clean_chosen,
-                elapsed,
-                end,
-            ));
-        }
-    }
-
-    /// «Annulla»: ferma le categorie, le voci native e le opzioni dinamiche.
-    fn cancel_clean(&self) {
-        if let Some((files, other)) = &self.clean_cancel {
-            files.cancel();
-            other.store(true, Ordering::SeqCst);
-        }
-    }
-
-    fn clean_cancelling(&self) -> bool {
-        self.clean_cancel.as_ref().is_some_and(|(f, a)| f.is_cancelled() || a.load(Ordering::SeqCst))
     }
 
     /// Solo build di debug, `--clean-demo` con `--screenshot`: un resoconto inventato per
@@ -421,10 +135,10 @@ impl App {
     #[cfg(debug_assertions)]
     fn clean_demo(&mut self) {
         let user = PathBuf::from(r"C:\Users\demo\AppData\Local\Temp");
-        self.clean_sel = vec![false; self.clean_sel.len()];
+        self.cleanup.clean_sel = vec![false; self.cleanup.clean_sel.len()];
         for (i, freed, removed) in [(1usize, 734_003_200u64, 1_204u64), (3, 52_428_800, 2), (6, 18_874_368, 9)] {
-            self.clean_sel[i] = true;
-            self.found[i] = Some(cleaner::Found { bytes: freed, count: removed, ..Default::default() });
+            self.cleanup.clean_sel[i] = true;
+            self.cleanup.found[i] = Some(cleaner::Found { bytes: freed, count: removed, ..Default::default() });
             let mut c = cleaner::Cleaned { freed, removed, dirs: if i == 1 { 37 } else { 0 }, ..Default::default() };
             if i == 1 {
                 c.failed = 2;
@@ -433,13 +147,13 @@ impl App {
                     (user.join("~DF1A2B.tmp"), "Accesso negato. (os error 5)".into()),
                 ];
             }
-            self.cleaned[i] = Some(c);
+            self.cleanup.cleaned[i] = Some(c);
         }
-        self.clean_sel[8] = true;
-        self.cleaned[8] = Some(cleaner::Cleaned { cancelled: true, ..Default::default() });
-        let cats: Vec<usize> = (0..self.clean_sel.len()).filter(|&i| self.clean_sel[i]).collect();
+        self.cleanup.clean_sel[8] = true;
+        self.cleanup.cleaned[8] = Some(cleaner::Cleaned { cancelled: true, ..Default::default() });
+        let cats: Vec<usize> = (0..self.cleanup.clean_sel.len()).filter(|&i| self.cleanup.clean_sel[i]).collect();
         let native = native::NativeCleaned { freed: 0, removed: 1, done: vec!["Appunti svuotati".into()], ..Default::default() };
-        self.native_cleaned.push(("native:clipboard".into(), "Appunti".into(), native));
+        self.cleanup.native_cleaned.push(("native:clipboard".into(), "Appunti".into(), native));
         let rule = rules::RuleCleaned {
             freed: 157_286_400,
             removed: 3_310,
@@ -448,11 +162,11 @@ impl App {
             notes: vec!["1 file in uso".into()],
             ..Default::default()
         };
-        self.rule_cleaned.push(("demo/cache".into(), "Google Chrome – Cache".into(), rule));
+        self.cleanup.rule_cleaned.push(("demo/cache".into(), "Google Chrome – Cache".into(), rule));
         let mut skipped = rules::RuleCleaned::default();
         skipped.notes.push("Saltata: Firefox in esecuzione".into());
-        self.rule_cleaned.push(("demo/ff".into(), "Firefox – Cache".into(), skipped));
-        self.clean_chosen = Chosen {
+        self.cleanup.rule_cleaned.push(("demo/ff".into(), "Firefox – Cache".into(), skipped));
+        self.cleanup.clean_chosen = Chosen {
             cats,
             others: vec![
                 ("native:clipboard".into(), "Appunti".into()),
@@ -461,13 +175,13 @@ impl App {
                 ("demo/edge".into(), "Microsoft Edge – Cache".into()),
             ],
         };
-        self.clean_view = CleanView::Cleaned;
-        self.clean_end = Some(CleanEnd::Cancelled);
-        self.clean_report = Some(clean_report(
-            &self.cleaned,
-            &self.native_cleaned,
-            &self.rule_cleaned,
-            &self.clean_chosen,
+        self.cleanup.clean_view = CleanView::Cleaned;
+        self.cleanup.clean_end = Some(CleanEnd::Cancelled);
+        self.cleanup.clean_report = Some(clean_report(
+            &self.cleanup.cleaned,
+            &self.cleanup.native_cleaned,
+            &self.cleanup.rule_cleaned,
+            &self.cleanup.clean_chosen,
             8_400,
             CleanEnd::Cancelled,
         ));
@@ -535,68 +249,7 @@ impl App {
     }
 
     fn poll(&mut self) {
-        if let Some(rx) = &self.rules_rx {
-            let mut ended = false;
-            loop {
-                match rx.try_recv() {
-                    Ok(rules::RulesMsg::Loaded(set)) => self.rules = Some(set),
-                    Ok(rules::RulesMsg::Updated(outcome)) => self.winapp2_update = Some(outcome),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        ended = true;
-                        break;
-                    }
-                }
-            }
-            if ended {
-                self.rules_rx = None;
-            }
-        }
-        if let Some(rx) = &self.clean_job {
-            let mut msgs = Vec::new();
-            let mut gone = false;
-            loop {
-                match rx.try_recv() {
-                    Ok(m) => msgs.push(m),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        gone = true;
-                        break;
-                    }
-                }
-            }
-            let mut done = false;
-            for m in msgs {
-                match m {
-                    CleanMsg::Progress(t, p) => {
-                        self.clean_text = t;
-                        self.clean_progress = p;
-                    }
-                    CleanMsg::Analyzed(i, f) => self.found[i] = Some(f),
-                    CleanMsg::Cleaned(i, f, c) => {
-                        self.found[i] = Some(f);
-                        self.cleaned[i] = Some(c);
-                    }
-                    CleanMsg::Rule(key, label, f, c) => {
-                        if let Some(c) = c {
-                            self.rule_cleaned.push((key.clone(), label.clone(), c));
-                        }
-                        self.rule_found.push((key, label, f));
-                    }
-                    CleanMsg::Native(key, label, f, c) => {
-                        if let Some(c) = c {
-                            self.native_cleaned.push((key.clone(), label.clone(), c));
-                        }
-                        self.native_found.push((key, label, f));
-                    }
-                    CleanMsg::Done => done = true,
-                }
-            }
-            // Thread morto senza `Done` (panic): il resoconto con quello che è arrivato.
-            if done || gone {
-                self.finish_clean(!done);
-            }
-        }
+        self.cleanup.poll();
         if let Some(rx) = &self.reg_job {
             let mut done = false;
             let mut gone = false;
@@ -748,7 +401,7 @@ impl App {
         if !self.about_open {
             return;
         }
-        let winapp2 = match self.rules.as_ref() {
+        let winapp2 = match self.cleanup.rules.as_ref() {
             None => "Winapp2: caricamento in corso".to_string(),
             Some(rs) => match &rs.winapp2_version {
                 Some(v) => format!("Winapp2: versione {v}"),
@@ -785,7 +438,7 @@ impl App {
     }
 
     fn cleaner_tab(&mut self, ui: &mut Ui) {
-        let busy = self.clean_job.is_some();
+        let busy = self.cleanup.clean_job.is_some();
         egui::SidePanel::left("clean_opts")
             .exact_width(270.0)
             .resizable(false)
@@ -802,23 +455,23 @@ impl App {
                         }
                         ui.add_enabled_ui(!busy, |ui| {
                             let label = if c.needs_admin && !self.admin { format!("{}  🛡", c.name) } else { c.name.to_string() };
-                            ui.checkbox(&mut self.clean_sel[i], label).on_hover_text(c.help);
+                            ui.checkbox(&mut self.cleanup.clean_sel[i], label).on_hover_text(c.help);
                         });
                     }
-                    let natives = Natives { items: &self.natives, admin: self.admin };
-                    match &self.rules {
+                    let natives = Natives { items: &self.cleanup.natives, admin: self.admin };
+                    match &self.cleanup.rules {
                         Some(rs) => {
-                            let status = rules::status_line(rs, self.winapp2_update.as_ref());
-                            rules_panel(ui, rs, natives, status, &mut self.rule_sel, &mut self.rule_search, &self.processes, busy);
+                            let status = rules::status_line(rs, self.cleanup.winapp2_update.as_ref());
+                            rules_panel(ui, rs, natives, status, &mut self.cleanup.rule_sel, &mut self.cleanup.rule_search, &self.cleanup.processes, busy);
                         }
                         // Regole non ancora caricate: le voci native ci sono già.
-                        None => group_panel(ui, None, natives, &rules::panel_groups(&[], natives.items), &mut self.rule_sel, &self.processes, busy),
+                        None => group_panel(ui, None, natives, &rules::panel_groups(&[], natives.items), &mut self.cleanup.rule_sel, &self.cleanup.processes, busy),
                     }
                     ui.add_space(12.0);
                     ui.label(RichText::new("Opzioni").strong().color(ACCENT));
                     ui.separator();
                     ui.add_enabled_ui(!busy, |ui| {
-                        ui.checkbox(&mut self.only_old, format!("Elimina dalle cartelle Temp solo i file più vecchi di {} ore", cleaner::TEMP_MIN_AGE_HOURS));
+                        ui.checkbox(&mut self.cleanup.only_old, format!("Elimina dalle cartelle Temp solo i file più vecchi di {} ore", cleaner::TEMP_MIN_AGE_HOURS));
                     });
                 });
             });
@@ -826,16 +479,14 @@ impl App {
             .frame(egui::Frame::new().inner_margin(Margin::symmetric(16, 12)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let any = self.clean_sel.iter().any(|&b| b)
-                        || !rules::active_natives(&self.natives, &self.rule_sel, &self.processes).is_empty()
-                        || self.rules.as_ref().is_some_and(|rs| !rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes).is_empty());
+                    let any = self.cleanup.any_selected();
                     if primary(ui, "Avvia pulizia", !busy && any).clicked() {
-                        self.confirm_warnings = self.rule_warnings();
-                        self.confirm_clean = true;
+                        self.cleanup.confirm_warnings = self.cleanup.rule_warnings();
+                        self.cleanup.confirm_clean = true;
                     }
                     if secondary(ui, "Analizza", !busy && any).clicked() {
                         let ctx = ui.ctx().clone();
-                        self.start_clean(false, &ctx);
+                        self.cleanup.start(false, Arc::new(Repaint(ctx)));
                     }
                 });
             });
@@ -843,17 +494,17 @@ impl App {
             self.profile_strip(ui);
             card(ui, |ui| {
                 if busy {
-                    ui.label(RichText::new(&self.clean_text).size(16.0).color(TEXT));
+                    ui.label(RichText::new(&self.cleanup.clean_text).size(16.0).color(TEXT));
                     ui.add_space(6.0);
-                    ui.add(egui::ProgressBar::new(self.clean_progress).fill(ACCENT).show_percentage());
+                    ui.add(egui::ProgressBar::new(self.cleanup.clean_progress).fill(ACCENT).show_percentage());
                     ui.add_space(6.0);
-                    let cancelling = self.clean_cancelling();
+                    let cancelling = self.cleanup.cancelling();
                     if secondary(ui, if cancelling { "Annullamento…" } else { "Annulla" }, !cancelling).clicked() {
-                        self.cancel_clean();
+                        self.cleanup.cancel();
                     }
                     ui.add_space(10.0);
                 }
-                match self.clean_view {
+                match self.cleanup.clean_view {
                     CleanView::Empty => {
                         ui.add_space(30.0);
                         ui.vertical_centered(|ui| {
@@ -867,9 +518,9 @@ impl App {
                 }
             });
         });
-        if self.confirm_clean {
+        if self.cleanup.confirm_clean {
             let mut close = false;
-            let warnings = self.confirm_warnings.clone();
+            let warnings = self.cleanup.confirm_warnings.clone();
             egui::Modal::new(egui::Id::new("confirm_clean")).show(ui.ctx(), |ui| {
                 ui.set_width(380.0);
                 ui.label(RichText::new("Avviare la pulizia?").size(18.0).strong());
@@ -893,7 +544,7 @@ impl App {
                 ui.horizontal(|ui| {
                     if primary(ui, "Continua", true).clicked() {
                         let ctx = ui.ctx().clone();
-                        self.start_clean(true, &ctx);
+                        self.cleanup.start(true, Arc::new(Repaint(ctx)));
                         close = true;
                     }
                     if secondary(ui, "Annulla", true).clicked() {
@@ -902,38 +553,19 @@ impl App {
                 });
             });
             if close {
-                self.confirm_clean = false;
+                self.cleanup.confirm_clean = false;
             }
         }
     }
 
-    /// "<voce>: <avviso>" per ogni voce nativa e "<cleaner> – <opzione>: <avviso>"
-    /// per ogni opzione dinamica spuntata, non bloccata, con un avviso.
-    fn rule_warnings(&self) -> Vec<String> {
-        // Solo le scelte che si pulirebbero davvero (non quelle bloccate).
-        let active = rules::active_natives(&self.natives, &self.rule_sel, &self.processes);
-        let mut out = rules::native_warnings(&active);
-        // Le voci con anteprima usano l'ultima «Analisi» solo se la vista è ancora quella (vedi `start_clean`).
-        let analyzed = self.clean_view == CleanView::Analyzed;
-        let shown = |i: &native::NativeItem| {
-            let key = rules::native_key(i);
-            analyzed.then(|| self.native_found.iter().find(|(k, _, _)| *k == key).map(|(_, _, f)| f.items.len() as u64)).flatten()
-        };
-        out.extend(rules::preview_notes(&active, &shown));
-        if let Some(rs) = &self.rules {
-            out.extend(rules::choice_warnings(&rules::active_choices(&rs.cleaners, &self.rule_sel, &self.processes)));
-        }
-        out
-    }
-
     fn analysis_table(&self, ui: &mut Ui) {
-        let total: u64 = self.found.iter().flatten().map(|f| f.bytes).sum::<u64>()
-            + self.native_found.iter().map(|r| r.2.bytes).sum::<u64>()
-            + self.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
-        let files: u64 = self.found.iter().flatten().map(|f| f.count).sum::<u64>()
-            + self.native_found.iter().map(|r| r.2.files).sum::<u64>()
-            + self.rule_found.iter().map(|r| r.2.count).sum::<u64>();
-        let (title, note) = analysis_title(self.clean_job.is_some(), self.clean_end);
+        let total: u64 = self.cleanup.found.iter().flatten().map(|f| f.bytes).sum::<u64>()
+            + self.cleanup.native_found.iter().map(|r| r.2.bytes).sum::<u64>()
+            + self.cleanup.rule_found.iter().map(|r| r.2.bytes).sum::<u64>();
+        let files: u64 = self.cleanup.found.iter().flatten().map(|f| f.count).sum::<u64>()
+            + self.cleanup.native_found.iter().map(|r| r.2.files).sum::<u64>()
+            + self.cleanup.rule_found.iter().map(|r| r.2.count).sum::<u64>();
+        let (title, note) = analysis_title(self.cleanup.clean_job.is_some(), self.cleanup.clean_end);
         ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
         ui.label(RichText::new(format!("{} da eliminare ({} file)", sys::fmt_size(total), files)).size(15.0).color(ACCENT));
         if let Some(note) = note {
@@ -947,7 +579,7 @@ impl App {
                 ui.label(RichText::new("File").strong());
                 ui.label("");
                 ui.end_row();
-                for (i, f) in self.found.iter().enumerate() {
+                for (i, f) in self.cleanup.found.iter().enumerate() {
                     if let Some(f) = f {
                         ui.label(cleaner::CATEGORIES[i].name);
                         ui.label(sys::fmt_size(f.bytes));
@@ -960,7 +592,7 @@ impl App {
                         ui.end_row();
                     }
                 }
-                for (_, label, f) in &self.native_found {
+                for (_, label, f) in &self.cleanup.native_found {
                     ui.label(label);
                     ui.label(sys::fmt_size(f.bytes));
                     // Canali, DNS e Appunti non sono file: il numero sta nel dettaglio.
@@ -968,7 +600,7 @@ impl App {
                     note_cell(ui, &f.detail);
                     ui.end_row();
                 }
-                for (_, label, f) in &self.rule_found {
+                for (_, label, f) in &self.cleanup.rule_found {
                     ui.label(label);
                     ui.label(sys::fmt_size(f.bytes));
                     ui.label(f.count.to_string());
@@ -981,20 +613,20 @@ impl App {
                     ui.end_row();
                 }
             });
-            for (key, label, f) in &self.native_found {
+            for (key, label, f) in &self.cleanup.native_found {
                 native_list(ui, key, label, &f.detail);
             }
         });
     }
 
     fn cleaned_view(&mut self, ui: &mut Ui) {
-        let busy = self.clean_job.is_some();
-        let report = if busy { None } else { self.clean_report.as_ref() };
+        let busy = self.cleanup.clean_job.is_some();
+        let report = if busy { None } else { self.cleanup.clean_report.as_ref() };
         let Some(r) = report else {
             // Durante la pulizia: il totale e le voci finite, come sempre.
-            let freed: u64 = self.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>()
-                + self.native_cleaned.iter().map(|r| r.2.freed).sum::<u64>()
-                + self.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
+            let freed: u64 = self.cleanup.cleaned.iter().flatten().map(|c| c.freed).sum::<u64>()
+                + self.cleanup.native_cleaned.iter().map(|r| r.2.freed).sum::<u64>()
+                + self.cleanup.rule_cleaned.iter().map(|r| r.2.freed).sum::<u64>();
             let title = if busy { "Pulizia in corso…" } else { "Pulizia completata" };
             ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
             ui.label(RichText::new(format!("Liberati {}", sys::fmt_size(freed))).size(15.0).color(GREEN));
@@ -1013,13 +645,13 @@ impl App {
         // Con --screenshot nessun dialogo di sistema.
         if save && self.screenshot.is_none() {
             if let Some(out) = dev::save_report_text(r) {
-                self.clean_saved = Some(out);
+                self.cleanup.clean_saved = Some(out);
             }
         }
-        if let Some((text, ok)) = &self.clean_saved {
+        if let Some((text, ok)) = &self.cleanup.clean_saved {
             ui.add(egui::Label::new(RichText::new(text).size(12.0).color(if *ok { GREEN } else { RED })).wrap());
         }
-        let Some(r) = &self.clean_report else { return };
+        let Some(r) = &self.cleanup.clean_report else { return };
         dev::report_view(ui, r, &|p| p.display().to_string(), "clean_report", |ui| {
             ui.add_space(12.0);
             ui.label(RichText::new("Dettaglio per voce").strong().color(TEXT));
@@ -1036,7 +668,7 @@ impl App {
             ui.label(RichText::new("Lasciati (in uso)").strong());
             ui.label("");
             ui.end_row();
-            for (i, c) in self.cleaned.iter().enumerate() {
+            for (i, c) in self.cleanup.cleaned.iter().enumerate() {
                 if let Some(c) = c {
                     ui.label(cleaner::CATEGORIES[i].name);
                     ui.label(sys::fmt_size(c.freed));
@@ -1046,7 +678,7 @@ impl App {
                     ui.end_row();
                 }
             }
-            for (_, label, c) in &self.native_cleaned {
+            for (_, label, c) in &self.cleanup.native_cleaned {
                 ui.label(label);
                 ui.label(sys::fmt_size(c.freed));
                 ui.label(c.removed.to_string());
@@ -1054,7 +686,7 @@ impl App {
                 note_cell(ui, &c.notes);
                 ui.end_row();
             }
-            for (_, label, c) in &self.rule_cleaned {
+            for (_, label, c) in &self.cleanup.rule_cleaned {
                 ui.label(label);
                 ui.label(sys::fmt_size(c.freed));
                 ui.label(c.removed.to_string());
@@ -1074,7 +706,7 @@ impl App {
                 ui.end_row();
             }
         });
-        for (key, label, c) in &self.native_cleaned {
+        for (key, label, c) in &self.cleanup.native_cleaned {
             let lines: Vec<String> = c.done.iter().chain(&c.notes).cloned().collect();
             native_list(ui, key, label, &lines);
         }
@@ -1359,12 +991,12 @@ impl App {
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         let Some(path) = self.screenshot.clone() else { return };
         ctx.request_repaint();
-        let busy = self.clean_job.is_some()
+        let busy = self.cleanup.clean_job.is_some()
             || self.reg_job.is_some()
             || self.svc_job.is_some()
             || self.dev.busy()
             || self.dev.demo_pending()
-            || self.rules_rx.is_some();
+            || self.cleanup.rules_rx.is_some();
         // L'analisi Sviluppatori dura circa un minuto senza amministratore: la si aspetta fino a 5 minuti.
         let dev_wait = self.dev.busy() && self.started.elapsed() < Duration::from_secs(300);
         if self.frame >= 120 && (!busy || self.frame >= 900) && !dev_wait && !self.shot_sent {
@@ -1614,110 +1246,6 @@ fn rule_checkbox(ui: &mut Ui, c: &xiox_rules::Cleaner, o: &xiox_rules::Opt, labe
     }
 }
 
-/// Titolo dell'analisi e, se non è arrivata in fondo, la nota che lo dice.
-fn analysis_title(busy: bool, end: Option<CleanEnd>) -> (&'static str, Option<&'static str>) {
-    match (busy, end) {
-        (true, _) => ("Analisi in corso…", None),
-        (false, Some(CleanEnd::Cancelled)) => {
-            ("Analisi annullata", Some("Analisi annullata: le voci mancanti non sono state analizzate."))
-        }
-        (false, Some(CleanEnd::Died)) => (
-            "Analisi interrotta",
-            Some("Un errore interno ha fermato l'analisi: le voci mancanti non sono state analizzate."),
-        ),
-        (false, _) => ("Analisi completata", None),
-    }
-}
-
-/// La nota di una voce nativa o dinamica che dice che non è stata pulita del tutto
-/// (saltata, interrotta, non supportata), se c'è.
-fn stop_note(notes: &[String]) -> Option<&String> {
-    notes.iter().find(|n| n.starts_with("Saltata") || n.contains("interrotta") || n.starts_with("Opzione non supportata"))
-}
-
-/// Il resoconto di Pulizia file: categorie (nome di `CATEGORIES`), voci native e opzioni
-/// dinamiche (la loro etichetta). Le categorie elencano i file rimasti uno per uno; le voci
-/// native e dinamiche, che contano soltanto, compaiono con il numero e la prima nota; quelle
-/// saltate o interrotte tra i saltati con il motivo. Le voci di `chosen` che non hanno mai
-/// risposto (annullate prima di partire, o thread morto) sono anch'esse tra i saltate.
-///
-/// «File eliminati»: i file delle categorie (gli elementi del Cestino sono file nel Cestino,
-/// quindi contano) e i soli file delle opzioni dinamiche (`RuleCleaned::files`, non le voci
-/// di registro). Le voci native no: tolgono canali, righe di database, Appunti…, non file.
-fn clean_report(
-    cleaned: &[Option<cleaner::Cleaned>],
-    natives: &[(String, String, native::NativeCleaned)],
-    rules: &[(String, String, rules::RuleCleaned)],
-    chosen: &Chosen,
-    elapsed_ms: u64,
-    end: CleanEnd,
-) -> xiox_model::CleanReport {
-    let mut r = xiox_model::CleanReport { elapsed_ms, cancelled: end != CleanEnd::Done, ..Default::default() };
-    if end == CleanEnd::Died {
-        r.failed.push((PathBuf::from("Pulizia"), CLEAN_DIED.to_string()));
-    }
-    let never = if end == CleanEnd::Died { "Non eseguito: pulizia interrotta da un errore interno" } else { "Annullato" };
-    let counted = |n: u64, notes: &[String]| match notes.first() {
-        Some(first) => format!("{n} elementi lasciati: {first}"),
-        None => format!("{n} elementi lasciati (in uso o rifiutati)"),
-    };
-    for (i, c) in cleaned.iter().enumerate() {
-        let Some(c) = c else { continue };
-        let name = cleaner::CATEGORIES[i].name;
-        r.freed_bytes += c.freed;
-        r.files += c.removed;
-        r.dirs += c.dirs;
-        if c.freed > 0 {
-            r.by_category.push((name.to_string(), c.freed));
-        }
-        r.failed.extend(c.failures.iter().cloned());
-        // Fallimenti contati ma senza percorso (non dovrebbe accadere): una riga per la categoria.
-        let unnamed = c.failed.saturating_sub(c.failures.len() as u64);
-        if unnamed > 0 {
-            r.failed.push((PathBuf::from(name), counted(unnamed, &[])));
-        }
-        if c.cancelled {
-            let why = if c.removed == 0 && c.failed == 0 {
-                "Annullato".to_string()
-            } else {
-                format!("Annullato: liberati {}", sys::fmt_size(c.freed))
-            };
-            r.skipped.push((PathBuf::from(name), why));
-        }
-    }
-    for &i in &chosen.cats {
-        if cleaned.get(i).is_none_or(|c| c.is_none()) {
-            r.skipped.push((PathBuf::from(cleaner::CATEGORIES[i].name), never.to_string()));
-        }
-    }
-    let others = natives
-        .iter()
-        .map(|(_, label, c)| (label, c.freed, 0, c.failed, &c.notes))
-        .chain(rules.iter().map(|(_, label, c)| (label, c.freed, c.files, c.failed, &c.notes)));
-    for (label, freed, files, failed, notes) in others {
-        r.freed_bytes += freed;
-        r.files += files;
-        if freed > 0 {
-            r.by_category.push((label.clone(), freed));
-        }
-        if failed > 0 {
-            r.failed.push((PathBuf::from(label), counted(failed, notes)));
-        }
-        if let Some(why) = stop_note(notes) {
-            let why = if freed > 0 { format!("{why}: liberati {}", sys::fmt_size(freed)) } else { why.clone() };
-            r.skipped.push((PathBuf::from(label), why));
-        }
-    }
-    for (key, label) in &chosen.others {
-        let reported = natives.iter().any(|(k, _, _)| k == key) || rules.iter().any(|(k, _, _)| k == key);
-        if !reported {
-            r.skipped.push((PathBuf::from(label), never.to_string()));
-        }
-    }
-    r.by_category.sort_by(|a, b| b.1.cmp(&a.1));
-    r
-}
-
 fn cell(ui: &mut Ui, w: f32, text: impl Into<egui::WidgetText>) -> egui::Response {
     ui.allocate_ui_with_layout(Vec2::new(w, 20.0), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(w);
@@ -1731,7 +1259,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame += 1;
         self.poll();
-        if self.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() {
+        if self.cleanup.clean_job.is_some() || self.reg_job.is_some() || self.svc_job.is_some() || self.dev.busy() {
             ctx.request_repaint_after(Duration::from_millis(150));
         }
         self.sidebar(ctx);
@@ -1881,172 +1409,4 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(app))
         }),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Il resoconto somma categorie, voci native e opzioni dinamiche, le ordina per spazio e
-    /// riporta i file rimasti, le voci con fallimenti contati e le categorie annullate.
-    #[test]
-    fn clean_report_merges_categories_natives_and_rules() {
-        let mut cleaned = vec![None; cleaner::CATEGORIES.len()];
-        let locked = PathBuf::from(r"C:\t\a.tmp");
-        cleaned[1] = Some(cleaner::Cleaned {
-            freed: 100,
-            removed: 4,
-            failed: 1,
-            dirs: 2,
-            failures: vec![(locked.clone(), "in uso".into())],
-            cancelled: false,
-        });
-        cleaned[3] = Some(cleaner::Cleaned { cancelled: true, ..Default::default() });
-        let natives = vec![(
-            "native:x".to_string(),
-            "Appunti".to_string(),
-            native::NativeCleaned { freed: 0, removed: 1, ..Default::default() },
-        )];
-        let rules = vec![(
-            "c/o".to_string(),
-            "Chrome – Cache".to_string(),
-            rules::RuleCleaned {
-                freed: 500,
-                removed: 12,
-                files: 10,
-                failed: 2,
-                notes: vec!["2 file in uso".into()],
-                ..Default::default()
-            },
-        )];
-        let r = clean_report(&cleaned, &natives, &rules, &Chosen::default(), 1200, CleanEnd::Cancelled);
-        assert_eq!(r.freed_bytes, 600);
-        // 4 file della categoria e i 10 file della regola: non gli Appunti, non le voci di registro.
-        assert_eq!(r.files, 14);
-        assert_eq!(r.dirs, 2);
-        assert_eq!(r.elapsed_ms, 1200);
-        assert!(r.cancelled);
-        assert_eq!(
-            r.by_category,
-            vec![("Chrome – Cache".to_string(), 500), (cleaner::CATEGORIES[1].name.to_string(), 100)]
-        );
-        assert_eq!(r.failed.len(), 2);
-        assert_eq!(r.failed[0], (locked, "in uso".to_string()));
-        assert_eq!(r.failed[1].0, PathBuf::from("Chrome – Cache"));
-        assert!(r.failed[1].1.contains("2 elementi lasciati: 2 file in uso"));
-        assert_eq!(r.skipped, vec![(PathBuf::from(cleaner::CATEGORIES[3].name), "Annullato".to_string())]);
-        assert!(r.to_text().contains("Spazio liberato"));
-    }
-
-    /// Voci native e dinamiche saltate o interrotte senza fallimenti, e voci scelte che non
-    /// hanno mai risposto (annullate prima di partire): tutte tra i saltati, anche nel testo.
-    #[test]
-    fn clean_report_lists_skipped_interrupted_and_never_started_items() {
-        let mut cleaned = vec![None; cleaner::CATEGORIES.len()];
-        cleaned[1] = Some(cleaner::Cleaned { freed: 10, removed: 1, ..Default::default() });
-        let mut chrome = native::NativeCleaned::default();
-        chrome.note("Saltata: Chrome in esecuzione".into());
-        let natives = vec![("native:chrome".to_string(), "Chrome – Cronologia".to_string(), chrome)];
-        let rules = vec![(
-            "c/o".to_string(),
-            "Firefox – Cache".to_string(),
-            rules::RuleCleaned { freed: 2048, removed: 3, files: 3, notes: vec!["Pulizia interrotta".into()], ..Default::default() },
-        )];
-        let chosen = Chosen {
-            cats: vec![1, 2],
-            others: vec![
-                ("native:chrome".into(), "Chrome – Cronologia".into()),
-                ("c/o".into(), "Firefox – Cache".into()),
-                ("native:dns".into(), "Cache DNS".into()),
-                ("x/y".into(), "Edge – Cache".into()),
-            ],
-        };
-        let r = clean_report(&cleaned, &natives, &rules, &chosen, 10, CleanEnd::Cancelled);
-        assert!(r.failed.is_empty(), "{:?}", r.failed);
-        let skipped: Vec<(String, String)> =
-            r.skipped.iter().map(|(p, w)| (p.display().to_string(), w.clone())).collect();
-        assert_eq!(
-            skipped,
-            vec![
-                (cleaner::CATEGORIES[2].name.to_string(), "Annullato".to_string()),
-                ("Chrome – Cronologia".to_string(), "Saltata: Chrome in esecuzione".to_string()),
-                ("Firefox – Cache".to_string(), "Pulizia interrotta: liberati 2 KB".to_string()),
-                ("Cache DNS".to_string(), "Annullato".to_string()),
-                ("Edge – Cache".to_string(), "Annullato".to_string()),
-            ]
-        );
-        let text = r.to_text();
-        assert!(text.contains("Saltati (5):"), "{text}");
-        assert!(text.contains("Chrome – Cronologia: Saltata: Chrome in esecuzione"), "{text}");
-        assert!(text.contains("Edge – Cache: Annullato"), "{text}");
-    }
-
-    fn test_app() -> (tempfile::TempDir, App) {
-        let t = tempfile::tempdir().unwrap();
-        let dev = dev::DevState::only_root(t.path().to_path_buf(), dev::Section::Projects, false);
-        let app = App::new(None, Tab::Cleaner, dev, false);
-        (t, app)
-    }
-
-    /// Thread della pulizia morto (panic) prima di `Done`: il job si chiude, il resoconto
-    /// si costruisce con quello che è arrivato e dice dell'errore; le voci mai arrivate
-    /// sono tra i saltati.
-    #[test]
-    fn dead_cleaning_thread_still_builds_the_report() {
-        let (_t, mut app) = test_app();
-        let (tx, rx) = channel();
-        app.clean_job = Some(rx);
-        app.clean_view = CleanView::Cleaned;
-        app.clean_cancel = Some((xiox_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
-        app.clean_chosen = Chosen { cats: vec![1, 3], others: vec![("native:dns".into(), "Cache DNS".into())] };
-        let c = cleaner::Cleaned { freed: 100, removed: 2, ..Default::default() };
-        tx.send(CleanMsg::Cleaned(1, cleaner::Found::default(), c)).unwrap();
-        app.poll();
-        assert!(app.clean_job.is_some(), "il thread è vivo: si aspetta");
-        drop(tx);
-        app.poll();
-        assert!(app.clean_job.is_none());
-        assert!(app.clean_cancel.is_none());
-        assert_eq!(app.clean_end, Some(CleanEnd::Died));
-        let r = app.clean_report.as_ref().expect("resoconto");
-        assert!(r.cancelled);
-        assert_eq!((r.freed_bytes, r.files), (100, 2));
-        assert_eq!(r.failed, vec![(PathBuf::from("Pulizia"), CLEAN_DIED.to_string())]);
-        let never = "Non eseguito: pulizia interrotta da un errore interno".to_string();
-        assert_eq!(
-            r.skipped,
-            vec![(PathBuf::from(cleaner::CATEGORIES[3].name), never.clone()), (PathBuf::from("Cache DNS"), never)]
-        );
-        assert!(r.to_text().contains("Pulizia interrotta da un errore interno"));
-    }
-
-    /// Analisi: thread morto o «Annulla» chiudono il job e il titolo dice che non è completa.
-    #[test]
-    fn dead_or_cancelled_analysis_is_marked_interrupted() {
-        let (_t, mut app) = test_app();
-        let (tx, rx) = channel::<CleanMsg>();
-        app.clean_job = Some(rx);
-        app.clean_view = CleanView::Analyzed;
-        drop(tx);
-        app.poll();
-        assert!(app.clean_job.is_none());
-        assert!(app.clean_report.is_none());
-        assert_eq!(app.clean_end, Some(CleanEnd::Died));
-        assert_eq!(analysis_title(false, app.clean_end).0, "Analisi interrotta");
-
-        let (tx, rx) = channel();
-        app.clean_job = Some(rx);
-        let cancel = xiox_cleaner::Cancel::default();
-        cancel.cancel();
-        app.clean_cancel = Some((cancel, Arc::new(AtomicBool::new(false))));
-        tx.send(CleanMsg::Done).unwrap();
-        app.poll();
-        assert!(app.clean_job.is_none());
-        assert_eq!(app.clean_end, Some(CleanEnd::Cancelled));
-        let (title, note) = analysis_title(false, app.clean_end);
-        assert_eq!(title, "Analisi annullata");
-        assert!(note.unwrap().contains("le voci mancanti non sono state analizzate"));
-        assert_eq!(analysis_title(false, Some(CleanEnd::Done)), ("Analisi completata", None));
-        assert_eq!(analysis_title(true, None).0, "Analisi in corso…");
-    }
 }
