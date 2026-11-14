@@ -2,7 +2,7 @@
 <!-- Percorsi dalla documentazione di huggingface_hub (variabili d'ambiente) e di datasets (cache). Il token (token, stored_tokens) sta in HF_HOME e non si tocca: si colpiscono solo hub, datasets, xet e assets. -->
 <cleaner id="huggingface" os="windows">
   <label>Hugging Face</label>
-  <description>Modelli, dataset e cache locali di Hugging Face. Non tocca il token di accesso né i token salvati.</description>
+  <description>Local Hugging Face models, datasets and caches. Does not touch the access token or saved tokens.</description>
   <var id="hub">
     <value>%HF_HUB_CACHE%</value>
     <value>%HF_HOME%\hub</value>
@@ -21,27 +21,27 @@
     <value>%UserProfile%\.cache\huggingface\assets</value>
   </var>
   <option id="hub">
-    <label>Modelli e repository scaricati (hub)</label>
-    <description>Rimuove la cache dell'hub: modelli, dataset e spazi scaricati dal sito.</description>
-    <warning>Si riscaricano al prossimo uso. I modelli grandi possono pesare decine di GB.</warning>
+    <label>Downloaded models and repositories (hub)</label>
+    <description>Removes the hub cache: models, datasets and spaces downloaded from the site.</description>
+    <warning>Re-downloaded on next use. Large models can weigh tens of GB.</warning>
     <action command="delete" search="walk.all" path="$$hub$$"/>
   </option>
   <option id="datasets">
-    <label>Dataset convertiti (datasets)</label>
-    <description>Rimuove la cache della libreria datasets (file Arrow e indici).</description>
-    <warning>Si riscaricano e si ricostruiscono al prossimo uso, e la conversione può richiedere tempo.</warning>
+    <label>Converted datasets (datasets)</label>
+    <description>Removes the datasets library cache (Arrow files and indexes).</description>
+    <warning>Re-downloaded and rebuilt on next use; the conversion can take time.</warning>
     <action command="delete" search="walk.all" path="$$datasets$$"/>
   </option>
   <option id="xet">
-    <label>Cache Xet</label>
-    <description>Rimuove la cache degli shard e i dati temporanei di caricamento di Xet.</description>
-    <warning>Si ricostruisce al prossimo trasferimento di file.</warning>
+    <label>Xet cache</label>
+    <description>Removes the Xet shard cache and temporary upload data.</description>
+    <warning>Rebuilt on the next file transfer.</warning>
     <action command="delete" search="walk.all" path="$$xet$$"/>
   </option>
   <option id="assets">
-    <label>Risorse delle librerie (assets)</label>
-    <description>Rimuove i dati preelaborati, i file scaricati e i log creati dalle librerie che usano Hugging Face.</description>
-    <warning>Si ricreano al prossimo uso delle librerie.</warning>
+    <label>Library assets (assets)</label>
+    <description>Removes the preprocessed data, downloaded files and logs created by libraries that use Hugging Face.</description>
+    <warning>Recreated the next time the libraries are used.</warning>
     <action command="delete" search="walk.all" path="$$assets$$"/>
   </option>
 </cleaner>

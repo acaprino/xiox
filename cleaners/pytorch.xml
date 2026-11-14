@@ -2,15 +2,15 @@
 <!-- Percorso dal sorgente di PyTorch (torch/hub.py): TORCH_HOME oppure ~/.cache/torch, sottocartella hub. -->
 <cleaner id="pytorch" os="windows">
   <label>PyTorch</label>
-  <description>Modelli e repository scaricati da torch.hub. Non tocca progetti, script o checkpoint salvati altrove.</description>
+  <description>Models and repositories downloaded by torch.hub. Does not touch projects, scripts or checkpoints saved elsewhere.</description>
   <var id="hub">
     <value>%TORCH_HOME%\hub</value>
     <value>%UserProfile%\.cache\torch\hub</value>
   </var>
   <option id="hub">
-    <label>Modelli e repository di torch.hub</label>
-    <description>Rimuove la cache di torch.hub, compresi i pesi preaddestrati scaricati.</description>
-    <warning>Si riscaricano al prossimo `torch.hub.load` o al prossimo uso di pesi preaddestrati.</warning>
+    <label>torch.hub models and repositories</label>
+    <description>Removes the torch.hub cache, including the downloaded pretrained weights.</description>
+    <warning>Re-downloaded on the next `torch.hub.load` or the next use of pretrained weights.</warning>
     <action command="delete" search="walk.all" path="$$hub$$"/>
   </option>
 </cleaner>

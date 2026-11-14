@@ -2,15 +2,15 @@
 <!-- Percorso da playwright.dev/docs/browsers: %USERPROFILE%\AppData\Local\ms-playwright, sostituibile con PLAYWRIGHT_BROWSERS_PATH. -->
 <cleaner id="playwright" os="windows">
   <label>Playwright</label>
-  <description>Browser scaricati da Playwright. Non tocca progetti, test o report.</description>
+  <description>Browsers downloaded by Playwright. Does not touch projects, tests or reports.</description>
   <var id="browsers">
     <value>%PLAYWRIGHT_BROWSERS_PATH%</value>
     <value>%LocalAppData%\ms-playwright</value>
   </var>
   <option id="browsers">
-    <label>Browser di Playwright</label>
-    <description>Rimuove Chromium, Firefox, WebKit e gli altri browser scaricati da Playwright.</description>
-    <warning>Per riaverli rifai `npx playwright install`.</warning>
+    <label>Playwright browsers</label>
+    <description>Removes Chromium, Firefox, WebKit and the other browsers downloaded by Playwright.</description>
+    <warning>To get them back, run `npx playwright install` again.</warning>
     <action command="delete" search="walk.all" path="$$browsers$$"/>
   </option>
 </cleaner>

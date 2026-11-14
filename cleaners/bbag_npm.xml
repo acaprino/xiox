@@ -1,32 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- npm documented Windows default: %LocalAppData%\npm-cache. -->
 <cleaner id="bbag_npm" os="windows">
-  <label>npm e npx</label>
-  <description>Cache pacchetti, esecuzioni temporanee npx e log npm; non tocca progetti o node_modules.</description>
+  <label>npm and npx</label>
+  <description>Package cache, temporary npx runs and npm logs; does not touch projects or node_modules.</description>
   <running type="exe" os="windows" same_user="true">node.exe</running>
   <var id="custom_cache">
     <value>%npm_config_cache%</value>
   </var>
   <option id="downloads">
-    <label>Cache pacchetti npm</label>
-    <description>Rimuove la cache npm. Chiudi Node/npm e tieni presente che i pacchetti dovranno essere riscaricati.</description>
+    <label>npm package cache</label>
+    <description>Removes the npm cache. Close Node/npm; packages will have to be downloaded again.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\npm-cache\_cacache"/>
   </option>
   <option id="npx">
-    <label>Installazioni temporanee npx</label>
-    <description>Rimuove solo le copie temporanee dei pacchetti npx.</description>
-    <warning>Le future esecuzioni di npx potranno riscaricare pacchetti. Non usare durante l'esecuzione di npx.</warning>
+    <label>Temporary npx installs</label>
+    <description>Removes only the temporary copies of npx packages.</description>
+    <warning>Future npx runs may re-download packages. Do not use while npx is running.</warning>
     <action command="delete" search="walk.files" path="%LocalAppData%\npm-cache\_npx"/>
   </option>
   <option id="logs">
-    <label>Log npm</label>
-    <description>Rimuove i log di debug npm. Conserva eventuali log necessari a diagnosticare errori recenti.</description>
+    <label>npm logs</label>
+    <description>Removes npm debug logs. Keeps any logs needed to diagnose recent errors.</description>
     <action command="delete" search="glob" path="%LocalAppData%\npm-cache\_logs\*.log"/>
   </option>
   <option id="custom_cache">
-    <label>Cache npm in una cartella personalizzata</label>
-    <description>Rimuove cache dei pacchetti, copie temporanee npx e log nella cartella indicata dalla variabile npm_config_cache. Compare solo se la variabile è definita.</description>
-    <warning>I pacchetti dovranno essere riscaricati e le future esecuzioni di npx potranno riscaricare pacchetti. Non usare durante l'esecuzione di npm o npx.</warning>
+    <label>npm cache in a custom folder</label>
+    <description>Removes the package cache, temporary npx copies and logs in the folder set by the npm_config_cache variable. Appears only if the variable is defined.</description>
+    <warning>Packages will have to be downloaded again and future npx runs may re-download packages. Do not use while npm or npx is running.</warning>
     <action command="delete" search="walk.files" path="$$custom_cache$$\_cacache"/>
     <action command="delete" search="walk.files" path="$$custom_cache$$\_npx"/>
     <action command="delete" search="glob" path="$$custom_cache$$\_logs\*.log"/>

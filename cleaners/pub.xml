@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Percorsi da dart.dev/tools/pub/environment-variables (PUB_CACHE, %LOCALAPPDATA%\Pub\Cache) e da dart-lang/pub (system_cache.dart: una cartella per sorgente, hosted e git). bin e global_packages NON si toccano: sono i programmi installati con dart pub global activate. -->
 <cleaner id="pub" os="windows">
-  <label>Pub (Dart e Flutter)</label>
-  <description>Pacchetti Dart scaricati nella cache di Pub. Non tocca i programmi installati con dart pub global activate (bin, global_packages) né i progetti.</description>
+  <label>Pub (Dart and Flutter)</label>
+  <description>Dart packages downloaded to the Pub cache. Does not touch programs installed with dart pub global activate (bin, global_packages) or projects.</description>
   <var id="cache">
     <value>%PUB_CACHE%</value>
     <value>%LocalAppData%\Pub\Cache</value>
   </var>
   <option id="hosted">
-    <label>Pacchetti di pub.dev</label>
-    <description>Rimuove i pacchetti scaricati dai server di pacchetti (hosted).</description>
-    <warning>I progetti non compilano finché non rifai `dart pub get` o `flutter pub get`.</warning>
+    <label>pub.dev packages</label>
+    <description>Removes the packages downloaded from package servers (hosted).</description>
+    <warning>Projects will not build until you run `dart pub get` or `flutter pub get` again.</warning>
     <action command="delete" search="walk.all" path="$$cache$$\hosted"/>
   </option>
   <option id="git">
-    <label>Pacchetti da repository Git</label>
-    <description>Rimuove i repository Git scaricati come dipendenze (git).</description>
-    <warning>I progetti non compilano finché non rifai `dart pub get` o `flutter pub get`.</warning>
+    <label>Packages from Git repositories</label>
+    <description>Removes the Git repositories downloaded as dependencies (git).</description>
+    <warning>Projects will not build until you run `dart pub get` or `flutter pub get` again.</warning>
     <action command="delete" search="walk.all" path="$$cache$$\git"/>
   </option>
 </cleaner>

@@ -7,63 +7,63 @@
      Non incluse: «Cronologia moduli con completamento automatico» di Internet
      Explorer (chiave IntelliForms\Storage1 da verificare). -->
 <cleaner id="windows_extra" os="windows">
-  <label>Altre voci di Windows</label>
-  <description>Cronologia di Internet Explorer, elenchi dei file recenti di Esplora risorse e cache di sistema.</description>
+  <label>Other Windows items</label>
+  <description>Internet Explorer history, File Explorer recent-file lists and system caches.</description>
 
   <!-- 2.1 Internet Explorer -->
   <option id="ie_cache">
-    <label>Internet Explorer: file temporanei di Internet</label>
-    <description>Svuota la cache delle pagine usata da Internet Explorer e dalle app che usano i suoi componenti.</description>
+    <label>Internet Explorer: temporary Internet files</label>
+    <description>Empties the page cache used by Internet Explorer and by apps that use its components.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\Microsoft\Windows\INetCache\IE"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\Microsoft\Windows\INetCache\Low\IE"/>
   </option>
   <option id="ie_history">
-    <label>Internet Explorer: cronologia</label>
-    <description>Elimina la cronologia dei siti visitati e l'elenco della pagina Nuova scheda.</description>
+    <label>Internet Explorer: history</label>
+    <description>Deletes the history of visited sites and the New Tab page list.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\Microsoft\Windows\History"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\TabbedBrowsing\NewTabPage"/>
   </option>
   <option id="ie_cookies">
-    <label>Internet Explorer: cookie</label>
-    <description>Elimina i cookie di Internet Explorer e delle app che usano i suoi componenti.</description>
-    <warning>Nelle app che usano questi cookie dovrai accedere di nuovo ai siti. Nessun cookie viene conservato.</warning>
+    <label>Internet Explorer: cookies</label>
+    <description>Deletes the cookies of Internet Explorer and of apps that use its components.</description>
+    <warning>In apps that use these cookies you will have to sign in to the sites again. No cookie is kept.</warning>
     <action command="delete" search="walk.files" path="%LocalAppData%\Microsoft\Windows\INetCookies"/>
   </option>
   <option id="ie_typed_urls">
-    <label>Internet Explorer: URL digitati di recente</label>
-    <description>Elimina gli indirizzi digitati nella barra degli indirizzi e le ricerche recenti.</description>
+    <label>Internet Explorer: recently typed URLs</label>
+    <description>Deletes the addresses typed in the address bar and recent searches.</description>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\TypedURLs"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\TypedURLsTime"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\Explorer Bars\{C4EE31F3-4768-11D2-BE5C-00A0C9A83DA1}\FilesNamedMRU"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\Explorer Bars\{C4EE31F3-4768-11D2-BE5C-00A0C9A83DA1}\ContainingTextMRU"/>
   </option>
   <option id="ie_last_download">
-    <label>Internet Explorer: ultimo percorso di download</label>
-    <description>Dimentica l'ultima cartella usata per scaricare e salvare i file.</description>
+    <label>Internet Explorer: last download location</label>
+    <description>Forgets the last folder used to download and save files.</description>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer" name="Download Directory"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Internet Explorer\Main" name="Save Directory"/>
   </option>
 
   <!-- 2.3 Esplora risorse -->
   <option id="recent_docs">
-    <label>Documenti recenti</label>
-    <description>Svuota l'elenco dei file aperti di recente in Esplora risorse e nel menu Start.</description>
+    <label>Recent documents</label>
+    <description>Empties the list of recently opened files in File Explorer and the Start menu.</description>
     <action command="delete" search="glob" path="%AppData%\Microsoft\Windows\Recent\*.lnk"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs"/>
   </option>
   <option id="run_mru">
-    <label>Esegui (nel menu Start)</label>
-    <description>Elimina i comandi digitati di recente nella finestra Esegui.</description>
+    <label>Run (in the Start menu)</label>
+    <description>Deletes the commands recently typed in the Run window.</description>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"/>
   </option>
   <option id="search_assistant">
-    <label>Completamento automatico Assistente ricerca</label>
-    <description>Elimina le ricerche recenti dell'Assistente ricerca delle versioni precedenti di Windows.</description>
+    <label>Search Assistant autocomplete</label>
+    <description>Deletes the recent searches of the Search Assistant in older versions of Windows.</description>
     <action command="winreg" path="HKCU\Software\Microsoft\Search Assistant\ACMru"/>
   </option>
   <option id="explorer_mrus">
-    <label>Altri elenchi recenti di Esplora risorse</label>
-    <description>Elimina i file recenti delle finestre Apri e Salva, le ricerche di computer, le porte delle stampanti, le unità di rete connesse di recente e le descrizioni dei computer.</description>
+    <label>Other File Explorer recent lists</label>
+    <description>Deletes the recent files of the Open and Save windows, computer searches, printer ports, recently connected network drives and computer descriptions.</description>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FindComputerMRU"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\PrnPortsMRU"/>
@@ -74,47 +74,47 @@
 
   <!-- 2.4 Sistema -->
   <option id="chkdsk">
-    <label>Frammenti file di chkdsk</label>
-    <description>Elimina i frammenti di file recuperati da Controllo disco nella radice del disco di sistema e nelle cartelle FOUND.</description>
+    <label>chkdsk file fragments</label>
+    <description>Deletes the file fragments recovered by Check Disk in the root of the system drive and in the FOUND folders.</description>
     <action command="delete" search="glob" path="%SystemDrive%\FILE*.CHK"/>
     <action command="delete" search="glob" path="%SystemDrive%\FOUND.*\FILE*.CHK"/>
   </option>
 
   <!-- 2.5 Avanzate -->
   <option id="menu_order">
-    <label>Cache ordine menu</label>
-    <description>Azzera l'ordine personalizzato delle voci nei menu di Windows.</description>
-    <warning>L'ordine delle voci nei menu torna quello predefinito.</warning>
+    <label>Menu order cache</label>
+    <description>Resets the custom order of items in Windows menus.</description>
+    <warning>The order of items in menus goes back to the default.</warning>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MenuOrder"/>
   </option>
   <option id="tray_notify">
-    <label>Cache notifiche area di sistema</label>
-    <description>Azzera l'elenco delle icone dell'area di notifica, anche dei programmi disinstallati.</description>
-    <warning>Le scelte su quali icone mostrare nell'area di notifica tornano quelle iniziali.</warning>
+    <label>System tray notification cache</label>
+    <description>Resets the list of notification area icons, including those of uninstalled programs.</description>
+    <warning>The choices about which icons to show in the notification area go back to the initial ones.</warning>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TrayNotify" name="IconStreams"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\TrayNotify" name="PastIconsStream"/>
     <action command="winreg" path="HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify" name="IconStreams"/>
     <action command="winreg" path="HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify" name="PastIconsStream"/>
   </option>
   <option id="window_cache">
-    <label>Cache dimensione e posizione finestre</label>
-    <description>Azzera le dimensioni e le posizioni delle finestre ricordate da Esplora risorse.</description>
-    <warning>Le finestre di Esplora risorse si riaprono con dimensioni e posizioni predefinite.</warning>
+    <label>Window size and position cache</label>
+    <description>Resets the window sizes and positions remembered by File Explorer.</description>
+    <warning>File Explorer windows reopen with default sizes and positions.</warning>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StreamMRU"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Streams"/>
   </option>
   <option id="user_assist">
-    <label>Cronologia assistenza utente</label>
-    <description>Azzera il conteggio dei programmi usati più spesso, che Windows usa nel menu Start.</description>
-    <warning>L'elenco dei programmi più usati del menu Start riparte da zero.</warning>
+    <label>User assist history</label>
+    <description>Resets the count of most-used programs, which Windows uses in the Start menu.</description>
+    <warning>The Start menu's most-used programs list starts over from zero.</warning>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{5E6AB780-7743-11CF-A12B-00AA004AE837}\Count"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{75048700-EF1F-11D0-9888-006097DEACF9}\Count"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count"/>
     <action command="winreg" path="HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{F4E57C4B-2036-45F0-A9AB-443BCFE33D9F}\Count"/>
   </option>
   <option id="iis_logs">
-    <label>File di log di IIS</label>
-    <description>Elimina i registri del server web IIS nella cartella inetpub.</description>
+    <label>IIS log files</label>
+    <description>Deletes the IIS web server logs in the inetpub folder.</description>
     <action command="delete" search="walk.files" path="%SystemDrive%\inetpub\logs\LogFiles"/>
   </option>
 </cleaner>

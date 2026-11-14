@@ -374,7 +374,7 @@ fn warnings_and_running_processes() {
 }
 
 #[test]
-fn visible_texts_are_clean_italian() {
+fn visible_texts_are_clean() {
     let env = real_like_env();
     for (name, xml) in XMLS {
         assert!(!xml.to_lowercase().contains("bleachbit"), "{name}");

@@ -2,16 +2,16 @@
 <!-- Conan 2: cartella p della cache (CONAN_HOME o %USERPROFILE%\.conan2). Contiene anche il database cache.sqlite3,
      che va tolto insieme ai pacchetti. Il resto della home (profili, global.conf, remote) non si tocca. -->
 <cleaner id="conan" os="windows">
-  <label>Cache di Conan</label>
-  <description>Ricette e pacchetti binari nella cache locale di Conan. Non tocca profili, impostazioni e remote.</description>
+  <label>Conan cache</label>
+  <description>Recipes and binary packages in Conan's local cache. Does not touch profiles, settings or remotes.</description>
   <var id="conan_packages">
     <value>%CONAN_HOME%\p</value>
     <value>%USERPROFILE%\.conan2\p</value>
   </var>
   <option id="packages">
-    <label>Pacchetti nella cache di Conan</label>
-    <description>Rimuove ricette, sorgenti e binari dei pacchetti dalla cache locale (cartella p), con il suo database.</description>
-    <warning>I pacchetti creati con `conan create` esistono solo qui e non si possono riscaricare. Quelli presi da un remote si riscaricano con `conan install`. Chiudi Conan prima di pulire.</warning>
+    <label>Packages in the Conan cache</label>
+    <description>Removes recipes, sources and binaries of the packages from the local cache (p folder), along with its database.</description>
+    <warning>Packages built with `conan create` exist only here and cannot be re-downloaded. Those fetched from a remote are re-downloaded with `conan install`. Close Conan before cleaning.</warning>
     <action command="delete" search="walk.all" path="$$conan_packages$$"/>
   </option>
 </cleaner>

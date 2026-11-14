@@ -2,15 +2,15 @@
 <!-- Percorso da docs.cypress.io (installazione avanzata, cache dei binari): AppData\Local\Cypress\Cache, sostituibile con CYPRESS_CACHE_FOLDER. -->
 <cleaner id="cypress" os="windows">
   <label>Cypress</label>
-  <description>Binari di Cypress scaricati. Non tocca progetti, test, video o schermate.</description>
+  <description>Downloaded Cypress binaries. Does not touch projects, tests, videos or screenshots.</description>
   <var id="cache">
     <value>%CYPRESS_CACHE_FOLDER%</value>
     <value>%LocalAppData%\Cypress\Cache</value>
   </var>
   <option id="binary">
-    <label>Binari di Cypress</label>
-    <description>Rimuove le versioni di Cypress scaricate nella cache dei binari.</description>
-    <warning>Per riaverli rifai `npx cypress install`.</warning>
+    <label>Cypress binaries</label>
+    <description>Removes the Cypress versions downloaded to the binary cache.</description>
+    <warning>To get them back, run `npx cypress install` again.</warning>
     <action command="delete" search="walk.all" path="$$cache$$"/>
   </option>
 </cleaner>

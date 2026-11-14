@@ -199,7 +199,7 @@ fn every_xml_parses_with_every_option_supported() {
         assert_eq!(*xml_id, id);
         let c = load(id, &full);
         assert_eq!(c.id, id);
-        assert_eq!(c.group, "Sviluppo e AI");
+        assert_eq!(c.group, "Development & AI");
         assert_eq!(option_ids(&c), ids.to_vec(), "{id}: opzioni");
         assert!(!c.label.trim().is_empty() && !c.description.trim().is_empty(), "{id}");
         for o in &c.options {
@@ -266,7 +266,7 @@ fn warnings_are_present_where_the_table_asks_for_them() {
             .unwrap_or_else(|| panic!("{cleaner}/{option}: manca l'avviso"))
     };
     // Avvisi espliciti della colonna Note.
-    assert!(warning("bbag_go", "modules").contains("sola lettura"));
+    assert!(warning("bbag_go", "modules").contains("read-only"));
     assert!(warning("conan", "packages").contains("conan create"));
     assert!(warning("vagrant", "boxes").contains("vagrant box add"));
     // Voci che si riscaricano (D): l'avviso dice come riaverle.
@@ -314,7 +314,7 @@ fn running_processes_block_the_cleaners_that_the_table_names() {
 }
 
 #[test]
-fn visible_texts_are_clean_italian() {
+fn visible_texts_are_clean() {
     let full = full_env(Path::new(r"C:\Users\t"));
     for (id, xml) in XMLS {
         let low = xml.to_lowercase();
@@ -330,9 +330,6 @@ fn visible_texts_are_clean_italian() {
         for t in texts {
             let low = t.to_lowercase();
             for bad in [
-                "downloads",
-                "build cache",
-                "package cache",
                 "sara piu",
                 "possibilita",
                 "puo ",
@@ -466,7 +463,7 @@ fn go_module_cache_read_only_files_are_listed_and_not_skipped() {
     let got = collect(option_of(&c, "modules"), &env, &|_| false);
     assert_eq!(got.files.len(), 1);
     assert_eq!(got.skipped, 0, "{:?}", got.skipped_reasons);
-    assert!(option_of(&c, "modules").warning.as_deref().unwrap().contains("sola lettura"));
+    assert!(option_of(&c, "modules").warning.as_deref().unwrap().contains("read-only"));
 
     // Lascia il file cancellabile alla pulizia della cartella temporanea.
     let mut perm = fs::metadata(&file).unwrap().permissions();

@@ -2,23 +2,23 @@
 <!-- CleanerML: definizioni Windows; ogni opzione va selezionata esplicitamente. -->
 <cleaner id="ai_opencode" os="windows">
   <label>OpenCode (AI)</label>
-  <description>Cache, log e archivi delle sessioni vecchie. OpenCode V2 usa SQLite.</description>
+  <description>Cache, logs and archives of old sessions. OpenCode V2 uses SQLite.</description>
   <running type="exe" os="windows" same_user="true">opencode.exe</running>
   <option id="cache">
-    <label>Cache pacchetti e modelli</label>
-    <description>Elimina la cache globale di OpenCode, anche dipendenze scaricate che saranno ricreate.</description>
-    <warning>Al riavvio OpenCode può riscaricare pacchetti, plugin e strumenti gestiti.</warning>
+    <label>Package and model cache</label>
+    <description>Deletes OpenCode's global cache, including downloaded dependencies that will be recreated.</description>
+    <warning>On restart OpenCode may re-download packages, plugins and managed tools.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.cache\opencode"/>
   </option>
   <option id="logs">
-    <label>Log dell'applicazione</label>
-    <description>Elimina i log sotto la cartella dati di OpenCode.</description>
+    <label>Application logs</label>
+    <description>Deletes the logs under OpenCode's data folder.</description>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.local\share\opencode\log"/>
   </option>
   <option id="legacy_sessions">
-    <label>Sessioni V1 / precedenti (avanzato)</label>
-    <description>Elimina la vecchia cartella project contenente sessioni e messaggi V1.</description>
-    <warning>Elimina i dati dei progetti della versione 1. La V2 usa SQLite: NON eliminare opencode.db perché contiene anche credenziali; usa opencode session delete ID.</warning>
+    <label>V1 / legacy sessions (advanced)</label>
+    <description>Deletes the old project folder containing V1 sessions and messages.</description>
+    <warning>Deletes the version 1 project data. V2 uses SQLite: do NOT delete opencode.db, as it also holds credentials; use opencode session delete ID.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.local\share\opencode\project"/>
   </option>
 </cleaner>

@@ -2,11 +2,11 @@
 <!-- Percorso dal sorgente di firebase-tools (src/emulator/downloadableEmulators.ts): ~/.cache/firebase/emulators. -->
 <cleaner id="firebase" os="windows">
   <label>Firebase</label>
-  <description>Emulatori di Firebase scaricati dalla CLI. Non tocca progetti, accessi o dati esportati.</description>
+  <description>Firebase emulators downloaded by the CLI. Does not touch projects, logins or exported data.</description>
   <option id="emulators">
-    <label>Emulatori Firebase</label>
-    <description>Rimuove i file degli emulatori scaricati. Gli export dei dati restano dove li ha salvati l'utente.</description>
-    <warning>Si riscaricano alla prossima esecuzione degli emulatori (`firebase emulators:start`).</warning>
+    <label>Firebase emulators</label>
+    <description>Removes the downloaded emulator files. Data exports stay where the user saved them.</description>
+    <warning>Re-downloaded the next time the emulators run (`firebase emulators:start`).</warning>
     <action command="delete" search="walk.all" path="%UserProfile%\.cache\firebase\emulators"/>
   </option>
 </cleaner>

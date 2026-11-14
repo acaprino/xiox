@@ -6,16 +6,16 @@
      le password salvate (portachiavi Apple). -->
 <cleaner id="safari" os="windows">
   <label>Safari</label>
-  <description>Cache, cronologia e moduli salvati di Safari per Windows.</description>
+  <description>Cache, history and saved forms of Safari for Windows.</description>
   <running type="exe" os="windows" same_user="true">Safari.exe</running>
   <option id="cache">
-    <label>Cache Internet</label>
-    <description>Elimina la cache delle pagine visitate.</description>
+    <label>Internet cache</label>
+    <description>Deletes the cache of visited pages.</description>
     <action command="delete" search="file" path="%LocalAppData%\Apple Computer\Safari\Cache.db"/>
   </option>
   <option id="history">
-    <label>Cronologia Internet</label>
-    <description>Elimina la cronologia, l'ultima sessione, i siti più visitati, l'elenco dei download e le anteprime delle pagine.</description>
+    <label>Internet history</label>
+    <description>Deletes the history, the last session, the top sites, the download list and the page previews.</description>
     <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\History.plist"/>
     <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\LastSession.plist"/>
     <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\TopSites.plist"/>
@@ -24,8 +24,8 @@
     <action command="delete" search="walk.all" path="%LocalAppData%\Apple Computer\Safari\Webpage Previews"/>
   </option>
   <option id="forms">
-    <label>Informazioni moduli salvate</label>
-    <description>Elimina i dati inseriti nei moduli delle pagine web.</description>
+    <label>Saved form information</label>
+    <description>Deletes the data entered in web page forms.</description>
     <action command="delete" search="file" path="%AppData%\Apple Computer\Safari\Form Values.plist"/>
   </option>
 </cleaner>

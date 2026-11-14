@@ -178,7 +178,7 @@ fn every_xml_reads_with_no_warnings_and_expected_options() {
     for (name, ids) in want {
         let c = fake.cleaner(name);
         assert_eq!(c.id, name);
-        assert_eq!(c.group, "Sviluppo e AI");
+        assert_eq!(c.group, "Development & AI");
         let got: Vec<&str> = c.options.iter().map(|o| o.id.as_str()).collect();
         assert_eq!(got, ids, "{name}: opzioni");
         for o in &c.options {
@@ -217,13 +217,13 @@ fn warnings_name_the_command_to_get_the_files_back() {
         ("puppeteer", "browsers", "npm install"),
         ("cypress", "binary", "npx cypress install"),
         ("firebase", "emulators", "firebase emulators:start"),
-        ("huggingface", "hub", "Si riscaricano"),
-        ("huggingface", "datasets", "Si riscaricano"),
+        ("huggingface", "hub", "Re-downloaded"),
+        ("huggingface", "datasets", "Re-downloaded"),
         ("pytorch", "hub", "torch.hub.load"),
-        ("keras", "datasets", "Si riscaricano"),
-        ("keras", "models", "Si riscaricano"),
+        ("keras", "datasets", "Re-downloaded"),
+        ("keras", "models", "Re-downloaded"),
         ("ollama", "models", "ollama pull"),
-        ("bbag_npm", "custom_cache", "riscaricati"),
+        ("bbag_npm", "custom_cache", "downloaded again"),
     ];
     for (name, option, needle) in cases {
         let c = fake.cleaner(name);

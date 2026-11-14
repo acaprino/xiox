@@ -3,16 +3,16 @@
      (la documentazione dà come base %HOME%, se definita, altrimenti %USERPROFILE%).
      Il nome contiene l'utente: si usa %USERNAME%. -->
 <cleaner id="bazel" os="windows">
-  <label>Cache di Bazel</label>
-  <description>Radice di output di Bazel: risultati delle compilazioni, dipendenze esterne e file di installazione di tutti i workspace.</description>
+  <label>Bazel cache</label>
+  <description>Bazel output root: build results, external dependencies and install files of all workspaces.</description>
   <running type="exe" os="windows" same_user="true">bazel.exe</running>
   <var id="bazel_output_root">
     <value>%USERPROFILE%\_bazel_%USERNAME%</value>
   </var>
   <option id="output_root">
-    <label>Radice di output di Bazel</label>
-    <description>Rimuove tutto lo stato di compilazione di Bazel per l'utente, come `bazel clean --expunge` su tutti i workspace.</description>
-    <warning>La prossima compilazione riparte da zero e riscarica le dipendenze esterne: può richiedere molto tempo. Chiudi il server Bazel (`bazel shutdown`) prima di pulire.</warning>
+    <label>Bazel output root</label>
+    <description>Removes all of Bazel's build state for the user, like `bazel clean --expunge` on every workspace.</description>
+    <warning>The next build starts from scratch and re-downloads external dependencies, which can take a long time. Shut down the Bazel server (`bazel shutdown`) before cleaning.</warning>
     <action command="delete" search="walk.all" path="$$bazel_output_root$$"/>
   </option>
 </cleaner>

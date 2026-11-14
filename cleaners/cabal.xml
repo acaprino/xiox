@@ -2,11 +2,11 @@
 <!-- Cabal: solo la cartella packages. Nella stessa cartella %LocalAppData%\cabal vive lo store
      delle librerie compilate, che non si tocca. -->
 <cleaner id="cabal" os="windows">
-  <label>Cache di Cabal</label>
-  <description>Pacchetti Haskell scaricati da Cabal. Non tocca lo store delle librerie compilate né la configurazione.</description>
+  <label>Cabal cache</label>
+  <description>Haskell packages downloaded by Cabal. Does not touch the compiled-library store or the configuration.</description>
   <option id="packages">
-    <label>Pacchetti scaricati da Cabal</label>
-    <description>Rimuove gli archivi dei pacchetti e gli indici dei repository scaricati da Cabal.</description>
+    <label>Packages downloaded by Cabal</label>
+    <description>Removes the package archives and repository indexes downloaded by Cabal.</description>
     <action command="delete" search="walk.all" path="%APPDATA%\cabal\packages"/>
     <action command="delete" search="walk.all" path="%LOCALAPPDATA%\cabal\packages"/>
   </option>

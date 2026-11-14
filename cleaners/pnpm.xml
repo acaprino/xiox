@@ -2,16 +2,16 @@
 <!-- Percorsi di Windows da pnpm.io (impostazioni storeDir e cacheDir). Nessun file di configurazione o di credenziali (auth.ini). -->
 <cleaner id="pnpm" os="windows">
   <label>pnpm</label>
-  <description>Store dei pacchetti e cache dei metadati di pnpm. Non tocca progetti, node_modules, configurazione o credenziali.</description>
+  <description>pnpm package store and metadata cache. Does not touch projects, node_modules, configuration or credentials.</description>
   <option id="store">
-    <label>Store dei pacchetti pnpm</label>
-    <description>Rimuove lo store globale in cui pnpm conserva i pacchetti scaricati.</description>
-    <warning>Si riscarica al prossimo `pnpm install`; i node_modules esistenti restano validi (sono hard link).</warning>
+    <label>pnpm package store</label>
+    <description>Removes the global store where pnpm keeps downloaded packages.</description>
+    <warning>Re-downloaded on the next `pnpm install`; existing node_modules stay valid (they are hard links).</warning>
     <action command="delete" search="walk.all" path="%LocalAppData%\pnpm\store"/>
   </option>
   <option id="cache">
-    <label>Cache dei metadati pnpm</label>
-    <description>Rimuove la cache dei metadati dei pacchetti, di dlx e di alcune verifiche di installazione.</description>
+    <label>pnpm metadata cache</label>
+    <description>Removes the package metadata cache, the dlx cache and some install checks.</description>
     <action command="delete" search="walk.all" path="%LocalAppData%\pnpm-cache"/>
   </option>
 </cleaner>

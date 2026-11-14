@@ -2,18 +2,18 @@
 <!-- Percorsi da python-poetry.org/docs/configuration (cache-dir, virtualenvs.path) e da src/poetry/config/config.py: cache\repositories e artifacts. -->
 <cleaner id="poetry" os="windows">
   <label>Poetry (Python)</label>
-  <description>Cache di Poetry e, come opzione separata, gli ambienti virtuali che crea. Non tocca i progetti né la configurazione.</description>
+  <description>Poetry cache and, as a separate option, the virtual environments it creates. Does not touch projects or configuration.</description>
   <option id="cache">
-    <label>Cache di Poetry</label>
-    <description>Rimuove i metadati dei repository e i pacchetti scaricati (artifacts).</description>
-    <warning>Si riscarica al prossimo `poetry install`.</warning>
+    <label>Poetry cache</label>
+    <description>Removes the repository metadata and downloaded packages (artifacts).</description>
+    <warning>Re-downloaded on the next `poetry install`.</warning>
     <action command="delete" search="walk.all" path="%LocalAppData%\pypoetry\Cache\cache"/>
     <action command="delete" search="walk.all" path="%LocalAppData%\pypoetry\Cache\artifacts"/>
   </option>
   <option id="virtualenvs">
-    <label>Ambienti virtuali di Poetry</label>
-    <description>Rimuove tutti gli ambienti virtuali creati da Poetry nella cartella predefinita.</description>
-    <warning>I progetti che li usano smettono di funzionare finché non rifai `poetry install` in ognuno.</warning>
+    <label>Poetry virtual environments</label>
+    <description>Removes all the virtual environments created by Poetry in the default folder.</description>
+    <warning>The projects that use them stop working until you run `poetry install` again in each one.</warning>
     <action command="delete" search="walk.all" path="%LocalAppData%\pypoetry\Cache\virtualenvs"/>
   </option>
 </cleaner>

@@ -2,17 +2,17 @@
 <!-- Percorsi da maven.apache.org/settings.html (localRepository predefinito ${user.home}/.m2/repository) e da apache/maven-wrapper (only-mvnw.cmd: ~/.m2/wrapper/dists). settings.xml NON si tocca. -->
 <cleaner id="maven" os="windows">
   <label>Maven (Java)</label>
-  <description>Repository locale e distribuzioni scaricate dal wrapper di Maven. Non tocca settings.xml né i progetti.</description>
+  <description>Local repository and distributions downloaded by the Maven wrapper. Does not touch settings.xml or projects.</description>
   <option id="repository">
-    <label>Repository locale di Maven</label>
-    <description>Rimuove tutti gli artefatti della cartella .m2\repository: dipendenze scaricate e artefatti installati in locale.</description>
-    <warning>Le dipendenze si riscaricano al prossimo build. Gli artefatti installati con `mvn install` esistono solo in questa cartella e vanno persi: se non li hai pubblicati altrove, rifai `mvn install` dal loro progetto.</warning>
+    <label>Maven local repository</label>
+    <description>Removes all the artifacts in the .m2\repository folder: downloaded dependencies and locally installed artifacts.</description>
+    <warning>Dependencies are re-downloaded on the next build. Artifacts installed with `mvn install` exist only in this folder and are lost: if you have not published them elsewhere, run `mvn install` again from their project.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.m2\repository"/>
   </option>
   <option id="wrapper_dists">
-    <label>Distribuzioni del wrapper di Maven</label>
-    <description>Rimuove le versioni di Maven scaricate da mvnw.</description>
-    <warning>Si riscaricano alla prossima esecuzione di `mvnw`.</warning>
+    <label>Maven wrapper distributions</label>
+    <description>Removes the Maven versions downloaded by mvnw.</description>
+    <warning>Re-downloaded the next time `mvnw` runs.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.m2\wrapper\dists"/>
   </option>
 </cleaner>

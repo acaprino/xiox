@@ -2,47 +2,47 @@
 <!-- CleanerML: definizioni Windows; ogni opzione va selezionata esplicitamente. -->
 <cleaner id="ai_claude_code" os="windows">
   <label>Claude Code (AI)</label>
-  <description>Pulizia selettiva di cache, prompt, log, trascrizioni e checkpoint.</description>
+  <description>Selective cleanup of cache, prompts, logs, transcripts and checkpoints.</description>
   <running type="exe" os="windows" same_user="true">claude.exe</running>
   <option id="cache">
-    <label>Cache temporanea</label>
-    <description>Elimina cache rigenerabili e immagini locali obsolete.</description>
+    <label>Temporary cache</label>
+    <description>Deletes regenerable caches and stale local images.</description>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\cache"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\image-cache"/>
   </option>
   <option id="logs">
-    <label>Log e diagnostica</label>
-    <description>Elimina log di debug, telemetria e file diagnostici.</description>
+    <label>Logs and diagnostics</label>
+    <description>Deletes debug logs, telemetry and diagnostic files.</description>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\debug"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\logs"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\telemetry"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\statsig"/>
   </option>
   <option id="prompt_history">
-    <label>Cronologia prompt</label>
-    <description>Elimina la cronologia dei prompt e i contenuti delle grandi testi incollati.</description>
-    <warning>Perderai la ricerca e il recupero dei prompt precedenti.</warning>
+    <label>Prompt history</label>
+    <description>Deletes the prompt history and the contents of large pasted texts.</description>
+    <warning>You will lose search and recall of earlier prompts.</warning>
     <action command="delete" search="file" path="%USERPROFILE%\.claude\history.jsonl"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\paste-cache"/>
   </option>
   <option id="transcripts">
-    <label>Trascrizioni delle sessioni</label>
-    <description>Elimina i file JSONL delle conversazioni nei progetti, senza eliminare le memorie Markdown.</description>
-    <warning>Non potrai riprendere le conversazioni eliminate. Restano eventuali metadati e file ausiliari. Per una rimozione coerente di tutti i dati usa claude purge.</warning>
+    <label>Session transcripts</label>
+    <description>Deletes the conversation JSONL files in the projects, keeping the Markdown memories.</description>
+    <warning>Deleted conversations cannot be resumed. Any metadata and auxiliary files remain. To remove all data consistently, use claude purge.</warning>
     <action command="delete" search="walk.files" path="%USERPROFILE%\.claude\projects" regex="\.jsonl($|\.)" type="f"/>
   </option>
   <option id="checkpoints">
-    <label>Checkpoint e task</label>
-    <description>Elimina snapshot e piani delle sessioni precedenti.</description>
-    <warning>Perderai la possibilità di ripristinare modifiche e riprendere task dai checkpoint.</warning>
+    <label>Checkpoints and tasks</label>
+    <description>Deletes snapshots and plans of earlier sessions.</description>
+    <warning>You will lose the ability to restore changes and resume tasks from checkpoints.</warning>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\file-history"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\plans"/>
     <action command="delete" search="walk.all" path="%USERPROFILE%\.claude\tasks"/>
   </option>
   <option id="temp">
-    <label>Scratchpad e allegati temporanei</label>
-    <description>Elimina file temporanei e scratchpad nelle sessioni Claude.</description>
-    <warning>Gli scratchpad possono contenere bozze, immagini e script non ancora salvati nel progetto.</warning>
+    <label>Scratchpads and temporary attachments</label>
+    <description>Deletes temporary files and scratchpads in Claude sessions.</description>
+    <warning>Scratchpads may contain drafts, images and scripts not yet saved in the project.</warning>
     <action command="delete" search="walk.all" path="%TEMP%\claude"/>
   </option>
 </cleaner>

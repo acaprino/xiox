@@ -181,11 +181,11 @@ mod tests {
     }
 
     #[test]
-    fn embedded_xml_have_no_english_leftovers() {
+    fn embedded_xml_have_no_italian_leftovers() {
         let (cleaners, _) = load();
         for t in all_texts(&cleaners) {
             let low = t.to_lowercase();
-            for bad in ["downloads", "build cache", "package cache"] {
+            for bad in ["cartella", "rimuove", "elimina", "riscaric", "cache di ", "pulisci", "chiudi "] {
                 assert!(!low.contains(bad), "«{bad}» in «{t}»");
             }
         }
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_italian_wording() {
+    fn reviewed_wording() {
         let all: String = CLEANERS.iter().map(|(_, x)| *x).collect();
         for bad in [
             "incollature",
@@ -258,12 +258,10 @@ mod tests {
             "Trascrizioni sessioni",
             "Checkpoint snapshot",
             "sessioni legacy",
-            "V1 / legacy",
             "Log applicazione",
             "Distrugge dati",
             "a supporto tecnico",
             "al successivo build",
-            "le build",
             "Cache di build",
         ] {
             assert!(!all.contains(bad), "testo da correggere ancora presente: «{bad}»");

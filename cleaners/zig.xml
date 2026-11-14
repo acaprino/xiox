@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Zig: cache globale (ZIG_GLOBAL_CACHE_DIR o %LocalAppData%\zig). -->
 <cleaner id="zig" os="windows">
-  <label>Cache di Zig</label>
-  <description>Cache globale del compilatore Zig: oggetti compilati e dipendenze scaricate.</description>
+  <label>Zig cache</label>
+  <description>Zig compiler global cache: compiled objects and downloaded dependencies.</description>
   <var id="zig_cache">
     <value>%ZIG_GLOBAL_CACHE_DIR%</value>
     <value>%LOCALAPPDATA%\zig</value>
   </var>
   <option id="global_cache">
-    <label>Cache globale di Zig</label>
-    <description>Rimuove oggetti compilati e pacchetti scaricati dalla cache globale di Zig.</description>
-    <warning>Le dipendenze si riscaricano al prossimo `zig build`: serve la rete, e la prima compilazione sarà più lenta.</warning>
+    <label>Zig global cache</label>
+    <description>Removes compiled objects and downloaded packages from Zig's global cache.</description>
+    <warning>Dependencies are re-downloaded on the next `zig build`: network required, and the first build will be slower.</warning>
     <action command="delete" search="walk.all" path="$$zig_cache$$"/>
   </option>
 </cleaner>

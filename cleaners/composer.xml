@@ -3,8 +3,8 @@
      o %LocalAppData%\Composer. Così config.json e auth.json non entrano mai, nemmeno quando la cache
      è stata messa nella stessa cartella di COMPOSER_HOME. Il vendor globale non si tocca. -->
 <cleaner id="composer" os="windows">
-  <label>Cache di Composer</label>
-  <description>Archivi dei pacchetti, metadati dei repository e cloni VCS nella cache di Composer. Non tocca config.json, auth.json né i pacchetti globali.</description>
+  <label>Composer cache</label>
+  <description>Package archives, repository metadata and VCS clones in Composer's cache. Does not touch config.json, auth.json or global packages.</description>
   <var id="composer_files">
     <value>%COMPOSER_CACHE_DIR%\files</value>
     <value>%LOCALAPPDATA%\Composer\files</value>
@@ -18,9 +18,9 @@
     <value>%LOCALAPPDATA%\Composer\vcs</value>
   </var>
   <option id="cache">
-    <label>Cache di Composer</label>
-    <description>Rimuove archivi zip dei pacchetti (files), metadati dei repository (repo) e cloni VCS (vcs).</description>
-    <warning>I pacchetti si riscaricano al prossimo `composer install` o `composer update`: serve la rete.</warning>
+    <label>Composer cache</label>
+    <description>Removes package zip archives (files), repository metadata (repo) and VCS clones (vcs).</description>
+    <warning>Packages are re-downloaded on the next `composer install` or `composer update`: network required.</warning>
     <action command="delete" search="walk.all" path="$$composer_files$$"/>
     <action command="delete" search="walk.all" path="$$composer_repo$$"/>
     <action command="delete" search="walk.all" path="$$composer_vcs$$"/>

@@ -2,7 +2,7 @@
 <!-- Percorsi da docs.conda.io (pkgs_dirs, CONDA_PKGS_DIRS: la cache dell'installazione base è <radice>\pkgs), dalle FAQ di Anaconda (Anaconda3, Miniconda3 nel profilo) e dal README di Miniforge (miniforge3). Gli ambienti (envs) NON si toccano. -->
 <cleaner id="conda" os="windows">
   <label>Conda (Python)</label>
-  <description>Pacchetti scaricati ed estratti da Conda (cartella pkgs). Non tocca gli ambienti (envs) né le configurazioni.</description>
+  <description>Packages downloaded and extracted by Conda (pkgs folder). Does not touch the environments (envs) or the configurations.</description>
   <var id="pkgs">
     <value>%CONDA_PKGS_DIRS%</value>
     <value>%USERPROFILE%\miniconda3\pkgs</value>
@@ -10,9 +10,9 @@
     <value>%USERPROFILE%\miniforge3\pkgs</value>
   </var>
   <option id="pkgs">
-    <label>Pacchetti di Conda</label>
-    <description>Rimuove gli archivi e i pacchetti estratti nella cartella pkgs delle installazioni Miniconda, Anaconda e Miniforge.</description>
-    <warning>Si riscaricano al prossimo `conda install` o `conda create`. Gli ambienti esistenti non vengono toccati.</warning>
+    <label>Conda packages</label>
+    <description>Removes the archives and extracted packages in the pkgs folder of Miniconda, Anaconda and Miniforge installations.</description>
+    <warning>Re-downloaded on the next `conda install` or `conda create`. Existing environments are not touched.</warning>
     <action command="delete" search="walk.all" path="$$pkgs$$"/>
   </option>
 </cleaner>

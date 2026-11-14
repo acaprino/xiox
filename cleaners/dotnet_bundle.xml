@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Percorso da learn.microsoft.com/dotnet/core/deploying/single-file/overview: DOTNET_BUNDLE_EXTRACT_BASE_DIR, altrimenti %TEMP%\.net. -->
 <cleaner id="dotnet_bundle" os="windows">
-  <label>Applicazioni .NET a file singolo</label>
-  <description>File estratti all'avvio dalle applicazioni .NET pubblicate come file singolo.</description>
+  <label>Single-file .NET applications</label>
+  <description>Files extracted at startup by .NET applications published as a single file.</description>
   <var id="extract">
     <value>%DOTNET_BUNDLE_EXTRACT_BASE_DIR%</value>
     <value>%TEMP%\.net</value>
   </var>
   <option id="extract">
-    <label>File estratti dalle applicazioni a file singolo</label>
-    <description>Rimuove le cartelle in cui le applicazioni .NET a file singolo estraggono le librerie all'avvio.</description>
-    <warning>Chiudi le applicazioni .NET a file singolo in esecuzione: le librerie vengono estratte di nuovo al prossimo avvio.</warning>
+    <label>Files extracted by single-file applications</label>
+    <description>Removes the folders where single-file .NET applications extract their libraries at startup.</description>
+    <warning>Close any running single-file .NET applications: the libraries are extracted again at the next launch.</warning>
     <action command="delete" search="walk.all" path="$$extract$$"/>
   </option>
 </cleaner>

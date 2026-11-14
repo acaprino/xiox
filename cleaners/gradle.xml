@@ -2,38 +2,38 @@
 <!-- Percorsi da docs.gradle.org/current/userguide/directory_layout.html (caches, daemon, wrapper/dists, jdks), da gradle_daemon.html (daemon-pid.out.log in daemon/versione) e dai sorgenti di Gradle (NativeServices: GRADLE_USER_HOME/native). gradle.properties e init.d NON si toccano. -->
 <cleaner id="gradle" os="windows">
   <label>Gradle (Java, Kotlin, Android)</label>
-  <description>Cache, distribuzioni, librerie native, JDK e log dei daemon nella cartella utente di Gradle. Non tocca gradle.properties, gli script init.d e i progetti.</description>
+  <description>Caches, distributions, native libraries, JDKs and daemon logs in the Gradle user folder. Does not touch gradle.properties, the init.d scripts or projects.</description>
   <running type="exe" os="windows" same_user="true">gradle.exe</running>
   <var id="home">
     <value>%GRADLE_USER_HOME%</value>
     <value>%USERPROFILE%\.gradle</value>
   </var>
   <option id="caches">
-    <label>Cache di Gradle</label>
-    <description>Rimuove le dipendenze scaricate, le cache di build e gli script compilati nella cartella caches.</description>
-    <warning>Chiudi i daemon con `gradle --stop` e gli IDE prima di pulire. Dipendenze e plugin si riscaricano e gli script si ricompilano alla prossima build: la prima sarà lenta e serve la rete.</warning>
+    <label>Gradle cache</label>
+    <description>Removes downloaded dependencies, build caches and compiled scripts in the caches folder.</description>
+    <warning>Stop the daemons with `gradle --stop` and close IDEs before cleaning. Dependencies and plugins are re-downloaded and scripts recompiled on the next build: the first one will be slow and needs the network.</warning>
     <action command="delete" search="walk.all" path="$$home$$\caches"/>
   </option>
   <option id="wrapper_dists">
-    <label>Distribuzioni del wrapper di Gradle</label>
-    <description>Rimuove le versioni di Gradle scaricate da gradlew.</description>
-    <warning>Si riscaricano alla prossima esecuzione di `gradlew`.</warning>
+    <label>Gradle wrapper distributions</label>
+    <description>Removes the Gradle versions downloaded by gradlew.</description>
+    <warning>Re-downloaded the next time `gradlew` runs.</warning>
     <action command="delete" search="walk.all" path="$$home$$\wrapper\dists"/>
   </option>
   <option id="native">
-    <label>Librerie native di Gradle</label>
-    <description>Rimuove le librerie native che Gradle estrae per interagire con Windows.</description>
+    <label>Gradle native libraries</label>
+    <description>Removes the native libraries Gradle extracts to interact with Windows.</description>
     <action command="delete" search="walk.all" path="$$home$$\native"/>
   </option>
   <option id="jdks">
-    <label>JDK scaricati da Gradle</label>
-    <description>Rimuove i JDK scaricati dal supporto toolchain di Gradle.</description>
-    <warning>Si riscaricano alla prossima build che li richiede. Se un IDE usa uno di questi JDK, va riconfigurato.</warning>
+    <label>JDKs downloaded by Gradle</label>
+    <description>Removes the JDKs downloaded by Gradle's toolchain support.</description>
+    <warning>Re-downloaded on the next build that needs them. If an IDE uses one of these JDKs, it must be reconfigured.</warning>
     <action command="delete" search="walk.all" path="$$home$$\jdks"/>
   </option>
   <option id="daemon_logs">
-    <label>Log dei daemon di Gradle</label>
-    <description>Rimuove i file daemon-PID.out.log delle cartelle daemon\versione.</description>
+    <label>Gradle daemon logs</label>
+    <description>Removes the daemon-PID.out.log files in the daemon\version folders.</description>
     <action command="delete" search="glob" path="$$home$$\daemon\*\*.out.log"/>
   </option>
 </cleaner>

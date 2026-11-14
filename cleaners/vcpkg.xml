@@ -2,8 +2,8 @@
 <!-- vcpkg: cache binaria (VCPKG_DEFAULT_BINARY_CACHE o %LocalAppData%\vcpkg\archives) e, con VCPKG_ROOT,
      buildtrees, packages e downloads. La cartella installed non si tocca. -->
 <cleaner id="vcpkg" os="windows">
-  <label>Cache di vcpkg</label>
-  <description>Pacchetti binari, file di compilazione intermedi e sorgenti scaricati da vcpkg. Non tocca i pacchetti installati.</description>
+  <label>vcpkg cache</label>
+  <description>Binary packages, intermediate build files and sources downloaded by vcpkg. Does not touch installed packages.</description>
   <var id="vcpkg_archives">
     <value>%VCPKG_DEFAULT_BINARY_CACHE%</value>
     <value>%LOCALAPPDATA%\vcpkg\archives</value>
@@ -18,25 +18,25 @@
     <value>%VCPKG_ROOT%\downloads</value>
   </var>
   <option id="binary_cache">
-    <label>Cache binaria di vcpkg</label>
-    <description>Rimuove gli archivi dei pacchetti già compilati. Al prossimo install vcpkg li ricompila dai sorgenti.</description>
-    <warning>I pacchetti si ricompilano al prossimo `vcpkg install`: può richiedere molto tempo.</warning>
+    <label>vcpkg binary cache</label>
+    <description>Removes the archives of already-built packages. On the next install vcpkg rebuilds them from source.</description>
+    <warning>Packages are rebuilt on the next `vcpkg install`: it can take a long time.</warning>
     <action command="delete" search="walk.all" path="$$vcpkg_archives$$"/>
   </option>
   <option id="buildtrees">
-    <label>File di compilazione intermedi (buildtrees)</label>
-    <description>Rimuove sorgenti estratti, oggetti e registri delle compilazioni fatte da vcpkg.</description>
+    <label>Intermediate build files (buildtrees)</label>
+    <description>Removes extracted sources, objects and logs of the builds done by vcpkg.</description>
     <action command="delete" search="walk.all" path="$$vcpkg_buildtrees$$"/>
   </option>
   <option id="packages">
-    <label>Pacchetti in preparazione (packages)</label>
-    <description>Rimuove i file messi da parte da vcpkg prima dell'installazione definitiva.</description>
+    <label>Packages in staging (packages)</label>
+    <description>Removes the files vcpkg sets aside before the final installation.</description>
     <action command="delete" search="walk.all" path="$$vcpkg_packages$$"/>
   </option>
   <option id="downloads">
-    <label>Strumenti e sorgenti scaricati</label>
-    <description>Rimuove gli strumenti e gli archivi dei sorgenti scaricati da vcpkg.</description>
-    <warning>Strumenti e sorgenti si riscaricano al prossimo `vcpkg install`: serve la rete.</warning>
+    <label>Downloaded tools and sources</label>
+    <description>Removes the tools and source archives downloaded by vcpkg.</description>
+    <warning>Tools and sources are re-downloaded on the next `vcpkg install`: network required.</warning>
     <action command="delete" search="walk.all" path="$$vcpkg_downloads$$"/>
   </option>
 </cleaner>

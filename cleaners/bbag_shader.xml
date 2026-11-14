@@ -1,32 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Windows 11: solo cache shader esplicite e ricostruibili. Nessun percorso di sistema. -->
 <cleaner id="bbag_shader" os="windows">
-  <label>Cache shader GPU</label>
-  <description>Cache shader e driver grafici ricostruibili. Chiudi giochi e software 3D.</description>
+  <label>GPU shader cache</label>
+  <description>Rebuildable shader and graphics-driver caches. Close games and 3D software.</description>
   <var id="cuda_cache">
     <value>%CUDA_CACHE_PATH%</value>
     <value>%AppData%\NVIDIA\ComputeCache</value>
   </var>
   <option id="directx">
-    <label>Cache shader DirectX</label>
-    <description>Rimuove la cache DirectX. Chiudi giochi e programmi 3D: gli shader saranno ricompilati e potrebbero rallentare temporaneamente.</description>
+    <label>DirectX shader cache</label>
+    <description>Removes the DirectX cache. Close games and 3D programs: shaders will be recompiled and may be temporarily slower.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\D3DSCache"/>
   </option>
   <option id="nvidia">
-    <label>Cache NVIDIA DX e OpenGL</label>
-    <description>Rimuove le cache NVIDIA: chiudi giochi e app GPU; le cache saranno rigenerate e il prossimo avvio può rallentare.</description>
+    <label>NVIDIA DX and OpenGL cache</label>
+    <description>Removes the NVIDIA caches: close games and GPU apps; the caches will be regenerated and the next launch may be slower.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\NVIDIA\DXCache"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\NVIDIA\GLCache"/>
   </option>
   <option id="amd">
-    <label>Cache AMD DX e OpenGL</label>
-    <description>Rimuove le cache AMD: chiudi giochi e app GPU; le cache saranno rigenerate e il prossimo avvio può rallentare.</description>
+    <label>AMD DX and OpenGL cache</label>
+    <description>Removes the AMD caches: close games and GPU apps; the caches will be regenerated and the next launch may be slower.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\AMD\DxCache"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\AMD\GLCache"/>
   </option>
   <option id="cuda">
-    <label>Cache di compilazione CUDA</label>
-    <description>Rimuove la cache di compilazione JIT di CUDA (ComputeCache). Chiudi i programmi che usano CUDA: i kernel saranno ricompilati e il primo avvio può rallentare.</description>
+    <label>CUDA compile cache</label>
+    <description>Removes the CUDA JIT compile cache (ComputeCache). Close programs that use CUDA: kernels will be recompiled and the first launch may be slower.</description>
     <action command="delete" search="walk.files" path="$$cuda_cache$$"/>
   </option>
 </cleaner>

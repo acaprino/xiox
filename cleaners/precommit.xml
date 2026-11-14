@@ -2,15 +2,15 @@
 <!-- Percorso da pre-commit.com (Managing CI Caches): PRE_COMMIT_HOME, altrimenti ~/.cache/pre-commit, cioè %USERPROFILE%\.cache\pre-commit. -->
 <cleaner id="precommit" os="windows">
   <label>pre-commit</label>
-  <description>Repository e ambienti degli hook scaricati da pre-commit. Non tocca i progetti né i file .pre-commit-config.yaml.</description>
+  <description>Hook repositories and environments downloaded by pre-commit. Does not touch projects or .pre-commit-config.yaml files.</description>
   <var id="home">
     <value>%PRE_COMMIT_HOME%</value>
     <value>%USERPROFILE%\.cache\pre-commit</value>
   </var>
   <option id="cache">
-    <label>Cache di pre-commit</label>
-    <description>Rimuove i repository degli hook, i loro ambienti e il registro di pre-commit.</description>
-    <warning>Gli hook si riscaricano e si ricostruiscono al prossimo `pre-commit run`: la prima esecuzione sarà lenta.</warning>
+    <label>pre-commit cache</label>
+    <description>Removes the hook repositories, their environments and the pre-commit registry.</description>
+    <warning>Hooks are re-downloaded and rebuilt on the next `pre-commit run`: the first run will be slow.</warning>
     <action command="delete" search="walk.all" path="$$home$$"/>
   </option>
 </cleaner>

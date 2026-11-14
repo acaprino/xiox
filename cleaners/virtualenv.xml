@@ -2,11 +2,11 @@
 <!-- Percorso da src/virtualenv/app_data (pypa/virtualenv): user_data_dir o user_cache_dir con appname virtualenv e appauthor pypa, cioè %LOCALAPPDATA%\pypa\virtualenv (le versioni recenti usano la sottocartella Cache). -->
 <cleaner id="virtualenv" os="windows">
   <label>virtualenv (Python)</label>
-  <description>Dati dell'applicazione virtualenv: wheel di base e immagini di installazione riusate per creare gli ambienti. Non tocca gli ambienti già creati.</description>
+  <description>virtualenv application data: seed wheels and install images reused to create environments. Does not touch environments already created.</description>
   <option id="app_data">
-    <label>Cache di virtualenv</label>
-    <description>Rimuove le wheel e le immagini di installazione in cache.</description>
-    <warning>Vengono ricreate alla prossima creazione di un ambiente virtuale. Gli ambienti creati con `--symlink-app-data` collegano i pacchetti a questa cartella e smettono di funzionare.</warning>
+    <label>virtualenv cache</label>
+    <description>Removes the cached wheels and install images.</description>
+    <warning>Recreated the next time a virtual environment is created. Environments created with `--symlink-app-data` link their packages to this folder and stop working.</warning>
     <action command="delete" search="walk.all" path="%LocalAppData%\pypa\virtualenv"/>
   </option>
 </cleaner>

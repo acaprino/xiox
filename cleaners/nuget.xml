@@ -2,7 +2,7 @@
 <!-- Percorsi da learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders: global-packages (NUGET_PACKAGES), http-cache v3-cache (NUGET_HTTP_CACHE_PATH), plugins-cache e temp NuGetScratch. NuGet.Config NON si tocca. -->
 <cleaner id="nuget" os="windows">
   <label>NuGet (.NET)</label>
-  <description>Pacchetti globali, cache HTTP, cache dei plugin e cartella temporanea di NuGet. Non tocca NuGet.Config, i progetti e le cartelle packages delle soluzioni.</description>
+  <description>Global packages, HTTP cache, plugin cache and temporary folder of NuGet. Does not touch NuGet.Config, projects or the solutions' packages folders.</description>
   <var id="packages">
     <value>%NUGET_PACKAGES%</value>
     <value>%USERPROFILE%\.nuget\packages</value>
@@ -12,25 +12,25 @@
     <value>%LocalAppData%\NuGet\v3-cache</value>
   </var>
   <option id="packages">
-    <label>Pacchetti globali di NuGet</label>
-    <description>Rimuove tutti i pacchetti scaricati ed estratti nella cartella globale di NuGet.</description>
-    <warning>Si riscaricano al prossimo restore (`dotnet restore` o build). Chiudi Visual Studio e le compilazioni in corso.</warning>
+    <label>NuGet global packages</label>
+    <description>Removes all the packages downloaded and extracted in NuGet's global folder.</description>
+    <warning>Re-downloaded on the next restore (`dotnet restore` or build). Close Visual Studio and any running builds.</warning>
     <action command="delete" search="walk.all" path="$$packages$$"/>
   </option>
   <option id="http_cache">
-    <label>Cache HTTP di NuGet</label>
-    <description>Rimuove le risposte dei feed e i pacchetti in cache (v3-cache).</description>
+    <label>NuGet HTTP cache</label>
+    <description>Removes the cached feed responses and packages (v3-cache).</description>
     <action command="delete" search="walk.all" path="$$http_cache$$"/>
   </option>
   <option id="plugins_cache">
-    <label>Cache dei plugin di NuGet</label>
-    <description>Rimuove i risultati in cache delle richieste ai plugin di credenziali e feed (plugins-cache).</description>
+    <label>NuGet plugin cache</label>
+    <description>Removes the cached results of requests to credential and feed plugins (plugins-cache).</description>
     <action command="delete" search="walk.all" path="%LocalAppData%\NuGet\plugins-cache"/>
   </option>
   <option id="scratch">
-    <label>Cartella temporanea di NuGet</label>
-    <description>Rimuove i file temporanei di NuGet (NuGetScratch).</description>
-    <warning>Non pulire mentre è in corso un restore: NuGet usa questa cartella per coordinare i blocchi dei file.</warning>
+    <label>NuGet temporary folder</label>
+    <description>Removes NuGet's temporary files (NuGetScratch).</description>
+    <warning>Do not clean while a restore is running: NuGet uses this folder to coordinate file locks.</warning>
     <action command="delete" search="walk.all" path="%TEMP%\NuGetScratch"/>
   </option>
 </cleaner>

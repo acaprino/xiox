@@ -2,16 +2,16 @@
 <!-- Percorso da docs.ollama.com (FAQ): C:\Users\%username%\.ollama\models, sostituibile con OLLAMA_MODELS. -->
 <cleaner id="ollama" os="windows">
   <label>Ollama</label>
-  <description>Modelli scaricati da Ollama. Non tocca la configurazione né le chiavi di Ollama.</description>
+  <description>Models downloaded by Ollama. Does not touch Ollama's configuration or keys.</description>
   <running type="exe" os="windows" same_user="true">ollama.exe</running>
   <var id="models">
     <value>%OLLAMA_MODELS%</value>
     <value>%UserProfile%\.ollama\models</value>
   </var>
   <option id="models">
-    <label>Modelli di Ollama</label>
-    <description>Rimuove i modelli e i loro file. Chiudi Ollama prima di procedere.</description>
-    <warning>I modelli spariscono da `ollama list`: per riaverli rifai `ollama pull`. I modelli creati in locale con `ollama create` esistono solo qui.</warning>
+    <label>Ollama models</label>
+    <description>Removes the models and their files. Close Ollama before proceeding.</description>
+    <warning>The models disappear from `ollama list`: to get them back, run `ollama pull` again. Models created locally with `ollama create` exist only here.</warning>
     <action command="delete" search="walk.all" path="$$models$$"/>
   </option>
 </cleaner>

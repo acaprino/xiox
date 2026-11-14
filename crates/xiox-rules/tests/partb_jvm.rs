@@ -184,7 +184,7 @@ fn every_xml_reads_with_zero_warnings() {
             let c = parse_cleaner(xml, "partb_jvm", env)
                 .unwrap_or_else(|e| panic!("{id}: XML non letto: {e}"));
             assert_eq!(c.id, id);
-            assert_eq!(c.group, "Sviluppo e AI");
+            assert_eq!(c.group, "Development & AI");
             assert!(!c.label.is_empty() && !c.description.is_empty(), "{id}");
             let want: Vec<&str> = OPTIONS.iter().find(|(i, _)| *i == id).unwrap().1.to_vec();
             let got: Vec<&str> = c.options.iter().map(|o| o.id.as_str()).collect();
@@ -209,7 +209,7 @@ fn every_option_is_off_by_default() {
 }
 
 #[test]
-fn texts_are_clean_italian_without_donor_names() {
+fn texts_are_clean_without_donor_names() {
     let sb = Sandbox::new(&[]);
     for (id, xml) in XML {
         let low = xml.to_lowercase();
@@ -225,7 +225,7 @@ fn texts_are_clean_italian_without_donor_names() {
         for t in texts {
             assert!(!t.starts_with("AGG"), "{id}: «{t}»");
             let low = t.to_lowercase();
-            for bad in ["puo ", "e stato", "possibilita", "sara piu", "download cache"] {
+            for bad in ["puo ", "e stato", "possibilita", "sara piu"] {
                 assert!(!low.contains(bad), "{id}: «{bad}» in «{t}»");
             }
         }

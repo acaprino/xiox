@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Cache predefinita di pip su Windows. Non tocca mai gli ambienti installati. -->
 <cleaner id="bbag_pip" os="windows">
-  <label>Cache dei pacchetti pip</label>
-  <description>Download HTTP e wheel di pip; non elimina Python, virtualenv o pacchetti installati.</description>
+  <label>pip package cache</label>
+  <description>pip HTTP downloads and wheels; does not delete Python, virtualenvs or installed packages.</description>
   <running type="exe" os="windows" same_user="true">python.exe</running>
   <running type="exe" os="windows" same_user="true">pythonw.exe</running>
   <option id="cache">
-    <label>Cache dei download di pip</label>
-    <description>Rimuove file HTTP e wheel di pip. Chiudi Python; i pacchetti potranno richiedere un nuovo download o una compilazione.</description>
+    <label>pip download cache</label>
+    <description>Removes pip HTTP and wheel files. Close Python; packages may need a new download or a build.</description>
     <action command="delete" search="walk.files" path="%LocalAppData%\pip\Cache\http"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\pip\Cache\http-v2"/>
     <action command="delete" search="walk.files" path="%LocalAppData%\pip\Cache\wheels"/>

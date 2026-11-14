@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- I dati di sistema JetBrains contengono la cronologia locale: si colpisce SOLO la sottocartella caches. -->
 <cleaner id="bbag_jetbrains" os="windows">
-  <label>Cache degli IDE JetBrains</label>
-  <description>Solo le cartelle caches degli IDE JetBrains. Non elimina la cronologia locale, le configurazioni, i plugin o i progetti.</description>
+  <label>JetBrains IDE caches</label>
+  <description>Only the caches folders of JetBrains IDEs. Does not delete local history, configurations, plugins or projects.</description>
   <running type="exe" os="windows" same_user="true">idea64.exe</running>
   <running type="exe" os="windows" same_user="true">pycharm64.exe</running>
   <running type="exe" os="windows" same_user="true">webstorm64.exe</running>
@@ -16,9 +16,9 @@
     <value search="glob" os="windows">%LocalAppData%\JetBrains\*\caches</value>
   </var>
   <option id="indexes">
-    <label>Indici e cache IDE</label>
-    <description>Rimuove file dalle sole sottocartelle caches degli IDE installati.</description>
-    <warning>Chiudi tutti gli IDE JetBrains. Alla riapertura potranno reindicizzare i progetti: operazione lenta.</warning>
+    <label>IDE indexes and caches</label>
+    <description>Removes files from the caches subfolders of the installed IDEs only.</description>
+    <warning>Close all JetBrains IDEs. On reopen they may reindex the projects, which is slow.</warning>
     <action command="delete" search="walk.files" path="$$cache_targets$$"/>
   </option>
 </cleaner>

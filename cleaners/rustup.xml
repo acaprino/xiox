@@ -2,8 +2,8 @@
 <!-- Solo downloads e tmp di rustup (RUSTUP_HOME, predefinita %USERPROFILE%\.rustup).
      toolchains, update-hashes e settings.toml non si toccano: la toolchain predefinita è in uso. -->
 <cleaner id="rustup" os="windows">
-  <label>Cache di rustup</label>
-  <description>File scaricati e temporanei di rustup. Non tocca le toolchain installate né le impostazioni.</description>
+  <label>rustup cache</label>
+  <description>Downloaded and temporary rustup files. Does not touch installed toolchains or settings.</description>
   <var id="rustup_downloads">
     <value>%RUSTUP_HOME%\downloads</value>
     <value>%USERPROFILE%\.rustup\downloads</value>
@@ -13,15 +13,15 @@
     <value>%USERPROFILE%\.rustup\tmp</value>
   </var>
   <option id="downloads">
-    <label>Componenti scaricati da rustup</label>
-    <description>Rimuove gli archivi di toolchain e componenti rimasti nella cartella dei download di rustup.</description>
-    <warning>Chiudi rustup prima di pulire: un aggiornamento in corso fallirebbe. I componenti si riscaricano al prossimo `rustup update` o `rustup component add`.</warning>
+    <label>Components downloaded by rustup</label>
+    <description>Removes the toolchain and component archives left in rustup's downloads folder.</description>
+    <warning>Close rustup before cleaning: an update in progress would fail. Components are re-downloaded on the next `rustup update` or `rustup component add`.</warning>
     <action command="delete" search="walk.all" path="$$rustup_downloads$$"/>
   </option>
   <option id="tmp">
-    <label>File temporanei di rustup</label>
-    <description>Rimuove i file temporanei lasciati da installazioni e aggiornamenti di rustup.</description>
-    <warning>Chiudi rustup prima di pulire: un aggiornamento in corso fallirebbe.</warning>
+    <label>rustup temporary files</label>
+    <description>Removes the temporary files left by rustup installs and updates.</description>
+    <warning>Close rustup before cleaning: an update in progress would fail.</warning>
     <action command="delete" search="walk.all" path="$$rustup_tmp$$"/>
   </option>
 </cleaner>

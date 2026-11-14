@@ -3,8 +3,8 @@
      Si toccano solo registry\cache, registry\src, registry\index, git\checkouts e git\db.
      Mai bin, config.toml, credentials.toml, .crates.toml, .crates2.json. -->
 <cleaner id="bbag_cargo" os="windows">
-  <label>Cache di Cargo</label>
-  <description>Archivi, sorgenti e indici scaricati da Cargo, tutti ricostruibili. Non tocca i binari installati, la configurazione né le credenziali.</description>
+  <label>Cargo cache</label>
+  <description>Archives, sources and indexes downloaded by Cargo, all rebuildable. Does not touch installed binaries, configuration or credentials.</description>
   <running type="exe" os="windows" same_user="true">cargo.exe</running>
   <running type="exe" os="windows" same_user="true">rustc.exe</running>
   <var id="crate_archives">
@@ -28,31 +28,31 @@
     <value>%USERPROFILE%\.cargo\git\db</value>
   </var>
   <option id="downloaded_crates">
-    <label>Download compressi Cargo</label>
-    <description>Rimuove gli archivi .crate compressi scaricati da Cargo (registry\cache).</description>
-    <warning>Gli archivi si riscaricano al prossimo `cargo build` o `cargo fetch`: evita se lavori offline.</warning>
+    <label>Cargo compressed downloads</label>
+    <description>Removes the compressed .crate archives downloaded by Cargo (registry\cache).</description>
+    <warning>Archives are re-downloaded on the next `cargo build` or `cargo fetch`: avoid if you work offline.</warning>
     <action command="delete" search="walk.files" path="$$crate_archives$$"/>
   </option>
   <option id="registry_src">
-    <label>Sorgenti estratti delle dipendenze</label>
-    <description>Rimuove i sorgenti estratti dagli archivi .crate (registry\src). Cargo li estrae di nuovo al prossimo uso.</description>
+    <label>Extracted dependency sources</label>
+    <description>Removes the sources extracted from the .crate archives (registry\src). Cargo extracts them again on next use.</description>
     <action command="delete" search="walk.all" path="$$crate_sources$$"/>
   </option>
   <option id="registry_index">
-    <label>Indice dei registri</label>
-    <description>Rimuove l'indice locale dei registri (registry\index): metadati di versioni e dipendenze dei crate.</description>
-    <warning>L'indice si riscarica al prossimo `cargo fetch` o `cargo update`: serve la rete.</warning>
+    <label>Registry index</label>
+    <description>Removes the local registry index (registry\index): version and dependency metadata of the crates.</description>
+    <warning>The index is re-downloaded on the next `cargo fetch` or `cargo update`: network required.</warning>
     <action command="delete" search="walk.all" path="$$registry_indexes$$"/>
   </option>
   <option id="git_checkouts">
-    <label>Copie di lavoro delle dipendenze git</label>
-    <description>Rimuove le copie estratte delle dipendenze git (git\checkouts). Cargo le ricrea dal database git al prossimo uso.</description>
+    <label>Git dependency checkouts</label>
+    <description>Removes the extracted copies of git dependencies (git\checkouts). Cargo recreates them from the git database on next use.</description>
     <action command="delete" search="walk.all" path="$$git_checkout_dirs$$"/>
   </option>
   <option id="git_db">
-    <label>Database delle dipendenze git</label>
-    <description>Rimuove i cloni dei repository git usati come dipendenze (git\db).</description>
-    <warning>I repository si riscaricano al prossimo `cargo fetch`: serve la rete.</warning>
+    <label>Git dependency database</label>
+    <description>Removes the clones of the git repositories used as dependencies (git\db).</description>
+    <warning>The repositories are re-downloaded on the next `cargo fetch`: network required.</warning>
     <action command="delete" search="walk.all" path="$$git_db_dirs$$"/>
   </option>
 </cleaner>

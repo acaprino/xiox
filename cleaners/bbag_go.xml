@@ -2,8 +2,8 @@
 <!-- Cache di Go: compilazione (GOCACHE, predefinita %LocalAppData%\go-build) e moduli
      (GOMODCACHE, predefinita %GOPATH%\pkg\mod o %USERPROFILE%\go\pkg\mod). Non tocca go\bin né i sorgenti. -->
 <cleaner id="bbag_go" os="windows">
-  <label>Cache di Go</label>
-  <description>Cache di compilazione e moduli scaricati da Go, ricostruibili. Non tocca GOPATH\bin né i sorgenti.</description>
+  <label>Go cache</label>
+  <description>Go build cache and downloaded modules, rebuildable. Does not touch GOPATH\bin or your sources.</description>
   <running type="exe" os="windows" same_user="true">go.exe</running>
   <var id="build_cache">
     <value>%GOCACHE%</value>
@@ -15,14 +15,14 @@
     <value>%USERPROFILE%\go\pkg\mod</value>
   </var>
   <option id="build">
-    <label>Cache di compilazione di Go</label>
-    <description>Rimuove la cache di compilazione di Go. Attendi che le compilazioni in corso finiscano; le successive compilazioni impiegheranno più tempo.</description>
+    <label>Go build cache</label>
+    <description>Removes the Go build cache. Wait for running builds to finish; later builds will take longer.</description>
     <action command="delete" search="walk.files" path="$$build_cache$$"/>
   </option>
   <option id="modules">
-    <label>Moduli scaricati di Go</label>
-    <description>Rimuove la cache dei moduli (pkg\mod): sorgenti e archivi dei moduli scaricati. I file della cache sono in sola lettura: la pulizia li rimuove comunque.</description>
-    <warning>I moduli si riscaricano al prossimo `go build` o `go mod download`: serve la rete. I file della cache sono in sola lettura.</warning>
+    <label>Go downloaded modules</label>
+    <description>Removes the module cache (pkg\mod): sources and archives of downloaded modules. Cache files are read-only; cleaning removes them anyway.</description>
+    <warning>Modules are re-downloaded on the next `go build` or `go mod download`: network required. Cache files are read-only.</warning>
     <action command="delete" search="walk.all" path="$$module_cache$$"/>
   </option>
 </cleaner>

@@ -2,15 +2,15 @@
 <!-- Percorsi da bun.sh/docs/install/cache: BUN_INSTALL_CACHE_DIR oppure ~/.bun/install/cache. -->
 <cleaner id="bun" os="windows">
   <label>Bun</label>
-  <description>Cache globale dei pacchetti scaricati da Bun. Non tocca progetti, node_modules o configurazione.</description>
+  <description>Global cache of packages downloaded by Bun. Does not touch projects, node_modules or configuration.</description>
   <var id="cache">
     <value>%BUN_INSTALL_CACHE_DIR%</value>
     <value>%UserProfile%\.bun\install\cache</value>
   </var>
   <option id="cache">
-    <label>Cache dei pacchetti Bun</label>
-    <description>Rimuove la cache globale in cui Bun conserva i pacchetti del registro.</description>
-    <warning>Si riscarica al prossimo `bun install`. Nei progetti con linker isolato rifai `bun install`.</warning>
+    <label>Bun package cache</label>
+    <description>Removes the global cache where Bun keeps registry packages.</description>
+    <warning>Re-downloaded on the next `bun install`. In projects with an isolated linker, run `bun install` again.</warning>
     <action command="delete" search="walk.all" path="$$cache$$"/>
   </option>
 </cleaner>
