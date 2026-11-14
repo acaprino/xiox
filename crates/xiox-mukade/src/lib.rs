@@ -188,8 +188,11 @@ impl MukadeSessions {
         if children {
             cmd.arg("--children");
         }
+        // Both inside our folder: without MUKADE_INTENT_DIR mukade writes its default intent
+        // prompts beside its own executable.
         cmd.env(self.store_env(), store)
             .env("MUKADE_DATA_DIR", &data)
+            .env("MUKADE_INTENT_DIR", data.join("intent-prompts"))
             .stdin(Stdio::null());
         #[cfg(windows)]
         {

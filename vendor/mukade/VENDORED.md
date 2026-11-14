@@ -10,9 +10,9 @@
   archived listing of each), with the store passed in the harness's own variable (`CLAUDE_CONFIG_DIR`,
   `CODEX_HOME`, `OPENCODE_DB`, `PI_CODING_AGENT_DIR`). Nothing is written to the stores; `dump`,
   `hop` and `write` are never run.
-- The only writes: mukade's data folder, set with `MUKADE_DATA_DIR` to the folder Xiox passes in
-  (`app_cache_dir()/mukade`): the Claude Code listing cache and the intent prompts mukade installs on
-  first run. Never `mukade-data` beside the executable.
+- The only writes: the folder Xiox passes in (`app_cache_dir()/mukade`), set as `MUKADE_DATA_DIR`
+  (the Claude Code listing cache) and `MUKADE_INTENT_DIR` (`intent-prompts/`, the default prompts
+  mukade installs on start). Never `mukade-data` or `intent-prompts` beside the executable.
 - Which executable runs: `XIOX_MUKADE_EXE`, else `mukade.exe` beside the Xiox executable (the
   `xiox-mukade` build script copies this file into `target/<profile>/`), else this file.
 
