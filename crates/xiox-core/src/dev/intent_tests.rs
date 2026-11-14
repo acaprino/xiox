@@ -930,6 +930,7 @@ fn shape(st: &DevState) -> &'static str {
     }
     match (st.view, st.section) {
         (View::Empty, _) => "idle",
+        (View::Cleaned, _) if st.cleaned.as_ref().is_some_and(|c| c.report.cancelled) => "cancelled",
         (View::Cleaned, _) => "report",
         (View::Scanned, Section::Projects) => "projects",
         (View::Scanned, Section::Worktrees) => "worktrees",
@@ -937,10 +938,33 @@ fn shape(st: &DevState) -> &'static str {
     }
 }
 
-/// The state the script calls `name` (`go`, and the re-synchronisation after a job).
+/// The scan worker of the replay: lands the script's own scan (the ids it names).
+fn scan_script(_: Settings, _: bool, out: Outbox<DevMsg>) {
+    out.send(DevMsg::Scanned(script_scan()));
+}
+
+/// Raised by the replay when the script's cleanup is to finish by itself (a `tick` to `report`).
+static FINISH_CLEAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The cleanup worker of the replay: runs until the replay lets it finish (a complete report) or
+/// the job's `Cancel` flag is raised (a report marked cancelled, as the engine answers).
+fn clean_script(job: DevCleanJob, out: Outbox<DevMsg>) {
+    use std::sync::atomic::Ordering::SeqCst;
+    for _ in 0..500 {
+        if job.cancel.is_cancelled() || FINISH_CLEAN.load(SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut done = DevCleaned::new();
+    done.report.cancelled = job.cancel.is_cancelled();
+    out.send(DevMsg::Cleaned(done));
+}
+
+/// The state the script calls `name` (`go`).
 fn script_state(name: &str) -> DevState {
     let mut st = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
-        .with_workers(DevWorkers { scan: scan_none, clean: clean_quiet });
+        .with_workers(DevWorkers { scan: scan_script, clean: clean_script });
     if name == "idle" {
         st.persist = false;
         return st;
@@ -981,38 +1005,67 @@ fn apply(st: &mut DevState, intent: DevIntent) -> Result<(), String> {
             st.close_confirm();
             Ok(())
         }
+        // Over a report (finished or cancelled) the page's «Close» is `release()`: the section
+        // goes back to its empty state and the analysis is not brought back.
+        DevIntent::CloseDialog if st.view == View::Cleaned && !st.busy() => {
+            st.release();
+            Ok(())
+        }
         DevIntent::CloseDialog => Err(NO_DIALOG.into()),
         DevIntent::Cancel => st.cancel(),
     }
 }
 
 /// Replays the Developers steps of `apps/desktop/fixtures/intent-script.json` against the real
-/// state, through the worker seam. The script is the spec for the transitions. Where Rust cannot
-/// follow because the analysis a job touched must not come back (`cancel` of a scan, and
-/// `closeDialog`/`cancel` over a cleanup, which return to the analysis in the mock), the replay
-/// re-synchronises on the state the script expects; it counts those.
+/// state, through the worker seam. The script is the spec for the transitions and none of them is
+/// bent to fit: a `tick` is replayed by letting the worker answer (the scan lands, the cleanup
+/// ends), a `cancel` of a cleanup raises the job's flag and waits for the cancelled report, and a
+/// refused intent (`cancel` of a scan, `select` over a report) must leave the shape unchanged.
+/// The ticks of the script that only move a fraction are not replayed.
 #[test]
 fn replays_the_developers_steps_of_the_shared_script() {
+    use std::sync::atomic::Ordering::SeqCst;
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/fixtures/intent-script.json");
     let script: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let mut st = script_state("idle");
-    let (mut compared, mut resyncs) = (0, 0);
+    // Compared intents; scans that landed; cleanups that finished by themselves; cleanups cancelled.
+    let (mut compared, mut landed, mut finished, mut cancelled) = (0, 0, 0, 0);
     for step in script["steps"].as_array().unwrap() {
-        if step["section"] != "developers" {
-            continue;
-        }
         let note = step["note"].as_str().unwrap_or("");
         match step["op"].as_str().unwrap() {
-            "go" => st = script_state(step["state"].as_str().unwrap()),
-            "intent" => {
+            "go" if step["section"] == "developers" => st = script_state(step["state"].as_str().unwrap()),
+            "tick" => {
+                for pushed in step["pushed"].as_array().unwrap().iter().filter(|p| p["section"] == "developers") {
+                    match (shape(&st), pushed["state"].as_str().unwrap()) {
+                        // The scan ends: its answer is polled in, like the pump does.
+                        ("analyzing", "projects" | "worktrees" | "sessions") => {
+                            // `set_scan` drops what an in-memory state may not keep: this one has no tree.
+                            st.persist = true;
+                            finish(&mut st);
+                            st.persist = false;
+                            assert_eq!(shape(&st), "projects", "{note}: the scan lands on projects");
+                            landed += 1;
+                        }
+                        ("cleaning", "report") => {
+                            FINISH_CLEAN.store(true, SeqCst);
+                            finish(&mut st);
+                            FINISH_CLEAN.store(false, SeqCst);
+                            assert_eq!(shape(&st), "report", "{note}");
+                            finished += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "intent" if step["section"] == "developers" => {
                 let intent: DevIntent = serde_json::from_value(step["intent"].clone()).unwrap();
                 let expect = step["expect"]["state"].as_str().unwrap();
                 let was = shape(&st);
-                let _ = apply(&mut st, intent.clone());
-                if matches!(was, "analyzing" | "cleaning") && matches!(intent, DevIntent::Cancel | DevIntent::CloseDialog) {
-                    st = script_state(expect);
-                    resyncs += 1;
-                    continue;
+                let result = apply(&mut st, intent.clone());
+                if was == "cleaning" && matches!(intent, DevIntent::Cancel) && result.is_ok() {
+                    // The flag is up: the worker answers with the cancelled report.
+                    finish(&mut st);
+                    cancelled += 1;
                 }
                 assert_eq!(shape(&st), expect, "{note}: {intent:?}");
                 let v = st.view(false);
@@ -1032,11 +1085,14 @@ fn replays_the_developers_steps_of_the_shared_script() {
                 if let Some(active) = step["expect"]["active"].as_str() {
                     assert!(v.nav.iter().any(|n| n.id == active && n.active), "{note}: active list");
                 }
+                if let Some(report) = step["expect"]["report"].as_bool() {
+                    assert_eq!(v.report.is_some(), report, "{note}: report");
+                }
                 compared += 1;
             }
             _ => {}
         }
     }
     assert!(compared >= 20, "most of the script's intents were compared: {compared}");
-    assert_eq!(resyncs, 4, "Rust diverges from the script at four back-steps only");
+    assert_eq!((landed, finished, cancelled), (2, 1, 1), "scans landed, cleanups finished, cleanups cancelled");
 }
