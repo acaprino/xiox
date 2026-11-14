@@ -532,24 +532,3 @@ fn level_view(l: Level) -> LevelView {
         Level::Caution => LevelView::Caution,
     }
 }
-
-/// A row with nothing filled in: the callers set what the row has.
-fn blank_row(id: String, kind: RowKind) -> RowView {
-    RowView {
-        id,
-        kind,
-        parent: None,
-        check: Check::None,
-        enabled: true,
-        name: String::new(),
-        sub: None,
-        level: None,
-        cells: Vec::new(),
-        bytes: None,
-        size_text: None,
-        muted: false,
-        why: None,
-        detail: Vec::new(),
-        lines: Vec::new(),
-    }
-}

@@ -120,7 +120,7 @@ pub struct ChoiceItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum OptionView {
     Toggle { id: String, label: String, on: bool, enabled: bool, #[serde(deserialize_with = "required")] hint: Option<String> },
     Number { id: String, label: String, value: u32, min: u32, max: u32, enabled: bool },
@@ -315,7 +315,7 @@ pub struct SectionView {
 // ---------- intents (page -> Rust) ----------
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum CleanupIntent {
     Select { category: String },
     Toggle { row: String },
@@ -330,7 +330,7 @@ pub enum CleanupIntent {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum RegistryIntent {
     ToggleCategory { index: usize },
     Toggle { row: String },
@@ -351,7 +351,7 @@ pub enum ServiceAction {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum ServicesIntent {
     SetAll { all: bool },
     Search { text: String },
@@ -398,7 +398,7 @@ impl From<xiox_model::RemoveMode> for RemoveModeView {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DevIntent {
     Select { category: DevCategory },
     Toggle { row: String },
@@ -415,6 +415,59 @@ pub enum DevIntent {
     Permanent,
     CloseDialog,
     Cancel,
+}
+
+/// A row with nothing filled in: the section views set what their rows have (struct update).
+pub(crate) fn blank_row(id: String, kind: RowKind) -> RowView {
+    RowView {
+        id,
+        kind,
+        parent: None,
+        check: Check::None,
+        enabled: true,
+        name: String::new(),
+        sub: None,
+        level: None,
+        cells: Vec::new(),
+        bytes: None,
+        size_text: None,
+        muted: false,
+        why: None,
+        detail: Vec::new(),
+        lines: Vec::new(),
+    }
+}
+
+/// Helpers the intent tests of every section share.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use crate::notify::{NoNotifier, SharedNotifier};
+    use std::sync::Arc;
+
+    pub fn notifier() -> SharedNotifier {
+        Arc::new(NoNotifier)
+    }
+
+    /// The refusal of an intent that has to be refused.
+    pub fn err<T>(r: Result<T, String>) -> String {
+        match r {
+            Err(e) => e,
+            Ok(_) => panic!("expected a refusal"),
+        }
+    }
+
+    pub fn action<'a>(v: &'a SectionView, id: &str) -> &'a ActionView {
+        v.actions.iter().find(|a| a.id == id).unwrap_or_else(|| panic!("no action {id}"))
+    }
+
+    pub fn button<'a>(d: &'a DialogView, id: &str) -> &'a ButtonView {
+        d.buttons.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("no button {id}"))
+    }
+
+    pub fn row<'a>(v: &'a SectionView, id: &str) -> &'a RowView {
+        v.rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("no row {id}"))
+    }
 }
 
 #[cfg(test)]

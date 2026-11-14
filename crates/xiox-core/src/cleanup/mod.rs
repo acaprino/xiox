@@ -1,10 +1,15 @@
 //! Stato di Pulizia file senza interfaccia: scelte, lavori in un thread, analisi, pulizia,
 //! resoconto e opzioni dinamiche. Spostato da `src/main.rs` così com'era; al posto di
 //! `egui::Context` i thread svegliano chi mostra la sezione con un [`SharedNotifier`].
+//!
+//! Sopra lo stato stanno le intenzioni della pagina (`select_category`, `toggle`, `analyze`,
+//! `request_clean`, `confirm`...): ognuna rifiuta, con una frase in inglese, ciò che l'interfaccia
+//! egui avrebbe tenuto disattivato, e un rifiuto non cambia nulla. Il lavoro vero gira dietro
+//! [`CleanupWorkers`], così i test arrivano da «Continua» fino all'avvio senza toccare il motore.
 
 use crate::notify::{Outbox, SectionId, SharedNotifier};
-use crate::{cleaner, native, rules, sys};
-use std::collections::HashSet;
+use crate::{browserdb, cleaner, native, rules, sys};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -12,7 +17,27 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(test)]
+mod intent_tests;
+#[cfg(test)]
+mod script_tests;
+#[cfg(test)]
 mod tests;
+mod view;
+
+// Why an intent is refused (English: the page shows them as they are). The first four are
+// Developers' own, so both sections say the same thing.
+pub use crate::dev::{BUSY, DIALOG_OPEN, NOTHING_TO_CANCEL, NO_DIALOG};
+pub const NOTHING: &str = "Select something to analyze or clean first.";
+/// «Clean» works on the analysis on screen: after a report, or with none, there is nothing to clean.
+pub const NO_ANALYSIS: &str = "Analyze first: Clean works on the analysis on screen.";
+pub const REPORT_OPEN: &str = "Close the report first.";
+pub const NO_KEEP_LIST: &str = "There is no cookie keep list in this build.";
+
+/// Prefix of the nav ids: a group of the built-in categories, a group of the rules.
+const BUILTIN: &str = "builtin:";
+const RULES: &str = "rules:";
+/// The nav id of the Winapp2 entries.
+pub const WINAPP2: &str = "winapp2";
 
 pub enum CleanMsg {
     Progress(String, f32),
@@ -45,7 +70,7 @@ pub struct Chosen {
     pub others: Vec<(String, String)>,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum CleanView {
     Empty,
     Analyzed,
@@ -94,12 +119,46 @@ pub struct CleanupState {
     pub native_cleaned: Vec<(String, String, native::NativeCleaned)>,
     /// Processi attivi: aggiornati a ogni «Analizza» e prima di ogni pulizia.
     pub processes: Vec<String>,
+    /// La categoria aperta nell'elenco a sinistra (id di [`CleanupState::nav_ids`]).
+    pub nav: String,
+    /// Il lavoro del thread di analisi e pulizia (quello vero per default).
+    pub workers: CleanupWorkers,
+}
+
+/// Tutto ciò che il thread di analisi e pulizia riceve: la scelta fatta all'avvio e i segnali di
+/// «Annulla». Il thread non legge più lo stato.
+pub struct CleanJob {
+    pub cats: Vec<usize>,
+    pub natives: Vec<native::NativeItem>,
+    pub natives_last: Vec<native::NativeItem>,
+    pub dynamic: Vec<(xiox_rules::Cleaner, xiox_rules::Opt)>,
+    pub env: Option<xiox_rules::Env>,
+    pub previews: HashMap<String, native::NativeFound>,
+    pub only_old: bool,
+    pub also_clean: bool,
+    pub files_cancel: xiox_cleaner::Cancel,
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// Il lavoro di `CleanupState` come puntatore a funzione: quello vero per default, una funzione
+/// finta nei test (così `confirm` arriva fino all'avvio senza toccare il motore).
+#[derive(Clone, Copy)]
+pub struct CleanupWorkers {
+    pub job: fn(CleanJob, Outbox<CleanMsg>),
+}
+
+impl CleanupWorkers {
+    pub const REAL: CleanupWorkers = CleanupWorkers { job: real_job };
 }
 
 impl CleanupState {
     pub fn new() -> Self {
+        Self::with(native::all(), rules::processes(), CleanupWorkers::REAL)
+    }
+
+    /// Lo stato con altre voci native, altri processi attivi e un altro lavoro (i test).
+    pub fn with(natives: Vec<native::NativeItem>, processes: Vec<String>, workers: CleanupWorkers) -> Self {
         let n = cleaner::CATEGORIES.len();
-        let natives = native::all();
         CleanupState {
             clean_sel: cleaner::CATEGORIES.iter().map(|c| c.default_on).collect(),
             only_old: true,
@@ -127,7 +186,9 @@ impl CleanupState {
             natives,
             native_found: vec![],
             native_cleaned: vec![],
-            processes: rules::processes(),
+            processes,
+            nav: format!("{BUILTIN}{}", cleaner::CATEGORIES[0].group),
+            workers,
         }
     }
 
@@ -204,72 +265,12 @@ impl CleanupState {
         let cancel = Arc::new(AtomicBool::new(false));
         self.clean_cancel = Some((files_cancel.clone(), cancel.clone()));
         let only_old = self.only_old;
-        std::thread::spawn(move || {
-            let outbox = Outbox::new(tx, notifier, SectionId::Cleanup);
-            let verb = if also_clean { "Pulizia" } else { "Analisi" };
-            let total = (cats.len() + natives.len() + dynamic.len() + natives_last.len()).max(1) as f32;
-            for (k, &i) in cats.iter().enumerate() {
-                let name = cleaner::CATEGORIES[i].name;
-                if files_cancel.is_cancelled() || cancel.load(Ordering::SeqCst) {
-                    // Annullata prima di iniziare: nel resoconto tra i saltati.
-                    if also_clean {
-                        let c = cleaner::Cleaned { cancelled: true, ..Default::default() };
-                        outbox.send(CleanMsg::Cleaned(i, cleaner::Found::default(), c));
-                    }
-                    continue;
-                }
-                outbox.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
-                let f = cleaner::analyze(i, only_old);
-                if also_clean {
-                    // L'avanzamento dentro la categoria affina la barra.
-                    let tick = |t: xiox_cleaner::Tick| {
-                        if t.total_items > 0 {
-                            let part = t.done_items as f32 / t.total_items as f32;
-                            outbox.send(CleanMsg::Progress(format!("{verb} – {name}"), (k as f32 + part) / total));
-                        }
-                    };
-                    let c = cleaner::clean(i, &f, &tick, &files_cancel);
-                    outbox.send(CleanMsg::Cleaned(i, f, c));
-                } else {
-                    outbox.send(CleanMsg::Analyzed(i, f));
-                }
-            }
-            // Voci native e opzioni dinamiche: in sequenza, un solo Guard per tutta
-            // la pulizia; i processi si rileggono prima dell'analisi e della pulizia
-            // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
-            let env = env.unwrap_or_else(xiox_rules::Env::for_rules);
-            let guard = xiox_rules::Guard::new(&env);
-            let processes = rules::processes;
-            let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
-            let nprogress = |k: usize, text: String| {
-                outbox.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
-            };
-            let previews = |item: &native::NativeItem| previews.get(&rules::native_key(item)).cloned();
-            native::run_natives(&natives, also_clean, &nctx, &previews, &processes, &nprogress, &mut |item, f, done| {
-                outbox.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
-            });
-            let run = rules::RunCtx {
-                env: &env,
-                guard: &guard,
-                reg: &rules::RealRegistry,
-                reg_exists: &rules::reg_exists,
-                processes: &processes,
-                cancel: &*cancel,
-            };
-            let progress = |k: usize, text: String| {
-                outbox.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));
-            };
-            rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
-                outbox.send(CleanMsg::Rule(key, label, f, done));
-            });
-            let lprogress = |k: usize, text: String| {
-                outbox.send(CleanMsg::Progress(text, (cats.len() + natives.len() + dynamic.len() + k) as f32 / total));
-            };
-            native::run_natives(&natives_last, also_clean, &nctx, &previews, &processes, &lprogress, &mut |item, f, done| {
-                outbox.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
-            });
-            outbox.send(CleanMsg::Done);
-        });
+        // L'avanzamento riparte da zero: la barra non mostra quello del lavoro di prima.
+        self.clean_progress = 0.0;
+        self.clean_text.clear();
+        let job = CleanJob { cats, natives, natives_last, dynamic, env, previews, only_old, also_clean, files_cancel, cancel };
+        let work = self.workers.job;
+        std::thread::spawn(move || work(job, Outbox::new(tx, notifier, SectionId::Cleanup)));
     }
 
     /// Fine dell'analisi o della pulizia (`died`: il thread è morto senza `Done`): dopo una
@@ -347,7 +348,12 @@ impl CleanupState {
             let mut ended = false;
             loop {
                 match rx.try_recv() {
-                    Ok(rules::RulesMsg::Loaded(set)) => self.rules = Some(set),
+                    Ok(rules::RulesMsg::Loaded(set)) => {
+                        self.rules = Some(set);
+                        // The warnings of an open confirmation describe the rules it was opened
+                        // for: new ones close it, and «Clean» opens it again with theirs.
+                        self.confirm_clean = false;
+                    }
                     Ok(rules::RulesMsg::Updated(outcome)) => self.winapp2_update = Some(outcome),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
@@ -406,6 +412,317 @@ impl CleanupState {
             }
         }
     }
+}
+
+/// What the page asks of Cleanup (`CleanupIntent`). Each intent refuses, with a reason in English
+/// (`Err`), whatever the egui window would have kept disabled: the caller (the Tauri command) turns
+/// it into a `CmdError { kind: "refused" }`. A refused intent changes nothing.
+impl CleanupState {
+    /// A job runs: nothing may change under it.
+    fn idle(&self) -> Result<(), String> {
+        if self.busy() {
+            return Err(BUSY.into());
+        }
+        Ok(())
+    }
+
+    /// No job and no confirmation, whose warnings describe the choice.
+    fn unlocked(&self) -> Result<(), String> {
+        self.idle()?;
+        if self.confirm_clean {
+            return Err(DIALOG_OPEN.into());
+        }
+        Ok(())
+    }
+
+    /// Choices and settings: unlocked, and no report on screen (it is closed first, or replaced
+    /// by a new analysis).
+    fn editable(&self) -> Result<(), String> {
+        self.unlocked()?;
+        if self.clean_view == CleanView::Cleaned {
+            return Err(REPORT_OPEN.into());
+        }
+        Ok(())
+    }
+
+    /// The ids of the categories the page can open, in the order it shows them: a group of the
+    /// built-in categories (`builtin:<group>`), a group of the rules (`rules:<group>`: the natives
+    /// first, then the cleaners that came with the program), and Winapp2 when it has sections.
+    pub fn nav_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for c in cleaner::CATEGORIES {
+            let id = format!("{BUILTIN}{}", c.group);
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.extend(self.rule_groups().into_iter().map(|(g, _, _)| format!("{RULES}{g}")));
+        if self.rules.as_ref().is_some_and(|rs| !rs.sections.is_empty()) {
+            ids.push(WINAPP2.into());
+        }
+        ids
+    }
+
+    /// The groups of the rules panel: (group, natives, cleaners) as `rules::panel_groups` has them.
+    pub fn rule_groups(&self) -> Vec<(String, Vec<usize>, Vec<usize>)> {
+        rules::panel_groups(self.rules.as_ref().map_or(&[][..], |rs| &rs.groups[..]), &self.natives)
+    }
+
+    /// The category on screen: the chosen one if it is still there (the rules can reload), else the first.
+    pub fn open_nav(&self) -> String {
+        let mut ids = self.nav_ids();
+        if ids.contains(&self.nav) {
+            self.nav.clone()
+        } else {
+            ids.swap_remove(0)
+        }
+    }
+
+    pub fn select_category(&mut self, id: &str) -> Result<(), String> {
+        self.editable()?;
+        if !self.nav_ids().iter().any(|n| n == id) {
+            return Err(format!("“{id}” is not a category of this list."));
+        }
+        self.nav = id.to_string();
+        Ok(())
+    }
+
+    /// A row id of the contract: `cat:<index>` a built-in category, `native:<id>` a native item,
+    /// `<cleaner>/<option>` a rule. Headers (`section:`) and anything unknown are not choosable,
+    /// and neither is a row the list shows disabled (an unsupported option, a program that runs).
+    pub fn toggle(&mut self, row: &str) -> Result<(), String> {
+        self.editable()?;
+        let unknown = || format!("“{row}” is not a row that can be chosen.");
+        if let Some(n) = row.strip_prefix("cat:") {
+            let i = n.parse::<usize>().ok().filter(|i| i.to_string() == n && *i < self.clean_sel.len()).ok_or_else(unknown)?;
+            self.clean_sel[i] = !self.clean_sel[i];
+            return Ok(());
+        }
+        let blocked = if row.starts_with(rules::NATIVE_PREFIX) {
+            let item = self.natives.iter().find(|i| rules::native_key(i) == row).ok_or_else(unknown)?;
+            rules::native_blocked(item, &self.processes)
+        } else {
+            let rs = self.rules.as_ref().ok_or_else(unknown)?;
+            let (c, o) = rs
+                .cleaners
+                .iter()
+                .flat_map(|c| c.options.iter().map(move |o| (c, o)))
+                .find(|(c, o)| rules::key(c, o) == row)
+                .ok_or_else(unknown)?;
+            rules::blocked(c, o, &self.processes)
+        };
+        if let Some(why) = blocked {
+            return Err(why);
+        }
+        if !self.rule_sel.remove(row) {
+            self.rule_sel.insert(row.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn set_only_old(&mut self, on: bool) -> Result<(), String> {
+        self.editable()?;
+        self.only_old = on;
+        Ok(())
+    }
+
+    /// The Winapp2 search box: it only filters what is shown, so it is never refused.
+    pub fn set_search(&mut self, text: &str) {
+        self.rule_search = text.to_string();
+    }
+
+    /// «Analyze»: what is chosen, analysed, nothing deleted. A report on screen is replaced.
+    pub fn analyze(&mut self, notifier: SharedNotifier) -> Result<(), String> {
+        self.unlocked()?;
+        if !self.any_selected() {
+            return Err(NOTHING.into());
+        }
+        self.start(false, notifier);
+        Ok(())
+    }
+
+    /// «Clean N items»: opens the confirmation, with the warnings of what is chosen, for the
+    /// analysis on screen. With none (nothing analysed yet, or a report is showing) there is nothing
+    /// to clean from: that is the contract of the page, stricter than the egui button (which cleaned
+    /// without an analysis); the PATH preview needs an analysis on screen anyway.
+    pub fn request_clean(&mut self) -> Result<(), String> {
+        self.unlocked()?;
+        if self.clean_view != CleanView::Analyzed {
+            return Err(NO_ANALYSIS.into());
+        }
+        if !self.any_selected() {
+            return Err(NOTHING.into());
+        }
+        self.confirm_warnings = self.rule_warnings();
+        self.confirm_clean = true;
+        Ok(())
+    }
+
+    /// «Continue» in the confirmation: closes it and cleans. Only from the open dialog.
+    pub fn confirm(&mut self, notifier: SharedNotifier) -> Result<(), String> {
+        self.idle()?;
+        if !self.confirm_clean {
+            return Err(NO_DIALOG.into());
+        }
+        self.confirm_clean = false;
+        if !self.any_selected() {
+            return Err(NOTHING.into());
+        }
+        self.start(true, notifier);
+        Ok(())
+    }
+
+    /// «Cancel» in the confirmation (and Esc): nothing runs.
+    pub fn close_confirm(&mut self) {
+        self.confirm_clean = false;
+    }
+
+    /// «Cancel» during an analysis or a cleaning: the workers stop before the next item. A
+    /// cleaning then ends with a report of what was done (`cancelled`); an analysis with what it had.
+    pub fn cancel_job(&mut self) -> Result<(), String> {
+        if !self.busy() || self.clean_cancel.is_none() {
+            return Err(NOTHING_TO_CANCEL.into());
+        }
+        self.cancel();
+        Ok(())
+    }
+
+    /// Closing a report (the page's «Close» over it): the analysis and the report go, the choices
+    /// stay. Nothing happens while a job runs.
+    pub fn release(&mut self) {
+        if self.busy() {
+            return;
+        }
+        let n = self.clean_sel.len();
+        self.found = vec![None; n];
+        self.cleaned = vec![None; n];
+        self.rule_found.clear();
+        self.rule_cleaned.clear();
+        self.native_found.clear();
+        self.native_cleaned.clear();
+        self.clean_view = CleanView::Empty;
+        self.clean_report = None;
+        self.clean_saved = None;
+        self.clean_chosen = Chosen::default();
+        self.clean_end = None;
+        self.confirm_clean = false;
+    }
+
+    /// Opens the cookie keep list in the editor (the real one starts it: call it off the UI thread).
+    /// Refused when this list has no cookie item, as the page has no button for it then.
+    pub fn open_keep_list(&self) -> Result<(), String> {
+        if !self.natives.iter().any(|i| i.id == browserdb::COOKIES_ID) {
+            return Err(NO_KEEP_LIST.into());
+        }
+        browserdb::open_keep_list().map_err(|e| format!("Could not open the cookie keep list: {e}"))
+    }
+
+    /// The text of «Save as text…»: the report, once the cleaning is over.
+    pub fn report_text(&self) -> Option<String> {
+        if self.busy() {
+            return None;
+        }
+        self.clean_report.as_ref().map(|r| r.to_text())
+    }
+
+    /// The outcome of «Save as text…» (the dialog is Rust's): what the report shows.
+    pub fn set_saved(&mut self, text: String, ok: bool) {
+        self.clean_saved = Some((text, ok));
+    }
+}
+
+/// The Winapp2 filter of the rules panel: the sections (with the indexes of their cleaners in
+/// `rs.cleaners`) that match `needle` (trimmed, any case). A section whose name matches keeps all its
+/// cleaners; otherwise a cleaner stays when its label or one of its options' labels matches. A
+/// cleaner that stays shows all its options. Sections left empty are dropped.
+pub fn winapp2_matches(rs: &rules::RuleSet, needle: &str) -> Vec<(String, Vec<usize>)> {
+    let needle = needle.trim().to_lowercase();
+    let hit = |text: &str| text.to_lowercase().contains(&needle);
+    rs.sections
+        .iter()
+        .filter_map(|(section, idx)| {
+            let whole = needle.is_empty() || hit(section);
+            let kept: Vec<usize> = idx
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    let c = &rs.cleaners[i];
+                    whole || hit(&c.label) || c.options.iter().any(|o| hit(&o.label))
+                })
+                .collect();
+            (!kept.is_empty()).then(|| (section.clone(), kept))
+        })
+        .collect()
+}
+
+/// Il thread di analisi e pulizia (il lavoro vero di [`CleanupWorkers::REAL`]): le categorie, poi le
+/// voci native, le opzioni dinamiche e per ultime le voci che girano dopo tutto il resto. `outbox`
+/// avvisa la UI a ogni messaggio e, se il thread muore, alla fine.
+fn real_job(job: CleanJob, outbox: Outbox<CleanMsg>) {
+    let CleanJob { cats, natives, natives_last, dynamic, env, previews, only_old, also_clean, files_cancel, cancel } = job;
+    let verb = if also_clean { "Pulizia" } else { "Analisi" };
+    let total = (cats.len() + natives.len() + dynamic.len() + natives_last.len()).max(1) as f32;
+    for (k, &i) in cats.iter().enumerate() {
+        let name = cleaner::CATEGORIES[i].name;
+        if files_cancel.is_cancelled() || cancel.load(Ordering::SeqCst) {
+            // Annullata prima di iniziare: nel resoconto tra i saltati.
+            if also_clean {
+                let c = cleaner::Cleaned { cancelled: true, ..Default::default() };
+                outbox.send(CleanMsg::Cleaned(i, cleaner::Found::default(), c));
+            }
+            continue;
+        }
+        outbox.send(CleanMsg::Progress(format!("{verb} – {name}"), k as f32 / total));
+        let f = cleaner::analyze(i, only_old);
+        if also_clean {
+            // L'avanzamento dentro la categoria affina la barra.
+            let tick = |t: xiox_cleaner::Tick| {
+                if t.total_items > 0 {
+                    let part = t.done_items as f32 / t.total_items as f32;
+                    outbox.send(CleanMsg::Progress(format!("{verb} – {name}"), (k as f32 + part) / total));
+                }
+            };
+            let c = cleaner::clean(i, &f, &tick, &files_cancel);
+            outbox.send(CleanMsg::Cleaned(i, f, c));
+        } else {
+            outbox.send(CleanMsg::Analyzed(i, f));
+        }
+    }
+    // Voci native e opzioni dinamiche: in sequenza, un solo Guard per tutta
+    // la pulizia; i processi si rileggono prima dell'analisi e della pulizia
+    // di ognuna. Regole non ancora caricate: l'ambiente fidato di sempre.
+    let env = env.unwrap_or_else(xiox_rules::Env::for_rules);
+    let guard = xiox_rules::Guard::new(&env);
+    let processes = rules::processes;
+    let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
+    let nprogress = |k: usize, text: String| {
+        outbox.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
+    };
+    let previews = |item: &native::NativeItem| previews.get(&rules::native_key(item)).cloned();
+    native::run_natives(&natives, also_clean, &nctx, &previews, &processes, &nprogress, &mut |item, f, done| {
+        outbox.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
+    });
+    let run = rules::RunCtx {
+        env: &env,
+        guard: &guard,
+        reg: &rules::RealRegistry,
+        reg_exists: &rules::reg_exists,
+        processes: &processes,
+        cancel: &*cancel,
+    };
+    let progress = |k: usize, text: String| {
+        outbox.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));
+    };
+    rules::run_options(&dynamic, also_clean, &run, &progress, &mut |key, label, f, done| {
+        outbox.send(CleanMsg::Rule(key, label, f, done));
+    });
+    let lprogress = |k: usize, text: String| {
+        outbox.send(CleanMsg::Progress(text, (cats.len() + natives.len() + dynamic.len() + k) as f32 / total));
+    };
+    native::run_natives(&natives_last, also_clean, &nctx, &previews, &processes, &lprogress, &mut |item, f, done| {
+        outbox.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), f, done));
+    });
+    outbox.send(CleanMsg::Done);
 }
 
 /// Titolo dell'analisi e, se non è arrivata in fondo, la nota che lo dice.

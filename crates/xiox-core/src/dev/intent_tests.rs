@@ -3,7 +3,7 @@
 //! (The fixtures below copy the helpers of `tests.rs`, which are private to that module.)
 
 use super::*;
-use crate::notify::NoNotifier;
+use crate::view::testing::{action, button, err, notifier, row};
 use crate::view::*;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -154,10 +154,6 @@ fn clean_until_cancelled(job: DevCleanJob, out: Outbox<DevMsg>) {
 
 const TEST_WORKERS: DevWorkers = DevWorkers { scan: scan_none, clean: clean_recording };
 
-fn notifier() -> SharedNotifier {
-    Arc::new(NoNotifier)
-}
-
 /// A state whose workers never reach the engine. Tests that change settings use `persist = false`.
 fn state() -> DevState {
     DevState::with_settings(xiox_app::default_settings(), Section::Projects, false).with_workers(TEST_WORKERS)
@@ -184,13 +180,6 @@ fn dist_id() -> String {
     tid("web").replace("target", "dist")
 }
 
-fn err<T>(r: Result<T, String>) -> String {
-    match r {
-        Err(e) => e,
-        Ok(_) => panic!("expected a refusal"),
-    }
-}
-
 /// Waits for the job to land (polling, like the pump does).
 fn finish(st: &mut DevState) {
     for _ in 0..500 {
@@ -201,18 +190,6 @@ fn finish(st: &mut DevState) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("the worker never answered");
-}
-
-fn action<'a>(v: &'a SectionView, id: &str) -> &'a ActionView {
-    v.actions.iter().find(|a| a.id == id).unwrap_or_else(|| panic!("no action {id}"))
-}
-
-fn button<'a>(d: &'a DialogView, id: &str) -> &'a ButtonView {
-    d.buttons.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("no button {id}"))
-}
-
-fn row<'a>(v: &'a SectionView, id: &str) -> &'a RowView {
-    v.rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("no row {id}"))
 }
 
 // ---------- selection ----------

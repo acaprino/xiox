@@ -1,0 +1,714 @@
+//! Intent tests of Cleanup: what `CleanupState` refuses, what it lets through and what the view shows.
+//! The worker is a test function behind `CleanupWorkers`: nothing here reaches the engine, the disk,
+//! the registry or the Recycle Bin, and `open_keep_list` is only ever called where it refuses (the real
+//! one starts an editor).
+
+use super::*;
+use crate::native::NativeFound;
+use crate::view::testing::{action, button, err, notifier, row};
+use crate::view::*;
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
+use xiox_rules::{Cleaner, Opt, Origin};
+
+// ---------- worker seam ----------
+
+/// What the recording worker was asked to do: (`also_clean`, categories, sorted preview keys).
+static JOBS: Mutex<Vec<(bool, Vec<usize>, Vec<String>)>> = Mutex::new(Vec::new());
+/// The tests that read `JOBS` run one at a time.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn jobs() -> Vec<(bool, Vec<usize>, Vec<String>)> {
+    JOBS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Records the job; an analysis also reports the natives it was given (so a later cleanup has a
+/// preview on screen), then ends.
+fn record(job: CleanJob, out: Outbox<CleanMsg>) {
+    let mut keys: Vec<String> = job.previews.keys().cloned().collect();
+    keys.sort();
+    JOBS.lock().unwrap_or_else(|e| e.into_inner()).push((job.also_clean, job.cats.clone(), keys));
+    if !job.also_clean {
+        for item in job.natives.iter().chain(&job.natives_last) {
+            let found = NativeFound { count: 1, items: vec!["found".into()], ..Default::default() };
+            out.send(CleanMsg::Native(rules::native_key(item), item.label.to_string(), found, None));
+        }
+    }
+    out.send(CleanMsg::Done);
+}
+
+/// Ends at once, records nothing.
+fn quiet(_: CleanJob, out: Outbox<CleanMsg>) {
+    out.send(CleanMsg::Done);
+}
+
+/// Runs until «Cancel» raises the job's flags (gives up after five seconds).
+fn hold(job: CleanJob, out: Outbox<CleanMsg>) {
+    for _ in 0..500 {
+        if job.files_cancel.is_cancelled() || job.cancel.load(SeqCst) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    out.send(CleanMsg::Done);
+}
+
+const QUIET: CleanupWorkers = CleanupWorkers { job: quiet };
+const HOLD: CleanupWorkers = CleanupWorkers { job: hold };
+
+// ---------- states ----------
+
+fn natives_for_test() -> Vec<native::NativeItem> {
+    native::all().into_iter().filter(|i| i.id == "env_path" || i.id == "clipboard").collect()
+}
+
+fn opt(id: &str, label: &str, description: &str) -> Opt {
+    Opt {
+        id: id.into(),
+        label: label.into(),
+        description: description.into(),
+        warning: None,
+        default_on: false,
+        actions: vec![],
+        excludes: vec![],
+        unsupported: None,
+    }
+}
+
+fn cleaner(id: &str, label: &str, origin: Origin, group: &str, options: Vec<Opt>) -> Cleaner {
+    Cleaner { id: id.into(), label: label.into(), group: group.into(), origin, description: String::new(), running: vec![], options }
+}
+
+/// One embedded cleaner (a warning option without description, an unsupported one with one) and three
+/// Winapp2 ones in two sections.
+fn rule_set() -> rules::RuleSet {
+    let mut history = opt("history", "History", "");
+    history.warning = Some("Forgets every command you typed.".into());
+    let mut legacy = opt("legacy", "Legacy", "Old files.");
+    legacy.unsupported = Some("needs the old engine".into());
+    let both = |label: &str| vec![opt("logs", "Logs", ""), opt("temp", label, "")];
+    rules::RuleSet {
+        cleaners: vec![
+            cleaner("t_tool", "Toolchain", Origin::CleanerMl("t"), rules::EMBEDDED_GROUP, vec![history, legacy]),
+            cleaner("w_alpha", "Alpha App", Origin::Winapp2, "Utilities", vec![opt("cache", "Alpha App", "")]),
+            cleaner("w_beta", "Beta Tool", Origin::Winapp2, "Utilities", both("Temp")),
+            cleaner("w_gamma", "Gamma", Origin::Winapp2, "Browsers", vec![opt("cache", "Gamma", "")]),
+        ],
+        winapp2_version: Some("0.1".into()),
+        status: "Winapp2 0.1 caricato".into(),
+        warnings: vec!["Winapp2: 2 regole scartate".into()],
+        env: xiox_rules::Env::for_rules(),
+        sections: vec![("Browsers".into(), vec![3]), ("Utilities".into(), vec![1, 2])],
+        groups: vec![(rules::EMBEDDED_GROUP.into(), vec![0])],
+    }
+}
+
+pub(super) fn state_with(workers: CleanupWorkers) -> CleanupState {
+    let mut st = CleanupState::with(natives_for_test(), vec![], workers);
+    st.rules = Some(rule_set());
+    st
+}
+
+fn state() -> CleanupState {
+    state_with(QUIET)
+}
+
+/// A state whose jobs are recorded; the guard keeps the other recording tests out meanwhile.
+fn recording() -> (CleanupState, MutexGuard<'static, ()>) {
+    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    JOBS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    (state_with(CleanupWorkers { job: record }), guard)
+}
+
+/// Waits for the job to land (polling, like the pump does).
+pub(super) fn finish(st: &mut CleanupState) {
+    for _ in 0..500 {
+        st.poll();
+        if !st.busy() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("the worker never answered");
+}
+
+/// An analysis on screen.
+fn analyzed(workers: CleanupWorkers) -> CleanupState {
+    let mut st = state_with(workers);
+    st.analyze(notifier()).unwrap();
+    finish(&mut st);
+    st
+}
+
+fn open(st: &mut CleanupState, nav: &str) {
+    st.select_category(nav).unwrap_or_else(|e| panic!("{nav}: {e}"));
+}
+
+/// The view as JSON and back: every view these tests look at has to read through the contract.
+fn view(st: &CleanupState, admin: bool) -> SectionView {
+    let v = st.view(admin);
+    let back: SectionView = serde_json::from_value(serde_json::to_value(&v).unwrap()).unwrap();
+    assert_eq!(back, v, "the view does not round-trip");
+    v
+}
+
+fn detail<'a>(r: &'a RowView, key: &str) -> Option<&'a str> {
+    r.detail.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+fn blocker(rs: &mut rules::RuleSet) {
+    rs.cleaners[1].running = vec!["blocker.exe".into()];
+}
+
+// ---------- selection ----------
+
+#[test]
+fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
+    let mut st = state();
+    assert_eq!(st.nav, "builtin:Sistema");
+    assert!(st.clean_sel[0]);
+    st.toggle("cat:0").unwrap();
+    assert!(!st.clean_sel[0]);
+    assert!(st.rule_sel.contains("native:clipboard"));
+    st.toggle("native:clipboard").unwrap();
+    assert!(!st.rule_sel.contains("native:clipboard"));
+    st.toggle("t_tool/history").unwrap();
+    assert!(st.rule_sel.contains("t_tool/history"));
+    st.toggle("t_tool/history").unwrap();
+    assert!(!st.rule_sel.contains("t_tool/history"));
+    // The keys of the view are the keys of the selection.
+    open(&mut st, "rules:Sviluppo e AI");
+    let v = view(&st, false);
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["t_tool/history", "t_tool/legacy"]);
+    open(&mut st, "rules:Windows");
+    let v = view(&st, false);
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["native:clipboard", "native:env_path"]);
+
+    // Unknown ids and headers change nothing.
+    let before = (st.clean_sel.clone(), st.rule_sel.clone());
+    for id in ["", "cat:99", "cat:x", "native:nope", "t_tool/nope", "nope/history", "section:Utilities", "history"] {
+        assert!(st.toggle(id).is_err(), "{id} must be refused");
+    }
+    // Blocked rows: an unsupported option, an option and a native whose program runs.
+    let legacy = rule_set();
+    let why = rules::blocked(&legacy.cleaners[0], &legacy.cleaners[0].options[1], &[]).unwrap();
+    assert_eq!(err(st.toggle("t_tool/legacy")), why);
+    let mut rs = rule_set();
+    blocker(&mut rs);
+    st.rules = Some(rs);
+    st.processes = vec!["Blocker.EXE".into()];
+    let why = rules::blocked(&st.rules.as_ref().unwrap().cleaners[1], &st.rules.as_ref().unwrap().cleaners[1].options[0], &st.processes).unwrap();
+    assert_eq!(err(st.toggle("w_alpha/cache")), why);
+    st.natives[0].running = &["blocker"];
+    let why = rules::native_blocked(&st.natives[0], &st.processes).unwrap();
+    assert_eq!(err(st.toggle("native:clipboard")), why);
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone()), before, "a refused toggle changes nothing");
+    let v = view(&st, false);
+    let r = row(&v, "native:clipboard");
+    assert!(!r.enabled && r.muted && r.check == Check::Off);
+    assert_eq!(r.why.as_deref(), Some(why.as_str()));
+}
+
+#[test]
+fn selection_is_frozen_while_busy_or_with_the_dialog_open() {
+    let mut st = state_with(HOLD);
+    st.analyze(notifier()).unwrap();
+    assert!(st.busy());
+    let before = (st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone());
+    for (name, r) in [
+        ("toggle", st.toggle("cat:0")),
+        ("select", st.select_category("builtin:Avanzate")),
+        ("only old", st.set_only_old(false)),
+        ("analyze", st.analyze(notifier())),
+        ("clean", st.request_clean()),
+        ("confirm", st.confirm(notifier())),
+    ] {
+        assert_eq!(err(r), BUSY, "{name} while a job runs");
+    }
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone()), before);
+    let v = view(&st, false);
+    assert!(!action(&v, "analyze").enabled && !action(&v, "clean").enabled);
+    st.cancel_job().unwrap();
+    finish(&mut st);
+
+    // The confirmation describes the selection: it may not move under it.
+    st.request_clean().unwrap();
+    assert!(st.confirm_clean);
+    for (name, r) in [
+        ("toggle", st.toggle("cat:0")),
+        ("select", st.select_category("builtin:Avanzate")),
+        ("only old", st.set_only_old(false)),
+        ("analyze", st.analyze(notifier())),
+        ("clean", st.request_clean()),
+    ] {
+        assert_eq!(err(r), DIALOG_OPEN, "{name} with the confirmation open");
+    }
+    assert_eq!((st.clean_sel.clone(), st.rule_sel.clone(), st.only_old, st.nav.clone()), before);
+    let v = view(&st, false);
+    assert!(v.options.iter().all(|o| !matches!(o, OptionView::Toggle { enabled: true, .. })), "the box is off while the dialog is open");
+    st.close_confirm();
+    st.toggle("cat:0").unwrap();
+
+    // A report on screen freezes them too; Analyze is the way out (or releasing it).
+    st.clean_view = CleanView::Cleaned;
+    st.clean_report = Some(Default::default());
+    assert_eq!(err(st.toggle("cat:0")), REPORT_OPEN);
+    assert_eq!(err(st.select_category("builtin:Avanzate")), REPORT_OPEN);
+    assert_eq!(err(st.set_only_old(false)), REPORT_OPEN);
+    st.release();
+    assert!(st.clean_report.is_none() && st.clean_view == CleanView::Empty);
+    st.toggle("cat:0").unwrap();
+}
+
+#[test]
+fn analyze_needs_something_selected() {
+    let (mut st, _serial) = recording();
+    st.clean_sel = vec![false; cleaner::CATEGORIES.len()];
+    st.rule_sel.clear();
+    assert_eq!(err(st.analyze(notifier())), NOTHING);
+    st.clean_view = CleanView::Analyzed;
+    assert_eq!(err(st.request_clean()), NOTHING);
+    let v = view(&st, false);
+    assert!(!action(&v, "analyze").enabled && !action(&v, "clean").enabled);
+    assert_eq!(action(&v, "clean").label, "Clean");
+    // A selected row that is blocked does not count.
+    st.rule_sel.insert("native:clipboard".into());
+    st.natives[0].running = &["blocker"];
+    st.processes = vec!["blocker.exe".into()];
+    assert_eq!(err(st.analyze(notifier())), NOTHING);
+    assert!(jobs().is_empty(), "nothing started");
+    st.natives[0].running = &[];
+    st.analyze(notifier()).unwrap();
+    finish(&mut st);
+    assert_eq!(jobs().len(), 1);
+    assert!(!jobs()[0].0, "Analyze never cleans");
+    // `Clean 1 item`: the one native.
+    let v = view(&st, false);
+    assert_eq!(action(&v, "clean").label, "Clean 1 item");
+}
+
+#[test]
+fn cleanup_confirm_needs_the_open_dialog() {
+    let (mut st, _serial) = recording();
+    assert_eq!(err(st.confirm(notifier())), NO_DIALOG);
+    assert!(jobs().is_empty());
+    // Clean works on the analysis on screen: there is none yet.
+    assert_eq!(err(st.request_clean()), NO_ANALYSIS);
+    assert!(!st.confirm_clean && jobs().is_empty());
+    st.analyze(notifier()).unwrap();
+    finish(&mut st);
+    assert_eq!(jobs().len(), 1);
+    // Opening and closing runs nothing; a closed dialog cannot be confirmed.
+    st.request_clean().unwrap();
+    st.close_confirm();
+    assert_eq!(err(st.confirm(notifier())), NO_DIALOG);
+    assert_eq!(jobs().len(), 1);
+    st.request_clean().unwrap();
+    assert!(st.confirm_clean);
+    st.confirm(notifier()).unwrap();
+    assert!(!st.confirm_clean, "the dialog is closed");
+    finish(&mut st);
+    let all = jobs();
+    assert_eq!(all.iter().filter(|j| j.0).count(), 1, "one cleaning job: {all:?}");
+    assert!(all[1].0);
+    assert!(all[1].1.iter().all(|i| st.clean_sel[*i]), "only the chosen categories");
+    // A second Enter finds no dialog.
+    assert_eq!(err(st.confirm(notifier())), NO_DIALOG);
+    assert_eq!(jobs().len(), 2);
+}
+
+#[test]
+fn previews_only_from_the_analysis_on_screen() {
+    let (mut st, _serial) = recording();
+    st.rule_sel.insert("native:env_path".into());
+    st.rule_sel.remove("native:clipboard");
+    let shown = |st: &mut CleanupState| {
+        st.native_found.push(("native:env_path".into(), "Percorso ambiente".into(), NativeFound { items: vec!["C:\\gone".into()], ..Default::default() }));
+    };
+    // Cleaning from the analysis on screen: the PATH preview goes with the job.
+    st.clean_view = CleanView::Analyzed;
+    shown(&mut st);
+    st.start(true, notifier());
+    finish(&mut st);
+    assert_eq!(jobs().last().unwrap().2, ["native:env_path"]);
+    // The same entry, but the screen is no longer an analysis: no preview.
+    st.clean_view = CleanView::Cleaned;
+    shown(&mut st);
+    st.start(true, notifier());
+    finish(&mut st);
+    assert!(jobs().last().unwrap().2.is_empty());
+    // An analysis never carries one.
+    st.clean_view = CleanView::Analyzed;
+    shown(&mut st);
+    st.start(false, notifier());
+    finish(&mut st);
+    assert!(jobs().last().unwrap().2.is_empty());
+    // End to end: Analyze shows the PATH entries, Clean through the dialog uses exactly those; a
+    // new Analyze that replaced them leaves nothing to reuse once the cleaning is over.
+    st.analyze(notifier()).unwrap();
+    finish(&mut st);
+    st.request_clean().unwrap();
+    st.confirm(notifier()).unwrap();
+    finish(&mut st);
+    let last = jobs().pop().unwrap();
+    assert!(last.0 && last.2 == ["native:env_path"], "{last:?}");
+    assert_eq!(st.clean_view, CleanView::Cleaned);
+    assert_eq!(err(st.request_clean()), NO_ANALYSIS, "a report is not an analysis to clean");
+}
+
+/// The warnings of an open confirmation describe the rules it was opened for: rules that load under
+/// it close it (a new analysis is not needed, a new confirmation is).
+#[test]
+fn a_dialog_does_not_outlive_the_rules_it_was_opened_for() {
+    let mut st = analyzed(QUIET);
+    st.request_clean().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    st.rules_rx = Some(rx);
+    tx.send(rules::RulesMsg::Updated(xiox_rules::updater::UpdateOutcome::UpToDate)).unwrap();
+    st.poll();
+    assert!(st.confirm_clean, "an update outcome changes no rule");
+    tx.send(rules::RulesMsg::Loaded(rule_set())).unwrap();
+    st.poll();
+    assert!(!st.confirm_clean);
+    assert_eq!(err(st.confirm(notifier())), NO_DIALOG);
+    st.request_clean().unwrap();
+}
+
+// ---------- the view ----------
+
+#[test]
+fn cleanup_view_groups_levels_and_modes() {
+    let mut st = state();
+    let v = view(&st, false);
+    let nav: Vec<(&str, &str, bool)> = v.nav.iter().map(|n| (n.id.as_str(), n.name.as_str(), n.active)).collect();
+    assert_eq!(
+        nav,
+        [
+            ("builtin:Sistema", "Sistema", true),
+            ("builtin:Esplora file", "Esplora file", false),
+            ("builtin:Avanzate", "Avanzate", false),
+            ("rules:Windows", "Windows", false),
+            ("rules:Sviluppo e AI", "Sviluppo e AI", false),
+            ("winapp2", rules::WINAPP2_GROUP, false),
+        ]
+    );
+    assert_eq!(v.nav[0].note.as_deref(), Some("6 items · 6 selected"));
+    assert_eq!(v.nav[1].note.as_deref(), Some("1 item · 0 selected"));
+    assert_eq!(v.nav[3].note.as_deref(), Some("2 items · 1 selected"));
+    assert_eq!(v.nav[4].note.as_deref(), Some("2 items · 0 selected"));
+    assert_eq!(v.nav[5].note.as_deref(), Some("4 items · 0 selected"));
+    assert!(v.nav.iter().all(|n| n.bytes.is_none()), "no analysis yet");
+    assert_eq!(v.columns.iter().map(|c| (c.title.as_str(), c.kind)).collect::<Vec<_>>(), [
+        ("Item", ColumnKind::Name),
+        ("Level", ColumnKind::Level),
+        ("Files", ColumnKind::Cell),
+        ("Size", ColumnKind::Size),
+    ]);
+    assert_eq!((v.section, v.rev, v.title.as_str()), (SectionId::Cleanup, 0, "Sistema"));
+    assert!(!v.bulk && v.search.is_none() && v.dialog.is_none() && v.report.is_none() && v.job.is_none());
+    // Built-in rows: the Recycle Bin empties, a default-on category is recommended.
+    let bin = row(&v, "cat:0");
+    assert_eq!((bin.level, bin.check, bin.enabled), (Some(LevelView::Recommended), Check::On, true));
+    assert_eq!(bin.name, cleaner::CATEGORIES[0].name);
+    assert_eq!(bin.sub.as_deref(), Some(cleaner::CATEGORIES[0].help));
+    assert_eq!(detail(bin, "mode"), Some("empties the Recycle Bin"));
+    assert_eq!(detail(row(&v, "cat:1"), "mode"), Some("permanently"));
+    assert_eq!(detail(bin, "why"), Some(cleaner::CATEGORIES[0].help));
+    assert_eq!(detail(bin, "item"), Some(cleaner::CATEGORIES[0].name));
+    assert!(bin.cells.is_empty() && bin.bytes.is_none(), "no figures before an analysis");
+    // Default-off: optional. Needs administrator: said for a standard user, not for an administrator.
+    open(&mut st, "builtin:Esplora file");
+    let thumbs = view(&st, false);
+    assert_eq!((row(&thumbs, "cat:6").level, row(&thumbs, "cat:6").check), (Some(LevelView::Optional), Check::Off));
+    open(&mut st, "builtin:Avanzate");
+    let why = "Needs administrator: some folders are skipped";
+    assert_eq!(row(&view(&st, false), "cat:7").why.as_deref(), Some(why));
+    assert_eq!(row(&view(&st, true), "cat:7").why, None);
+    // Natives and options: caution for a warning, the blocked reason for an unsupported one.
+    open(&mut st, "rules:Windows");
+    let v = view(&st, false);
+    let (clip, path) = (row(&v, "native:clipboard"), row(&v, "native:env_path"));
+    assert_eq!((clip.level, clip.check, clip.sub.as_deref()), (Some(LevelView::Recommended), Check::On, Some(st.natives[0].description)));
+    assert_eq!((path.level, path.check, path.enabled), (Some(LevelView::Caution), Check::Off, true));
+    assert_eq!(path.why.as_deref(), st.natives[1].warning);
+    assert_eq!(detail(path, "warning"), st.natives[1].warning);
+    assert_eq!(detail(path, "mode"), Some("permanently"));
+    open(&mut st, "rules:Sviluppo e AI");
+    let v = view(&st, false);
+    let (history, legacy) = (row(&v, "t_tool/history"), row(&v, "t_tool/legacy"));
+    assert_eq!((history.name.as_str(), history.level, history.enabled), ("Toolchain – History", Some(LevelView::Caution), true));
+    assert_eq!(history.sub, None, "neither the option nor its cleaner has a description");
+    assert!(detail(history, "why").is_none(), "no description: no why");
+    assert_eq!(detail(history, "warning"), Some("Forgets every command you typed."));
+    let rs = rule_set();
+    let blocked = rules::blocked(&rs.cleaners[0], &rs.cleaners[0].options[1], &[]).unwrap();
+    assert_eq!((legacy.enabled, legacy.muted, legacy.check, legacy.level), (false, true, Check::Off, Some(LevelView::Optional)));
+    assert_eq!(legacy.why.as_deref(), Some(blocked.as_str()));
+    assert_eq!((legacy.sub.as_deref(), detail(legacy, "why")), (Some("Old files."), Some("Old files.")));
+    // The box, the buttons.
+    assert!(matches!(&v.options[0], OptionView::Toggle { id, label, on: true, enabled: true, .. }
+        if id == "onlyOld" && label == "Only delete Temp files older than 24 hours"));
+    assert_eq!(v.options.len(), 1, "no cookie list in this category");
+    assert_eq!((action(&v, "analyze").label.as_str(), action(&v, "analyze").key.as_deref(), action(&v, "analyze").enabled), ("Analyze", Some("a"), true));
+    let clean = action(&v, "clean");
+    assert_eq!((clean.label.as_str(), clean.key.as_deref(), clean.primary, clean.enabled), ("Clean 7 items", Some("Enter"), true, false));
+    assert_eq!((v.status.badge.as_str(), v.status.text.as_str()), ("Ready", "Pick what to clean, then analyze"));
+    // After an analysis: figures, sizes per group, the total in the status.
+    st.clean_view = CleanView::Analyzed;
+    st.found[0] = Some(cleaner::Found { count: 5, bytes: 1000, skipped_dirs: 2, ..Default::default() });
+    st.found[7] = Some(cleaner::Found { count: 2, bytes: 24, ..Default::default() });
+    st.native_found.push(("native:clipboard".into(), "Appunti".into(), NativeFound { bytes: 0, detail: vec!["1 voce".into(), "altro".into()], ..Default::default() }));
+    st.rule_found.push(("t_tool/history".into(), "Toolchain – History".into(), rules::RuleFound { count: 4, bytes: 77, skipped: 3, skipped_reasons: vec!["a".into(), "b".into()], ..Default::default() }));
+    let v = view(&st, false);
+    assert_eq!(v.nav.iter().map(|n| n.bytes).collect::<Vec<_>>(), [Some(1000), Some(0), Some(24), Some(0), Some(77), Some(0)]);
+    assert_eq!(v.status.text, format!("{} to delete (11 files)", sys::fmt_size(1101)));
+    let history = row(&v, "t_tool/history");
+    assert_eq!((history.cells.as_slice(), history.bytes), (&["4".to_string()][..], Some(77)));
+    assert_eq!(detail(history, "left"), Some("3 items left (protected or unreadable)"));
+    assert_eq!(history.lines, ["a", "b"]);
+    open(&mut st, "rules:Windows");
+    let clip = view(&st, false).rows.into_iter().find(|r| r.id == "native:clipboard").unwrap();
+    assert_eq!((clip.cells.as_slice(), clip.lines.len()), (&["—".to_string()][..], 2), "not files: a dash, the lines are the detail");
+    open(&mut st, "builtin:Sistema");
+    let bin = view(&st, false).rows.into_iter().find(|r| r.id == "cat:0").unwrap();
+    assert_eq!((bin.cells.as_slice(), bin.bytes), (&["5".to_string()][..], Some(1000)));
+    assert!(detail(&bin, "skipped").is_some(), "folders were skipped without administrator rights");
+    assert_eq!(view(&st, true).rows[0].detail.iter().any(|(k, _)| k == "skipped"), false);
+}
+
+#[test]
+fn cleanup_view_confirm_lists_the_warnings_of_the_open_dialog() {
+    let mut st = analyzed(QUIET);
+    st.rule_sel.insert("t_tool/history".into());
+    st.rule_sel.insert("native:env_path".into());
+    st.request_clean().unwrap();
+    let v = view(&st, false);
+    let d = v.dialog.as_ref().expect("the dialog is open");
+    assert_eq!(d.id, "confirm");
+    assert_eq!(d.title, "Start cleaning?");
+    assert_eq!(d.text, ["The selected files will be deleted permanently. Files in use are left where they are."]);
+    assert_eq!(d.warnings_title.as_deref(), Some("Warnings for the chosen options"));
+    assert_eq!(d.warnings, st.confirm_warnings);
+    assert!(d.warnings.iter().any(|w| w.starts_with("Toolchain – History: ")), "{:?}", d.warnings);
+    assert!(d.warnings.iter().any(|w| w.starts_with(st.natives[1].label)), "{:?}", d.warnings);
+    assert!(d.summary.is_empty() && d.rows.is_empty() && d.cautions.is_empty() && d.caution_title.is_none() && d.ack.is_none() && d.error.is_none());
+    // Primary first, as the egui dialog has them.
+    assert_eq!(d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary, b.enabled)).collect::<Vec<_>>(), [
+        ("continue", "Continue", true, true),
+        ("cancel", "Cancel", false, true),
+    ]);
+    assert!(button(d, "continue").enabled);
+    // Behind it the section is frozen.
+    assert!(!action(&v, "analyze").enabled && !action(&v, "clean").enabled);
+    // The warnings are the ones of what is chosen now: nothing chosen with a warning, no title.
+    st.close_confirm();
+    assert!(view(&st, false).dialog.is_none());
+    st.rule_sel.clear();
+    st.request_clean().unwrap();
+    let d = view(&st, false).dialog.unwrap();
+    assert!(d.warnings.is_empty() && d.warnings_title.is_none());
+}
+
+#[test]
+fn cleanup_view_report_and_items_after_cleaning() {
+    let mut st = state();
+    let (tx, rx) = std::sync::mpsc::channel();
+    st.clean_job = Some(rx);
+    st.clean_view = CleanView::Cleaned;
+    st.clean_cancel = Some((xiox_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
+    st.clean_chosen = Chosen { cats: vec![1, 3], others: vec![("native:clipboard".into(), "Appunti".into()), ("t_tool/history".into(), "Toolchain – History".into())] };
+    let locked = PathBuf::from(r"C:\t\a.tmp");
+    tx.send(CleanMsg::Progress("Pulizia – Cestino".into(), 0.5)).unwrap();
+    let cat = cleaner::Cleaned { freed: 100, removed: 4, failed: 1, dirs: 2, failures: vec![(locked.clone(), "in uso".into())], cancelled: false };
+    tx.send(CleanMsg::Cleaned(1, cleaner::Found::default(), cat)).unwrap();
+    let nat = native::NativeCleaned { removed: 1, notes: vec!["una nota".into()], done: vec!["Appunti svuotati".into()], ..Default::default() };
+    tx.send(CleanMsg::Native("native:clipboard".into(), "Appunti".into(), NativeFound::default(), Some(nat))).unwrap();
+    let rule = rules::RuleCleaned { freed: 500, removed: 12, files: 10, failed: 2, backup: Some(PathBuf::from(r"C:\b\x.reg")), ..Default::default() };
+    tx.send(CleanMsg::Rule("t_tool/history".into(), "Toolchain – History".into(), rules::RuleFound::default(), Some(rule))).unwrap();
+    st.poll();
+    // Running: the totals come through the status, the job through `job`, Cancel is offered.
+    let v = view(&st, false);
+    assert_eq!((v.status.badge.as_str(), v.status.text.clone()), ("Cleaning", format!("{} freed", sys::fmt_size(600))));
+    let job = v.job.as_ref().unwrap();
+    assert_eq!((job.label.as_str(), job.fraction, job.detail.as_deref()), ("Cleaning…", 0.5, Some("Pulizia – Cestino")));
+    assert!(action(&v, "cancel").enabled && !action(&v, "clean").enabled && !action(&v, "analyze").enabled);
+    assert!(v.report.is_none() && view(&st, false).rows.len() == 6);
+    assert_eq!(st.report_text(), None, "nothing to save while it runs");
+    tx.send(CleanMsg::Done).unwrap();
+    st.poll();
+    let v = view(&st, false);
+    let r = v.report.as_ref().expect("the report");
+    assert_eq!((r.title.as_str(), r.cancelled, r.freed_bytes, r.files, r.dirs), ("Cleanup done", false, 600, 14, 2));
+    assert_eq!(v.status.badge, "Cleanup done");
+    assert_eq!(r.by_category, [("Toolchain – History".to_string(), 500), (cleaner::CATEGORIES[1].name.to_string(), 100)]);
+    // The files that stayed name their category; a counted failure names the option; the items that
+    // never answered are skipped.
+    let named: Vec<(&str, &str, &str)> = r.failed.iter().map(|l| (l.item.as_str(), l.why.as_str(), l.path.as_str())).collect();
+    assert_eq!(named[0], (cleaner::CATEGORIES[1].name, "in uso", r"C:\t\a.tmp"));
+    assert_eq!((named[1].0, named[1].2), ("Toolchain – History", ""));
+    let skipped: Vec<(&str, &str)> = r.skipped.iter().map(|l| (l.item.as_str(), l.path.as_str())).collect();
+    assert_eq!(skipped, [(cleaner::CATEGORIES[3].name, "")]);
+    assert_eq!(r.notes.iter().map(|n| n.tone).collect::<Vec<_>>(), [Tone::Warn]);
+    let items: Vec<(&str, u64, u64, u64, Option<&str>, Vec<&str>)> =
+        r.items.iter().map(|i| (i.name.as_str(), i.freed_bytes, i.removed, i.left, i.note.as_deref(), i.lines.iter().map(String::as_str).collect())).collect();
+    assert_eq!(items, [
+        (cleaner::CATEGORIES[1].name, 100, 4, 1, None, vec![]),
+        ("Appunti", 0, 1, 0, Some("una nota"), vec!["Appunti svuotati", "una nota"]),
+        ("Toolchain – History", 500, 12, 2, Some(r"Registry backup: C:\b\x.reg"), vec![r"Registry backup: C:\b\x.reg"]),
+    ]);
+    assert!(r.can_save && r.saved.is_none());
+    assert!(st.report_text().unwrap().contains("Resoconto della pulizia"));
+    st.set_saved("Saved.".into(), true);
+    assert_eq!(view(&st, false).report.unwrap().saved, Some(SavedView { text: "Saved.".into(), ok: true }));
+    // After the report: nothing to clean, Analyze allowed; the figures of the analysis are gone.
+    assert!(!action(&v, "clean").enabled && action(&v, "analyze").enabled && v.job.is_none());
+    assert!(v.rows.iter().all(|r| r.cells.is_empty() && r.bytes.is_none()));
+
+    // Cancelled: the same report, flagged, with no list left to choose from and Clean off.
+    let mut st = state_with(HOLD);
+    st.analyze(notifier()).unwrap();
+    st.cancel_job().unwrap();
+    finish(&mut st);
+    assert_eq!(st.clean_end, Some(CleanEnd::Cancelled));
+    st.clean_sel[1] = true;
+    let (tx, rx) = std::sync::mpsc::channel();
+    st.clean_job = Some(rx);
+    st.clean_view = CleanView::Cleaned;
+    st.clean_chosen = Chosen { cats: vec![1], others: vec![] };
+    st.clean_cancel = Some((xiox_cleaner::Cancel::default(), Arc::new(AtomicBool::new(false))));
+    st.cancel_job().unwrap();
+    assert_eq!(view(&st, false).status.badge, "Cancelling");
+    assert_eq!(view(&st, false).job.unwrap().label, "Cancelling…");
+    let cancelling = view(&st, false);
+    assert_eq!((action(&cancelling, "cancel").label.as_str(), action(&cancelling, "cancel").enabled), ("Cancelling…", false));
+    tx.send(CleanMsg::Done).unwrap();
+    st.poll();
+    let v = view(&st, false);
+    let r = v.report.as_ref().unwrap();
+    assert_eq!((r.title.as_str(), r.cancelled, v.status.badge.as_str()), ("Cleanup cancelled", true, "Cleanup cancelled"));
+    assert!(v.rows.is_empty() && v.empty.is_none(), "the report fills the place of the list");
+    assert!(!action(&v, "clean").enabled && action(&v, "analyze").enabled);
+    assert_eq!(r.notes[0].tone, Tone::Info);
+    assert!(r.skipped.iter().any(|l| l.item == cleaner::CATEGORIES[1].name), "the category that never ran is skipped");
+
+    // A worker that died: the report says so, and it is not called cancelled.
+    let mut st = state();
+    let (tx, rx) = std::sync::mpsc::channel::<CleanMsg>();
+    st.clean_job = Some(rx);
+    st.clean_view = CleanView::Cleaned;
+    drop(tx);
+    st.poll();
+    let v = view(&st, false);
+    assert_eq!(v.status.badge, "Cleanup stopped");
+    assert!(v.report.as_ref().unwrap().notes.iter().any(|n| n.tone == Tone::Error));
+}
+
+#[test]
+fn cancel_and_release_follow_the_job() {
+    let mut st = state_with(HOLD);
+    assert_eq!(err(st.cancel_job()), NOTHING_TO_CANCEL);
+    st.analyze(notifier()).unwrap();
+    let v = view(&st, false);
+    assert_eq!((v.status.badge.as_str(), v.job.as_ref().unwrap().label.as_str()), ("Analyzing", "Analyzing…"));
+    assert!(action(&v, "cancel").enabled && action(&v, "cancel").key.as_deref() == Some("Esc"));
+    st.cancel_job().unwrap();
+    assert_eq!(view(&st, false).status.badge, "Cancelling");
+    finish(&mut st);
+    // The analysis that was cut short says so, as an error notice.
+    let v = view(&st, false);
+    assert_eq!(st.clean_end, Some(CleanEnd::Cancelled));
+    assert_eq!(v.status.badge, analysis_title(false, st.clean_end).0);
+    assert_eq!(v.notices.len(), 1);
+    assert_eq!((v.notices[0].tone, v.notices[0].text.as_str()), (Tone::Error, analysis_title(false, st.clean_end).1.unwrap()));
+    assert!(v.actions.iter().all(|a| a.id != "cancel"));
+    // Nothing to release while a job runs; after it the section is empty, the choices stay.
+    let mut st = state_with(HOLD);
+    st.clean_sel[2] = false;
+    st.analyze(notifier()).unwrap();
+    st.release();
+    assert!(st.busy() && st.clean_view == CleanView::Analyzed);
+    st.cancel_job().unwrap();
+    finish(&mut st);
+    st.release();
+    assert_eq!((st.clean_view == CleanView::Empty, st.clean_end, st.found.iter().flatten().count()), (true, None, 0));
+    assert!(!st.clean_sel[2]);
+}
+
+#[test]
+fn keep_list_belongs_to_the_cookie_item() {
+    let mut st = state();
+    assert_eq!(err(st.open_keep_list()), NO_KEEP_LIST, "refused without the item, before anything starts");
+    let mut cookies = st.natives[0];
+    cookies.id = browserdb::COOKIES_ID;
+    cookies.group = "Browser";
+    st.natives.push(cookies);
+    let ids = |v: &SectionView| v.options.iter().filter_map(|o| match o {
+        OptionView::Button { id, label, enabled, hint } => Some((id.clone(), label.clone(), *enabled, hint.is_some())),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert!(ids(&view(&st, false)).is_empty());
+    open(&mut st, "rules:Browser");
+    assert_eq!(ids(&view(&st, false)), [("keepList".to_string(), "Edit cookie keep list".to_string(), true, true)]);
+    open(&mut st, "rules:Windows");
+    assert!(ids(&view(&st, false)).is_empty());
+}
+
+// ---------- Winapp2 ----------
+
+#[test]
+fn winapp2_search_matches_section_cleaner_or_option() {
+    let rs = rule_set();
+    let m = |needle: &str| winapp2_matches(&rs, needle);
+    let all = vec![("Browsers".to_string(), vec![3]), ("Utilities".to_string(), vec![1, 2])];
+    assert_eq!(m(""), all);
+    assert_eq!(m("   "), all, "blank is no filter");
+    assert_eq!(m("UTIL"), [("Utilities".to_string(), vec![1, 2])], "a section name takes the whole section");
+    assert_eq!(m("gamma"), [("Browsers".to_string(), vec![3])], "a cleaner name");
+    assert_eq!(m(" Logs "), [("Utilities".to_string(), vec![2])], "an option label, any case, trimmed");
+    assert!(m("zzz").is_empty());
+
+    // In the view: a header per section with the number of cleaners, its options after it, the box
+    // only in this category, and the status line of Winapp2 with its reasons.
+    let mut st = state();
+    st.winapp2_update = Some(xiox_rules::updater::UpdateOutcome::NoCopyYet("rete assente".into()));
+    open(&mut st, "winapp2");
+    let v = view(&st, false);
+    assert_eq!(v.title, rules::WINAPP2_GROUP);
+    assert_eq!(v.search, Some(SearchView { placeholder: "Search".into(), value: String::new() }));
+    let shown: Vec<(&str, RowKind, &str)> = v.rows.iter().map(|r| (r.id.as_str(), r.kind, r.name.as_str())).collect();
+    assert_eq!(shown, [
+        ("section:Browsers", RowKind::Header, "Browsers (1)"),
+        ("w_gamma/cache", RowKind::Item, "Gamma"),
+        ("section:Utilities", RowKind::Header, "Utilities (2)"),
+        ("w_alpha/cache", RowKind::Item, "Alpha App"),
+        ("w_beta/logs", RowKind::Item, "Beta Tool – Logs"),
+        ("w_beta/temp", RowKind::Item, "Beta Tool – Temp"),
+    ]);
+    assert_eq!(row(&v, "section:Utilities").check, Check::None);
+    let (text, why) = rules::status_line(st.rules.as_ref().unwrap(), st.winapp2_update.as_ref());
+    let status = v.options.iter().find_map(|o| match o {
+        OptionView::Text { text, hint, .. } => Some((text.clone(), hint.clone())),
+        _ => None,
+    });
+    assert_eq!(status, Some((text, Some(format!("{}\nWinapp2: 2 regole scartate", why.unwrap())))));
+    st.set_search("logs");
+    let v = view(&st, false);
+    assert_eq!(v.search.as_ref().unwrap().value, "logs");
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["section:Utilities", "w_beta/logs", "w_beta/temp"]);
+    assert_eq!(row(&v, "section:Utilities").name, "Utilities (1)");
+    // Headers are not choosable, rows are, and a search that finds nothing says so.
+    assert!(st.toggle("section:Utilities").is_err());
+    st.toggle("w_beta/logs").unwrap();
+    assert_eq!(row(&view(&st, false), "w_beta/logs").check, Check::On);
+    st.set_search("zzz");
+    let v = view(&st, false);
+    assert!(v.rows.is_empty() && v.empty.is_some());
+    open(&mut st, "builtin:Sistema");
+    assert!(view(&st, false).search.is_none(), "the box exists only in this category");
+    // Rules not loaded yet: no Winapp2 entry, the natives are there already.
+    st.rules = None;
+    let v = view(&st, false);
+    assert_eq!(v.nav.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["builtin:Sistema", "builtin:Esplora file", "builtin:Avanzate", "rules:Windows"]);
+    assert!(st.select_category("winapp2").is_err());
+}
