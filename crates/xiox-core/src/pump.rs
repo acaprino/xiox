@@ -10,6 +10,7 @@ use crate::app::Core;
 use crate::notify::{Notifier, SectionId};
 use crate::view::SectionView;
 use std::collections::BTreeSet;
+use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -52,8 +53,21 @@ pub fn spawn_pump(core: Arc<Mutex<Core>>, rx: Receiver<SectionId>, sink: Arc<dyn
                 sections.insert(s);
             }
             for s in sections {
-                let view = core.lock().unwrap_or_else(|e| e.into_inner()).view(s);
-                sink.send(&view);
+                // A panic in one view builder or in the sink must not end the pump: the page would
+                // keep its last view (a spinner) while every intent still answered. The section that
+                // panicked is skipped; the lock it poisoned is taken again as it is.
+                let one = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    let view = core.lock().unwrap_or_else(|e| e.into_inner()).view(s);
+                    sink.send(&view);
+                }));
+                if let Err(panic) = one {
+                    let why = panic
+                        .downcast_ref::<&str>()
+                        .map(|m| m.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    eprintln!("xiox: the view of {s:?} could not be published ({why}); the next one will be tried");
+                }
             }
         }
     })
@@ -67,7 +81,7 @@ mod tests {
     use crate::dev::{DevCleanJob, DevMsg, DevState, DevWorkers, Section};
     use crate::notify::Outbox;
     use crate::regstate::RegistryState;
-    use crate::svcstate::ServicesState;
+    use crate::svcstate::{ServicesState, ServicesWorkers, SvcMsg};
     use crate::view::{DevIntent, Tone};
     use std::time::Instant;
 
@@ -106,6 +120,13 @@ mod tests {
 
     /// A core whose workers never reach the engine, whose notifier is the pump's, and the pump over it.
     fn running(scan: fn(xiox_model::Settings, bool, Outbox<DevMsg>)) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
+        running_with(scan, ServicesState::new())
+    }
+
+    fn running_with(
+        scan: fn(xiox_model::Settings, bool, Outbox<DevMsg>),
+        services: ServicesState,
+    ) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
         let (notifier, rx) = pump_channel();
         let mut dev = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
             .with_workers(DevWorkers { scan, clean: clean_never });
@@ -115,7 +136,7 @@ mod tests {
             Arc::new(PumpNotifier { tx: notifier.tx.clone() }),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers::REAL),
             RegistryState::new(),
-            ServicesState::new(),
+            services,
             dev,
         );
         let core = Arc::new(Mutex::new(core));
@@ -153,5 +174,70 @@ mod tests {
         sink.wait_for("a Developers view without a job and with an error", |v| {
             v.iter().any(|v| v.section == SectionId::Developers && v.job.is_none() && v.notices.iter().any(|n| n.tone == Tone::Error))
         });
+    }
+
+    fn load_never(_: Outbox<SvcMsg>) {}
+    fn apply_never(_: Vec<crate::services::Service>, _: Option<u32>, _: Outbox<SvcMsg>) {}
+    fn saved_none() -> usize {
+        0
+    }
+    fn memory_panics() -> crate::sys::Memory {
+        panic!("a view builder panicked");
+    }
+
+    /// A panic inside one view (here the Services meter, read while the core is locked: the lock is
+    /// poisoned) does not end the pump: the next wake-up, of any section, is still published.
+    #[test]
+    fn a_view_that_panics_does_not_stop_the_pump() {
+        let workers = ServicesWorkers { load: load_never, apply: apply_never, saved: saved_none, memory: memory_panics };
+        let (_core, sink, notifier) = running_with(scan_never, ServicesState::new().with_workers(workers));
+        notifier.notify(SectionId::Services);
+        std::thread::sleep(Duration::from_millis(3 * PUMP_COALESCE_MS));
+        assert!(sink.views().is_empty(), "the view that panicked is not published");
+        notifier.notify(SectionId::Registry);
+        sink.wait_for("the Registry view after the panic", |v| v.iter().any(|v| v.section == SectionId::Registry));
+        // Two sections in one burst: the one that panics does not take the other down with it.
+        notifier.notify(SectionId::Services);
+        notifier.notify(SectionId::Cleanup);
+        sink.wait_for("the Cleanup view of the same burst", |v| v.iter().any(|v| v.section == SectionId::Cleanup));
+    }
+
+    /// A sink that panics once (a closed window, say) does not end it either.
+    #[test]
+    fn a_sink_that_panics_does_not_stop_the_pump() {
+        struct Flaky(Mutex<u32>, Recorder);
+        impl ViewSink for Flaky {
+            fn send(&self, view: &SectionView) {
+                let first = {
+                    let mut n = self.0.lock().unwrap();
+                    *n += 1;
+                    *n == 1
+                };
+                if first {
+                    panic!("the window is gone");
+                }
+                self.1.send(view);
+            }
+        }
+        let (notifier, rx) = pump_channel();
+        let core = Core::with_states(
+            CoreOptions { version: "t".into(), admin: false, only_root: None, load_rules: false, update_rules: false },
+            Arc::new(PumpNotifier { tx: notifier.tx.clone() }),
+            CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers::REAL),
+            RegistryState::new(),
+            ServicesState::new(),
+            {
+                let mut d = DevState::with_settings(xiox_app::default_settings(), Section::Projects, false)
+                    .with_workers(DevWorkers { scan: scan_never, clean: clean_never });
+                d.persist = false;
+                d
+            },
+        );
+        let sink = Arc::new(Flaky(Mutex::new(0), Recorder::default()));
+        spawn_pump(Arc::new(Mutex::new(core)), rx, sink.clone());
+        notifier.notify(SectionId::Cleanup);
+        std::thread::sleep(Duration::from_millis(3 * PUMP_COALESCE_MS));
+        notifier.notify(SectionId::Registry);
+        sink.1.wait_for("a view after the sink panicked", |v| v.iter().any(|v| v.section == SectionId::Registry));
     }
 }

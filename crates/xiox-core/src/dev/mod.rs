@@ -29,7 +29,7 @@ use std::time::Instant;
 mod tests;
 
 #[cfg(test)]
-mod intent_tests;
+pub(crate) mod intent_tests;
 /// `DevState::view`: the section as a `SectionView`.
 mod view;
 

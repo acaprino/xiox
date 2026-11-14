@@ -311,6 +311,7 @@ mod tests {
     use crate::notify::{NoNotifier, Outbox};
     use crate::svcstate::{ServicesWorkers, SvcMsg};
     use crate::view::testing::wait;
+    use crate::view::RemoveModeView;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::sync::Arc;
 
@@ -514,6 +515,28 @@ mod tests {
         assert!(c.cleanup(CleanupIntent::Confirm).is_err(), "and no confirmation to confirm");
     }
 
+    /// A confirmation whose analysis went stale while the dialog was open does not clean: the state
+    /// closes it and puts the warning on screen, and `Core` still answers with the view (`Ok`), never
+    /// with an error: the page reads the warning from the view.
+    #[test]
+    fn a_stale_confirm_returns_the_view_with_the_warning_and_starts_nothing() {
+        let mut c = core();
+        let now = xiox_app::now_ms();
+        let analysed_at = now - (xiox_app::MAX_SCAN_AGE_MS as i64) - 60_000;
+        let mut scan = crate::dev::intent_tests::three_sections();
+        scan.scanned_at_ms = analysed_at;
+        c.dev.persist = true; // `set_scan` empties a scan when it does not persist; the state stops saving after
+        c.dev.set_scan(scan);
+        c.dev.persist = false;
+        // The dialog opened when the analysis was fresh and has been left open since.
+        c.dev.open_confirm_with(analysed_at + 1000, |_| Vec::new());
+        assert!(c.dev.confirm.is_some(), "the dialog is open");
+        let v = c.developers(DevIntent::Confirm).expect("nothing started, and that is not an error");
+        assert!(v.dialog.is_none() && v.job.is_none() && v.report.is_none(), "no dialog, no job, no report");
+        assert!(v.notices.iter().any(|n| n.tone == Tone::Warn && n.text == dev::STALE_SCAN), "the warning is on the view: {:?}", v.notices);
+        assert!(!c.dev.busy() && c.dev.cleaned.is_none(), "nothing ran");
+    }
+
     /// A worker that ended since the last view is seen BEFORE the intent is judged: `OpenConfirm` right
     /// after an analysis landed must not be refused as busy, and a dead job must not be confirmed.
     #[test]
@@ -537,5 +560,71 @@ mod tests {
         // The outcome of a save is shown by the section that has a report; the others ignore it.
         let v = c.set_saved(SectionId::Registry, "Report saved to x".into(), true);
         assert!(v.report.is_none());
+    }
+
+    /// Polls the Developers view until `done` holds (the real engine runs in worker threads).
+    fn developers_until(c: &mut Core, what: &str, done: impl Fn(&SectionView) -> bool) -> SectionView {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let v = c.view(SectionId::Developers);
+            if done(&v) {
+                return v;
+            }
+            assert!(std::time::Instant::now() < until, "within 120 s: {what}");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// The real engine on a temp tree, end to end: analyze, choose the build folder, confirm, clean.
+    /// It reads the session stores read-only (the scan looks at them; `only_root` then keeps only what
+    /// is under the temp tree) and deletes only inside its own temp tree, for good: never the real
+    /// Recycle Bin. `cargo test -p xiox-core app::developers_clean_a_temp_project_end_to_end -- --ignored`
+    #[test]
+    #[ignore = "real engine on a temp tree; reads the session stores read-only"]
+    fn developers_clean_a_temp_project_end_to_end() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let project = root.join("proj");
+        let target = project.join("target");
+        std::fs::create_dir_all(target.join("debug")).unwrap();
+        std::fs::write(project.join("Cargo.toml"), "[package]
+name = \"proj\"
+version = \"0.1.0\"
+").unwrap();
+        std::fs::write(target.join("debug").join("blob.bin"), vec![7u8; 1 << 20]).unwrap();
+
+        let mut c = Core::new(
+            CoreOptions { version: "t".into(), admin: false, only_root: Some(root.clone()), load_rules: false, update_rules: false },
+            Arc::new(NoNotifier),
+        );
+        // For good, whatever the Recycle Bin holds: nothing of this test goes into the real one.
+        c.developers(DevIntent::SetRemoveMode { mode: RemoveModeView::Permanent }).unwrap();
+        let build_row = |v: &SectionView| {
+            v.rows.iter().find(|r| r.id.starts_with("a:") && r.detail.iter().any(|(k, folder)| k == "folder" && folder.ends_with("target"))).cloned()
+        };
+        c.developers(DevIntent::Analyze).unwrap();
+        let mut v = developers_until(&mut c, "the analysis ends", |v| v.job.is_none());
+        if build_row(&v).is_none() {
+            // The project is not recognised without a repository: make one and look again.
+            let git = std::process::Command::new("git").arg("init").arg("-q").arg(&project).status();
+            assert!(git.is_ok_and(|s| s.success()), "git init on the temp project");
+            c.developers(DevIntent::Analyze).unwrap();
+            v = developers_until(&mut c, "the second analysis ends", |v| v.job.is_none());
+        }
+        let row = build_row(&v).unwrap_or_else(|| panic!("the build folder is listed: {:?}", v.rows.iter().map(|r| &r.id).collect::<Vec<_>>()));
+        if row.check != Check::On {
+            c.developers(DevIntent::Toggle { row: row.id.clone() }).unwrap();
+        }
+        let v = c.developers(DevIntent::OpenConfirm).expect("Clean opens its confirmation");
+        let dialog = v.dialog.expect("the confirmation is open");
+        if dialog.ack.is_some() {
+            c.developers(DevIntent::SetAck { on: true }).unwrap();
+        }
+        c.developers(DevIntent::Confirm).expect("the confirmation starts the clean");
+        let v = developers_until(&mut c, "a report", |v| v.job.is_none() && v.report.is_some());
+        let report = v.report.unwrap();
+        assert!(report.freed_bytes >= 1 << 20, "freed {} bytes", report.freed_bytes);
+        assert!(!target.exists(), "the build folder is gone");
+        assert!(project.join("Cargo.toml").exists(), "the project stays");
     }
 }

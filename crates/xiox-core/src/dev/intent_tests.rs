@@ -66,7 +66,7 @@ fn session(id: &str, blocked: Option<&str>, file: bool, bytes: u64) -> ArchivedS
 
 
 /// Un progetto (più uno bloccato), un worktree d'agente e due sessioni.
-fn three_sections() -> DevScan {
+pub(crate) fn three_sections() -> DevScan {
     let mut wt = report("w", ProjectStatus::Recent, false, 30);
     wt.is_agent_worktree = true;
     DevScan {
