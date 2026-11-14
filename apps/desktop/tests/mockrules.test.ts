@@ -30,14 +30,20 @@ const FROZEN: [SectionId, string][] = [
   ['developers', 'analyzing'], ['developers', 'confirm'], ['developers', 'shortfall'], ['developers', 'cleaning'], ['developers', 'report'], ['developers', 'cancelled'],
 ];
 
-test('the fixture freezes the rows and the actions of every state with a job, a dialog or a report', () => {
+test('a state with a job offers nothing but Cancel, and a report that dropped its analysis lists no row', () => {
+  // Rust never greys a row because of a job (the page does, and Rust refuses a toggle anyway): the fixture
+  // says what Rust says, so it is the MODEL below that must refuse. Actions are Rust's own: busy = only Cancel.
   for (const [section, name] of FROZEN) {
     const view = fixture.views[section][name];
     assert.ok(view, `${section}:${name}`);
-    assert.ok(view.rows.every((r) => !r.enabled), `${section}:${name} has an enabled row`);
-    // A cancelled report is the one frozen view that offers Analyze (its analysis is dropped).
-    assert.ok(view.actions.every((a) => !a.enabled || a.id === 'cancel' || (name === 'cancelled' && a.id === 'analyze')), `${section}:${name} has an enabled action`);
+    if (view.job !== null) {
+      assert.ok(view.actions.every((a) => !a.enabled || a.id === 'cancel'), `${section}:${name} has an enabled action under a job`);
+    }
+    if (name === 'cancelled') assert.equal(view.rows.length, 0, `${section}:${name} still lists the dropped analysis`);
   }
+  // Developers: a scan cannot be stopped, so its view has no Cancel; a clean can.
+  assert.ok(!fixture.views.developers.analyzing?.actions.some((a) => a.id === 'cancel'));
+  assert.ok(fixture.views.developers.cleaning?.actions.some((a) => a.id === 'cancel' && a.enabled));
 });
 
 test('toggle, select and analyze are refused while a job runs, a dialog is open or a report is on screen', () => {
@@ -55,7 +61,7 @@ test('toggle, select and analyze are refused while a job runs, a dialog is open 
       assert.deepEqual(after.nav.map((n) => n.active), before.nav.map((n) => n.active), `select in ${section}:${name}`);
       assert.equal(model.stateOf(section), name, `select moved ${section}:${name}`);
     }
-    if (name === 'cancelled') continue; // accepts Analyze: see the test below
+    if (before.report !== null) continue; // a report accepts Analyze: see the test below
     const start = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' }[section] as 'analyze';
     const rev = model.view(section).rev;
     const answered = model.intent(section, { kind: start });
@@ -64,13 +70,15 @@ test('toggle, select and analyze are refused while a job runs, a dialog is open 
   }
 });
 
-test('Analyze is accepted over a cancelled report and over nothing else that is frozen', () => {
+test('Analyze is accepted over a report, finished or cancelled, and over nothing else that is frozen', () => {
   const model = loose(enableAll);
   for (const section of ['cleanup', 'developers'] as const) {
-    model.go(section, 'cancelled');
-    model.intent(section, { kind: 'analyze' });
-    assert.equal(model.stateOf(section), 'analyzing', `${section}: Analyze over the cancelled report`);
-    for (const name of ['report', 'confirm', 'cleaning']) {
+    for (const report of ['cancelled', 'report']) {
+      model.go(section, report);
+      model.intent(section, { kind: 'analyze' });
+      assert.equal(model.stateOf(section), 'analyzing', `${section}: Analyze over the ${report}`);
+    }
+    for (const name of ['confirm', 'cleaning', 'analyzing']) {
       model.go(section, name);
       model.intent(section, { kind: 'analyze' });
       assert.equal(model.stateOf(section), name, `${section}:${name} accepted Analyze`);
@@ -113,7 +121,7 @@ test('cancel: a clean goes to the cancelled report, a Developers scan is refused
   assert.equal(model.stateOf('developers'), 'analyzing', 'a scan cannot be cancelled');
   model.go('cleanup', 'analyzing');
   model.intent('cleanup', { kind: 'cancel' });
-  assert.equal(model.stateOf('cleanup'), HOME.cleanup, 'a Cleanup analysis can');
+  assert.equal(model.stateOf('cleanup'), 'interrupted', 'a Cleanup analysis can, and keeps its partial list');
 });
 
 test('confirm needs an open dialog whose button is enabled and whose ack box, where there is one, is on', () => {
@@ -208,7 +216,22 @@ test('a dialog that is reopened starts with its ack box off', () => {
   assert.equal(model.intent('cleanup', { kind: 'setOnlyOld', on: false }).dialog?.ack, null);
 });
 
-const BLOCKED: [SectionId, string, string][] = [['cleanup', 'analyzed', 'cat:6'], ['registry', 'analyzed', 'i:4'], ['developers', 'worktrees', 'w:3']];
+// Rust blocks: Winapp2 / browser options of a running program, native items, a worktree with unsaved changes, a project in use,
+// a session in use. It never blocks a built-in category, a registry issue or (but for the protected ones) a service.
+const BLOCKED: [SectionId, string, string][] = [
+  ['cleanup', 'applications', 'steam/downloadcache'], ['cleanup', 'browser', 'chrome/cache'],
+  ['developers', 'worktrees', 'w:3'], ['developers', 'projects', 'p:3'], ['developers', 'projects', 'a:5'], ['developers', 'sessions', 's:claude:3a7c15'],
+  ['services', 'loaded', 'svc:wuauserv'],
+];
+
+test('Rust has no protected registry issue: every row of the Registry fixture can be ticked', () => {
+  for (const name of Object.keys(fixture.views.registry)) {
+    assert.ok(fixture.views.registry[name]?.rows.every((r) => r.enabled && !r.muted && r.why === null), `registry:${name}`);
+  }
+  const model = fresh();
+  model.go('registry', 'analyzed');
+  assert.equal(checks(model.intent('registry', { kind: 'toggle', row: 'i:4' }))['i:4'], 'on');
+});
 
 test('a blocked row is listed, dimmed, with its reason, and toggling it changes nothing', () => {
   for (const [section, name, id] of BLOCKED) {
@@ -220,6 +243,7 @@ test('a blocked row is listed, dimmed, with its reason, and toggling it changes 
     assert.equal(row.enabled, false); assert.equal(row.muted, true);
     assert.ok(row.why && row.why.length > 10, `${id} has no reason`);
     assert.equal(row.check, 'off');
+    assert.equal(row.kind === 'child' || row.kind === 'item', true);
     assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view), `toggle of ${id}`);
     assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view));
   }
@@ -249,11 +273,12 @@ test('the Services notice says what was done and goes when a new job starts, a d
 
 interface Expect {
   state?: string; rev?: number; fraction?: number | null; checks?: Record<string, string>; active?: string;
-  ack?: boolean | null; primaryEnabled?: boolean; notices?: string[]; dialog?: boolean; report?: boolean;
+  ack?: boolean | null; primaryEnabled?: boolean; notices?: string[]; dialog?: boolean; report?: boolean; saved?: boolean;
 }
 type Step =
   | { op: 'go' | 'show' | 'view'; section: SectionId; state?: string; expect?: Expect; note?: string }
   | { op: 'intent'; section: SectionId; intent: AnyIntent; expect?: Expect; note?: string }
+  | { op: 'save'; section: SectionId; expect?: Expect; note?: string }
   | { op: 'tick'; pushed: ({ section: SectionId } & Expect)[]; note?: string };
 
 function matches(view: SectionView, state: string, want: Expect, where: string): void {
@@ -270,6 +295,7 @@ function matches(view: SectionView, state: string, want: Expect, where: string):
   if (want.notices !== undefined) assert.deepEqual(view.notices.map((n) => n.text), want.notices, `${where}: notices`);
   if (want.dialog !== undefined) assert.equal(view.dialog !== null, want.dialog, `${where}: dialog`);
   if (want.report !== undefined) assert.equal(view.report !== null, want.report, `${where}: report`);
+  if (want.saved !== undefined) assert.equal(view.report?.saved != null, want.saved, `${where}: saved`);
 }
 
 test('the intent script replays on the model', () => {
@@ -287,7 +313,8 @@ test('the intent script replays on the model', () => {
     const view = step.op === 'go' ? model.go(step.section, step.state as string)
       : step.op === 'show' ? model.show(step.section)
         : step.op === 'view' ? model.view(step.section)
-          : model.intent(step.section, step.intent);
+          : step.op === 'save' ? model.saveReport(step.section)
+            : model.intent(step.section, step.intent);
     matches(view, model.stateOf(step.section), step.expect ?? {}, where);
   });
 });

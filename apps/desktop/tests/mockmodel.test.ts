@@ -147,8 +147,8 @@ test('toggle flips one row only', () => {
 test('select moves the active category, or the Developers state', () => {
   const model = fresh();
   model.go('cleanup', 'analyzed');
-  const after = model.intent('cleanup', { kind: 'select', category: 'cat:browser' });
-  assert.deepEqual(after.nav.filter((n) => n.active).map((n) => n.id), ['cat:browser']);
+  const after = model.intent('cleanup', { kind: 'select', category: 'rules:Sviluppo e AI' });
+  assert.deepEqual(after.nav.filter((n) => n.active).map((n) => n.id), ['rules:Sviluppo e AI']);
   assert.equal(model.stateOf('cleanup'), 'analyzed');
   model.go('developers', 'projects');
   assert.equal(model.intent('developers', { kind: 'select', category: 'worktrees' }).title, fixture.views.developers.worktrees?.title);
@@ -187,18 +187,26 @@ test('closeDialog returns to the state the dialog was opened from', () => {
   assert.equal(model.stateOf('cleanup'), 'idle');
 });
 
-test('cancel of an analysis returns to the state before it; a Developers scan cannot be cancelled', () => {
+test('cancel of an analysis keeps the partial list; a Developers scan cannot be cancelled', () => {
   const model = fresh();
-  // A Cleanup analysis started from idle goes back to idle, one started from the analysis goes back to it.
-  model.go('cleanup', 'idle');
-  model.intent('cleanup', { kind: 'analyze' });
-  model.intent('cleanup', { kind: 'cancel' });
-  assert.equal(model.stateOf('cleanup'), 'idle');
-  assert.deepEqual(model.tick().filter((v) => v.section === 'cleanup'), [], 'a cancelled job stops ticking');
-  model.go('cleanup', 'analyzed');
-  model.intent('cleanup', { kind: 'analyze' });
-  model.intent('cleanup', { kind: 'cancel' });
-  assert.equal(model.stateOf('cleanup'), 'analyzed');
+  // A Cleanup analysis that is cancelled keeps what was analysed so far (Rust), wherever it started: the
+  // `interrupted` state, with its error notice and Clean enabled.
+  for (const from of ['idle', 'analyzed']) {
+    model.go('cleanup', from);
+    model.intent('cleanup', { kind: 'analyze' });
+    const view = model.intent('cleanup', { kind: 'cancel' });
+    assert.equal(model.stateOf('cleanup'), 'interrupted', `started from ${from}`);
+    assert.deepEqual(view.notices.map((n) => n.tone), ['error']);
+    assert.match(view.notices[0]?.text ?? '', /cancelled/);
+    assert.ok(view.actions.find((a) => a.id === 'clean')?.enabled, 'Clean stays enabled over the partial list');
+    assert.ok(view.rows.some((r) => r.bytes !== null) && view.rows.some((r) => r.bytes === null), 'some rows were analysed, some were not');
+    assert.deepEqual(model.tick().filter((v) => v.section === 'cleanup'), [], 'a cancelled job stops ticking');
+  }
+  // The partial analysis can be cleaned: the dialog opens, and closing it comes back to the partial list.
+  model.intent('cleanup', { kind: 'openConfirm' });
+  assert.equal(model.stateOf('cleanup'), 'confirm');
+  model.intent('cleanup', { kind: 'closeDialog' });
+  assert.equal(model.stateOf('cleanup'), 'interrupted');
   // Developers: the scan is not offered a cancel and the mock refuses it: it runs on to the projects.
   model.go('developers', 'sessions');
   model.intent('developers', { kind: 'analyze' });
@@ -304,4 +312,63 @@ test('registry fixes through the backup dialog and services confirm goes straigh
   assert.equal(done.dialog, null);
   assert.deepEqual(done.notices.map((n) => n.tone), ['ok']);
   assert.deepEqual(model.tick(), []);
+});
+
+test('selecting Applications shows its sections and the search box', () => {
+  const model = fresh();
+  model.go('cleanup', 'analyzed');
+  const plain = model.view('cleanup');
+  assert.equal(plain.search, null, 'only Applications has a search box');
+  const apps = model.intent('cleanup', { kind: 'select', category: 'winapp2' });
+  assert.equal(model.stateOf('cleanup'), 'applications');
+  assert.deepEqual(apps.nav.filter((n) => n.active).map((n) => n.id), ['winapp2']);
+  assert.deepEqual(apps.search, { placeholder: 'Search', value: '' });
+  assert.ok(apps.rows.some((r) => r.kind === 'header' && r.id.startsWith('section:')), 'rows are grouped under Winapp2 section headers');
+  assert.ok(apps.options.some((o) => o.kind === 'text'), 'the Winapp2 status line is an option');
+  assert.ok(apps.rows.some((r) => r.muted && !r.enabled && r.why), 'a blocked row says why');
+  assert.ok(apps.rows.some((r) => r.lines.length > 20), 'a row with a long list of lines');
+  // A blocked row cannot be ticked, an ordinary one can.
+  const blocked = apps.rows.find((r) => !r.enabled)!;
+  assert.equal(checks(model.intent('cleanup', { kind: 'toggle', row: blocked.id }))[blocked.id], 'off');
+  const open = apps.rows.find((r) => r.kind === 'item' && r.enabled && r.check === 'off')!;
+  assert.equal(checks(model.intent('cleanup', { kind: 'toggle', row: open.id }))[open.id], 'on');
+  // Another category goes back to the plain analysis; the Browser category has a state too (keep list button).
+  const back = model.intent('cleanup', { kind: 'select', category: 'builtin:Sistema' });
+  assert.equal(model.stateOf('cleanup'), 'analyzed');
+  assert.equal(back.search, null);
+  assert.deepEqual(back.nav.filter((n) => n.active).map((n) => n.id), ['builtin:Sistema']);
+  const browser = model.intent('cleanup', { kind: 'select', category: 'rules:Browser' });
+  assert.equal(model.stateOf('cleanup'), 'browser');
+  assert.ok(browser.options.some((o) => o.kind === 'button' && o.id === 'keepList'));
+  assert.ok(browser.rows.some((r) => r.lines.length > 20), 'a native row with its own list of lines');
+  // Before an analysis there is nothing to show of them, and the confirmation can be opened from them.
+  model.go('cleanup', 'idle');
+  model.intent('cleanup', { kind: 'select', category: 'winapp2' });
+  assert.equal(model.stateOf('cleanup'), 'idle');
+  model.go('cleanup', 'applications');
+  model.intent('cleanup', { kind: 'openConfirm' });
+  assert.equal(model.stateOf('cleanup'), 'confirm');
+  model.intent('cleanup', { kind: 'closeDialog' });
+  assert.equal(model.stateOf('cleanup'), 'applications', 'the dialog goes back to the list it was opened from');
+});
+
+test('Analyze is on over a finished report and starts a new analysis (Rust enables it when nothing runs)', () => {
+  const model = fresh();
+  for (const section of ['cleanup', 'developers'] as const) {
+    model.go(section, 'report');
+    assert.ok(model.view(section).actions.find((a) => a.id === 'analyze')?.enabled, `${section}: Analyze is on over the report`);
+    model.intent(section, { kind: 'analyze' });
+    assert.equal(model.stateOf(section), 'analyzing');
+  }
+});
+
+test('Save as text… marks the report saved, only a report that can be saved, and only until it is left', () => {
+  const model = fresh();
+  model.go('cleanup', 'report');
+  assert.equal(model.view('cleanup').report?.saved, null);
+  assert.deepEqual(model.saveReport('cleanup').report?.saved, { text: 'Report saved.', ok: true });
+  model.go('cleanup', 'report');
+  assert.equal(model.view('cleanup').report?.saved, null, 'a report arrived at again starts unsaved');
+  model.go('cleanup', 'analyzed');
+  assert.equal(model.saveReport('cleanup').report, null, 'nothing to save without a report');
 });

@@ -8,7 +8,7 @@ import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, keyAction } from './keys.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { rowParents, sortRows, visibleRows } from './rows.ts';
-import { acceptView, createGate, createUi, currentFocus, moveFocus } from './state.ts';
+import { acceptView, createGate, createUi, currentFocus, moveFocus, SERVICES_POLL_MS, shouldPollServices } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -126,7 +126,7 @@ function onKey(event: KeyboardEvent): void {
     }
     case 'toggle': {
       const row = rows.find((r) => r.id === currentFocus(ui, view));
-      if (!listed || !row || row.kind === 'header' || row.check === 'none' || !row.enabled) return;
+      if (!listed || !row || row.kind === 'header' || row.check === 'none' || !row.enabled || view.job !== null) return;
       handlers.send(section, toggleIntent(section, row.id));
       break;
     }
@@ -150,6 +150,20 @@ function onKey(event: KeyboardEvent): void {
 }
 
 document.addEventListener('keydown', onKey);
+
+/**
+ * The RAM meter moves by itself: while Services & RAM is shown, the window visible and no dialog open, its view is
+ * read again every 2 s. A reading that comes back after a newer view (an intent answered meanwhile) is dropped by
+ * `acceptView`; a failed one is not worth a message (the next one will say, and an intent shows its own errors).
+ */
+function pollServices(): void {
+  if (!shouldPollServices(ui, document.visibilityState === 'visible')) return;
+  void api.view('services').then((view) => {
+    if (acceptView(ui, view) && ui.section === 'services') render();
+  }, () => undefined);
+}
+
+setInterval(pollServices, SERVICES_POLL_MS);
 
 async function start(): Promise<void> {
   try {

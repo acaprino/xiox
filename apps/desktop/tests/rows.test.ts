@@ -49,10 +49,10 @@ test('gridTemplate adds the check column only when rows have checks', () => {
   const columns: ColumnView[] = [
     { title: 'Item', kind: 'name' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
   ];
-  assert.equal(gridTemplate(columns, true), '16px minmax(0,1fr) 96px 74px');
-  assert.equal(gridTemplate(columns, false), 'minmax(0,1fr) 96px 74px');
+  assert.equal(gridTemplate(columns, true), '16px minmax(0,1fr) 96px minmax(74px,max-content)');
+  assert.equal(gridTemplate(columns, false), 'minmax(0,1fr) 96px minmax(74px,max-content)');
   const cells: ColumnView[] = [{ title: 'Service', kind: 'name' }, { title: 'Startup', kind: 'cell' }, { title: 'State', kind: 'cell' }];
-  assert.equal(gridTemplate(cells, false), 'minmax(0,1fr) minmax(64px,max-content) minmax(64px,max-content)');
+  assert.equal(gridTemplate(cells, false), 'minmax(0,1fr) fit-content(260px) fit-content(260px)');
 });
 
 test('children of a collapsed parent are not visible', () => {

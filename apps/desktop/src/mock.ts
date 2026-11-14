@@ -20,7 +20,11 @@ type Args = Record<string, unknown> | undefined;
 const section = (args: Args): SectionId => (args as { section: SectionId }).section;
 const intent = (args: Args): AnyIntent => (args as { intent: AnyIntent }).intent;
 
+/** Every command the page sent, in order (the smoke script reads it: what the page asked, not what it drew). */
+const calls: { command: string; args: unknown }[] = [];
+
 export async function answer(command: string, args?: Args): Promise<unknown> {
+  calls.push({ command, args: structuredClone(args ?? null) });
   switch (command) {
     case 'app_info': return structuredClone((fixture as unknown as Fixture).app);
     case 'about': return structuredClone((fixture as unknown as Fixture).about);
@@ -31,7 +35,7 @@ export async function answer(command: string, args?: Args): Promise<unknown> {
     case 'services': return model.intent('services', intent(args));
     case 'developers': return model.intent('developers', intent(args));
     case 'developers_add_root': return model.view('developers');
-    case 'save_report': return model.view(section(args));
+    case 'save_report': return model.saveReport(section(args));
     default: throw { kind: 'failed', message: `unknown command ${command}` };
   }
 }
@@ -40,6 +44,9 @@ let paused = false;
 setInterval(() => { if (!paused) for (const view of model.tick()) emit(view); }, 200);
 
 (window as unknown as { __xioxMock: unknown }).__xioxMock = {
+  /** The commands received so far; `clearCalls` starts the list again. */
+  calls,
+  clearCalls(): void { calls.length = 0; },
   /** The smoke script holds the timer while it inspects a busy state. */
   pause(on: boolean): void { paused = on; },
   go(target: SectionId, state: string): SectionView {

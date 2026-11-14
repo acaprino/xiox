@@ -19,7 +19,9 @@ export function renderDetail(root: HTMLElement, row: RowView | null): void {
   if (!row) { fill(root); return; }
   const main = row.detail.filter(([key]) => key !== 'why');
   const reason: [string, string][] = row.detail.filter(([key]) => key === 'why');
-  if (reason.length === 0 && row.why) reason.push(['why', row.why]);
+  if (reason.length === 0 && row.why && !row.detail.some(([, value]) => value === row.why)) reason.push(['why', row.why]);
+  // A blocked row says why it cannot be chosen, even when its detail already has a description under `why`.
+  if (row.muted && !row.enabled && row.why && !reason.some(([, value]) => value === row.why)) reason.unshift(['blocked', row.why]);
   const second = reason.length > 0 || row.lines.length > 0;
   const boxes: HTMLElement[] = [];
   if (main.length > 0) boxes.push(h('div', { class: second ? 'box' : 'box wide' }, pairs(main)));

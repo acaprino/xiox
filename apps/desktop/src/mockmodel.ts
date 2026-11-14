@@ -7,7 +7,8 @@
 // current state, a revision counter, and a few memories (below). Fixture states are fixed copies:
 // a toggle or an ack changes the view it was made in and nothing else (the confirm / cleaning /
 // report copies of a list do not follow the toggles made in the analysed one); the list does not
-// change with the Cleanup category (`select` only moves `nav[].active`).
+// change with the Cleanup category except for the two categories that have a state of their own
+// (`select`, below).
 //
 // REVISIONS. `rev` starts at 0 and grows by one on EVERY view the model returns or pushes: `show`,
 // `view`, `go`, each `intent` (also an ignored or refused one: the same state with a new rev) and
@@ -19,12 +20,15 @@
 //   registry   scanning  -> analyzed      fixing   -> fixed
 //   services   loading   -> loaded
 //   developers analyzing -> projects      cleaning -> report
-// A cleaning that is CANCELLED does not land on the report but on `cancelled` (see `cancel`).
+// A cleaning that is CANCELLED does not land on the report but on `cancelled` (see `cancel`). A Cleanup
+// ANALYSIS that is cancelled lands on `interrupted`: the partial list, an error notice and Clean enabled.
 // "Home" (where cancel / closeDialog fall back when nothing was recorded, e.g. after `go`):
 //   cleanup analyzed, registry analyzed, services loaded, developers projects.
 // "Empty" (where closeDialog goes from a report, whose analysis was dropped): cleanup idle, developers idle.
-// "Analyzed-like" (where a dialog can be opened): cleanup analyzed, registry analyzed, services loaded,
-//   developers projects / worktrees / sessions.
+// "Analyzed-like" (where a dialog can be opened): cleanup analyzed / interrupted / browser / applications,
+//   registry analyzed, services loaded, developers projects / worktrees / sessions.
+// Cleanup has two more list states, `browser` (the Browser category: native rows, a blocked row, the keep
+// list button) and `applications` (Winapp2: headers, the search box, a blocked row); `select` goes there.
 // FROZEN = a job runs (busy state) OR the view has a dialog OR the view has a report.
 // CANCELLED (cleanup:cancelled, developers:cancelled) = the report of a clean that was cancelled
 //   (`report.cancelled` true). It is FROZEN like any report, with the differences the engine has: the
@@ -33,17 +37,22 @@
 //
 // INTENTS (any section unless named). `kind` is the intent's `kind`.
 //   analyze (cleanup, developers) | scan (registry) | refresh (services)
-//       refused when FROZEN, except over a CANCELLED report, where it is accepted. Otherwise records the current state as `back`, clears the Services notice,
-//       goes to the busy state (analyzing / scanning / loading). That first view has job.fraction 0.
+//       refused while a job runs or a dialog is open; accepted over a report (finished or CANCELLED: the
+//       button is on when nothing runs, as in Rust). Otherwise records the current state as `back`, clears
+//       the Services notice, goes to the busy state (analyzing / scanning / loading). That first view has
+//       job.fraction 0.
 //   tick (the timer: not an intent; returns the views pushed, in section order cleanup, registry,
 //       services, developers, at most one per section)
 //       a section that is not busy pushes nothing. A busy section counts its ticks: tick 1, 2, 3 push the
 //       busy view with job.fraction 1/3, 2/3, 1 (same state); tick 4 goes to the landing state and
 //       pushes that view (no job). Every pushed view bumps the rev.
-//   select{category} (cleanup)       refused when FROZEN or when the category is not in nav; otherwise the
-//       same state, and from now on every view of the section has nav[].active moved to that id (the
-//       model remembers it across states and revs and rewrites nav[].active on every view it returns;
-//       it applies only to views whose nav has that id).
+//   select{category} (cleanup)       refused when FROZEN or when the category is not in nav. `rules:Browser`
+//       and `winapp2` have their own states (`browser`, `applications`): from analyzed / interrupted / browser /
+//       applications it goes there (from any other state, e.g. idle, it changes nothing). Any other category:
+//       from `browser` / `applications` it goes back to `analyzed`, from any other state it stays; and from now
+//       on every view that is not `browser` / `applications` has nav[].active moved to that id (the model
+//       remembers it across states and revs and rewrites nav[].active on every view it returns; it applies
+//       only to views whose nav has that id).
 //   select{category} (developers)    only from projects / worktrees / sessions to one of the three
 //       (so never when FROZEN); goes to that state. No memory is needed: each state's nav marks its own.
 //   toggle{row}                      refused when FROZEN, or when the row is missing, disabled
@@ -78,6 +87,8 @@
 //       cleaning (cleanup, developers): goes to `cancelled`, NOT back to the analysis nor to the dialog:
 //         the cancelled clean ends in a report of what was done (`report.cancelled` true, no rows, Clean
 //         disabled, Analyze enabled) and the analysis is dropped; `back` is forgotten.
+//       analyzing (cleanup): goes to `interrupted`, NOT back: Rust keeps what was analysed so far, shows an
+//         error notice and keeps Clean enabled; `back` is forgotten.
 //       analyzing (developers): REFUSED. A scan cannot be stopped: its view has no `cancel` action and
 //         Rust answers "Nothing can be cancelled right now.". The scan runs on to `projects`.
 //       any other busy state (cleanup analyzing, registry scanning / fixing, services loading): goes to
@@ -102,6 +113,10 @@
 // SERVICES NOTICE. The notice of `services:loaded` is cleared when a refresh starts, when a dialog opens
 // and when `show('services')` is called (the section is shown again); it is set only by a confirm.
 //
+// REPORTS. `saveReport(s)` (the `save_report` command; not an intent, the dialog is Rust's) puts the saved
+// outcome on the report on screen when it can be saved: `report.saved = { text: SAVED, ok: true }`. Anything
+// else is returned as it is. A new analysis or a closed report drops it with the report.
+//
 // `go(s, state)` jumps to a named state (smoke only): resets the tick counter and `back`.
 
 import type { AboutView, AnyIntent, AppInfo, DialogView, SectionId, SectionView } from './types.ts';
@@ -117,8 +132,14 @@ const SECTIONS: readonly SectionId[] = ['cleanup', 'registry', 'services', 'deve
 const INITIAL: Record<SectionId, string> = { cleanup: 'idle', registry: 'idle', services: 'loaded', developers: 'idle' };
 const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
 const ANALYZED: Record<SectionId, readonly string[]> = {
-  cleanup: ['analyzed'], registry: ['analyzed'], services: ['loaded'], developers: ['projects', 'worktrees', 'sessions'],
+  cleanup: ['analyzed', 'interrupted', 'browser', 'applications'], registry: ['analyzed'], services: ['loaded'],
+  developers: ['projects', 'worktrees', 'sessions'],
 };
+/** The Cleanup categories that have a state of their own, and that state's own nav is what the page draws. */
+const CATEGORY_STATE: Record<string, string> = { 'rules:Browser': 'browser', winapp2: 'applications' };
+const CATEGORY_STATES: readonly string[] = Object.values(CATEGORY_STATE);
+/** What the Save as text… command writes (Rust names the real file; the page never sees a path). */
+const SAVED = 'Report saved.';
 const LANDS: Record<SectionId, Record<string, string>> = {
   cleanup: { analyzing: 'analyzed', cleaning: 'report' },
   registry: { scanning: 'analyzed', fixing: 'fixed' },
@@ -131,7 +152,7 @@ const ANALYZE_KIND: Record<SectionId, string> = { cleanup: 'analyze', registry: 
 const EMPTY: Partial<Record<SectionId, string>> = { cleanup: 'idle', developers: 'idle' };
 /** Where `cancel` goes from a busy state: a state name, or null when that job cannot be cancelled. Missing = `back`, else Home. */
 const CANCEL_TO: Partial<Record<SectionId, Record<string, string | null>>> = {
-  cleanup: { cleaning: 'cancelled' },
+  cleanup: { analyzing: 'interrupted', cleaning: 'cancelled' },
   developers: { analyzing: null, cleaning: 'cancelled' },
 };
 const OPEN_KIND: Record<SectionId, string> = { cleanup: 'openConfirm', registry: 'openFix', services: 'openConfirm', developers: 'openConfirm' };
@@ -187,6 +208,13 @@ export class MockModel {
     return this.stamp(s);
   }
 
+  /** `Save as text…`: the report on screen says it was saved (the working copy keeps it until the report goes). */
+  saveReport(s: SectionId): SectionView {
+    const report = this.current(s).report;
+    if (report !== null && report.canSave) report.saved = { text: SAVED, ok: true };
+    return this.stamp(s);
+  }
+
   /** The name of the fixture state a section is in (tests and the smoke script read it). */
   stateOf(s: SectionId): string {
     return this.state[s];
@@ -214,8 +242,7 @@ export class MockModel {
   /** Jumps a section to one of its fixture states (the smoke script's lever). */
   go(s: SectionId, state: string): SectionView {
     if (!this.work[s][state]) throw new Error(`no state ${state} for ${s}`);
-    this.state[s] = state;
-    this.ticks[s] = 0;
+    this.enter(s, state);
     delete this.back[s];
     return this.stamp(s);
   }
@@ -230,7 +257,7 @@ export class MockModel {
     this.revs[s] += 1;
     const view: SectionView = { ...structuredClone(this.current(s)), rev: this.revs[s] };
     const active = this.active[s];
-    if (active !== undefined && view.nav.some((n) => n.id === active)) {
+    if (active !== undefined && !(s === 'cleanup' && CATEGORY_STATES.includes(this.state[s])) && view.nav.some((n) => n.id === active)) {
       view.nav = view.nav.map((n) => ({ ...n, active: n.id === active }));
     }
     if (view.job && LANDS[s][this.state[s]] !== undefined) {
@@ -251,8 +278,15 @@ export class MockModel {
 
   private goTo(s: SectionId, state: string): void {
     if (!this.work[s][state]) throw new Error(`no state ${state} for ${s}`);
+    this.enter(s, state);
+  }
+
+  /** Arriving on a state: the tick counter restarts and a report starts unsaved. */
+  private enter(s: SectionId, state: string): void {
     this.state[s] = state;
     this.ticks[s] = 0;
+    const report = this.work[s][state]?.report;
+    if (report) report.saved = null;
   }
 
   private clearNotice(): void {
@@ -268,7 +302,7 @@ export class MockModel {
     const here = this.state[s];
     const kind = intent.kind;
     if (kind === ANALYZE_KIND[s]) {
-      if (this.frozen(s) && this.current(s).report?.cancelled !== true) return;
+      if (this.isBusy(s) || this.current(s).dialog !== null) return; // a report does not stop it
       this.back[s] = here;
       if (s === 'services') this.clearNotice();
       this.goTo(s, ANALYZE_BUSY[s]);
@@ -278,7 +312,13 @@ export class MockModel {
       if (s === 'developers') {
         if (DEV_CATEGORIES.includes(here) && DEV_CATEGORIES.includes(category)) this.goTo(s, category);
       } else if (this.current(s).nav.some((n) => n.id === category)) {
-        this.active[s] = category;
+        const own = CATEGORY_STATE[category];
+        if (own !== undefined) {
+          if (ANALYZED.cleanup.includes(here)) this.goTo(s, own);
+        } else {
+          this.active[s] = category;
+          if (CATEGORY_STATES.includes(here)) this.goTo(s, HOME.cleanup);
+        }
       }
     } else if (kind === 'toggle') {
       if (!this.frozen(s)) this.toggle(s, (intent as { row: string }).row);

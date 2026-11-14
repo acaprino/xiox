@@ -122,33 +122,73 @@
    }
   },
   {
-   "note": "a blocked row cannot be toggled",
-   "op": "intent",
-   "section": "cleanup",
-   "intent": {
-    "kind": "toggle",
-    "row": "cat:6"
-   },
-   "expect": {
-    "state": "analyzed",
-    "checks": {
-     "cat:6": "off"
-    },
-    "rev": 10
-   }
-  },
-  {
    "note": "select moves nav active, same state",
    "op": "intent",
    "section": "cleanup",
    "intent": {
     "kind": "select",
-    "category": "cat:browser"
+    "category": "rules:Sviluppo e AI"
    },
    "expect": {
     "state": "analyzed",
-    "active": "cat:browser",
+    "active": "rules:Sviluppo e AI",
+    "rev": 10
+   }
+  },
+  {
+   "note": "a category with a state of its own (Winapp2) opens it: its rows, headers and search box",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "winapp2"
+   },
+   "expect": {
+    "state": "applications",
+    "active": "winapp2",
+    "dialog": false,
     "rev": 11
+   }
+  },
+  {
+   "note": "the search box only does something there: the same state",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "search",
+    "text": "opera"
+   },
+   "expect": {
+    "state": "applications",
+    "rev": 12
+   }
+  },
+  {
+   "note": "Browser has its own state too (native rows, the keep list button)",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "rules:Browser"
+   },
+   "expect": {
+    "state": "browser",
+    "active": "rules:Browser",
+    "rev": 13
+   }
+  },
+  {
+   "note": "any other category goes back to the plain analysis and the open category moves",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "select",
+    "category": "rules:Sviluppo e AI"
+   },
+   "expect": {
+    "state": "analyzed",
+    "active": "rules:Sviluppo e AI",
+    "rev": 14
    }
   },
   {
@@ -161,7 +201,7 @@
    "expect": {
     "state": "confirm",
     "dialog": true,
-    "rev": 12
+    "rev": 15
    }
   },
   {
@@ -177,7 +217,7 @@
     "checks": {
      "cat:4": "off"
     },
-    "rev": 13
+    "rev": 16
    }
   },
   {
@@ -186,12 +226,12 @@
    "section": "cleanup",
    "intent": {
     "kind": "select",
-    "category": "cat:windows"
+    "category": "rules:Windows"
    },
    "expect": {
     "state": "confirm",
-    "active": "cat:browser",
-    "rev": 14
+    "active": "rules:Sviluppo e AI",
+    "rev": 17
    }
   },
   {
@@ -203,7 +243,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 15
+    "rev": 18
    }
   },
   {
@@ -218,9 +258,9 @@
     "checks": {
      "cat:4": "on"
     },
-    "active": "cat:browser",
+    "active": "rules:Sviluppo e AI",
     "dialog": false,
-    "rev": 16
+    "rev": 19
    }
   },
   {
@@ -231,7 +271,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 17
+    "rev": 20
    }
   },
   {
@@ -244,7 +284,7 @@
    "expect": {
     "state": "cleaning",
     "fraction": 0,
-    "rev": 18
+    "rev": 21
    }
   },
   {
@@ -256,7 +296,7 @@
    },
    "expect": {
     "state": "cleaning",
-    "rev": 19
+    "rev": 22
    }
   },
   {
@@ -270,7 +310,7 @@
     "state": "cancelled",
     "report": true,
     "dialog": false,
-    "rev": 20
+    "rev": 23
    }
   },
   {
@@ -284,7 +324,7 @@
     "state": "cancelled",
     "dialog": false,
     "report": true,
-    "rev": 21
+    "rev": 24
    }
   },
   {
@@ -297,7 +337,7 @@
    "expect": {
     "state": "idle",
     "report": false,
-    "rev": 22
+    "rev": 25
    }
   },
   {
@@ -307,7 +347,7 @@
    "state": "analyzed",
    "expect": {
     "state": "analyzed",
-    "rev": 23
+    "rev": 26
    }
   },
   {
@@ -319,7 +359,7 @@
    },
    "expect": {
     "state": "analyzed",
-    "rev": 24
+    "rev": 27
    }
   },
   {
@@ -330,7 +370,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 25
+    "rev": 28
    }
   },
   {
@@ -342,7 +382,7 @@
    "expect": {
     "state": "cleaning",
     "fraction": 0,
-    "rev": 26
+    "rev": 29
    }
   },
   {
@@ -352,7 +392,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 0.3333333333333333,
-     "rev": 27
+     "rev": 30
     }
    ]
   },
@@ -363,7 +403,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 0.6666666666666666,
-     "rev": 28
+     "rev": 31
     }
    ]
   },
@@ -374,7 +414,7 @@
      "section": "cleanup",
      "state": "cleaning",
      "fraction": 1,
-     "rev": 29
+     "rev": 32
     }
    ]
   },
@@ -387,9 +427,19 @@
      "state": "report",
      "report": true,
      "fraction": null,
-     "rev": 30
+     "rev": 33
     }
    ]
+  },
+  {
+   "note": "Save as text… marks the report saved (the dialog is Rust's; the page never sees a path)",
+   "op": "save",
+   "section": "cleanup",
+   "expect": {
+    "state": "report",
+    "saved": true,
+    "rev": 34
+   }
   },
   {
    "note": "selection is frozen on the report",
@@ -401,18 +451,31 @@
    },
    "expect": {
     "state": "report",
-    "rev": 31
+    "rev": 35
    }
   },
   {
+   "note": "analyze over a finished report starts a new analysis: the button is on when nothing runs (Rust)",
    "op": "intent",
    "section": "cleanup",
    "intent": {
     "kind": "analyze"
    },
    "expect": {
+    "state": "analyzing",
+    "fraction": 0,
+    "report": false,
+    "rev": 36
+   }
+  },
+  {
+   "note": "back to a finished report: the next steps close it",
+   "op": "go",
+   "section": "cleanup",
+   "state": "report",
+   "expect": {
     "state": "report",
-    "rev": 32
+    "rev": 37
    }
   },
   {
@@ -425,7 +488,7 @@
    "expect": {
     "state": "idle",
     "report": false,
-    "rev": 33
+    "rev": 38
    }
   },
   {
@@ -435,7 +498,7 @@
    "state": "analyzed",
    "expect": {
     "state": "analyzed",
-    "rev": 34
+    "rev": 39
    }
   },
   {
@@ -643,6 +706,16 @@
    ]
   },
   {
+   "note": "the same for Developers",
+   "op": "save",
+   "section": "developers",
+   "expect": {
+    "state": "report",
+    "saved": true,
+    "rev": 17
+   }
+  },
+  {
    "note": "closeDialog from the report releases the section: its empty state, not the analysis",
    "op": "intent",
    "section": "developers",
@@ -651,7 +724,7 @@
    },
    "expect": {
     "state": "idle",
-    "rev": 17
+    "rev": 18
    }
   },
   {
@@ -661,7 +734,7 @@
    "state": "projects",
    "expect": {
     "state": "projects",
-    "rev": 18
+    "rev": 19
    }
   },
   {
@@ -675,7 +748,7 @@
    "expect": {
     "state": "worktrees",
     "active": "worktrees",
-    "rev": 19
+    "rev": 20
    }
   },
   {
@@ -691,7 +764,7 @@
     "checks": {
      "w:3": "off"
     },
-    "rev": 20
+    "rev": 21
    }
   },
   {
@@ -706,7 +779,7 @@
     "checks": {
      "w:1": "off"
     },
-    "rev": 21
+    "rev": 22
    }
   },
   {
@@ -717,7 +790,7 @@
    },
    "expect": {
     "state": "confirm",
-    "rev": 22
+    "rev": 23
    }
   },
   {
@@ -729,7 +802,7 @@
    },
    "expect": {
     "state": "worktrees",
-    "rev": 23
+    "rev": 24
    }
   },
   {
@@ -742,7 +815,7 @@
    "expect": {
     "state": "sessions",
     "active": "sessions",
-    "rev": 24
+    "rev": 25
    }
   },
   {
@@ -751,7 +824,7 @@
    "state": "shortfall",
    "expect": {
     "state": "shortfall",
-    "rev": 25
+    "rev": 26
    }
   },
   {
@@ -763,7 +836,7 @@
    },
    "expect": {
     "state": "shortfall",
-    "rev": 26
+    "rev": 27
    }
   },
   {
@@ -775,7 +848,7 @@
    "expect": {
     "state": "cleaning",
     "fraction": 0,
-    "rev": 27
+    "rev": 28
    }
   },
   {
@@ -788,7 +861,7 @@
    "expect": {
     "state": "cancelled",
     "report": true,
-    "rev": 28
+    "rev": 29
    }
   },
   {
@@ -802,7 +875,7 @@
    "expect": {
     "state": "cancelled",
     "report": true,
-    "rev": 29
+    "rev": 30
    }
   },
   {
@@ -816,7 +889,7 @@
     "state": "analyzing",
     "fraction": 0,
     "report": false,
-    "rev": 30
+    "rev": 31
    }
   },
   {
@@ -825,7 +898,7 @@
    "state": "idle",
    "expect": {
     "state": "idle",
-    "rev": 31
+    "rev": 32
    }
   },
   {
@@ -838,7 +911,7 @@
    },
    "expect": {
     "state": "idle",
-    "rev": 32
+    "rev": 33
    }
   },
   {
@@ -850,7 +923,7 @@
    "expect": {
     "state": "analyzing",
     "fraction": 0,
-    "rev": 33
+    "rev": 34
    }
   },
   {
@@ -860,7 +933,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.3333333333333333,
-     "rev": 34
+     "rev": 35
     }
    ]
   },
@@ -873,7 +946,7 @@
    },
    "expect": {
     "state": "analyzing",
-    "rev": 35
+    "rev": 36
    }
   },
   {
@@ -884,7 +957,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.6666666666666666,
-     "rev": 36
+     "rev": 37
     }
    ]
   },
@@ -897,7 +970,7 @@
    },
    "expect": {
     "state": "analyzing",
-    "rev": 37
+    "rev": 38
    }
   },
   {
@@ -907,7 +980,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 1,
-     "rev": 38
+     "rev": 39
     }
    ]
   },
@@ -919,7 +992,7 @@
      "section": "developers",
      "state": "projects",
      "fraction": null,
-     "rev": 39
+     "rev": 40
     }
    ]
   },
@@ -1014,7 +1087,7 @@
    }
   },
   {
-   "note": "a protected entry is blocked",
+   "note": "any entry ticks normally (the engine has no protected registry entries)",
    "op": "intent",
    "section": "registry",
    "intent": {
@@ -1024,7 +1097,7 @@
    "expect": {
     "state": "analyzed",
     "checks": {
-     "i:4": "off"
+     "i:4": "on"
     },
     "rev": 9
    }
@@ -1377,7 +1450,7 @@
    "expect": {
     "state": "analyzing",
     "fraction": 0,
-    "rev": 35
+    "rev": 40
    }
   },
   {
@@ -1389,7 +1462,7 @@
    "expect": {
     "state": "analyzing",
     "fraction": 0,
-    "rev": 40
+    "rev": 41
    }
   },
   {
@@ -1400,13 +1473,13 @@
      "section": "cleanup",
      "state": "analyzing",
      "fraction": 0.3333333333333333,
-     "rev": 36
+     "rev": 41
     },
     {
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.3333333333333333,
-     "rev": 41
+     "rev": 42
     }
    ]
   },
@@ -1417,9 +1490,12 @@
     "kind": "cancel"
    },
    "expect": {
-    "state": "analyzed",
-    "rev": 37
-   }
+    "state": "interrupted",
+    "dialog": false,
+    "report": false,
+    "rev": 42
+   },
+   "note": "cancel of an analysis keeps what was analysed so far (Rust): the partial list, an error notice, Clean enabled"
   },
   {
    "op": "tick",
@@ -1428,7 +1504,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 0.6666666666666666,
-     "rev": 42
+     "rev": 43
     }
    ]
   },
@@ -1441,7 +1517,7 @@
    },
    "expect": {
     "state": "analyzing",
-    "rev": 43
+    "rev": 44
    }
   },
   {
@@ -1451,7 +1527,7 @@
      "section": "developers",
      "state": "analyzing",
      "fraction": 1,
-     "rev": 44
+     "rev": 45
     }
    ]
   },
@@ -1463,7 +1539,7 @@
      "section": "developers",
      "state": "projects",
      "fraction": null,
-     "rev": 45
+     "rev": 46
     }
    ]
   },
@@ -1475,10 +1551,10 @@
     "kind": "closeDialog"
    },
    "expect": {
-    "state": "analyzed",
+    "state": "interrupted",
     "dialog": false,
     "report": false,
-    "rev": 38
+    "rev": 43
    }
   },
   {
@@ -1489,8 +1565,8 @@
     "kind": "cancel"
    },
    "expect": {
-    "state": "analyzed",
-    "rev": 39
+    "state": "interrupted",
+    "rev": 44
    }
   },
   {
@@ -1502,9 +1578,9 @@
     "category": "cat:cleanup"
    },
    "expect": {
-    "state": "analyzed",
-    "active": "cat:browser",
-    "rev": 40
+    "state": "interrupted",
+    "active": "rules:Sviluppo e AI",
+    "rev": 45
    }
   },
   {
@@ -1514,7 +1590,7 @@
    "state": "idle",
    "expect": {
     "state": "idle",
-    "rev": 41
+    "rev": 46
    }
   },
   {
@@ -1527,7 +1603,7 @@
    "expect": {
     "state": "idle",
     "dialog": false,
-    "rev": 42
+    "rev": 47
    }
   },
   {
@@ -1540,7 +1616,7 @@
    },
    "expect": {
     "state": "worktrees",
-    "rev": 46
+    "rev": 47
    }
   },
   {
@@ -1556,7 +1632,7 @@
     "checks": {
      "h:others": "none"
     },
-    "rev": 47
+    "rev": 48
    }
   }
  ]

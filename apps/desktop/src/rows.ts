@@ -72,8 +72,12 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>): Row
   return rows.filter((row) => shown(row, new Set()));
 }
 
+/**
+ * A cell column is as wide as its widest cell up to 260 px (a registry key is longer than the window: it is cut with an
+ * ellipsis and the full text is in the tooltip) and the size column grows for a size written in words («database row only»).
+ */
 const COLUMN_WIDTH: Record<ColumnView['kind'], string> = {
-  name: 'minmax(0,1fr)', cell: 'minmax(64px,max-content)', level: '96px', size: '74px',
+  name: 'minmax(0,1fr)', cell: 'fit-content(260px)', level: '96px', size: 'minmax(74px,max-content)',
 };
 
 /** The `grid-template-columns` of the header and every row: a check column first when rows have checks. */

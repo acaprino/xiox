@@ -16,12 +16,13 @@ function ellipsis(text: string, cls: string): HTMLElement {
   return h('span', { class: `ellipsis ${cls}`, title: text }, text);
 }
 
-function checkbox(row: RowView, on: Handlers, section: SectionView['section']): HTMLElement {
+/** A job running freezes the list: Rust refuses a tick then (and never greys a row for it), so the page does not offer one. */
+function checkbox(row: RowView, on: Handlers, section: SectionView['section'], busy: boolean): HTMLElement {
   if (row.check === 'none') return h('span');
   return h('button', {
     type: 'button', class: 'ck', role: 'checkbox',
     'aria-checked': row.check === 'on' ? 'true' : row.check === 'mixed' ? 'mixed' : 'false',
-    'aria-label': row.name, disabled: !row.enabled, title: row.enabled ? null : row.why, 'data-key': `ck:${row.id}`,
+    'aria-label': row.name, disabled: !row.enabled || busy, title: row.enabled ? null : row.why, 'data-key': `ck:${row.id}`,
     onClick: (event: Event) => {
       event.stopPropagation();
       on.focusRow(row.id);
@@ -45,7 +46,7 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
   if (row.kind === 'header') return h('div', { class: 'r sec', 'data-row': row.id }, ellipsis(row.name, 't'));
   const cells = [...row.cells];
   const parts: HTMLElement[] = [];
-  if (checks) parts.push(checkbox(row, on, view.section));
+  if (checks) parts.push(checkbox(row, on, view.section, view.job !== null));
   for (const column of view.columns) {
     if (column.kind === 'name') {
       const caret = parents.has(row.id)

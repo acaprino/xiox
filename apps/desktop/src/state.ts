@@ -48,6 +48,17 @@ export function currentFocus(ui: UiState, view: SectionView): string | null {
   return moveFocus(shown, null, 1);
 }
 
+/** How often the RAM meter of Services & RAM is read again while the section is shown (egui repainted every 2 s). */
+export const SERVICES_POLL_MS = 2000;
+
+/**
+ * Whether the page asks for Services & RAM again now: only while that section is the open one, the window is
+ * visible and no confirmation is open (the dialog describes a selection that a refresh must not move under it).
+ */
+export function shouldPollServices(ui: UiState, visible: boolean): boolean {
+  return ui.section === 'services' && visible && (ui.views.services?.dialog ?? null) === null;
+}
+
 export interface Gate {
   /**
    * Runs `load` and hands its result to `apply`, unless another `run` started meanwhile: a slow answer

@@ -43,10 +43,12 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
   }
 }
 
-/** The view's enabled action that carries `key` (its `key` field says `Escape` where this says `Esc`). */
+/** The Esc key as an action carries it: Rust writes `Esc`; `Escape` is accepted too (the key's own name). */
+const isEsc = (key: string | null): boolean => key === 'Esc' || key === 'Escape';
+
+/** The view's enabled action that carries `key`. */
 export function actionForKey(view: SectionView, key: ActionKey): ActionView | null {
-  const wanted = key === 'Esc' ? 'Escape' : key;
-  return view.actions.find((a) => a.enabled && a.key === wanted) ?? null;
+  return view.actions.find((a) => a.enabled && (key === 'Esc' ? isEsc(a.key) : a.key === key)) ?? null;
 }
 
 const KEY_WORDS: Record<string, string> = { Enter: '↵' };
@@ -57,7 +59,7 @@ const KEY_WORDS: Record<string, string> = { Enter: '↵' };
  * hint does not change while a job runs. Derived from the actions, so the hint and the keys agree.
  */
 export function footerHint(view: SectionView): string {
-  const keyed = view.actions.filter((a) => a.key !== null && a.key !== 'Escape').map((a) => `${KEY_WORDS[a.key as string] ?? a.key} ${a.id}`);
+  const keyed = view.actions.filter((a) => a.key !== null && !isEsc(a.key)).map((a) => `${KEY_WORDS[a.key as string] ?? a.key} ${a.id}`);
   return ['↑↓ move', 'space toggle', ...keyed].join(' · ');
 }
 

@@ -56,7 +56,9 @@ test("Enter and a press the view's action with that key, and nothing when it is 
   const view = viewWith(action('analyze', 'a', true), action('clean', 'Enter', false), action('cancel', 'Escape', true), action('scan', 's', true));
   assert.equal(actionForKey(view, 'a')?.id, 'analyze');
   assert.equal(actionForKey(view, 'Enter'), null, 'Clean is disabled: Enter does nothing');
-  assert.equal(actionForKey(view, 'Esc')?.id, 'cancel', 'the fixtures write the Esc key as "Escape"');
+  assert.equal(actionForKey(view, 'Esc')?.id, 'cancel', 'the key name "Escape" is accepted');
+  assert.equal(actionForKey(viewWith(action('cancel', 'Esc', true)), 'Esc')?.id, 'cancel', 'Rust writes the key as "Esc"');
+  assert.equal(actionForKey(viewWith(action('cancel', 'Esc', false)), 'Esc'), null, 'a disabled Cancel does not answer');
   assert.equal(actionForKey(view, 's')?.id, 'scan');
   assert.equal(actionForKey(view, 'r'), null, 'no action has that key');
   assert.equal(actionForKey(viewWith(action('analyze', 'a', false)), 'a'), null);
@@ -86,8 +88,9 @@ test('the footer hint follows the section, from the keys its actions carry', () 
   const hint = (section: SectionId, state: string): string => footerHint(fixture.views[section][state] as SectionView);
   assert.equal(hint('cleanup', 'analyzed'), '↑↓ move · space toggle · a analyze · ↵ clean');
   assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Esc is not in the footer, busy or not');
-  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · s scan · ↵ fix');
-  assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · r refresh');
+  assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Rust writes the Cancel key as "Esc": still not in the footer');
+  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · a scan · ↵ fix');
+  assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · a refresh · ↵ disable');
   assert.equal(hint('developers', 'projects'), '↑↓ move · space toggle · a analyze · ↵ clean');
   assert.equal(footerHint(viewWith()), '↑↓ move · space toggle');
 });
