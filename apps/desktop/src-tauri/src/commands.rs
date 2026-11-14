@@ -62,7 +62,10 @@ fn fake_add_root(_: &Arc<dyn Backend>) -> Option<CmdResult<SectionView>> {
 
 #[cfg(debug_assertions)]
 fn fake_save(b: &Arc<dyn Backend>, section: SectionId) -> Option<CmdResult<SectionView>> {
-    b.is_fake().then(|| Ok(b.set_saved(section, FAKE_SAVED.to_string(), true)))
+    b.is_fake().then(|| {
+        let text = b.report_text(section).unwrap_or_default();
+        Ok(b.set_saved_if(section, &text, FAKE_SAVED.to_string(), true))
+    })
 }
 
 #[cfg(not(debug_assertions))]
@@ -74,11 +77,7 @@ fn fake_save(_: &Arc<dyn Backend>, _: SectionId) -> Option<CmdResult<SectionView
 /// still the one that was serialized (the page may have closed it or started another job while the
 /// dialog was open); otherwise the person gets the current view, without the notice.
 fn apply_saved(b: &Arc<dyn Backend>, section: SectionId, serialized: &str, saved: String, ok: bool) -> SectionView {
-    if b.report_text(section).as_deref() == Some(serialized) {
-        b.set_saved(section, saved, ok)
-    } else {
-        b.view(section)
-    }
+    b.set_saved_if(section, serialized, saved, ok)
 }
 
 /// Run a blocking call off the UI thread.
@@ -252,8 +251,12 @@ mod tests {
         fn report_text(&self, _: SectionId) -> Option<String> {
             self.report.lock().unwrap().clone()
         }
-        fn set_saved(&self, _: SectionId, text: String, ok: bool) -> SectionView {
-            self.saved.lock().unwrap().push((text, ok));
+        fn set_saved_if(&self, _: SectionId, serialized: &str, text: String, ok: bool) -> SectionView {
+            // One lock for the comparison and the write, as the real backend does.
+            let report = self.report.lock().unwrap();
+            if report.as_deref() == Some(serialized) {
+                self.saved.lock().unwrap().push((text, ok));
+            }
             blank()
         }
         fn is_fake(&self) -> bool {

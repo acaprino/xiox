@@ -292,6 +292,15 @@ impl FakeModel {
         self.stamp(s)
     }
 
+    /// [`FakeModel::set_saved`] only if the report on screen is still `serialized`.
+    pub fn set_saved_if(&mut self, s: SectionId, serialized: &str, text: String, ok: bool) -> SectionView {
+        if self.report_text(s).as_deref() == Some(serialized) {
+            self.set_saved(s, text, ok)
+        } else {
+            self.view(s)
+        }
+    }
+
     fn current(&self, s: SectionId) -> &SectionView {
         &self.work[&s][&self.state[&s]]
     }
@@ -575,8 +584,8 @@ impl Backend for FakeBackend {
         self.model().report_text(s)
     }
 
-    fn set_saved(&self, s: SectionId, text: String, ok: bool) -> SectionView {
-        self.model().set_saved(s, text, ok)
+    fn set_saved_if(&self, s: SectionId, serialized: &str, text: String, ok: bool) -> SectionView {
+        self.model().set_saved_if(s, serialized, text, ok)
     }
 
     fn is_fake(&self) -> bool {

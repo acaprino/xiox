@@ -1,6 +1,6 @@
 //! The backend over the engine: `Core` behind a mutex. Every intent goes through the section state's
-//! own checks (`Core` maps the intent to the state's method; the state refuses what the old window
-//! had disabled); a refusal is turned into `CmdError::refused` with the state's English reason.
+//! own checks (`Core` maps the intent to the state's method; the state refuses what the page must
+//! not do now); a refusal is turned into `CmdError::refused` with the state's English reason.
 
 use crate::backend::Backend;
 use crate::error::{CmdError, CmdResult};
@@ -66,8 +66,8 @@ impl Backend for RealBackend {
         self.core().report_text(s)
     }
 
-    fn set_saved(&self, s: SectionId, text: String, ok: bool) -> SectionView {
-        self.core().set_saved(s, text, ok)
+    fn set_saved_if(&self, s: SectionId, serialized: &str, text: String, ok: bool) -> SectionView {
+        self.core().set_saved_if(s, serialized, text, ok)
     }
 
     fn is_fake(&self) -> bool {
@@ -83,11 +83,24 @@ mod tests {
     use xiox_core::dev::{DevState, Section};
     use xiox_core::notify::{NoNotifier, Outbox};
     use xiox_core::regstate::RegistryState;
-    use xiox_core::svcstate::ServicesState;
+    use xiox_core::svcstate::{ServicesState, ServicesWorkers, SvcMsg};
 
     /// A cleanup worker that only says it is done: no test here reaches the engine.
     fn quiet(_: CleanJob, out: Outbox<CleanMsg>) {
         out.send(CleanMsg::Done);
+    }
+
+    /// Services workers that never touch the machine.
+    fn no_services() -> ServicesState {
+        fn load(_: Outbox<SvcMsg>) {}
+        fn apply(_: Vec<xiox_core::services::Service>, _: Option<u32>, _: Outbox<SvcMsg>) {}
+        fn saved() -> usize {
+            0
+        }
+        fn memory() -> xiox_core::sys::Memory {
+            xiox_core::sys::Memory { total: 8 << 30, available: 4 << 30 }
+        }
+        ServicesState::new().with_workers(ServicesWorkers { load, apply, saved, memory })
     }
 
     fn backend() -> RealBackend {
@@ -98,7 +111,7 @@ mod tests {
             Arc::new(NoNotifier),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers { job: quiet }),
             RegistryState::new(),
-            ServicesState::new(),
+            no_services(),
             dev,
         );
         RealBackend::new(Arc::new(Mutex::new(core)))

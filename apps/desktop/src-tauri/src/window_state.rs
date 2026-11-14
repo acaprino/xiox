@@ -23,7 +23,28 @@ pub struct Geometry {
 
 /// `window.json` next to the settings file.
 pub fn path() -> PathBuf {
-    xiox_app::settings_path().with_file_name("window.json")
+    path_in(&xiox_app::settings_path())
+}
+
+/// `window.json` next to the given settings file.
+pub fn path_in(settings_file: &Path) -> PathBuf {
+    settings_file.with_file_name("window.json")
+}
+
+/// Whether this run keeps the window's place at all: the fixtures window reads and writes nothing of
+/// the user's, and `--only-root` writes no file outside its folder.
+pub fn remembers(fake: bool, only_root: bool) -> bool {
+    !fake && !only_root
+}
+
+/// What to remember when the window closes. A maximized or minimized window reports the screen
+/// (or `(-32000, -32000)` and size 0), so the geometry is the last normal one, which is what
+/// restoring brings back; only a normal window is measured (`live`).
+pub fn to_save(maximized: bool, minimized: bool, normal: Option<Geometry>, live: impl FnOnce() -> Option<Geometry>) -> Option<Geometry> {
+    if maximized || minimized {
+        return normal.map(|g| Geometry { maximized, ..g });
+    }
+    live()
 }
 
 /// The saved geometry, or `None` when there is no file or it cannot be read.
@@ -84,7 +105,29 @@ mod tests {
         std::fs::write(&file, "{ not json").unwrap();
         assert_eq!(load(&file), None);
         // The file sits next to the settings.
-        assert_eq!(path().file_name().unwrap(), "window.json");
+        let settings = dir.path().join("Xiox").join("settings.json");
+        assert_eq!(path_in(&settings), dir.path().join("Xiox").join("window.json"));
+    }
+
+    #[test]
+    fn the_fixtures_window_and_an_only_root_run_remember_nothing() {
+        assert!(remembers(false, false));
+        assert!(!remembers(true, false));
+        assert!(!remembers(false, true), "--only-root writes no file outside its folder");
+    }
+
+    #[test]
+    fn a_minimized_or_maximized_window_saves_the_last_normal_geometry() {
+        let live = || Some(Geometry { x: -32000, y: -32000, width: 0, height: 0, maximized: false });
+        // Normal: measured now.
+        assert_eq!(to_save(false, false, Some(BIG), live), live());
+        // Minimized: the window reports (-32000, -32000) and size 0; the last normal one is kept.
+        assert_eq!(to_save(false, true, Some(BIG), || panic!("a minimized window is not measured")), Some(BIG));
+        // Maximized (also when minimized from maximized): the normal geometry, flagged maximized.
+        assert_eq!(to_save(true, false, Some(BIG), || panic!("not measured")), Some(Geometry { maximized: true, ..BIG }));
+        assert_eq!(to_save(true, true, Some(BIG), || panic!("not measured")), Some(Geometry { maximized: true, ..BIG }));
+        // Nothing normal was ever seen: nothing is saved rather than a wrong place.
+        assert_eq!(to_save(false, true, None, || panic!("not measured")), None);
     }
 
     #[test]

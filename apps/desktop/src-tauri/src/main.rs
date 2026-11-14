@@ -126,15 +126,17 @@ fn restore_window(window: &WebviewWindow) {
     }
 }
 
-/// The window as it is now. A maximized window reports the screen, so its geometry is the last
-/// normal one (`normal`), which is what un-maximizing will bring back.
-fn current_geometry(window: &WebviewWindow, normal: Option<Geometry>) -> Option<Geometry> {
-    let maximized = window.is_maximized().unwrap_or(false);
-    if maximized {
-        return normal.map(|g| Geometry { maximized: true, ..g });
-    }
+/// The window as it is now, measured (only meaningful when it is neither maximized nor minimized).
+fn measure(window: &WebviewWindow) -> Option<Geometry> {
     let (position, size) = (window.outer_position().ok()?, window.inner_size().ok()?);
     Some(Geometry { x: position.x, y: position.y, width: size.width, height: size.height, maximized: false })
+}
+
+/// What to remember of the window: see [`window_state::to_save`].
+fn current_geometry(window: &WebviewWindow, normal: Option<Geometry>) -> Option<Geometry> {
+    let maximized = window.is_maximized().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(false);
+    window_state::to_save(maximized, minimized, normal, || measure(window))
 }
 
 fn main() {
@@ -148,6 +150,9 @@ fn main() {
         }
     };
     let fake = fake_requested();
+    // Where the window is remembered at all: not on fixtures, and not under `--only-root` (the
+    // flag promises that no file outside its folder is written).
+    let remember = window_state::remembers(fake, only_root.is_some());
     // One window at a time (the fixtures window has its own name, so it can run beside a real one).
     let Some(_instance) = single_instance::acquire(if fake { r"Local\XioxUiFake" } else { r"Local\XioxUi" }) else {
         single_instance::focus_existing("Xiox");
@@ -159,15 +164,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(move |window, event| {
-            // The fixtures window reads and writes nothing of the user's.
-            if fake {
+            if !remember {
                 return;
             }
             let Some(window) = window.app_handle().get_webview_window(window.label()) else { return };
             match event {
                 WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
                     if !window.is_maximized().unwrap_or(true) && !window.is_minimized().unwrap_or(true) {
-                        if let Some(g) = current_geometry(&window, None) {
+                        if let Some(g) = measure(&window) {
                             *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(g);
                         }
                     }
@@ -190,8 +194,11 @@ fn main() {
             };
             app.manage(BackendState(backend));
             if let Some(window) = app.get_webview_window("main") {
-                if !fake {
+                if remember {
                     restore_window(&window);
+                } else if !fake {
+                    // `--only-root`: not even the saved place is read (that would reach the real profile).
+                    let _ = window.center();
                 }
                 window.show()?;
             }

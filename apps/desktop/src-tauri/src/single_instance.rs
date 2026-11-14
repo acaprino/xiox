@@ -1,10 +1,17 @@
 //! One Xiox window at a time: a named mutex held for the life of the process. A second launch finds
 //! the name taken, brings the first window to the front and exits.
 
+use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::OsStringExt;
+use std::path::{Path, PathBuf};
 use std::ptr::null;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
-use windows_sys::Win32::System::Threading::CreateMutexW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM};
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+};
 
 /// Holds the named mutex; releasing it (drop) lets the next launch in.
 pub struct InstanceGuard(HANDLE);
@@ -42,12 +49,75 @@ pub fn acquire(name: &str) -> Option<InstanceGuard> {
     Some(InstanceGuard(handle))
 }
 
-/// Raises the window titled `title` (restoring it first when minimized), if there is one.
+/// What the window search walks with: the title to match (UTF-16, no NUL), our own program's file
+/// name, and the window found.
+struct Search {
+    title: Vec<u16>,
+    exe: OsString,
+    found: HWND,
+}
+
+/// Whether `image` (the executable of the process that owns a window) is the same program as `exe`
+/// (this one): the same file name, any case. A window titled “Xiox” that belongs to anything else
+/// (an Explorer window on `Documents\Xiox`, say) is not ours.
+fn same_program(image: &Path, exe: &OsStr) -> bool {
+    image.file_name().is_some_and(|name| name.eq_ignore_ascii_case(exe))
+}
+
+/// The full path of the executable of the process that owns `window`, if it can be read.
+///
+/// # Safety
+/// `window` is a window handle the system gave out; it is only passed back to the system.
+unsafe fn owner_image(window: HWND) -> Option<PathBuf> {
+    let mut pid = 0u32;
+    // SAFETY: `pid` is a valid out-pointer for the call.
+    unsafe { GetWindowThreadProcessId(window, &mut pid) };
+    if pid == 0 {
+        return None;
+    }
+    // SAFETY: a plain query-only open of a process id; the handle is closed below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: `buf` holds `len` UTF-16 units and `len` is updated to the number written.
+    let ok = unsafe { QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) } != 0;
+    // SAFETY: the handle we opened above, closed once.
+    unsafe { CloseHandle(process) };
+    ok.then(|| PathBuf::from(OsString::from_wide(&buf[..len as usize])))
+}
+
+/// `EnumWindows` callback: stops (returns 0) at the first window with our title and our program.
+unsafe extern "system" fn visit(window: HWND, lparam: LPARAM) -> i32 {
+    // SAFETY: `lparam` is the `&mut Search` that `focus_existing` passed and keeps alive for the walk.
+    let search = unsafe { &mut *(lparam as *mut Search) };
+    let mut buf = [0u16; 256];
+    // SAFETY: `buf` holds the length passed.
+    let n = unsafe { GetWindowTextW(window, buf.as_mut_ptr(), buf.len() as i32) };
+    if n > 0 && buf[..n as usize] == search.title[..] {
+        // SAFETY: a handle the system just gave us.
+        if unsafe { owner_image(window) }.is_some_and(|image| same_program(&image, &search.exe)) {
+            search.found = window;
+            return 0;
+        }
+    }
+    1
+}
+
+/// Raises the window titled `title` that belongs to THIS program (restoring it first when
+/// minimized), if there is one. A window with that title of another program is left alone.
 pub fn focus_existing(title: &str) {
-    let title = wide(title);
-    // SAFETY: `title` is NUL-terminated and outlives the calls; the handle is only passed back to the system.
+    let Some(exe) = std::env::current_exe().ok().and_then(|p| p.file_name().map(OsStr::to_os_string)) else {
+        return;
+    };
+    let mut search = Search { title: title.encode_utf16().collect(), exe, found: std::ptr::null_mut() };
+    // SAFETY: `visit` only reads and writes `search`, which outlives the walk; the handle found is
+    // only passed back to the system.
     unsafe {
-        let window = FindWindowW(null(), title.as_ptr());
+        EnumWindows(Some(visit), &mut search as *mut Search as LPARAM);
+        let window = search.found;
         if window.is_null() {
             return;
         }
@@ -72,5 +142,24 @@ mod tests {
         assert!(acquire(&name).is_none(), "the second is refused while the first lives");
         drop(first);
         assert!(acquire(&name).is_some(), "the name is free again after the first is dropped");
+    }
+
+    /// The window titled “Xiox” is ours only if its owner is this program: an Explorer window on
+    /// `Documents\Xiox` has the same title and must not be raised.
+    #[test]
+    fn a_window_of_another_program_is_not_ours() {
+        let exe = OsStr::new("xiox-ui.exe");
+        assert!(same_program(Path::new(r"C:\Program Files\Xiox\xiox-ui.exe"), exe));
+        assert!(same_program(Path::new(r"D:\build\XIOX-UI.EXE"), exe), "any case");
+        assert!(!same_program(Path::new(r"C:\Windows\explorer.exe"), exe));
+        assert!(!same_program(Path::new(r"C:\Windows\xiox-ui.exe.bak"), exe));
+        assert!(!same_program(Path::new(""), exe));
+    }
+
+    /// With no window of ours anywhere, nothing is raised and nothing breaks (no program has a
+    /// window with this title).
+    #[test]
+    fn focusing_a_window_that_does_not_exist_does_nothing() {
+        focus_existing("Xiox window that no program has 8f3a2c");
     }
 }

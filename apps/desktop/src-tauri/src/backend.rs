@@ -24,8 +24,9 @@ pub trait Backend: Send + Sync + 'static {
     fn add_root(&self, dir: PathBuf) -> CmdResult<SectionView>;
     /// The text of the report on screen, when there is one to save.
     fn report_text(&self, s: SectionId) -> Option<String>;
-    /// What the save dialog and the write came to, put on the report.
-    fn set_saved(&self, s: SectionId, text: String, ok: bool) -> SectionView;
+    /// What the save dialog and the write came to, put on the report, but ONLY if the report on
+    /// screen is still `serialized` (the text that was written). Compared and applied under one lock.
+    fn set_saved_if(&self, s: SectionId, serialized: &str, text: String, ok: bool) -> SectionView;
     /// Only the debug-build fake window asks (`XIOX_UI_FAKE`); a release build never reads it.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     fn is_fake(&self) -> bool;
