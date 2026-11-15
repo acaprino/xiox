@@ -22,6 +22,10 @@
 //! Agent-managed git worktrees (Codex `~/.codex/worktrees`, OpenCode's `worktree` table and
 //! `project.sandboxes`) are not a mukade concern: they are discovered here, read-only.
 
+mod calls;
+
+pub use calls::{cut_input, parse_stream, was_cut, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
+
 use xiox_model::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
@@ -73,6 +77,8 @@ pub struct SessionInfo {
 pub struct MukadeSessions {
     agent: Agent,
     roots: StoreRoots,
+    /// The native `opencode.exe` that `mukade dump` needs to read an OpenCode session.
+    opencode_exe: Option<PathBuf>,
     /// mukade's data folder (its Claude Code listing cache). `None`: a folder under the system
     /// temp directory.
     cache_dir: Option<PathBuf>,
@@ -125,11 +131,12 @@ impl MukadeSessions {
                 roots.pi_agent_dir = Some(env_dir("PI_CODING_AGENT_DIR", h.join(".pi").join("agent")))
             }
         }
-        Self::with_roots(agent, roots)
+        let exe = std::env::var_os("XIOX_OPENCODE_EXE").filter(|v| !v.is_empty()).map(PathBuf::from);
+        Self::with_roots(agent, roots).with_opencode_exe(exe)
     }
 
     pub fn with_roots(agent: Agent, roots: StoreRoots) -> Self {
-        Self { agent, roots, cache_dir: None }
+        Self { agent, roots, opencode_exe: None, cache_dir: None }
     }
 
     /// Where mukade keeps its data (`MUKADE_DATA_DIR`): the Claude Code listing cache (what each
@@ -138,6 +145,12 @@ impl MukadeSessions {
     /// its executable.
     pub fn with_cache_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.cache_dir = dir;
+        self
+    }
+
+    /// The native `opencode.exe` (`XIOX_OPENCODE_EXE` in [`Self::from_env`]).
+    pub fn with_opencode_exe(mut self, exe: Option<PathBuf>) -> Self {
+        self.opencode_exe = exe;
         self
     }
 
@@ -171,10 +184,10 @@ impl MukadeSessions {
         }
     }
 
-    /// `mukade list <harness>`: the root sessions, or with `children` every session the store
-    /// holds (forks and subagent sessions included).
-    fn run_list(&self, children: bool) -> anyhow::Result<Vec<SessionInfo>> {
-        let store = self.store_root().ok_or_else(|| anyhow::anyhow!("no store configured"))?;
+    /// A `mukade` command with its environment ready: the data and intent folders (both inside
+    /// ours: without `MUKADE_INTENT_DIR` mukade writes its default intent prompts beside its own
+    /// executable), the harness's store variable set to `store`, no stdin and no console window.
+    fn mukade_command(&self, store: &Path) -> anyhow::Result<Command> {
         let exe = mukade_exe().ok_or_else(|| {
             anyhow::anyhow!("{EXE_NAME} not found (put it beside the executable or set XIOX_MUKADE_EXE)")
         })?;
@@ -183,13 +196,7 @@ impl MukadeSessions {
             .clone()
             .unwrap_or_else(|| std::env::temp_dir().join("xiox-mukade"));
         let data = std::path::absolute(&data).unwrap_or(data);
-        let mut cmd = Command::new(&exe);
-        cmd.arg("list").arg(self.harness());
-        if children {
-            cmd.arg("--children");
-        }
-        // Both inside our folder: without MUKADE_INTENT_DIR mukade writes its default intent
-        // prompts beside its own executable.
+        let mut cmd = Command::new(exe);
         cmd.env(self.store_env(), store)
             .env("MUKADE_DATA_DIR", &data)
             .env("MUKADE_INTENT_DIR", data.join("intent-prompts"))
@@ -200,7 +207,21 @@ impl MukadeSessions {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let out = cmd.output().map_err(|e| anyhow::anyhow!("{}: {e}", exe.display()))?;
+        Ok(cmd)
+    }
+
+    /// `mukade list <harness>`: the root sessions, or with `children` every session the store
+    /// holds (forks and subagent sessions included).
+    fn run_list(&self, children: bool) -> anyhow::Result<Vec<SessionInfo>> {
+        let store = self.store_root().ok_or_else(|| anyhow::anyhow!("no store configured"))?;
+        let mut cmd = self.mukade_command(store)?;
+        cmd.arg("list").arg(self.harness());
+        if children {
+            cmd.arg("--children");
+        }
+        let out = cmd
+            .output()
+            .map_err(|e| anyhow::anyhow!("{}: {e}", cmd.get_program().to_string_lossy()))?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             anyhow::bail!("mukade list {}: {}", self.harness(), err.trim());
