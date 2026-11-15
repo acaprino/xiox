@@ -8,6 +8,7 @@
 use crate::MukadeSessions;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -230,7 +231,7 @@ impl MukadeSessions {
         self.opencode_exe()?;
         let (_copy_dir, read_from) = match self.agent {
             Agent::Opencode => {
-                let dir = tempfile::tempdir()?;
+                let dir = tempfile::tempdir_in(snapshot_base(&std::env::temp_dir()))?;
                 let copy = opencode_snapshot(store, dir.path())?;
                 (Some(dir), copy)
             }
@@ -251,13 +252,15 @@ impl MukadeSessions {
     /// `mukade dump <harness> <id> --stream` reading `store`, which `dump` takes from the same
     /// environment variable as `list`.
     fn dump_command(&self, id: &str, store: &Path) -> anyhow::Result<Command> {
-        let mut cmd = self.mukade_command(store)?;
+        let opencode_exe = self.opencode_exe()?;
+        let store = if opencode_exe.is_some() { snapshot_base(store) } else { store.to_path_buf() };
+        let mut cmd = self.mukade_command(&store)?;
         cmd.args(["dump", self.harness(), id, "--stream"]);
-        if let Some(exe) = self.opencode_exe()? {
+        if let Some(exe) = opencode_exe {
             cmd.arg("--opencode-exe").arg(exe);
             for var in OPENCODE_ENV {
                 if let Some(value) = std::env::var_os(var) {
-                    cmd.env(var, strip_verbatim(&value.to_string_lossy()));
+                    cmd.env(var, strip_verbatim(&value.to_string_lossy()).as_ref());
                 }
             }
         }
@@ -295,8 +298,19 @@ fn opencode_snapshot(db: &Path, into: &Path) -> std::io::Result<PathBuf> {
     Ok(copy)
 }
 
-fn strip_verbatim(p: &str) -> &str {
-    p.strip_prefix(VERBATIM_PREFIX).unwrap_or(p)
+/// `\\?\C:\x` becomes `C:\x` and `\\?\UNC\server\share\x` becomes `\\server\share\x`; any other
+/// path is kept.
+fn strip_verbatim(p: &str) -> Cow<'_, str> {
+    match p.strip_prefix(VERBATIM_PREFIX) {
+        Some(unc) if unc.starts_with(r"UNC\") => Cow::Owned(format!(r"\\{}", &unc[4..])),
+        Some(drive) if drive.as_bytes().get(1) == Some(&b':') => Cow::Borrowed(drive),
+        _ => Cow::Borrowed(p),
+    }
+}
+
+/// `p` without a `\\?\` prefix: the exe OpenCode runs rejects it in a store or temp path.
+fn snapshot_base(p: &Path) -> PathBuf {
+    PathBuf::from(strip_verbatim(&p.to_string_lossy()).into_owned())
 }
 
 #[cfg(test)]
@@ -602,9 +616,35 @@ mod tests {
 
     #[test]
     fn verbatim_prefix_is_stripped_only_when_present() {
-        for (value, want) in [(r"\\?\C:\Users\x", r"C:\Users\x"), (r"C:\Users\x", r"C:\Users\x")] {
-            assert_eq!(strip_verbatim(value), want);
+        let cases = [
+            (r"\\?\C:\Users\x", r"C:\Users\x"),
+            (r"\\?\UNC\server\share\x", r"\\server\share\x"),
+            (r"C:\Users\x", r"C:\Users\x"),
+            (r"\\server\share\x", r"\\server\share\x"),
+            (r"\\?\Volume{1}\x", r"\\?\Volume{1}\x"),
+            ("", ""),
+        ];
+        for (value, want) in cases {
+            assert_eq!(strip_verbatim(value), want, "{value}");
         }
+    }
+
+    #[test]
+    fn opencode_store_and_snapshot_base_are_never_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("opencode.db");
+        std::fs::write(&db, b"main").unwrap();
+        let sessions = opencode_sessions(&db, Some(&tmp.path().join("opencode.exe")));
+
+        let verbatim_db = PathBuf::from(format!(r"\\?\{}", db.display()));
+        let cmd = sessions.dump_command("ses_1", &verbatim_db).unwrap();
+        let pointed = env_of(&cmd, "OPENCODE_DB").unwrap();
+        assert!(!pointed.starts_with(r"\\?\"), "{pointed}");
+        assert_eq!(std::fs::read(&pointed).unwrap(), b"main");
+
+        let base = snapshot_base(Path::new(&format!(r"\\?\{}", tmp.path().display())));
+        assert!(!base.to_string_lossy().starts_with(r"\\?\"), "{base:?}");
+        assert!(base.is_dir());
     }
 
     #[test]
