@@ -22,3 +22,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shel
 
 [dev-dependencies]
 tempfile = "3.27.0"
+toml = "0.8"

@@ -19,7 +19,7 @@
   LFM2.5-350M inventano molti più percorsi di quanti ne trovino. Non riaprire la questione del
   modello senza un buco misurato su un campione nuovo.
 - `bench/path-extractor/` è il prototipo di misura in Python (`extract.py`, `evidence.py`,
-  `bench.py`, `real.py`, `harvest.py`, fixture in `events.toml`). Va riscritto in Rust in
+  `bench.py`, `real.py`, `harvest.py`, fixture in `crates/xiox-project/tests/data/shell-events.toml`). Va riscritto in Rust in
   `crates/xiox-project` con la struttura del codice della specifica.
 - I due campioni reali da 180 comandi (sviluppo, seed 7; verifica, seed 2026) sono già stati
   usati. Una nuova regola (directory di output da variabili d'ambiente, PowerShell eseguito dal

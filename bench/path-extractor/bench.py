@@ -175,7 +175,7 @@ def table(name, total):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--events", default=str(Path(__file__).with_name("events.toml")))
+    ap.add_argument("--events", default=str(Path(__file__).parents[2] / "crates/xiox-project/tests/data/shell-events.toml"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--server")
     ap.add_argument("--model")
