@@ -1,6 +1,7 @@
 # Copie e cartelle di prova scoperte dalle sessioni degli agenti
 
-Data: 2026-11-13. Revisione 2: aggiornata alle decisioni dell'utente; implementazione da pianificare.
+Data: 2026-11-13. Revisione 3 (2026-11-15): estrattore dei comandi misurato sulla cronologia reale;
+deciso l'approccio deterministico con evidenze di sessione, senza modello. Implementazione da pianificare.
 
 Dipende da [analisi mirata e pulizia CLI](2026-11-13-project-cleanup-cli-design.md).
 Si integra con [l'osservatore di progetto](2026-11-13-project-observer-mcp-design.md).
@@ -102,22 +103,147 @@ Una menzione può far cercare una copia Git; per proporre `scratch` deve esserci
 alla sua funzione di cartella di lavoro, copia, prova o destinazione di artefatti nella
 cronologia. Il semplice elenco di percorsi in un prompt o nell'output di `ls` non basta.
 
-La prima implementazione usa regole deterministiche sulle operazioni riconosciute. Messaggi
-e risultati sono disponibili come contesto da consultare; non si introduce un LLM né si
-considera una frase della chat prova automatica del successo di un comando.
+L'estrazione è deterministica. Un modello locale è stato misurato e scartato (vedi
+[Estrazione dai comandi: decisione e misure](#estrazione-dai-comandi-decisione-e-misure)).
+Messaggi e risultati sono disponibili come contesto da consultare; una frase della chat non
+è prova automatica del successo di un comando.
 
 ### Operazioni riconosciute
 
-- Tool di scrittura/modifica, con i loro parametri percorso e gli esiti disponibili.
+- Tool di scrittura/modifica, con i loro parametri percorso e gli esiti disponibili. I campi
+  strutturati (`file_path`, `path`, `notebook_path`) si leggono direttamente.
 - Patch: creazione, modifica, spostamento ed eliminazione di file mantengono significati
   distinti. Una modifica non diventa creazione; una cancellazione non genera una nuova cartella.
-- Comandi espliciti: `mkdir`, `New-Item`, `cp -r`, `Copy-Item`, `robocopy`, `git clone`,
-  `git worktree add`, `cargo new`/`init`, `npm create` e redirezioni supportate.
+- Comandi espliciti: `mkdir`/`md`, `New-Item`, `cp`, `Copy-Item`, `robocopy`, `xcopy`, `mv`,
+  `Move-Item`, `git clone`, `git worktree add`, `git init <dir>`, `cargo new`/`init`,
+  `npm`/`pnpm`/`yarn`/`bun create`, `npx create-*`, `uv init`/`venv`, `python -m venv`,
+  `dotnet new -o`, estrazioni (`tar -x -C`, `unzip -d`, `Expand-Archive`), scritture (`>`,
+  `>>`, `tee`, `Out-File`, `Set-Content`, `Add-Content`, `touch`, `sed -i`) e directory di
+  output indicate da flag (`--out`, `--output`, `--out-dir`, `--target-dir`, `--basetemp`).
+- Contesto dentro il comando: `cd`, `pushd`/`popd`, `Set-Location`, `cd /d`, `git -C`;
+  variabili assegnate con un valore letterale nello stesso comando; cicli `for` su liste
+  letterali, espansi; shell annidate (`bash -c`, `powershell -Command`, `cmd /c`); heredoc.
+- Script inline Python e JavaScript (`-c`, `-e`, heredoc, script scritto da un heredoc ed
+  eseguito nello stesso comando): solo chiamate note con un percorso letterale, come
+  `open(…, "w")`, `os.makedirs`, `Path(…).mkdir`, `shutil.copytree`, `writeFileSync`, `mkdirSync`.
 
 Xiox distingue sorgente e destinazione delle copie e applica la grammatica della shell
-indicata dalla chiamata. Non esegue comandi letti dalla cronologia. Variabili, cicli,
-sostituzioni e script non interpretati non producono percorsi inventati. Le forme non
-supportate sono conteggiate; il comportamento di ciascun parser è provato su fixture.
+indicata dalla chiamata. Non esegue comandi letti dalla cronologia. Variabili d'ambiente o
+non assegnate, sostituzioni di comando, cicli su glob o output, f-string, template e
+concatenazioni non producono percorsi: restano irrisolti e sono conteggiati. Il comportamento
+di ciascun parser è provato su fixture.
+
+### Estrazione dai comandi: decisione e misure
+
+**Decisione.** Parser deterministici per comando e dialetto, più un registro delle evidenze
+per sessione. Nessun modello generativo: sui comandi reali inventa percorsi più di quanti ne
+trovi. Un estrattore di span non generativo (tipo GLiNER) non è stato misurato; si valuta solo
+se un nuovo campione mostra un buco ricorrente nei corpi degli script.
+
+**Formato.** Per ogni chiamata shell l'estrattore restituisce, in ordine:
+
+- operazioni `{op, src, dst}` con `op` tra `create`, `copy`, `move`, `clone`, `worktree`,
+  `write`, e `cd` solo come contesto; `base` per `git -C`;
+- i segnali di incertezza `loop` e `script`.
+
+Un resolver comune trasforma i percorsi così come sono scritti in percorsi assoluti:
+
+- tiene conto di `cd` e pushd, `base`, forme Git Bash (`/d/x`, `/tmp`, `~`) e dispositivi
+  nulli (`/dev/null`, `nul`, `$null`), scartati;
+- un `clone` senza destinazione va nella cwd col nome del repository;
+- conta i percorsi irrisolti, che non diventano mai candidati.
+
+Sessione, progetto, esito e riferimento all'evento li collega Xiox, non l'estrattore.
+
+**Evidenze di sessione.** Il registro della sessione riunisce per cartella, senza distinguere
+maiuscole e minuscole, le evidenze di tutte le chiamate:
+
+| Fonte | Forza |
+|---|---|
+| Destinazione di `create`, `copy`, `move`, `clone`, `worktree` | creata |
+| File scritto (`write`, Write/Edit strutturati) | scritta, per la cartella del file |
+| Read, Glob, Grep, `cd`, cwd della chiamata | usata |
+
+Per ogni cartella si conservano la forza più alta e i riferimenti agli eventi. Un'operazione
+fallita resta visibile ma non porta forza. Il motivo mostrato all'utente usa la forza: una
+cartella solo "usata" non viene descritta come creata dalla sessione. Le evidenze ricavate da
+uno script sono indicate come tali. Un ultimo segmento con estensione è trattato come file:
+è un'approssimazione dichiarata, da rivedere quando il risultato del tool indica il tipo.
+
+**Misure (2026-11-15, su richiesta esplicita dell'utente).** Lettura tramite Mukade (`list`,
+`dump --stream`) di tutti gli store presenti:
+
+- 8 store, 6 harness; 1.848 sessioni lette su 1.905 leggibili; 157.214 chiamate di tool;
+- 94.862 comandi shell con cwd: Claude Code 83.270, Pi 6.077, OpenCode 4.726, Codex 786,
+  Hermes 3;
+- sessioni non lette: 50 Pi, che Mukade elenca tutte con lo stesso id `session`, e 7
+  Claude Code con catene di subagent ripresi o parent mancante.
+
+L'OpenCode dell'utente è stato letto da una copia del database.
+
+Le etichette sono state scritte alla cieca da tre agenti indipendenti, che vedevano solo
+comando, shell e cwd. Il campione di sviluppo (180 comandi) è servito a scrivere le regole. Il
+campione di verifica (180 comandi, seed diverso, nessuna sovrapposizione) dà i numeri seguenti.
+
+| Campione di verifica | Solo comando | Con evidenze di sessione |
+|---|---|---|
+| Percorsi inventati | 0 | 0 |
+| Percorsi esatti per comando | 82/157 | — |
+| Comandi con tutte le cartelle esterne trovate | 34/48 (71%) | 41/48 (85%) |
+| Cartelle esterne distinte trovate | 46/85 (54%) | 54/85 (64%) |
+
+Sulle cartelle distinte pesa un solo script che ne genera 22 con un ciclo su un dizionario:
+senza di esso la sessione ne trova circa l'86%. Sul campione di sviluppo gli stessi numeri
+erano 98–99%: la differenza indica quanto le regole siano tarate sui casi visti. Il prototipo
+in Python analizza i 94.862 comandi in circa 75 s, con un massimo di 104 ms per comando. Sulle
+106 fixture sintetiche: 105 esatte, 0 percorsi inventati.
+
+Modelli misurati su CPU (Intel Core Ultra 7 155H, 4 thread, llama.cpp b12024, uscita vincolata
+da JSON schema, guardia che accetta solo percorsi presenti nel comando), sul campione di
+sviluppo reale:
+
+| Modello | Trovati / 149 | Inventati | In aggiunta al deterministico | RAM di picco | Latenza mediana |
+|---|---|---|---|---|---|
+| SmolLM2-135M-Instruct Q8_0 | 3 | 75 | +0 trovati, +29 inventati | ~300 MB | ~1,0 s |
+| LFM2.5-350M Q4_K_M | 4 | 266 | +1 trovato, +117 inventati | ~520 MB | ~3,5 s |
+
+Le latenze sono indicative: parte delle prove ha condiviso la CPU con altre misure.
+
+**Comportamento quando l'estrazione è incerta.** Nessun percorso irrisolto diventa candidato.
+I segnali `loop` e `script` e i percorsi irrisolti sono conteggiati nella copertura. Una
+cartella può comunque emergere da altre evidenze della stessa sessione, con la forza che
+quelle evidenze consentono.
+
+**Lacune note, da misurare su un nuovo campione prima di colmarle:**
+
+1. Directory di output passate per variabile d'ambiente (`CARGO_TARGET_DIR=…`).
+2. Comandi PowerShell eseguiti dal tool Bash.
+3. Altri flag di output (`--user-data-dir`, `--local-dir`, `--screenshot`).
+4. `ForEach-Object` di PowerShell su liste letterali.
+
+I percorsi calcolati negli script (cicli su dizionari, argomenti di funzione) restano fuori
+per scelta.
+
+**Fixture.** I casi sintetici etichettati sono la base dei test guidati dai dati
+dell'implementazione. I comandi reali delle sessioni non entrano nel repository.
+
+### Struttura del codice
+
+L'implementazione in `crates/xiox-project` segue stadi puri e piccoli tipi di valore:
+
+1. **Lessico per dialetto:** un trait `Dialect`, con implementazioni Bash, PowerShell e Cmd per
+   virgolette, escape, operatori e heredoc.
+2. **Struttura del comando:** comandi semplici, assegnazioni, cicli e heredoc al posto di liste
+   di token.
+3. **Registro di riconoscitori:** un trait `Recognizer` per famiglia di comandi (directory,
+   copie, Git, archivi, package manager, scritture, shell annidate, interpreti). Un comando
+   nuovo si aggiunge con un riconoscitore nuovo.
+4. **Analizzatori di script:** una tabella dichiarativa di chiamate per linguaggio; argomenti
+   letti in un solo passaggio lineare, senza espressioni regolari con backtracking.
+5. **`Resolver` ed `EvidenceLedger`:** risoluzione dei percorsi con il contesto; registro per
+   sessione con forza ordinata (usata < scritta < creata).
+
+I test usano le fixture sintetiche e una tabella per caso.
 
 Per ogni evidenza si conservano: percorso, progetto associato e motivo dell'associazione,
 agente, ID sessione, ID/posizione dell'evento, timestamp se disponibile, `cwd` effettivo,
@@ -290,8 +416,9 @@ sessioni concorrenti. I risultati servono a tarare supporto e limiti, non a tras
 1. **Adapter e prova tecnica:** esporre sessioni non aggregate e leggere fixture attraverso
    Mukade; misurare costi e limiti. Preparare la sonda locale.
 2. **Parte A:** aggiungere candidati dai `cwd`, deduplicazione e provenienza.
-3. **Analisi Xiox della cronologia:** operazioni riconosciute, contesto, evidenze e `scratch`;
-   includere rischio e copertura nel risultato di `analyze`.
+3. **Analisi Xiox della cronologia:** operazioni riconosciute, contesto, registro delle evidenze
+   di sessione e `scratch`, con la struttura del codice descritta sopra; includere rischio e
+   copertura nel risultato di `analyze`.
 4. **Selezione e pulizia:** `danger`, conferme CLI/UI, propagazione ai contenitori, riconvalida
    ed eccezione esplicita dei worktree; incrementare lo schema JSON e aggiornare le guide.
 5. **Verifica integrata:** casi della tabella, osservatore e prove Windows controllate. Solo
@@ -304,7 +431,11 @@ Questa specifica non avvia la costruzione né modifica il codice applicativo.
 
 - Cronologie eliminate, store non supportati e sessioni non collegate al progetto riducono
   la copertura; una prova mai registrata o non leggibile non viene ricostruita dalle date.
-- Uno script può creare percorsi che non compaiono nei dati leggibili della sessione.
+- Uno script può creare percorsi che non compaiono nei dati leggibili della sessione. Sul
+  campione di verifica il registro di sessione trova tutte le cartelle esterne nell'85% dei
+  comandi che ne hanno; il resto è soprattutto percorsi calcolati dentro gli script.
+- Mukade non legge tutte le sessioni: al 2026-11-15 restano fuori 50 sessioni Pi con id
+  ambiguo e 7 di Claude Code con catene di subagent che Mukade rifiuta.
 - Una menzione o una scrittura non dimostrano che il contenuto sia inutile.
 - La conferma può essere automatizzata da un agente. `danger` rende esplicita la decisione,
   non certifica un intervento umano o l'assenza di attività concorrente.

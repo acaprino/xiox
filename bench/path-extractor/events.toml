@@ -1,0 +1,817 @@
+# Shell events from agent sessions, labelled by hand. Synthetic: no real session is quoted.
+# Each event: the command a tool ran, its shell, the working directory, the exit code (Xiox links the
+# outcome, the extractor never sees it) and `gold`, the paths that result once resolved against `cwd`.
+# Gold is the truth of what the command does to disk, so a loop that makes seed-1..3 lists all three,
+# and a path behind an unknown variable lists nothing. `cd` is context, never a candidate.
+# op: create (new directory or project), copy (copy or extract src into dst), move, clone,
+# worktree, write (a file, or a directory a tool writes its output to).
+
+[defaults]
+cwd = 'D:\Projects\Phazly'
+home = 'C:\Users\dev'
+temp = 'C:\Users\dev\AppData\Local\Temp'
+
+# ---- create
+[[event]]
+id = "c01"
+cat = "create"
+shell = "bash"
+cmd = 'mkdir -p /d/runs/planner-test'
+gold = [{ op = "create", dst = 'D:\runs\planner-test' }]
+
+[[event]]
+id = "c02"
+cat = "create"
+shell = "bash"
+cmd = 'mkdir -p ../phazly-bench/results'
+gold = [{ op = "create", dst = 'D:\Projects\phazly-bench\results' }]
+
+[[event]]
+id = "c03"
+cat = "create"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Path D:\runs\eval-01 -Force | Out-Null'
+gold = [{ op = "create", dst = 'D:\runs\eval-01' }]
+
+[[event]]
+id = "c04"
+cat = "create"
+shell = "powershell"
+cmd = 'mkdir D:\scratch\phazly-ui'
+gold = [{ op = "create", dst = 'D:\scratch\phazly-ui' }]
+
+[[event]]
+id = "c05"
+cat = "create"
+shell = "cmd"
+cmd = 'md D:\tmp\phazly-cmd'
+gold = [{ op = "create", dst = 'D:\tmp\phazly-cmd' }]
+
+[[event]]
+id = "c06"
+cat = "create"
+shell = "bash"
+cmd = 'cargo new /d/experiments/planner-cli --bin'
+gold = [{ op = "create", dst = 'D:\experiments\planner-cli' }]
+
+[[event]]
+id = "c07"
+cat = "create"
+shell = "bash"
+cmd = 'npm create vite@latest phazly-web -- --template react-ts'
+gold = [{ op = "create", dst = 'D:\Projects\Phazly\phazly-web' }]
+
+[[event]]
+id = "c08"
+cat = "create"
+shell = "powershell"
+cmd = 'dotnet new console -o D:\runs\cs-probe'
+gold = [{ op = "create", dst = 'D:\runs\cs-probe' }]
+
+[[event]]
+id = "c09"
+cat = "create"
+shell = "bash"
+cmd = 'python -m venv /d/venvs/phazly-py313'
+gold = [{ op = "create", dst = 'D:\venvs\phazly-py313' }]
+
+[[event]]
+id = "c10"
+cat = "create"
+shell = "bash"
+cmd = 'mkdir -p /d/runs/a /d/runs/b'
+gold = [{ op = "create", dst = 'D:\runs\a' }, { op = "create", dst = 'D:\runs\b' }]
+
+[[event]]
+id = "c11"
+cat = "create"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Path D:\runs\shard-1, D:\runs\shard-2'
+gold = [{ op = "create", dst = 'D:\runs\shard-1' }, { op = "create", dst = 'D:\runs\shard-2' }]
+
+[[event]]
+id = "c12"
+cat = "create"
+shell = "bash"
+cmd = 'uv init /d/experiments/tokenizer-probe'
+gold = [{ op = "create", dst = 'D:\experiments\tokenizer-probe' }]
+
+[[event]]
+id = "c13"
+cat = "create"
+shell = "powershell"
+cmd = 'New-Item -Path D:\runs -Name report-2026 -ItemType Directory'
+gold = [{ op = "create", dst = 'D:\runs\report-2026' }]
+
+# ---- copy (extraction counts as a copy of the archive into dst)
+[[event]]
+id = "p01"
+cat = "copy"
+shell = "bash"
+cmd = 'cp -r /d/Projects/Phazly /d/backup/Phazly-2026-11-12'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly', dst = 'D:\backup\Phazly-2026-11-12' }]
+
+[[event]]
+id = "p02"
+cat = "copy"
+shell = "bash"
+cmd = 'cp -a src/fixtures /d/runs/fixtures-copy'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\src\fixtures', dst = 'D:\runs\fixtures-copy' }]
+
+[[event]]
+id = "p03"
+cat = "copy"
+shell = "powershell"
+cmd = 'Copy-Item -Recurse -Path D:\Projects\Phazly -Destination D:\copies\phazly-review'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly', dst = 'D:\copies\phazly-review' }]
+
+[[event]]
+id = "p04"
+cat = "copy"
+shell = "powershell"
+cmd = 'Copy-Item .\data D:\runs\data-snapshot -Recurse'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\data', dst = 'D:\runs\data-snapshot' }]
+
+[[event]]
+id = "p05"
+cat = "copy"
+shell = "cmd"
+cmd = 'robocopy D:\Projects\Phazly D:\mirror\phazly /E /XD node_modules target'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly', dst = 'D:\mirror\phazly' }]
+
+[[event]]
+id = "p06"
+cat = "copy"
+shell = "cmd"
+cmd = 'xcopy /E /I /Y assets D:\runs\assets-copy'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\assets', dst = 'D:\runs\assets-copy' }]
+
+[[event]]
+id = "p07"
+cat = "copy"
+shell = "bash"
+cmd = 'tar -xzf /d/downloads/planner-data.tar.gz -C /d/runs/planner-data'
+gold = [{ op = "copy", src = 'D:\downloads\planner-data.tar.gz', dst = 'D:\runs\planner-data' }]
+
+[[event]]
+id = "p08"
+cat = "copy"
+shell = "powershell"
+cmd = 'Expand-Archive -Path .\release.zip -DestinationPath D:\runs\release-check'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\release.zip', dst = 'D:\runs\release-check' }]
+
+[[event]]
+id = "p09"
+cat = "copy"
+shell = "bash"
+cmd = 'unzip -q dist.zip -d /d/runs/dist-unpacked'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\dist.zip', dst = 'D:\runs\dist-unpacked' }]
+
+[[event]]
+id = "p10"
+cat = "copy"
+shell = "bash"
+cmd = 'cp -r . /d/sandbox/phazly-clean'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly', dst = 'D:\sandbox\phazly-clean' }]
+
+[[event]]
+id = "p11"
+cat = "copy"
+shell = "bash"
+cmd = 'cp README.md /d/runs/notes/'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\README.md', dst = 'D:\runs\notes' }]
+
+# ---- move
+[[event]]
+id = "m01"
+cat = "move"
+shell = "bash"
+cmd = 'mv target /d/archive/phazly-target-old'
+gold = [{ op = "move", src = 'D:\Projects\Phazly\target', dst = 'D:\archive\phazly-target-old' }]
+
+[[event]]
+id = "m02"
+cat = "move"
+shell = "powershell"
+cmd = 'Move-Item -Path D:\runs\eval-01 -Destination D:\archive\eval-01'
+gold = [{ op = "move", src = 'D:\runs\eval-01', dst = 'D:\archive\eval-01' }]
+
+[[event]]
+id = "m03"
+cat = "move"
+shell = "cmd"
+cmd = 'move D:\tmp\phazly-cmd D:\tmp\phazly-cmd-done'
+gold = [{ op = "move", src = 'D:\tmp\phazly-cmd', dst = 'D:\tmp\phazly-cmd-done' }]
+
+# ---- clone (no destination: the repository name under cwd)
+[[event]]
+id = "g01"
+cat = "clone"
+shell = "bash"
+cmd = 'git clone https://github.com/acme/planner.git /d/runs/planner-upstream'
+gold = [{ op = "clone", src = 'https://github.com/acme/planner.git', dst = 'D:\runs\planner-upstream' }]
+
+[[event]]
+id = "g02"
+cat = "clone"
+shell = "bash"
+cmd = 'git clone --depth 1 -b release https://github.com/acme/planner.git'
+gold = [{ op = "clone", src = 'https://github.com/acme/planner.git', dst = 'D:\Projects\Phazly\planner' }]
+
+[[event]]
+id = "g03"
+cat = "clone"
+shell = "powershell"
+cmd = 'git clone D:\Projects\Phazly D:\copies\phazly-local'
+gold = [{ op = "clone", src = 'D:\Projects\Phazly', dst = 'D:\copies\phazly-local' }]
+
+[[event]]
+id = "g04"
+cat = "clone"
+shell = "bash"
+cmd = 'git clone --branch main --single-branch git@github.com:acme/phazly-docs.git docs-clone'
+gold = [{ op = "clone", src = 'git@github.com:acme/phazly-docs.git', dst = 'D:\Projects\Phazly\docs-clone' }]
+
+[[event]]
+id = "g05"
+cat = "spaces"
+shell = "bash"
+cmd = 'git clone https://github.com/acme/planner.git "/d/My Runs/planner copy"'
+gold = [{ op = "clone", src = 'https://github.com/acme/planner.git', dst = 'D:\My Runs\planner copy' }]
+
+# ---- worktree
+[[event]]
+id = "w01"
+cat = "worktree"
+shell = "bash"
+cmd = 'git worktree add ../Phazly-feat-auth -b feat/auth'
+gold = [{ op = "worktree", dst = 'D:\Projects\Phazly-feat-auth' }]
+
+[[event]]
+id = "w02"
+cat = "worktree"
+shell = "bash"
+cmd = 'git worktree add -b fix/planner /d/wt/phazly-fix origin/main'
+gold = [{ op = "worktree", dst = 'D:\wt\phazly-fix' }]
+
+[[event]]
+id = "w03"
+cat = "worktree"
+shell = "powershell"
+cwd = 'D:\runs'
+cmd = 'git -C D:\Projects\Phazly worktree add ..\wt\phazly-review HEAD~3'
+gold = [{ op = "worktree", dst = 'D:\Projects\wt\phazly-review' }]
+
+[[event]]
+id = "w04"
+cat = "worktree"
+shell = "bash"
+cmd = 'git worktree add --detach .claude/worktrees/agent-7'
+gold = [{ op = "worktree", dst = 'D:\Projects\Phazly\.claude\worktrees\agent-7' }]
+
+# ---- write
+[[event]]
+id = "r01"
+cat = "write"
+shell = "bash"
+cmd = 'cargo bench > /d/runs/bench/out.txt 2>&1'
+gold = [{ op = "write", dst = 'D:\runs\bench\out.txt' }]
+
+[[event]]
+id = "r02"
+cat = "write"
+shell = "bash"
+cmd = 'python plan.py --seed 3 | tee /d/runs/plan-seed3.log'
+gold = [{ op = "write", dst = 'D:\runs\plan-seed3.log' }]
+
+[[event]]
+id = "r03"
+cat = "write"
+shell = "powershell"
+cmd = 'npm test 2>&1 | Out-File -FilePath D:\runs\npm-test.log'
+gold = [{ op = "write", dst = 'D:\runs\npm-test.log' }]
+
+[[event]]
+id = "r04"
+cat = "write"
+shell = "powershell"
+cmd = '''Set-Content -Path D:\runs\eval-01\config.json -Value '{}' '''
+gold = [{ op = "write", dst = 'D:\runs\eval-01\config.json' }]
+
+[[event]]
+id = "r05"
+cat = "write"
+shell = "bash"
+cmd = 'echo "done" >> /d/runs/status.txt'
+gold = [{ op = "write", dst = 'D:\runs\status.txt' }]
+
+[[event]]
+id = "r06"
+cat = "write"
+shell = "bash"
+cmd = '''
+cat > /d/runs/probe/main.py << 'EOF'
+import os
+print(os.getcwd())
+EOF'''
+gold = [{ op = "write", dst = 'D:\runs\probe\main.py' }]
+
+[[event]]
+id = "r07"
+cat = "write"
+shell = "cmd"
+cmd = 'dir /s > D:\tmp\listing.txt'
+gold = [{ op = "write", dst = 'D:\tmp\listing.txt' }]
+
+# ---- read only: no candidate
+[[event]]
+id = "n01"
+cat = "readonly"
+shell = "bash"
+cmd = 'ls -la /d/runs'
+gold = []
+
+[[event]]
+id = "n02"
+cat = "readonly"
+shell = "bash"
+cmd = 'git status --short'
+gold = []
+
+[[event]]
+id = "n03"
+cat = "readonly"
+shell = "bash"
+cmd = 'rg "mkdir" crates/ -n'
+gold = []
+
+[[event]]
+id = "n04"
+cat = "readonly"
+shell = "powershell"
+cmd = 'Get-ChildItem D:\runs -Recurse -Directory | Select-Object FullName'
+gold = []
+
+[[event]]
+id = "n05"
+cat = "readonly"
+shell = "bash"
+cmd = 'cat /d/runs/planner-test/out.txt'
+gold = []
+
+[[event]]
+id = "n06"
+cat = "readonly"
+shell = "bash"
+cmd = 'cargo test -p planner -- --nocapture'
+gold = []
+
+[[event]]
+id = "n07"
+cat = "readonly"
+shell = "powershell"
+cmd = 'Test-Path D:\runs\eval-01'
+gold = []
+
+[[event]]
+id = "n08"
+cat = "readonly"
+shell = "bash"
+cmd = 'git log --oneline -5 -- /d/Projects/Phazly/src'
+gold = []
+
+[[event]]
+id = "n09"
+cat = "readonly"
+shell = "bash"
+cmd = 'du -sh /d/runs/*'
+gold = []
+
+[[event]]
+id = "n10"
+cat = "readonly"
+shell = "bash"
+cmd = 'find /d/runs -maxdepth 2 -name "*.json"'
+gold = []
+
+[[event]]
+id = "n11"
+cat = "readonly"
+shell = "cmd"
+cmd = 'type D:\runs\status.txt'
+gold = []
+
+[[event]]
+id = "n12"
+cat = "readonly"
+shell = "bash"
+cmd = 'git clone --help'
+gold = []
+
+[[event]]
+id = "n13"
+cat = "readonly"
+shell = "bash"
+cmd = 'echo "mkdir -p /d/runs/ghost"'
+gold = []
+
+[[event]]
+id = "n14"
+cat = "readonly"
+shell = "bash"
+cmd = 'grep -rn "git worktree add" docs/'
+gold = []
+
+[[event]]
+id = "n15"
+cat = "readonly"
+shell = "bash"
+cmd = 'ls /d/runs > /dev/null 2>&1'
+gold = []
+
+[[event]]
+id = "n16"
+cat = "readonly"
+shell = "powershell"
+cmd = 'Get-Content D:\runs\npm-test.log -Tail 20 2>$null'
+gold = []
+
+[[event]]
+id = "n17"
+cat = "readonly"
+shell = "bash"
+cmd = 'git diff HEAD~1 --stat'
+gold = []
+
+[[event]]
+id = "n18"
+cat = "readonly"
+shell = "bash"
+cmd = 'cd /d/runs/planner-test && ls'
+gold = []
+
+# ---- delete: no candidate
+[[event]]
+id = "d01"
+cat = "delete"
+shell = "bash"
+cmd = 'rm -rf /d/runs/planner-test'
+gold = []
+
+[[event]]
+id = "d02"
+cat = "delete"
+shell = "powershell"
+cmd = 'Remove-Item -Recurse -Force D:\runs\eval-01'
+gold = []
+
+[[event]]
+id = "d03"
+cat = "delete"
+shell = "bash"
+cmd = 'git worktree remove ../Phazly-feat-auth'
+gold = []
+
+[[event]]
+id = "d04"
+cat = "delete"
+shell = "cmd"
+cmd = 'rmdir /s /q D:\tmp\phazly-cmd'
+gold = []
+
+# ---- chained commands
+[[event]]
+id = "h01"
+cat = "chain"
+shell = "bash"
+cmd = 'mkdir -p /d/runs/planner-test && cd /d/runs/planner-test && git clone https://github.com/acme/planner.git .'
+gold = [
+  { op = "create", dst = 'D:\runs\planner-test' },
+  { op = "clone", src = 'https://github.com/acme/planner.git', dst = 'D:\runs\planner-test' },
+]
+
+[[event]]
+id = "h02"
+cat = "chain"
+shell = "bash"
+cmd = 'cd /d/runs && mkdir llm-eval && cd llm-eval && python -m venv .venv'
+gold = [{ op = "create", dst = 'D:\runs\llm-eval' }, { op = "create", dst = 'D:\runs\llm-eval\.venv' }]
+
+[[event]]
+id = "h03"
+cat = "chain"
+shell = "powershell"
+cmd = 'Set-Location D:\runs; New-Item -ItemType Directory planner-ps; Copy-Item D:\Projects\Phazly\plan.toml .\planner-ps\'
+gold = [
+  { op = "create", dst = 'D:\runs\planner-ps' },
+  { op = "copy", src = 'D:\Projects\Phazly\plan.toml', dst = 'D:\runs\planner-ps' },
+]
+
+[[event]]
+id = "h04"
+cat = "chain"
+shell = "cmd"
+cmd = 'cd /d D:\runs && mkdir cmd-run && cd cmd-run && echo ok > status.txt'
+gold = [{ op = "create", dst = 'D:\runs\cmd-run' }, { op = "write", dst = 'D:\runs\cmd-run\status.txt' }]
+
+[[event]]
+id = "h05"
+cat = "chain"
+shell = "bash"
+cmd = 'cargo build --release && cp target/release/planner.exe /d/tools/planner/'
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\target\release\planner.exe', dst = 'D:\tools\planner' }]
+
+[[event]]
+id = "h06"
+cat = "chain"
+shell = "bash"
+cmd = 'cd .. && git clone ./Phazly Phazly-copy2 && cd Phazly-copy2 && git checkout -b exp'
+gold = [{ op = "clone", src = 'D:\Projects\Phazly', dst = 'D:\Projects\Phazly-copy2' }]
+
+[[event]]
+id = "h07"
+cat = "chain"
+shell = "bash"
+cmd = 'ls /d/runs; mkdir /d/runs/next-run; ls /d/runs'
+gold = [{ op = "create", dst = 'D:\runs\next-run' }]
+
+[[event]]
+id = "h08"
+cat = "chain"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Force D:\runs\pw1 | Out-Null; Get-ChildItem D:\runs'
+gold = [{ op = "create", dst = 'D:\runs\pw1' }]
+
+# ---- paths with spaces
+[[event]]
+id = "s01"
+cat = "spaces"
+shell = "bash"
+cmd = 'mkdir -p "/d/My Runs/planner test"'
+gold = [{ op = "create", dst = 'D:\My Runs\planner test' }]
+
+[[event]]
+id = "s02"
+cat = "spaces"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Path "D:\My Runs\eval two"'
+gold = [{ op = "create", dst = 'D:\My Runs\eval two' }]
+
+[[event]]
+id = "s03"
+cat = "spaces"
+shell = "bash"
+cmd = '''cp -r 'src dir' "/d/runs/copy of src"'''
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\src dir', dst = 'D:\runs\copy of src' }]
+
+[[event]]
+id = "s04"
+cat = "spaces"
+shell = "cmd"
+cmd = 'mkdir "D:\My Runs\cmd test"'
+gold = [{ op = "create", dst = 'D:\My Runs\cmd test' }]
+
+[[event]]
+id = "s05"
+cat = "spaces"
+shell = "powershell"
+cmd = '''Copy-Item -Path 'D:\Projects\Phazly\docs' -Destination 'D:\My Runs\docs snapshot' -Recurse'''
+gold = [{ op = "copy", src = 'D:\Projects\Phazly\docs', dst = 'D:\My Runs\docs snapshot' }]
+
+# ---- failed: same extraction, the outcome comes from the exit code
+[[event]]
+id = "f01"
+cat = "failed"
+shell = "bash"
+cmd = 'git clone https://github.com/acme/private-planner.git /d/runs/private'
+exit = 128
+gold = [{ op = "clone", src = 'https://github.com/acme/private-planner.git', dst = 'D:\runs\private' }]
+
+[[event]]
+id = "f02"
+cat = "failed"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Path D:\runs\eval-01'
+exit = 1
+gold = [{ op = "create", dst = 'D:\runs\eval-01' }]
+
+[[event]]
+id = "f03"
+cat = "failed"
+shell = "bash"
+cmd = 'mkdir /d/runs/deep/nested'
+exit = 1
+gold = [{ op = "create", dst = 'D:\runs\deep\nested' }]
+
+[[event]]
+id = "f04"
+cat = "failed"
+shell = "bash"
+cmd = 'cp -r /d/Projects/Missing /d/runs/missing-copy'
+exit = 1
+gold = [{ op = "copy", src = 'D:\Projects\Missing', dst = 'D:\runs\missing-copy' }]
+
+# ---- unknown variables: the path cannot be known, nothing is a candidate
+[[event]]
+id = "u02"
+cat = "variable"
+shell = "powershell"
+cmd = 'New-Item -ItemType Directory -Path "$env:TEMP\xiox-probe"'
+gold = []
+
+[[event]]
+id = "u03"
+cat = "variable"
+shell = "bash"
+cmd = 'mkdir -p "$OUT_DIR/results"'
+gold = []
+
+[[event]]
+id = "u04"
+cat = "variable"
+shell = "bash"
+cmd = 'cp -r src "$(mktemp -d)"'
+gold = []
+
+[[event]]
+id = "u05"
+cat = "variable"
+shell = "cmd"
+cmd = 'mkdir %TEMP%\cmd-probe'
+gold = []
+
+# ---- loops: the truth is the expanded list
+[[event]]
+id = "u01"
+cat = "loop"
+shell = "bash"
+cmd = 'for i in 1 2 3; do mkdir -p /d/runs/seed-$i; done'
+gold = [
+  { op = "create", dst = 'D:\runs\seed-1' },
+  { op = "create", dst = 'D:\runs\seed-2' },
+  { op = "create", dst = 'D:\runs\seed-3' },
+]
+
+[[event]]
+id = "u06"
+cat = "loop"
+shell = "powershell"
+cmd = '1..3 | ForEach-Object { New-Item -ItemType Directory "D:\runs\ps-$_" }'
+gold = [
+  { op = "create", dst = 'D:\runs\ps-1' },
+  { op = "create", dst = 'D:\runs\ps-2' },
+  { op = "create", dst = 'D:\runs\ps-3' },
+]
+
+# ---- inline scripts and nested shells
+[[event]]
+id = "x01"
+cat = "script"
+shell = "bash"
+cmd = '''python -c "import os; os.makedirs('D:/runs/py-made', exist_ok=True)"'''
+gold = [{ op = "create", dst = 'D:\runs\py-made' }]
+
+[[event]]
+id = "x02"
+cat = "script"
+shell = "bash"
+cmd = '''node -e "require('fs').mkdirSync('D:/runs/node-made', {recursive: true})"'''
+gold = [{ op = "create", dst = 'D:\runs\node-made' }]
+
+[[event]]
+id = "x06"
+cat = "nested"
+shell = "bash"
+cmd = 'bash -c "mkdir -p /d/runs/nested-shell && touch /d/runs/nested-shell/ok"'
+gold = [{ op = "create", dst = 'D:\runs\nested-shell' }, { op = "write", dst = 'D:\runs\nested-shell\ok' }]
+
+[[event]]
+id = "x07"
+cat = "nested"
+shell = "bash"
+cmd = 'powershell -NoProfile -Command "New-Item -ItemType Directory -Path D:\runs\ps-nested | Out-Null"'
+gold = [{ op = "create", dst = 'D:\runs\ps-nested' }]
+
+# ---- output directories named by a tool flag
+[[event]]
+id = "x03"
+cat = "tool-flag"
+shell = "powershell"
+cmd = 'python bench.py --out D:\runs\bench-42'
+gold = [{ op = "write", dst = 'D:\runs\bench-42' }]
+
+[[event]]
+id = "x04"
+cat = "tool-flag"
+shell = "bash"
+cmd = 'cargo build --target-dir /d/tmp/phazly-target'
+gold = [{ op = "write", dst = 'D:\tmp\phazly-target' }]
+
+[[event]]
+id = "x05"
+cat = "tool-flag"
+shell = "bash"
+cmd = 'pytest --basetemp=/d/runs/pytest-tmp tests/'
+gold = [{ op = "write", dst = 'D:\runs\pytest-tmp' }]
+
+# ---- Git Bash /tmp and home
+[[event]]
+id = "t01"
+cat = "create"
+shell = "bash"
+cmd = 'mkdir -p /tmp/phazly-check && cd /tmp/phazly-check && git init'
+gold = [{ op = "create", dst = 'C:\Users\dev\AppData\Local\Temp\phazly-check' }]
+
+[[event]]
+id = "t02"
+cat = "create"
+shell = "bash"
+cmd = 'mkdir -p ~/scratch/phazly'
+gold = [{ op = "create", dst = 'C:\Users\dev\scratch\phazly' }]
+
+# ---- variables assigned literally in the same command
+[[event]]
+id = "v01"
+cat = "variable"
+shell = "bash"
+cmd = 'W=/d/runs/vt; mkdir -p $W/a && cp notes.md "${W}/b.md"'
+gold = [{ op = "create", dst = 'D:\runs\vt\a' }, { op = "copy", src = 'D:\Projects\Phazly\notes.md', dst = 'D:\runs\vt\b.md' }]
+
+[[event]]
+id = "v02"
+cat = "variable"
+shell = "powershell"
+cmd = '''$o = 'D:\runs\vt-ps'; New-Item -ItemType Directory $o; $o | Out-Null'''
+gold = [{ op = "create", dst = 'D:\runs\vt-ps' }]
+
+[[event]]
+id = "v03"
+cat = "variable"
+shell = "bash"
+cmd = 'T=$(mktemp -d); mkdir -p $T/x; echo ok > "$T/log"'
+gold = []
+
+# ---- in-place edits and scripts read from a heredoc
+[[event]]
+id = "x08"
+cat = "write"
+shell = "bash"
+cmd = "sed -i 's/old/new/' src/lib.rs notes.md"
+gold = [{ op = "write", dst = 'D:\Projects\Phazly\src\lib.rs' }, { op = "write", dst = 'D:\Projects\Phazly\notes.md' }]
+
+[[event]]
+id = "x09"
+cat = "script"
+shell = "bash"
+cmd = '''
+python - <<'EOF' > /d/runs/summary.json
+import json
+print(json.dumps({"ok": True}))
+EOF'''
+gold = [{ op = "write", dst = 'D:\runs\summary.json' }]
+
+# ---- calls with literal paths inside scripts; anything not literal gives nothing
+[[event]]
+id = "x10"
+cat = "script"
+shell = "bash"
+cmd = '''
+python - <<'EOF'
+import json, shutil
+from pathlib import Path
+data = json.load(open("plan.json"))
+Path("D:/runs/plan-out").mkdir(parents=True, exist_ok=True)
+open(f"{base}/skip.txt", "w")
+shutil.copytree("fixtures", "D:/runs/plan-out/fixtures")
+EOF'''
+gold = [{ op = "create", dst = 'D:\runs\plan-out' }, { op = "copy", dst = 'D:\runs\plan-out\fixtures' }]
+
+[[event]]
+id = "x11"
+cat = "script"
+shell = "bash"
+cmd = '''
+cat > /tmp/probe.mjs <<'EOF'
+import fs from "fs";
+fs.writeFileSync("D:/runs/probe.json", JSON.stringify({ ok: true }));
+fs.mkdirSync(`${root}/skip`, { recursive: true });
+EOF
+node /tmp/probe.mjs'''
+gold = [
+  { op = "write", dst = 'C:\Users\dev\AppData\Local\Temp\probe.mjs' },
+  { op = "write", dst = 'D:\runs\probe.json' },
+]
+
+[[event]]
+id = "x12"
+cat = "readonly"
+shell = "bash"
+cmd = '''python -c "import json; print(json.load(open('package.json'))['version'])"'''
+gold = []
+
+[[event]]
+id = "x13"
+cat = "loop"
+shell = "bash"
+cmd = 'for f in *.json; do cp "$f" /d/runs/json-copy/; done'
+gold = [{ op = "copy", dst = 'D:\runs\json-copy' }]  # the destination does not depend on the loop
