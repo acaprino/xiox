@@ -8,6 +8,7 @@ mod lex;
 mod op;
 mod paths;
 mod recognize;
+mod script;
 
 pub use args::{Posix, PsParams, posix, powershell};
 pub use command::{Arg, Node, Simple, parse};
@@ -16,3 +17,4 @@ pub use lex::{Token, lex};
 pub use op::{Candidate, Completeness, Extraction, Flags, OpKind, RawOp};
 pub use paths::{Env, PathError, Resolved, is_null_device, resolve, resolve_path, strip_verbatim};
 pub use recognize::{Context, Invocation, Registry};
+pub use script::{Lang, ScriptScan, scan_script};

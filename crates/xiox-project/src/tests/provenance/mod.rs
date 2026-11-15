@@ -4,3 +4,4 @@ pub mod paths;
 pub mod lex;
 pub mod command;
 pub mod recognize;
+pub mod script;
