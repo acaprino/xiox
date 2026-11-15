@@ -120,14 +120,11 @@ def evidence_of(call: dict):
     shell = shell_of(call)
     if shell and cwd:
         raw, _ = extract(shell[1], shell[0])
-        for c in resolve(raw, cwd, ENV)[0]:
+        visits = []  # each cd resolved where it ran, not against the cwd of the call
+        for c in resolve(raw, cwd, ENV, visits)[0]:
             yield Evidence(folder_of(c["op"], c["dst"]), STRENGTH_OF[c["op"]], ref(f"shell:{c['op']}"), bad)
-        for o in raw:
-            if o["op"] == "cd" and o.get("dst") and o["dst"] != ".":
-                try:
-                    yield Evidence(resolve_path(o["dst"], cwd, ENV), Strength.USED, ref("cd"))
-                except Unresolved:
-                    pass
+        for folder in visits:
+            yield Evidence(folder, Strength.USED, ref("cd"))
 
 
 def ledgers(calls_path: str, sessions: set[str] | None = None) -> dict[str, Ledger]:

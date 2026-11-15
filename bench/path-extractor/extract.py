@@ -700,8 +700,9 @@ def repo_name(src):
     return name.removesuffix(".git") or None
 
 
-def resolve(ops, cwd, env):
-    """(candidates [{op, src, dst}], count of operations whose path could not be resolved)."""
+def resolve(ops, cwd, env, visits=None):
+    """(candidates [{op, src, dst}], count of operations whose path could not be resolved).
+    visits, when given, receives every directory a cd entered, resolved against the cwd of that moment."""
     cur, stack, out, bad = cwd, [], [], 0
     for o in ops:
         kind, src, dst = o.get("op"), o.get("src"), o.get("dst")
@@ -714,6 +715,8 @@ def resolve(ops, cwd, env):
             if dst is not None:
                 try:
                     cur = resolve_path(dst, cur, env)
+                    if visits is not None and dst != ".":
+                        visits.append(cur)
                 except Unresolved:
                     cur, bad = None, bad + 1
             continue
