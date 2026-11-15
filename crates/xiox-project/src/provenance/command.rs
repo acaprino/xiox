@@ -1,6 +1,8 @@
 //! The structure of a command: simple commands split at separators, with their redirect targets
 //! taken out of the words, literal assignments, and Bash `for` loops with their bodies.
 
+use std::ops::Range;
+
 use super::dialect::{Dialect, Shell};
 use super::lex::Token;
 
@@ -41,7 +43,8 @@ pub enum Node {
 
 /// The top-level nodes in order; the last one is the one that reaches the end of the text.
 pub fn parse(tokens: Vec<Token>, dialect: &dyn Dialect) -> Vec<Node> {
-    build(&segments(tokens), dialect.shell())
+    let segments = segments(tokens);
+    build(&segments, &closers(&segments), 0..segments.len(), dialect.shell())
 }
 
 const SEPARATORS: [&str; 10] = ["&&", "||", "|&", ";", "|", "&", "(", ")", "{", "}"];
@@ -72,7 +75,12 @@ fn segments(tokens: Vec<Token>) -> Vec<Simple> {
                 tokens.next_if(|next| matches!(next, Token::Word(_)));
             }
             Token::Op(_) => current.words.push(Arg::Comma),
-            Token::Heredoc(body) => current.heredoc = body,
+            // The first heredoc that has a body wins, as in the prototype.
+            Token::Heredoc(body) => {
+                if body.is_some() && current.heredoc.is_none() {
+                    current.heredoc = body;
+                }
+            }
             Token::Word(text) => current.words.push(Arg::Text(text)),
         }
     }
@@ -81,17 +89,18 @@ fn segments(tokens: Vec<Token>) -> Vec<Simple> {
     out
 }
 
-fn build(segments: &[Simple], shell: Shell) -> Vec<Node> {
+fn build(segments: &[Simple], closers: &[Option<usize>], range: Range<usize>, shell: Shell) -> Vec<Node> {
     let mut nodes = Vec::new();
-    let mut at = 0;
-    while at < segments.len() {
+    let mut at = range.start;
+    while at < range.end {
         let segment = &segments[at];
         if shell == Shell::Bash {
             if let Some((var, items)) = for_header(segment) {
-                let done = matching_done(segments, at);
-                let end = done.unwrap_or(segments.len());
+                // A loop whose `done` lies outside this range is unclosed: it takes the rest.
+                let done = closers[at].filter(|done| *done < range.end);
+                let end = done.unwrap_or(range.end);
                 let done_redirects = done.map(|done| segments[done].redirects.clone()).unwrap_or_default();
-                let body = build(&segments[at + 1..end], shell);
+                let body = build(segments, closers, at + 1..end, shell);
                 nodes.push(Node::For { var, items, body, done_redirects });
                 at = end + 1;
                 continue;
@@ -173,18 +182,21 @@ fn for_header(segment: &Simple) -> Option<(String, Option<Vec<String>>)> {
     Some((var, items))
 }
 
-/// The index of the `done` that closes the loop opened at `open`, counting nested loops.
-fn matching_done(segments: &[Simple], open: usize) -> Option<usize> {
-    let mut depth = 1;
-    for (at, segment) in segments.iter().enumerate().skip(open + 1) {
+/// For each segment that opens a loop, the index of the `done` that closes it. One pass with a
+/// stack of the open loops, so nesting depth never multiplies the work.
+fn closers(segments: &[Simple]) -> Vec<Option<usize>> {
+    let mut closers = vec![None; segments.len()];
+    let mut open = Vec::new();
+    for (at, segment) in segments.iter().enumerate() {
         match heads(segment).first() {
-            Some(head) if LOOP_HEADS.contains(head) => depth += 1,
-            Some(&"done") => depth -= 1,
+            Some(head) if LOOP_HEADS.contains(head) => open.push(at),
+            Some(&"done") => {
+                if let Some(opened) = open.pop() {
+                    closers[opened] = Some(at);
+                }
+            }
             _ => {}
         }
-        if depth == 0 {
-            return Some(at);
-        }
     }
-    None
+    closers
 }

@@ -80,6 +80,7 @@ fn file_system_recognizers() {
         (Bash, "touch f", vec![write("f")]),
         (PowerShell, r"Out-File -FilePath D:\o.txt -Encoding utf8", vec![write(r"D:\o.txt")]),
         (PowerShell, "Set-Content f.txt -Value hi", vec![write("f.txt")]),
+        (PowerShell, "Set-Content -Exclude x f", vec![write("f")]),
         (Bash, "sed -i 's/a/b/' x.rs y.md", vec![write("x.rs"), write("y.md")]),
         (Bash, "sed -ni -e p x", vec![write("x")]),
         (Bash, "sed --in-place=.bak s/a/b/ x", vec![write("x")]),

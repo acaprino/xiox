@@ -5,3 +5,4 @@ pub mod lex;
 pub mod command;
 pub mod recognize;
 pub mod script;
+pub mod extract;

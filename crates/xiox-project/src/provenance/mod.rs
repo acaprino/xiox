@@ -2,8 +2,10 @@
 //! perform on disk. Deterministic parsers only; no model guesses paths.
 
 mod args;
+mod budget;
 mod command;
 mod dialect;
+mod extract;
 mod lex;
 mod op;
 mod paths;
@@ -11,8 +13,10 @@ mod recognize;
 mod script;
 
 pub use args::{Posix, PsParams, posix, powershell};
+pub use budget::Budget;
 pub use command::{Arg, Node, Simple, parse};
 pub use dialect::Shell;
+pub use extract::extract;
 pub use lex::{Token, lex};
 pub use op::{Candidate, Completeness, Extraction, Flags, OpKind, RawOp};
 pub use paths::{Env, PathError, Resolved, is_null_device, resolve, resolve_path, strip_verbatim};

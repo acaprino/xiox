@@ -129,3 +129,37 @@ fn heredoc_bodies_ride_on_their_command() {
         Simple { words: text(&["cat"]), redirects: vec!["x.py".into()], heredoc: Some("hi\n".into()) };
     assert_eq!(parsed, vec![Node::Simple(expected)]);
 }
+
+#[test]
+fn first_heredoc_with_a_body_wins() {
+    // The second heredoc has no body (the text ends before it starts): it must not replace the first.
+    let parsed = nodes(Shell::Bash, "cat <<A <<B\nfirst\nA");
+    let Node::Simple(simple) = &parsed[0] else { panic!("not simple: {parsed:?}") };
+    assert_eq!(simple.heredoc.as_deref(), Some("first\n"));
+    let parsed = nodes(Shell::Bash, "cat <<A <<B\nfirst\nA\nsecond\nB");
+    let Node::Simple(simple) = &parsed[0] else { panic!("not simple: {parsed:?}") };
+    assert_eq!(simple.heredoc.as_deref(), Some("first\n"));
+}
+
+fn loop_depth(nodes: &[Node]) -> usize {
+    match nodes {
+        [Node::For { body, .. }] => 1 + loop_depth(body),
+        _ => 0,
+    }
+}
+
+#[test]
+fn nested_loops_close_innermost_first_in_one_pass() {
+    let deep = 300;
+    let cmd = format!("{}x{}", "for i in 1; do ".repeat(deep), "; done".repeat(deep));
+    let parsed = nodes(Shell::Bash, &cmd);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(loop_depth(&parsed), deep);
+    // An outer loop that never closes takes the rest of the text; the inner one still closes.
+    let parsed = nodes(Shell::Bash, "for a in 1; do for b in 2; do x; done; y");
+    assert_eq!(parsed.len(), 1);
+    let Node::For { body, .. } = &parsed[0] else { panic!("not a loop") };
+    assert_eq!(body.len(), 2);
+    assert!(matches!(body[0], Node::For { .. }));
+    assert_eq!(body[1], simple(&["y"], &[]));
+}

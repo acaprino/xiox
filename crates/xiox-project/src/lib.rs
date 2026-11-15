@@ -29,7 +29,8 @@ pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};
 pub use owned::key_within;
 pub use provenance::{
-    Candidate, Completeness, Env as PathEnv, Extraction, Flags, OpKind, PathError, RawOp, Resolved, is_null_device, resolve, resolve_path,
+    Candidate, Completeness, Env as PathEnv, Extraction, Flags, OpKind, PathError, RawOp, Resolved, Shell, extract, is_null_device,
+    resolve, resolve_path,
     strip_verbatim,
 };
 pub use resolve::{linked_worktree_count, resolve_project};

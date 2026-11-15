@@ -22,7 +22,7 @@ impl Recognizer for Writers {
 }
 
 /// Parameters that take a value and are not paths; without them the value would read as a path.
-const CMDLET_PARAMS: [(&str, &str); 8] = [
+const CMDLET_PARAMS: [(&str, &str); 9] = [
     ("filepath", "path"),
     ("value", "x"),
     ("encoding", "x"),
@@ -31,6 +31,7 @@ const CMDLET_PARAMS: [(&str, &str); 8] = [
     ("stream", "x"),
     ("filter", "x"),
     ("include", "x"),
+    ("exclude", "x"),
 ];
 
 const SCRIPT_OPTIONS: [&str; 4] = ["-e", "--expression", "-f", "--file"];
