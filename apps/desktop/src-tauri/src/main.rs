@@ -2,10 +2,12 @@
 //! The Xiox window (Tauri). The page draws what Rust sends and sends intents back; this crate is the
 //! thin layer between the two: `Backend` (the engine behind `xiox_core::app::Core`, or the fixtures in
 //! debug builds), the ten commands and the `xiox:view` event the view pump emits. Around it: one
-//! instance at a time (`single_instance`) and a window that remembers where it was (`window_state`).
+//! instance at a time (`single_instance`), a window that remembers where it was (`window_state`) and
+//! the desktop policy every webview gets (`desktop`: navigation, browser keys, context menu, recovery).
 
 mod backend;
 mod commands;
+mod desktop;
 mod error;
 #[cfg(debug_assertions)]
 mod fake;
@@ -153,6 +155,10 @@ fn main() {
     // Where the window is remembered at all: not on fixtures, and not under `--only-root` (the
     // flag promises that no file outside its folder is written).
     let remember = window_state::remembers(fake, only_root.is_some());
+    // A restart after the engine failed (`desktop`): the old process still holds the instance until it exits.
+    if let Some(pid) = desktop::restarted_from(&args) {
+        single_instance::wait_for_exit(pid, std::time::Duration::from_secs(10));
+    }
     // One window at a time (the fixtures window has its own name, so it can run beside a real one).
     let Some(_instance) = single_instance::acquire(if fake { r"Local\XioxUiFake" } else { r"Local\XioxUi" }) else {
         single_instance::focus_existing("Xiox");
@@ -163,6 +169,7 @@ fn main() {
     let tracked = normal.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(desktop::plugin())
         .on_window_event(move |window, event| {
             if !remember {
                 return;
@@ -200,7 +207,8 @@ fn main() {
                     // `--only-root`: not even the saved place is read (that would reach the real profile).
                     let _ = window.center();
                 }
-                window.show()?;
+                // Hidden until the page has drawn (`desktop::window_ready`), so the first frame is the page.
+                desktop::show_when_drawn(&window);
             }
             Ok(())
         })
@@ -215,6 +223,7 @@ fn main() {
             commands::developers,
             commands::developers_add_root,
             commands::save_report,
+            desktop::window_ready,
         ])
         .run(tauri::generate_context!())
         .expect("the Xiox window failed to start");

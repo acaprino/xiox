@@ -536,6 +536,23 @@ where the focus is.
 described above, the buttons ignore `Enter` and `Space` for 300 ms after the confirmation opens
 and while the key is held down. When it closes, the focus goes back to where it was.
 
+**Zoom and copying.** These work everywhere, in a text field and in a confirmation too:
+
+| Key | What it does |
+|---|---|
+| `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 67 % to 200 % |
+| `Ctrl`+wheel | the same, one step per notch |
+| `Ctrl`+`0` | back to 100 % |
+| `Ctrl`+`A` | in a text field, its text; in the detail panel, a confirmation or the report, the text you can copy; anywhere else, nothing |
+| `Ctrl`+`C` | copy what is selected |
+
+The zoom is remembered for the next start. The window is not a web page: buttons, rows and titles
+cannot be selected and keep the arrow pointer, the right button opens a menu only on selected text
+(`Copy`) and in a text field (the editing commands), and the browser keys (`F5`, `Ctrl`+`R`,
+`Ctrl`+`P`, `Ctrl`+`F`, `F12`, `Alt`+`←`, the mouse's back button) do nothing. What is worth copying
+can be selected with the mouse: the paths and reasons of the detail panel, the report, the notices
+and the text of a confirmation.
+
 ## About
 
 Open it with the `About` entry of the sections bar or with `?`. It shows `Xiox`, the version
@@ -626,6 +643,14 @@ screens any more, so it was ignored.
 
 **Starting the app again does nothing.** There is already a window: the second start brings it
 to the front. Look for it in the taskbar.
+
+**The window went blank, or a message says it stopped working.** The component Windows uses to
+draw the window (Microsoft Edge WebView2) failed. Xiox reloads the window by itself, up to three
+times a minute; after that it asks: `Reload` or `Quit`. If the component stopped altogether the
+message offers `Restart`, which closes Xiox and opens it again. A reload does not touch a running
+job: it goes on, and the window shows it again. A restart ends it as closing the window would:
+analyze again to see where things are. The same message, with `Try again`, appears if the window
+could not be loaded at all.
 
 ## The command line and the observer
 

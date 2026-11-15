@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::null;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM};
 use windows_sys::Win32::System::Threading::{
-    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
@@ -129,9 +130,36 @@ pub fn focus_existing(title: &str) {
     }
 }
 
+/// Waits, at most `timeout`, for the process `pid` to exit: a restart (`desktop::restart`) starts this
+/// process while the old one still holds the instance. A process that is already gone (or never was)
+/// returns at once.
+pub fn wait_for_exit(pid: u32, timeout: std::time::Duration) {
+    let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+    unsafe {
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return;
+        }
+        WaitForSingleObject(process, ms);
+        CloseHandle(process);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waiting_for_a_process_that_is_gone_returns_at_once() {
+        let started = std::time::Instant::now();
+        // Id 0 is the System Idle Process, which cannot be opened: nothing to wait for.
+        wait_for_exit(0, std::time::Duration::from_secs(5));
+        let mut child = std::process::Command::new("cmd").args(["/c", "exit"]).spawn().expect("cmd starts");
+        let pid = child.id();
+        let _ = child.wait();
+        wait_for_exit(pid, std::time::Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(4), "{:?}", started.elapsed());
+    }
 
     #[test]
     fn the_second_holder_of_a_name_is_refused() {

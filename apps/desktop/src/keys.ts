@@ -5,6 +5,7 @@
 
 import { SECTION_ORDER } from './state.ts';
 import type { ActionView, SectionId, SectionView } from './types.ts';
+import type { ZoomStep } from './zoom.ts';
 
 export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; repeat?: boolean }
 
@@ -46,6 +47,34 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
     default: return ACTION_KEYS.has(e.key) && e.repeat !== true ? { kind: 'action', key: e.key as ActionKey } : null;
   }
 }
+
+/**
+ * The chords that are the app's own: the zoom commands and Ctrl+A. They hold in fields and dialogs too, before
+ * `keyAction` (which leaves every chord alone). Ctrl+A in a field is the field's: it gives null there, so the
+ * browser selects the field's text. By `key`, so `+` works on layouts where it has its own key (Italian) and `=`
+ * where it shares one (US); the numeric keypad gives the same keys.
+ */
+export type ChordAction = { kind: 'zoom'; step: ZoomStep } | { kind: 'selectAll' };
+
+export function chordAction(e: KeyLike, ctx: { inField: boolean }): ChordAction | null {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
+  switch (e.key) {
+    case '=': case '+': return { kind: 'zoom', step: 'in' };
+    case '-': case '_': return { kind: 'zoom', step: 'out' };
+    case '0': return e.shiftKey ? null : { kind: 'zoom', step: 'reset' };
+    case 'a': case 'A': return e.shiftKey || ctx.inField ? null : { kind: 'selectAll' };
+    default: return null;
+  }
+}
+
+/**
+ * Where Ctrl+A selects, by where the focus is: `[within, select]`, the region the focus is in and its copyable
+ * part. tokens.css makes the same `select` places selectable (tests/native.test.ts holds the two together);
+ * anywhere else Ctrl+A selects nothing, as in a desktop list: the chrome is not text.
+ */
+export const SELECTABLE: readonly (readonly [within: string, select: string])[] = [
+  ['#detail', '#detail'], ['.report', '.rp-body'], ['[role=dialog]', '.dlg-body'], ['#notices', '#notices'],
+];
 
 /** The Esc key as an action carries it: Rust writes `Esc`; `Escape` is accepted too (the key's own name). */
 const isEsc = (key: string | null): boolean => key === 'Esc' || key === 'Escape';

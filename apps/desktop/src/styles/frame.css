@@ -10,7 +10,6 @@
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px;
   border: 2px solid var(--line); background: var(--button); color: var(--text);
   font: 700 13px var(--font-display); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
-  cursor: pointer;
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 .btn.primary { background: var(--button-primary); border-color: var(--line-strong); color: var(--text-hi); }

@@ -13,6 +13,15 @@
 
 * { box-sizing: border-box; }
 
+/* A desktop window, not a web page: the chrome (buttons, menus, rows, titles) keeps the arrow cursor and cannot be
+   selected or dragged. What a person may want to copy stays selectable: the detail panel (paths, reasons), the
+   report, the notices, the text of a dialog and the fields. Ctrl+A selects the one of these that has the focus
+   (main.ts, SELECTABLE). tests/native.test.ts keeps the hand cursor out and this list in step with main.ts. */
+html { cursor: default; -webkit-user-select: none; user-select: none; }
+input, textarea, #detail, #notices, .rp-body, .dlg-body { -webkit-user-select: text; user-select: text; cursor: auto; }
+#notices button, .rp-body button, .dlg-body button { -webkit-user-select: none; user-select: none; cursor: default; }
+img { -webkit-user-drag: none; }
+
 body {
   margin: 0; background: var(--stage); color: var(--text);
   font: 600 var(--text-size)/1.45 var(--font-body);
@@ -23,6 +32,14 @@ kbd { font: 11px var(--font-mono); letter-spacing: 0; text-transform: none; }
 
 /* clip-path cuts outlines, so the focus ring is drawn inside the box. */
 :focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--live); }
+
+/* Contrast themes (forced colors) drop box-shadow and repaint backgrounds: the focus ring and the selected row,
+   section and menu entry would vanish. Outlines survive in system colors; drawn inside the box, clip-path keeps them. */
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+  .r.sel, .nv.on, .it.on { outline: 2px solid Highlight; outline-offset: -2px; }
+  .r.sel:focus-visible, .nv.on:focus-visible, .it.on:focus-visible { outline-style: double; outline-width: 4px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }

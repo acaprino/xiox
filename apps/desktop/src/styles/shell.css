@@ -52,7 +52,7 @@ html, body { height: 100%; overflow: hidden; }
 /* Sections bar. */
 .nv {
   display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 16px;
-  border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer;
+  border: 0; background: none; color: var(--text-2); text-align: left;
 }
 .nv kbd { color: var(--muted); }
 .nv.on { background: var(--sel); color: var(--text-hi); }
@@ -71,7 +71,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .it {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; width: 100%; padding: 5px 12px 5px 16px;
-  border: 0; background: none; color: var(--text-2); text-align: left; cursor: pointer;
+  border: 0; background: none; color: var(--text-2); text-align: left;
 }
 .it.opt { cursor: default; display: block; }
 .it.on { background: var(--sel-soft); color: var(--text-hi); }

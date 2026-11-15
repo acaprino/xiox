@@ -3,7 +3,9 @@
 //! `SectionView` (or a `CmdError`).
 //!
 //! No command takes a path. The two commands that need one open the native dialog HERE, in Rust,
-//! and the page only learns what came of it. The page has no permission of the dialog plugin.
+//! and the page only learns what came of it. The page has no permission of the dialog plugin. The
+//! dialog is owned by the window that asked (`set_parent`): modal to it, on top of it, and the window
+//! is given back when it closes.
 
 use crate::backend::{Backend, BackendState};
 use crate::error::{CmdError, CmdResult};
@@ -146,14 +148,14 @@ pub async fn developers(state: State<'_, BackendState>, intent: DevIntent) -> Cm
 /// «Add folder» of Developers: the folder picker opens here and the page never names a path.
 /// Cancelling the picker changes nothing.
 #[tauri::command]
-pub async fn developers_add_root(app: tauri::AppHandle, state: State<'_, BackendState>) -> CmdResult<SectionView> {
+pub async fn developers_add_root(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, BackendState>) -> CmdResult<SectionView> {
     let b = backend(&state);
     blocking(move || {
         if let Some(answer) = fake_add_root(&b) {
             return answer;
         }
         let _slot = DialogSlot::take()?;
-        let picked = app.dialog().file().set_title("Folder to analyze").blocking_pick_folder();
+        let picked = app.dialog().file().set_parent(&window).set_title("Folder to analyze").blocking_pick_folder();
         match picked.and_then(|path| path.into_path().ok()) {
             Some(dir) => b.add_root(dir),
             None => Ok(b.view(SectionId::Developers)),
@@ -166,7 +168,7 @@ pub async fn developers_add_root(app: tauri::AppHandle, state: State<'_, Backend
 /// outcome the report shows. Cancelling the dialog changes nothing; a section with no report has
 /// nothing to save.
 #[tauri::command]
-pub async fn save_report(app: tauri::AppHandle, state: State<'_, BackendState>, section: SectionId) -> CmdResult<SectionView> {
+pub async fn save_report(app: tauri::AppHandle, window: tauri::WebviewWindow, state: State<'_, BackendState>, section: SectionId) -> CmdResult<SectionView> {
     let b = backend(&state);
     blocking(move || {
         let Some(text) = b.report_text(section) else {
@@ -179,6 +181,7 @@ pub async fn save_report(app: tauri::AppHandle, state: State<'_, BackendState>, 
         let picked = app
             .dialog()
             .file()
+            .set_parent(&window)
             .set_title("Save the report")
             .set_file_name("Xiox report.txt")
             .add_filter("Text", &["txt"])

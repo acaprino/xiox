@@ -39,6 +39,8 @@ export const api = {
   /** The folder picker opens in Rust; the page never sees a path. */
   addRoot: () => invoke<SectionView>('developers_add_root'),
   saveReport: (s: SectionId) => invoke<SectionView>('save_report', { section: s }),
+  /** The first frame is drawn: Rust shows the window, which opens hidden so that the page is the first thing seen. */
+  ready: () => invoke<void>('window_ready'),
 };
 
 /** Views pushed by the core (`xiox:view` in Tauri, the mock's emitter outside). */

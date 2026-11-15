@@ -4,6 +4,9 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
   <title>Xiox</title>
+  <!-- The stage colour before any stylesheet or script: the first frame is the window's own background
+       (tauri.conf.json backgroundColor, tokens.css --stage), never white or the engine's dark grey. -->
+  <style>html, body { background: #0b0416; }</style>
 </head>
 <body>
   <main id="app">
@@ -22,7 +25,7 @@
     </div>
     <!-- After the panes in the DOM so that Tab reaches the sections, the bars, the list and the detail first and the top-bar actions last; the grid rows of shell.css keep it on top. -->
     <header id="top">
-      <img id="wordmark" src="/xiox-wordmark.png" alt="Xiox">
+      <img id="wordmark" src="/xiox-wordmark.png" alt="Xiox" draggable="false">
       <span id="version"></span>
       <span class="spring"></span>
       <div id="actions"></div>

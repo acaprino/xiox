@@ -3,9 +3,11 @@ import './styles/frame.css';
 import './styles/shell.css';
 import './styles/list.css';
 import './styles/dialog.css';
-import { api, errorText, onView } from './api.ts';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { api, errorText, inTauri, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
-import { actionForKey, keyAction } from './keys.ts';
+import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
+import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { rowParents } from './rows.ts';
@@ -274,6 +276,63 @@ function onKey(event: KeyboardEvent): void {
 
 document.addEventListener('keydown', onKey);
 
+/** Ctrl+A selects the copyable text of the region the focus is in (keys.ts `SELECTABLE`), else nothing. */
+function selectAll(target: Element | null): void {
+  for (const [within, select] of SELECTABLE) {
+    const region = target?.closest(within);
+    const text = region === null || region === undefined ? null : region.matches(select) ? region : region.querySelector(select);
+    if (text) { window.getSelection()?.selectAllChildren(text); return; }
+  }
+  window.getSelection()?.removeAllRanges();
+}
+
+/** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
+const ZOOM_KEY = 'xiox.zoom';
+let zoom = 1;
+
+function readZoom(): number {
+  try { return storedZoom(localStorage.getItem(ZOOM_KEY)); } catch { return 1; }
+}
+
+function applyZoom(factor: number): void {
+  zoom = factor;
+  try { localStorage.setItem(ZOOM_KEY, String(factor)); } catch { /* no storage: the zoom lasts until the window closes */ }
+  // Outside Tauri (Vite, the smoke test) the browser's own zoom is the stand-in. The zoom is never worth a
+  // broken start: a webview that cannot be reached (it throws, it rejects) leaves the page at its size.
+  if (!inTauri) return;
+  try {
+    void getCurrentWebview().setZoom(factor).catch(() => undefined);
+  } catch { /* the page draws anyway, unzoomed */ }
+}
+
+function stepZoom(step: ZoomStep): void {
+  const next = nextZoom(zoom, step);
+  if (next !== zoom) applyZoom(next);
+}
+
+/** The app's own chords, in fields and dialogs too (keys.ts `chordAction`); the browser's are off in Rust. */
+document.addEventListener('keydown', (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const chord = chordAction(event, { inField: target?.closest(FIELD) != null });
+  if (chord === null) return;
+  event.preventDefault();
+  if (chord.kind === 'zoom') stepZoom(chord.step); else selectAll(target);
+});
+
+/** Ctrl+wheel (and a touchpad pinch, which arrives as one) zooms by whole steps: small deltas add up to a notch. */
+let wheelTravel = 0;
+document.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey) { wheelTravel = 0; return; }
+  event.preventDefault();
+  wheelTravel += wheelPixels(event.deltaY, event.deltaMode, zoom);
+  if (Math.abs(wheelTravel) < WHEEL_NOTCH) return;
+  stepZoom(wheelTravel < 0 ? 'in' : 'out');
+  wheelTravel = 0;
+}, { passive: false });
+
+// The mouse's back and forward buttons belong to a browser: the window has no pages to go back to.
+window.addEventListener('mouseup', (event) => { if (event.button === 3 || event.button === 4) event.preventDefault(); });
+
 /**
  * The RAM meter moves by itself: while Services & RAM is shown, the window visible and no dialog open, its view is
  * read again every 2 s. A reading that comes back after a newer view (an intent answered meanwhile) is dropped by
@@ -289,6 +348,8 @@ function pollServices(): void {
 setInterval(pollServices, SERVICES_POLL_MS);
 
 async function start(): Promise<void> {
+  // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.
+  applyZoom(readZoom());
   try {
     app = await api.appInfo();
     onView((view) => {
@@ -301,6 +362,9 @@ async function start(): Promise<void> {
     // No window state to draw: say what happened instead of leaving a blank window.
     renderFailure(errorText(failure));
   }
+  // The window opens hidden: once this frame is on screen (two animation frames: the second starts after the first
+  // was painted), Rust shows it. A failure to ask is not shown: Rust shows the window anyway after a few seconds.
+  requestAnimationFrame(() => requestAnimationFrame(() => { void api.ready().catch(() => undefined); }));
 }
 
 void start();
