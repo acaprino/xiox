@@ -13,7 +13,7 @@ pub enum Arg {
 }
 
 impl Arg {
-    fn text(&self) -> Option<&str> {
+    pub(super) fn text(&self) -> Option<&str> {
         match self {
             Arg::Text(text) => Some(text),
             Arg::Comma => None,
