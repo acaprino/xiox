@@ -1,0 +1,21 @@
+# Data and privileges of new windows
+
+Part of the tauri-native-desktop references: versions, scope and limits are in [guide.md](guide.md). Bracketed names are sources; their URLs are in [sources.md](sources.md).
+
+Each WebView has its own JS context: a closure, a component's state and a DOM ref do not cross the boundary. Proposal: separate the form fields from the container; keep a local draft; apply the change through the authoritative service/host the app already uses. For apps that are also web apps, use a desktop adapter for the container and a browser one for the in-page overlay that takes the window's place there, without duplicating domain or validation. [State management].
+
+**Beware of custom commands:** registering `invoke_handler` is not enough to restrict them to capabilities. Tauri documents that by default app commands are available to all windows/WebViews; use `AppManifest::commands` and explicit permissions when granularity is needed. Permissions of overlapping capabilities add up. Verify with denied calls from the secondary window, not just by reading JSON. [Capabilities], [AppManifest].
+
+For each window define allowed local route, label, role, commands, payloads/events and lifetime. Do not put passwords, tokens or sensitive data in the query string. Bind session and caller in the shell backend (the app's native side, which creates the windows); an ID sent by the client alone does not authenticate a window. Application data keeps using the authentication the service already provides.
+
+Neither events nor channels are controlled by capabilities: the documentation excludes both. Proposal: minimal payloads, targeted destination, authorized read of the current data and a protocol that does not lose the result if the listener starts late. Broadcast is not a channel for secrets. For heavy streams consider channels rather than indiscriminate JSON events: they solve throughput and ordering, not authorization. [Calling frontend].
+
+## Example: secondary window without credential access
+
+If a command that reads credentials is reserved to the main window, do not grant it automatically to a settings window or a form. Compare two alternatives against the local architecture: a relay of typed operations to the existing transport in the main window, or a broker in the shell if the shell already owns transport/authentication. In the first case main keeps talking to the service; in the second the broker is reused without introducing another domain. A limited session issued by the service is another option only if the service already supports it or the change is within the authorized scope. These are architectural proposals, not features Tauri offers automatically.
+
+Minimal relay contract: the caller's real role, the form session, the allowed operation and a validated payload; correlated response, readiness, timeout, cancellation and error if main is unavailable. Labels/sessions declared by the client alone do not authenticate the caller. If main stays hidden, do not base correctness on page timers; test delays, reconnection and closing. Do not turn the relay into a generic HTTP proxy or into new shell domain actions. Document every change to the project's already intentional boundaries.
+
+## Alternative for trusted forms: a portal in a same-origin document
+
+Instead of a second WebView with its own JS context, a trusted form can be rendered by the main window's own UI tree into a same-origin document that the main window opened (`window.open`, which the window's new-window handler must allow) (a portal, in React and similar frameworks): the tree, callbacks and transport stay single, so no relay or broker is needed. Verify opener support in the runtime, the close lifecycle and the destination of menu/popover portals. This path **shares trust with the main window**: the accessible opener prevents treating the form as an isolation boundary. Do not use it for remote content or user scripts. A capability without permissions is not enough to prove IPC protocol isolation in a shared WebView2 environment: verify the caller observed on the Rust side and every IPC route. A stricter CSP in the host document can forbid its direct network access, leaving operations to the main window's callbacks; it does not replace a boundary between different origins when that boundary is needed.

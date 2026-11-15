@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tauri Native Desktop"
+  short_description: "Native windows and desktop integration for Tauri"
+  default_prompt: "Use $tauri-native-desktop to evaluate and improve the native behavior of this Tauri app."
