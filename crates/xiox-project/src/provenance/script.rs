@@ -200,6 +200,9 @@ impl Scanner<'_> {
                 '(' | '[' | '{' => self.open_bracket(i + 1),
                 ')' | ']' | '}' => self.close_bracket(i + 1),
                 ',' => self.comma(i + 1),
+                '#' if self.lang == Lang::Python => self.line_comment(i),
+                '/' if self.lang == Lang::JavaScript && self.code[i..].starts_with("//") => self.line_comment(i),
+                '/' if self.lang == Lang::JavaScript && self.code[i..].starts_with("/*") => self.block_comment(i),
                 '=' => self.equals(i + 1),
                 c if c.is_whitespace() => i + c.len_utf8(),
                 c if is_word(c) => self.word(i),
@@ -212,6 +215,15 @@ impl Scanner<'_> {
 
     fn current(&mut self) -> Option<&mut Arg> {
         self.stack.last_mut().map(|frame| &mut frame.current)
+    }
+
+    /// A comment is blank space: it neither changes an argument nor hides the code after it.
+    fn line_comment(&self, start: usize) -> usize {
+        self.code[start..].find('\n').map_or(self.code.len(), |offset| start + offset)
+    }
+
+    fn block_comment(&self, start: usize) -> usize {
+        self.code[start + 2..].find("*/").map_or(self.code.len(), |offset| start + 2 + offset + 2)
     }
 
     fn other(&mut self, next: usize) -> usize {

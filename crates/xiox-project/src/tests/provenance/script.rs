@@ -136,3 +136,26 @@ fn adversarial_scripts_scan_once() {
     }
     assert!(started.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn comments_are_skipped() {
+    assert_ops(
+        Lang::Python,
+        &[
+            ("# don't touch\nos.makedirs('D:/after')", &[(OpKind::Create, "D:/after")]),
+            ("os.makedirs('D:/a') # it's done\nos.mkdir('D:/b')", &[(OpKind::Create, "D:/a"), (OpKind::Create, "D:/b")]),
+            ("# os.makedirs('D:/ghost')", &[]),
+            ("os.makedirs('D:/#x')", &[(OpKind::Create, "D:/#x")]),
+        ],
+    );
+    assert_ops(
+        Lang::JavaScript,
+        &[
+            ("// it's here\nfs.mkdirSync('D:/a')", &[(OpKind::Create, "D:/a")]),
+            ("/* it's */ fs.mkdirSync('D:/b')", &[(OpKind::Create, "D:/b")]),
+            ("/* open", &[]),
+            ("// fs.mkdirSync('D:/ghost')", &[]),
+            ("fs.writeFileSync(\"D://x.json\", d)", &[(OpKind::Write, "D://x.json")]),
+        ],
+    );
+}
