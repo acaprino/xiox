@@ -118,14 +118,17 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    /// Adds what `call` shows: its cwd, then its structured paths, its patch or its shell command.
-    /// A call is one of the last three, never two.
+    /// Adds what `call` shows: its cwd, then its structured paths, or its patch and shell command.
+    /// A structured call gives neither of the others.
     pub fn record(&mut self, call: &ToolCall, env: &Env) {
         let at = Site::of(call);
         self.record_cwd(&at);
-        if !self.record_structured(call, &at, env) && !self.record_patch(call, &at, env) {
-            self.record_shell(call, &at, env);
+        if self.record_structured(call, &at, env) {
+            return;
         }
+        // A shell command may carry a patch (`apply_patch <<EOF`): it gives both evidences.
+        self.record_patch(call, &at, env);
+        self.record_shell(call, &at, env);
     }
 
     pub fn get(&self, folder: &str) -> Option<&FolderEvidence> {
@@ -182,9 +185,9 @@ impl Ledger {
         true
     }
 
-    /// Returns whether the call is a patch (R1: a top-level string of its input holds one).
-    fn record_patch(&mut self, call: &ToolCall, at: &Site, env: &Env) -> bool {
-        let Some(text) = patch_text(&call.input) else { return false };
+    /// R1: a call is a patch when a top-level string of its input holds one.
+    fn record_patch(&mut self, call: &ToolCall, at: &Site, env: &Env) {
+        let Some(text) = patch_text(&call.input) else { return };
         let completeness = if was_cut(text) { Completeness::Truncated } else { Completeness::Whole };
         for (action, path) in patch_ops(text, completeness) {
             let Ok(path) = resolve_path(&path, at.cwd.as_deref(), env) else {
@@ -196,9 +199,9 @@ impl Ledger {
                 PatchAction::Add | PatchAction::Update | PatchAction::MoveTo => Strength::Written,
                 PatchAction::Delete | PatchAction::MoveFrom => Strength::Used,
             };
-            self.add(at, &folder_of(OpKind::Write, &path), strength, Source::Patch(action));
+            // Patch paths name files, whatever their last segment looks like.
+            self.add(at, &parent_dir(&path), strength, Source::Patch(action));
         }
-        true
     }
 
     fn record_shell(&mut self, call: &ToolCall, at: &Site, env: &Env) {

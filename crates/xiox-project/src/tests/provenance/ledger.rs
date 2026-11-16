@@ -200,3 +200,27 @@ fn folder_of_table() {
         assert_eq!(folder_of(kind, path), expected, "{kind:?} {path}");
     }
 }
+
+#[test]
+fn patch_paths_are_always_files() {
+    let patch = "*** Begin Patch\n*** Update File: D:/P/Makefile\n@@\n-a\n+b\n*** Delete File: D:/old/LICENSE\n\
+                 *** Add File: src/.gitignore\n+x\n*** End Patch\n";
+    let ledger = ledger_of(&[call("edit", "apply_patch", json!({ "_": patch }), Some(r"D:\P"))]);
+    assert_eq!(strength(&ledger, r"D:\P"), Some(Strength::Written));
+    assert!(ledger.get(r"D:\P\Makefile").is_none());
+    assert_eq!(strength(&ledger, r"D:\old"), Some(Strength::Used));
+    assert!(ledger.get(r"D:\old\LICENSE").is_none());
+    assert_eq!(strength(&ledger, r"D:\P\src"), Some(Strength::Written));
+    assert!(ledger.get(r"D:\P\src\.gitignore").is_none());
+}
+
+#[test]
+fn a_shell_command_carrying_a_patch_gives_both_evidences() {
+    let command = "cd /d/w && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: n.rs\n+x\n*** End Patch\nEOF";
+    let ledger = ledger_of(&[bash(command, r"D:\P")]);
+    assert_eq!(strength(&ledger, r"D:\w"), Some(Strength::Used));
+    assert_eq!(sources(&ledger, r"D:\w"), [Source::Cd]);
+    assert_eq!(strength(&ledger, r"D:\P"), Some(Strength::Written));
+    assert!(sources(&ledger, r"D:\P").contains(&Source::Patch(PatchAction::Add)));
+    assert_eq!(ledger.coverage().shell_calls, 1);
+}
