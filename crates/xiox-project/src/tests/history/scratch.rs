@@ -344,13 +344,20 @@ fn analyze_lists_scratch_once_and_leaves_listed_folders_to_their_category() {
 #[test]
 fn folders_around_the_home_or_a_plain_temp_are_protected() {
     // (name, home, temp, what the session did, the folder it points at, why it is left out)
-    let table: [(&str, &str, &str, Vec<Do>, &str, Option<Exclusion>); 6] = [
+    let table: [(&str, &str, &str, Vec<Do>, &str, Option<Exclusion>); 13] = [
         ("a folder that holds the home", "Profiles/alfio", "Profiles/alfio/Temp", vec![Write("Profiles/x.txt")], "Profiles", Some(Exclusion::Protected)),
         ("a folder that holds a plain temp", "h/alfio", "Temp/inner", vec![Write("Temp/x.txt")], "Temp", Some(Exclusion::Protected)),
         ("a plain temp itself", "h/alfio", "Temp", vec![Write("Temp/x.txt")], "Temp", Some(Exclusion::Protected)),
         ("a folder inside a plain temp", "h/alfio", "Temp", vec![Write("Temp/run1/x.txt")], "Temp/run1", None),
         ("a broad folder of a temp that is the home", "h/alfio", "h/alfio", vec![Write("h/alfio/Desktop/x.txt")], "h/alfio/Desktop", Some(Exclusion::Protected)),
         ("a new folder of a temp that is the home", "h/alfio", "h/alfio", vec![Mkdir("h/alfio/x")], "h/alfio/x", None),
+        ("the AppData of another profile's temp", "h/alfio", "Users/x/AppData/Local/Temp", vec![Write("Users/x/AppData/Local/x.txt")], "Users/x/AppData/Local", Some(Exclusion::Protected)),
+        ("the other profile itself", "h/alfio", "Users/x/AppData/Local/Temp", vec![Write("Users/x/x.txt")], "Users/x", Some(Exclusion::Protected)),
+        ("a folder inside another profile's temp", "h/alfio", "Users/x/AppData/Local/Temp", vec![Write("Users/x/AppData/Local/Temp/run1/x.txt")], "Users/x/AppData/Local/Temp/run1", None),
+        ("the AppData of a temp elsewhere", "h/alfio", "foo/AppData/Temp", vec![Write("foo/AppData/x.txt")], "foo/AppData", Some(Exclusion::Protected)),
+        ("the folder around a temp elsewhere", "h/alfio", "foo/AppData/Temp", vec![Write("foo/x.txt")], "foo", Some(Exclusion::Protected)),
+        ("a temp under the home, outside AppData", "h/alfio", "h/alfio/work/tmp", vec![Write("h/alfio/work/x.txt")], "h/alfio/work", Some(Exclusion::Protected)),
+        ("a folder inside the home's own AppData temp", "h/alfio", "h/alfio/AppData/Local/Temp", vec![Write("h/alfio/AppData/Local/Temp/run1/x.txt")], "h/alfio/AppData/Local/Temp/run1", None),
     ];
     for (name, home, temp, session, folder, expected) in table {
         let mut site = Site::new();

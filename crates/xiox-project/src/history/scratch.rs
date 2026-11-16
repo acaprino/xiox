@@ -48,15 +48,15 @@ pub(crate) fn scratch_items(
     }
     accepted
         .into_iter()
-        .map(|(path, key, standing)| {
-            let provenance = folders.provenance_within(&key).expect("a marked folder has session evidence");
+        .filter_map(|(path, key, standing)| {
+            let provenance = folders.provenance_within(&key)?;
             let why = Why::SessionFolder {
                 strength: standing.strength,
                 from_script: standing.from_script,
                 risks: risks(&path, &provenance, report_partial, env.now_ms),
                 activity: activity(&path, env),
             };
-            Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
+            Some(Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) })
         })
         .collect()
 }
@@ -82,15 +82,17 @@ impl Policy {
         let temp = non_empty(&user.temp);
         let temp_key = temp.as_deref().map(path_key).unwrap_or_default();
         let home_key = home.as_deref().map(path_key).unwrap_or_default();
-        let in_app_data = temp.as_deref().is_some_and(|t| {
-            t.components().any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("AppData"))
+        // Every folder under the home's `AppData` is broad, and that is where the usual `%TEMP%`
+        // lies, so its holders are already protected. Any other temp must be kept whole here.
+        let in_home_app_data = temp.as_deref().zip(home.as_deref()).is_some_and(|(_, h)| {
+            key_within(&temp_key, &path_key(&h.join("AppData")))
         });
-        // Everything under `AppData` is a broad folder, and that is where the usual `%TEMP%` lies.
         let temp_is_broad = temp.as_deref().is_some_and(|t| {
-            t.parent().is_none() || temp_key == home_key || (!in_app_data && is_broad_dir(t, home.as_deref()))
+            t.parent().is_none() || temp_key == home_key || (!in_home_app_data && is_broad_dir(t, home.as_deref()))
         });
-        let keep_whole = [home_key, if in_app_data { String::new() } else { temp_key.clone() }]
+        let keep_whole = [Some(home_key), (!in_home_app_data).then(|| temp_key.clone())]
             .into_iter()
+            .flatten()
             .filter(|k| !k.is_empty())
             .collect();
         Policy {
