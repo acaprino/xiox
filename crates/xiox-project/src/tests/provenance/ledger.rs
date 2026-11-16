@@ -224,3 +224,19 @@ fn a_shell_command_carrying_a_patch_gives_both_evidences() {
     assert!(sources(&ledger, r"D:\P").contains(&Source::Patch(PatchAction::Add)));
     assert_eq!(ledger.coverage().shell_calls, 1);
 }
+
+#[test]
+fn a_failed_call_still_ran_in_its_cwd() {
+    let mut failed = bash("cd /d/a && git clone https://h/x.git D:/c", r"D:\P");
+    failed.exit = Some(1);
+    let ledger = ledger_of(&[failed]);
+    for (folder, source) in [(r"D:\P", Source::Cwd), (r"D:\a", Source::Cd)] {
+        assert_eq!(strength(&ledger, folder), Some(Strength::Used), "{folder}");
+        let refs = &ledger.get(folder).unwrap().refs;
+        assert_eq!((refs.len(), &refs[0].source, refs[0].outcome), (1, &source, Outcome::Failed), "{folder}");
+    }
+    let clone = ledger.get(r"D:\c").unwrap();
+    assert_eq!(clone.strength, None);
+    assert!(clone.refs.is_empty());
+    assert_eq!(clone.failed.len(), 1);
+}

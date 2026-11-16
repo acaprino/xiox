@@ -143,12 +143,10 @@ impl Ledger {
         &self.coverage
     }
 
+    /// Evidence of an operation: a failed call keeps it under `failed`, without strength.
     fn add(&mut self, at: &Site, folder: &str, strength: Strength, source: Source) {
-        let entry = self
-            .folders
-            .entry(folder.to_lowercase())
-            .or_insert_with(|| FolderEvidence { path: folder.to_owned(), strength: None, refs: vec![], failed: vec![] });
         let reference = at.reference(source);
+        let entry = self.entry(folder);
         if at.outcome == Outcome::Failed {
             entry.failed.push(reference);
         } else {
@@ -157,9 +155,23 @@ impl Ledger {
         }
     }
 
+    /// Evidence that the call ran in `folder` (its cwd, a `cd`): it holds even when the call failed.
+    fn add_visit(&mut self, at: &Site, folder: &str, source: Source) {
+        let reference = at.reference(source);
+        let entry = self.entry(folder);
+        entry.refs.push(reference);
+        entry.strength = entry.strength.max(Some(Strength::Used));
+    }
+
+    fn entry(&mut self, folder: &str) -> &mut FolderEvidence {
+        self.folders
+            .entry(folder.to_lowercase())
+            .or_insert_with(|| FolderEvidence { path: folder.to_owned(), strength: None, refs: vec![], failed: vec![] })
+    }
+
     fn record_cwd(&mut self, at: &Site) {
         if let Some(cwd) = &at.cwd {
-            self.add(at, cwd, Strength::Used, Source::Cwd);
+            self.add_visit(at, cwd, Source::Cwd);
         }
     }
 
@@ -229,7 +241,7 @@ impl Ledger {
             self.add(at, &folder_of(candidate.kind, &candidate.dst), strength_of(candidate.kind), source);
         }
         for visit in &resolved.visits {
-            self.add(at, visit, Strength::Used, Source::Cd);
+            self.add_visit(at, visit, Source::Cd);
         }
     }
 }
