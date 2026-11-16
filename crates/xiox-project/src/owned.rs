@@ -14,7 +14,13 @@ use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error> {
+pub(crate) fn analyze_with(
+    path: &Path,
+    opts: &Options,
+    env: &Env,
+    budget: crate::history::Budget,
+    known: &[PathBuf],
+) -> Result<ProjectScan, Error> {
     let started = Instant::now();
     let (project, entries) = resolve_full(path)?;
     let mut notes = Vec::new();
@@ -35,9 +41,18 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     items.extend(crate::logs::log_items(&project, &build_dirs, &mut notes));
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
-    let found = crate::search::search(&project, opts, env);
+    let mut history = crate::history::History::start(&project, opts, env).map(|h| h.with_budget(budget));
+    let mut listed = history.as_mut().map(|h| h.listed_roots(&project)).unwrap_or_default();
+    listed.extend(known.iter().cloned());
+    let found = crate::search::search(&project, opts, env, &listed);
     items.extend(found.items);
     notes.extend(found.notes);
+    if let Some(h) = history.as_mut() {
+        h.read(&project, &mut items, &mut |dirs| crate::search::verify_dirs(&project, opts, env, dirs));
+        let scratch = h.scratch(&project, &items, env, opts);
+        items.extend(scratch);
+        h.attach(&mut items);
+    }
     sort_items(&mut items);
 
     let branches = if project.is_repo {
@@ -48,6 +63,13 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     } else {
         Vec::new()
     };
+    let history = history.map(crate::history::History::into_report);
+    // Nothing listed is stronger than "in part": the partial note would understate it.
+    match &history {
+        Some(h) if h.not_read() => notes.push(Note::HistoryNotRead),
+        Some(h) if h.partial() => notes.push(Note::HistoryPartial),
+        _ => {}
+    }
     Ok(ProjectScan {
         schema: SCHEMA,
         project,
@@ -57,13 +79,23 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         search: found.mode,
         scanned_at_ms: env.now_ms,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        history,
     })
 }
 
-/// Category order, then bytes descending (unmeasured last), then key.
+/// Category order; then bytes descending (unmeasured last) and key, except `scratch`, which goes
+/// by observed activity, most recent first and the undated last, and key.
 pub(crate) fn sort_items(items: &mut [Item]) {
+    let observed = |i: &Item| {
+        let at = i.provenance.as_ref().and_then(|p| p.last_activity_ms);
+        (at.is_none(), Reverse(at))
+    };
     items.sort_by(|a, b| {
-        (a.category, Reverse(a.bytes), &a.key).cmp(&(b.category, Reverse(b.bytes), &b.key))
+        a.category.cmp(&b.category).then_with(|| match a.category {
+            Category::Scratch => observed(a).cmp(&observed(b)),
+            _ => Reverse(a.bytes).cmp(&Reverse(b.bytes)),
+        })
+        .then_with(|| a.key.cmp(&b.key))
     });
 }
 
@@ -196,6 +228,7 @@ pub(crate) fn builds(project: &Project, reports: &[ProjectReport], opts: &Option
                 blocked: blocked.clone(),
                 why: Why::CatalogFolder { label_en: label_en(a) },
                 target: Target::Dir { kind: a.kind },
+                provenance: None,
             });
         }
     }
@@ -251,6 +284,7 @@ fn worktrees(
             why: Why::LinkedWorktree { branch: e.branch.clone(), head: e.head.clone() },
             target: Target::Worktree { repo: project.root.clone() },
             path: Some(path),
+            provenance: None,
         });
     }
     out
@@ -275,6 +309,7 @@ fn sessions(project: &Project, entries: &[WorktreeEntry], env: &Env) -> Vec<Item
             blocked: if s.blocked.is_some() { vec![Block::SessionLocked] } else { Vec::new() },
             why: Why::ArchivedSession { agent: s.agent, title: s.title.clone() },
             target: Target::Session { agent: s.agent, id: s.id.clone() },
+            provenance: None,
         })
         .collect()
 }

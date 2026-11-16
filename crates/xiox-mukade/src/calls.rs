@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -259,7 +260,11 @@ impl MukadeSessions {
 
     /// Every tool call of one session; a one-off [`CallReader::dump`].
     pub fn dump_calls(&self, id: &str, session_cwd: Option<&str>) -> anyhow::Result<Vec<ToolCall>> {
-        self.call_reader()?.dump(id, session_cwd)
+        let harness = self.harness();
+        self.call_reader()?.dump(id, session_cwd).map_err(|e| match e {
+            DumpError::NotConfigured(_) | DumpError::Spawn(_) => anyhow::Error::new(e),
+            e => anyhow::anyhow!("mukade dump {harness} {id}: {e}"),
+        })
     }
 
     /// `mukade dump <harness> <id> --stream` reading `store`, which `dump` takes from the same
@@ -294,6 +299,33 @@ impl MukadeSessions {
     }
 }
 
+/// Why a `mukade dump` gave no calls. The caller can tell a session that is too large from one
+/// Mukade cannot read without parsing a message.
+#[derive(Debug)]
+pub enum DumpError {
+    /// The store, `mukade` or `opencode.exe` is not set up.
+    NotConfigured(String),
+    /// The `mukade` process did not start.
+    Spawn(String),
+    TimedOut(Duration),
+    /// The stdout cap, in bytes.
+    TooLarge(usize),
+    /// Mukade failed; its trimmed stderr.
+    Exited(String),
+}
+
+impl fmt::Display for DumpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotConfigured(why) | Self::Spawn(why) | Self::Exited(why) => f.write_str(why),
+            Self::TimedOut(t) => write!(f, "timed out after {} s", t.as_secs_f64()),
+            Self::TooLarge(cap) => write!(f, "more than {cap} bytes on stdout"),
+        }
+    }
+}
+
+impl std::error::Error for DumpError {}
+
 /// Dumps the tool calls of many sessions of one store, each `mukade dump` under [`Limits`].
 pub struct CallReader<'a> {
     sessions: &'a MukadeSessions,
@@ -316,20 +348,22 @@ impl CallReader<'_> {
     }
 
     /// Every tool call of session `id`, from `mukade dump <harness> <id> --stream`. The child is
-    /// killed, and an error naming the harness and session returned, when it outlasts the timeout
-    /// or writes more than the stdout cap.
-    pub fn dump(&self, id: &str, session_cwd: Option<&str>) -> anyhow::Result<Vec<ToolCall>> {
+    /// killed, and a [`DumpError`] returned, when it outlasts the timeout or writes more than the
+    /// stdout cap.
+    pub fn dump(&self, id: &str, session_cwd: Option<&str>) -> Result<Vec<ToolCall>, DumpError> {
         let sessions = self.sessions;
         let harness = sessions.harness();
-        let mut cmd = sessions.dump_command(id, &self.read_from)?;
+        let mut cmd = sessions
+            .dump_command(id, &self.read_from)
+            .map_err(|e| DumpError::NotConfigured(format!("{e:#}")))?;
         let program = cmd.get_program().to_string_lossy().into_owned();
         let out = run_bounded(&mut cmd, self.limits).map_err(|e| match e {
-            BoundedError::Io(e) => anyhow::anyhow!("{program}: {e}"),
-            e => anyhow::anyhow!("mukade dump {harness} {id}: {e}"),
+            BoundedError::Io(e) => DumpError::Spawn(format!("{program}: {e}")),
+            BoundedError::TimedOut(t) => DumpError::TimedOut(t),
+            BoundedError::StdoutCap(cap) => DumpError::TooLarge(cap),
         })?;
         if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            anyhow::bail!("mukade dump {harness} {id}: {}", err.trim());
+            return Err(DumpError::Exited(String::from_utf8_lossy(&out.stderr).trim().to_string()));
         }
         let store = sessions.store_root().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let stream = String::from_utf8_lossy(&out.stdout);
@@ -372,6 +406,7 @@ fn snapshot_base(p: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_claude_store;
     use crate::StoreRoots;
     use serde_json::json;
     use xiox_model::Agent;
@@ -572,26 +607,19 @@ mod tests {
         assert_eq!(parse_stream(&bare, "h", "s", "i", None)[0].cwd, None);
     }
 
-    fn write_claude_store(root: &Path, id: &str) {
-        let dir = root.join("projects").join("D--proj");
-        std::fs::create_dir_all(&dir).unwrap();
-        let rec = |v: Value| format!("{v}\n");
-        let text = [
-            rec(json!({"type": "user", "uuid": "u1", "parentUuid": null, "sessionId": id,
-                "timestamp": "2026-11-01T10:00:00.000Z", "cwd": "D:\\proj",
-                "message": {"role": "user", "content": "make a folder"}})),
-            rec(json!({"type": "assistant", "uuid": "a1", "parentUuid": "u1", "sessionId": id,
-                "timestamp": "2026-11-01T10:00:01.000Z", "cwd": "D:\\proj",
-                "message": {"role": "assistant", "model": "claude-x", "content": [
-                    {"type": "tool_use", "id": "toolu_1", "name": "Bash",
-                     "input": {"command": "mkdir /d/x"}}]}})),
-            rec(json!({"type": "user", "uuid": "u2", "parentUuid": "a1", "sessionId": id,
-                "timestamp": "2026-11-01T10:00:02.000Z", "cwd": "D:\\proj",
-                "message": {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"}]}})),
-        ]
-        .concat();
-        std::fs::write(dir.join(format!("{id}.jsonl")), text).unwrap();
+    #[test]
+    fn a_dump_past_its_timeout_is_timed_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("claude");
+        let id = "11111111-2222-3333-4444-555555555555";
+        write_claude_store(&store, id);
+        let sessions = MukadeSessions::with_roots(
+            Agent::Claude,
+            StoreRoots { claude_config_dir: Some(store), ..Default::default() },
+        )
+        .with_cache_dir(Some(tmp.path().join("data")));
+        let reader = sessions.call_reader().unwrap().with_timeout(Duration::from_millis(1));
+        assert!(matches!(reader.dump(id, None), Err(DumpError::TimedOut(_))));
     }
 
     #[test]

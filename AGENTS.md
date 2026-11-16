@@ -41,6 +41,14 @@
   allargate guardando questi stessi dati: su una cronologia nuova vanno rilette con sospetto.
 - `MukadeSessions::call_reader()` è il lettore da usare in `analyze`: una copia del database di
   OpenCode per analisi, timeout reale (120 s) e tetto sull'output per ogni `dump`.
+- Cronologia in `xiox analyze` (piano `docs/superpowers/plans/2026-11-16-history-analysis.md`,
+  `crates/xiox-project/src/history`): `analyze` legge le sessioni del progetto, dei worktree e
+  delle copie, ordinate per attività, dentro un budget (`BUDGET` in `history/queue.rs`: 250
+  sessioni, 250.000 chiamate, 240 s). I valori sono iniziali e vanno tarati con
+  `cargo run -j 1 -p xiox-project --example session_probe -- <progetto> [--sample N]` su store reali,
+  solo su richiesta esplicita dell'utente (nessuna misura è stata fatta). `--no-history` la
+  disattiva. La categoria `scratch` è solo da rivedere: non si rimuove fino al passo 4 (conferme,
+  `--yes`, contenitori, worktree `danger`, sorgente riscritta, cartella condivisa).
 - Misura, 2026-11-16, su un campione nuovo etichettato alla cieca: le 113 chiamate reali in cui
   Rust e prototipo danno candidati diversi per D11, D12 o D13 (D10 non cambia mai i candidati),
   esclusi i due campioni precedenti. Rust con D3 fine e D15, contro il prototipo:

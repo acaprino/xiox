@@ -72,6 +72,17 @@ pub fn project_roots_from_sessions(dirs: &[PathBuf], home: Option<&Path>) -> Ses
     out
 }
 
+/// Drive root, the profile folder and its standard children, anything under AppData, system
+/// folders: never the root of a project.
+pub fn is_broad_dir(p: &Path, home: Option<&Path>) -> bool {
+    is_broad(p, home.map(path_key).as_deref())
+}
+
+/// Inside a cloud-synced drive, by name or because the folder is a cloud placeholder.
+pub fn is_cloud_dir(p: &Path) -> bool {
+    is_cloud_name(p) || is_cloud_placeholder(p)
+}
+
 fn resolve(d: &Path, home: Option<&str>) -> std::result::Result<PathBuf, Skip> {
     // Names first: no filesystem access at all for a cloud path.
     if is_cloud_name(d) {
@@ -307,6 +318,23 @@ mod tests {
         );
         assert!(r.roots.is_empty());
         assert!(r.skipped.iter().all(|(_, s)| *s == Skip::Cloud), "{:?}", r.skipped);
+    }
+
+    #[test]
+    fn broad_and_cloud_predicates_are_public() {
+        let home = Path::new(r"C:\Users\me");
+        let broad = [
+            (r"D:\", true),
+            (r"C:\Users\me", true),
+            (r"C:\Users\me\Downloads", true),
+            (r"C:\Users\me\AppData\Local\x", true),
+            (r"C:\Users\me\src\app", false),
+        ];
+        for (p, expected) in broad {
+            assert_eq!(is_broad_dir(Path::new(p), Some(home)), expected, "{p}");
+        }
+        assert!(is_cloud_dir(Path::new(r"H:\Il mio Drive\x")));
+        assert!(!is_cloud_dir(Path::new(r"C:\Users\me\src\app")));
     }
 
     #[test]

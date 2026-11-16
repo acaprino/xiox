@@ -244,6 +244,7 @@ fn sessions_flag_takes_unblocked_sessions_only() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let scan = scan_in(&root, &e);
 
@@ -576,6 +577,7 @@ fn sessions_are_revalidated_then_deleted_and_one_that_got_locked_is_skipped() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let scan = scan_in(&root, &e);
     let chosen = select(&scan, &req(&[Category::Sessions], &[])).unwrap();
@@ -615,6 +617,7 @@ fn sessions_dry_run_deletes_nothing() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let scan = scan_in(&root, &e);
     let chosen = select(&scan, &req(&[Category::Sessions], &[])).unwrap();
@@ -690,6 +693,7 @@ fn check_dir_refuses_a_junction_a_file_a_missing_path_and_a_project_folder_aroun
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
+        provenance: None,
     };
 
     let real = base.join("proj").join("target");
@@ -782,6 +786,7 @@ fn scan_with_copies(root: &Path, base: &Path) -> ProjectScan {
         search_roots: Some(vec![base.join("other")]),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     scan_in(root, &e)
 }
@@ -793,6 +798,7 @@ fn rerun(scan: &ProjectScan, chosen: &Chosen, base: &Path) -> CleanOutcome {
         search_roots: Some(vec![base.join("other")]),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let bin = FakeBin::new(PathBuf::from("unused"));
     run_with(scan, chosen, RemoveMode::Permanent, false, &e, &bin, &|_| Vec::new())
@@ -835,6 +841,7 @@ fn recheck_skips_a_copy_whose_fresh_listing_says_it_has_own_work_even_if_unblock
         blocked,
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
     };
     let old = mk(Some(false), Vec::new());
     assert!(crate::clean::recheck(&old, Some(&mk(Some(false), Vec::new()))).is_ok());
@@ -924,6 +931,7 @@ fn a_top_level_project_folder_is_refused_with_an_english_reason() {
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
     };
     let reason = check_dir(&item, 0, &project).unwrap_err();
     assert!(reason.starts_with("path too shallow"), "{reason}");
@@ -937,7 +945,7 @@ fn clean_without_sessions_removes_a_chosen_build_and_reads_no_session() {
     fs::create_dir_all(&p).unwrap();
     let target = rust_build(&p, MB);
     let roots = vec![base.join("work")];
-    let scan = analyze_project_without_sessions(&p, &Options { drives: false, measure: true, admin: false }, &roots).unwrap();
+    let scan = analyze_project_without_sessions(&p, &Options { drives: false, measure: true, admin: false, history: false }, &roots).unwrap();
     assert!(scan.items.iter().all(|i| i.category != Category::Sessions));
     let chosen = select(&scan, &req(&[Category::Builds], &[])).unwrap();
     assert_eq!(chosen.keys.len(), 1);
@@ -1143,6 +1151,7 @@ fn contents_item(path: &Path, kind: ArtifactKind, category: Category) -> Item {
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
+        provenance: None,
     }
 }
 
@@ -1215,6 +1224,7 @@ fn m1_a_copy_whose_fresh_own_work_check_gives_no_answer_is_skipped() {
         blocked: Vec::new(),
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
     };
     let old = mk(Some(false));
     assert!(crate::clean::recheck(&old, Some(&mk(Some(false)))).is_ok());
@@ -1247,6 +1257,7 @@ fn m4_a_failed_session_read_skips_worktrees_copies_and_named_folders_but_not_bui
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: SessionHealth { live_failed: true, archived_failed: false },
+        history: crate::history::HistoryInput::none(),
     };
     let bin = FakeBin::new(PathBuf::from("unused"));
     let out = run_with(&scan, &chosen, RemoveMode::Permanent, false, &blind, &bin, &|_| Vec::new());
@@ -1284,4 +1295,129 @@ Os { code: -2147024864, description: \"Il file \\\"x.dll\\\" (in uso) \u{e8} uti
     // Text that only looks like it is left alone.
     assert_eq!(strip_os_text("Os { code: x }"), "Os { code: x }");
     assert_eq!(strip_os_text("no code here"), "no code here");
+}
+
+fn listed(category: Category, path: &Path, why: Why) -> Item {
+    Item {
+        key: path_key(path),
+        category,
+        path: Some(path.to_path_buf()),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why,
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
+    }
+}
+
+fn scratch_scan(base: &Path, items: Vec<Item>) -> ProjectScan {
+    ProjectScan {
+        schema: SCHEMA,
+        project: Project { root: base.join("proj"), name: "proj".into(), is_repo: false, origin: None, worktrees: vec![] },
+        items,
+        branches: vec![],
+        notes: vec![],
+        history: None,
+        search: SearchMode::ParentOnly,
+        scanned_at_ms: 0,
+        elapsed_ms: 0,
+    }
+}
+
+fn session_folder() -> Why {
+    Why::SessionFolder {
+        strength: Strength::Created,
+        from_script: false,
+        risks: vec![Risk::NoGit],
+        activity: Activity::Unknown,
+    }
+}
+
+#[test]
+fn select_refuses_a_scratch_item() {
+    let (_t, base) = tmp();
+    let scratch = base.join("scratch");
+    let scan = scratch_scan(&base, vec![listed(Category::Scratch, &scratch, session_folder())]);
+    let err = select(&scan, &req(&[], &[&scratch])).unwrap_err();
+    assert_eq!(err, SelectError::ReviewOnly { path: scratch.clone(), inner: None });
+    assert_eq!(
+        err.to_string(),
+        format!("listed for review only: folders found in session history cannot be removed yet: {}", scratch.display())
+    );
+}
+
+#[test]
+fn select_refuses_a_folder_that_holds_a_scratch_item() {
+    let (_t, base) = tmp();
+    let named = base.join("named");
+    let scratch = named.join("scratch");
+    let scan = scratch_scan(
+        &base,
+        vec![listed(Category::Named, &named, Why::NameOnly), listed(Category::Scratch, &scratch, session_folder())],
+    );
+    let err = select(&scan, &req(&[], &[&named])).unwrap_err();
+    assert_eq!(err, SelectError::ReviewOnly { path: named.clone(), inner: Some(scratch.clone()) });
+    assert_eq!(
+        err.to_string(),
+        format!("cannot be removed: it holds {}, found in session history: {}", scratch.display(), named.display())
+    );
+}
+
+#[test]
+fn check_dir_refuses_a_target_under_a_linked_ancestor() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let project = resolve_project(&root).unwrap();
+    let real = base.join("real");
+    fill(&real.join("copy"), 1, 1024);
+    let link = base.join("linked");
+    if !link_dir(&link, &real) {
+        eprintln!("skipped: cannot create a junction here");
+        return;
+    }
+    let through = link.join("copy");
+    let item = Item {
+        key: path_key(&through),
+        category: Category::Copies,
+        path: Some(through),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
+    };
+
+    assert_eq!(check_dir(&item, 7, &project).unwrap_err(), "now behind a link: not followed");
+    assert!(real.join("copy").exists());
+    let _ = fs::remove_dir(&link);
+}
+
+#[test]
+fn a_copy_only_the_session_history_found_is_chosen_and_checked_again() {
+    use crate::history::UserDirs;
+    use crate::tests::history::fake::{descriptor, input, listing};
+    let (_t, base) = tmp();
+    let root = repo(&base.join("work").join("proj"));
+    // Five levels down: out of the walk's reach, found only through a session's working directory.
+    let deep = clone(&root, &base.join("a").join("b").join("c").join("d").join("e"));
+    let listings = [listing(
+        Agent::Claude,
+        vec![descriptor(Agent::Claude, "main", "s1", &deep.to_string_lossy(), "2026-11-10T10:00:00Z", None)],
+    )];
+    let user = UserDirs::default();
+    let with_history = Env { search_roots: Some(vec![base.clone()]), history: input(&listings, None, &user), ..env() };
+    let scan = scan_in(&root, &with_history);
+    let item = scan.items.iter().find(|i| i.key == path_key(&deep)).expect("the copy is listed");
+    assert_eq!(item.category, Category::Copies);
+    let chosen = select(&scan, &req(&[], &[&deep])).unwrap();
+
+    // The clean checks again without the history.
+    let without = Env { search_roots: Some(vec![base.clone()]), ..env() };
+    let bin = FakeBin::new(PathBuf::from("unused"));
+    let out = run_with(&scan, &chosen, RemoveMode::Permanent, true, &without, &bin, &|_| Vec::new());
+
+    assert!(matches!(outcome_of(&out, &deep), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert!(deep.join("README.md").exists());
 }

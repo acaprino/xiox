@@ -11,6 +11,7 @@
 mod clean;
 mod container;
 mod hint;
+mod history;
 mod logs;
 mod nested;
 mod owned;
@@ -27,6 +28,10 @@ pub use clean::{
 };
 pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};
+pub use history::{
+    Activity, CallOutcome, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure, Risk,
+    SessionEvidence, SourceReport,
+};
 pub use owned::key_within;
 pub use provenance::{
     Candidate, Completeness, Coverage, Env as PathEnv, EvidenceRef, Extraction, Flags, FolderEvidence, Ledger, OpKind,
@@ -51,6 +56,8 @@ pub enum Category {
     Worktrees,
     Copies,
     Named,
+    /// A folder the session history shows an agent made: listed for review only.
+    Scratch,
     Logs,
     Sessions,
 }
@@ -95,6 +102,7 @@ impl fmt::Display for Category {
             Category::Worktrees => "worktrees",
             Category::Copies => "copies",
             Category::Named => "named",
+            Category::Scratch => "scratch",
             Category::Logs => "logs",
             Category::Sessions => "sessions",
         })
@@ -118,6 +126,8 @@ pub enum Why {
     NameOnly,
     LogFile { ignored: bool },
     ArchivedSession { agent: Agent, title: Option<String> },
+    /// A folder that agent sessions made or used, found in the session history.
+    SessionFolder { strength: Strength, from_script: bool, risks: Vec<Risk>, activity: Activity },
 }
 
 /// What removing the item means.
@@ -146,6 +156,8 @@ pub struct Item {
     pub blocked: Vec<Block>,
     pub why: Why,
     pub target: Target,
+    /// The session evidence behind a `scratch` item; `None` for every other category.
+    pub provenance: Option<Provenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -191,6 +203,10 @@ pub enum Note {
     /// The folder is a drive root, the user profile (or a folder above it), or holds several
     /// projects: the category flags of `clean` refuse it.
     ContainerRoot,
+    /// The session history was read only in part: a cap was hit or a store could not be read.
+    HistoryPartial,
+    /// The session history could not be read at all, so `scratch` is empty.
+    HistoryNotRead,
 }
 
 /// A local branch that looks stale: listed, never deleted.
@@ -212,6 +228,8 @@ pub struct ProjectScan {
     pub items: Vec<Item>,
     pub branches: Vec<StaleBranch>,
     pub notes: Vec<Note>,
+    /// What the session history gave; `None` when it was not asked for or had no source.
+    pub history: Option<HistoryReport>,
     pub search: SearchMode,
     pub scanned_at_ms: i64,
     pub elapsed_ms: u64,
@@ -225,11 +243,13 @@ pub struct Options {
     pub measure: bool,
     /// The process is elevated (the MFT index may be read).
     pub admin: bool,
+    /// Read the session history for folders the project does not list otherwise.
+    pub history: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { drives: true, measure: true, admin: false }
+        Self { drives: true, measure: true, admin: false, history: true }
     }
 }
 
@@ -285,28 +305,68 @@ pub(crate) struct Env<'a> {
     /// fixed drive and the user's home.
     pub search_roots: Option<Vec<PathBuf>>,
     pub now_ms: i64,
+    pub history: history::HistoryInput<'a>,
 }
 
-/// Analyze the project that holds `path` with the real sessions of this PC. Writes nothing
-/// except the session listing cache the engine already writes (`xiox_app::cache_dir()`).
+/// Analyze the project that holds `path` with the real sessions of this PC, history included
+/// unless `opts.history` is off. Writes nothing except the session listing cache the engine
+/// already writes (`xiox_app::cache_dir()`); an OpenCode database is read from a temporary copy.
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
-    let cache = Some(xiox_app::cache_dir());
+    with_real_env(xiox_app::cache_dir(), opts.history, |env| analyze_with(path, opts, env))
+}
+
+/// [`analyze_project`] for the probe: no folder sizes, a session cache under the temporary
+/// folder instead of Xiox's own, and a history budget of `(sessions, calls, seconds)` (`None`:
+/// the one `analyze_project` uses, see [`history_budget`]).
+pub fn history_probe(path: &Path, budget: Option<(usize, usize, u64)>) -> Result<ProjectScan, Error> {
+    let budget = budget.map_or(history::BUDGET, |(max_sessions, max_calls, secs)| history::Budget {
+        max_sessions,
+        max_calls,
+        max_duration: std::time::Duration::from_secs(secs),
+    });
+    let cache = std::env::temp_dir().join("xiox-session-probe");
+    with_real_env(cache, true, |env| probe_with(path, budget, env))
+}
+
+/// The history budget `analyze_project` reads within, as `(sessions, calls, seconds)`.
+pub fn history_budget() -> (usize, usize, u64) {
+    let b = history::BUDGET;
+    (b.max_sessions, b.max_calls, b.max_duration.as_secs())
+}
+
+/// The sessions listing of every harness; without the history there is nothing to list, so no
+/// store is asked and nothing is cached.
+fn real_listings(history: bool, cache: Option<PathBuf>) -> Vec<(Agent, xiox_model::Loaded<xiox_mukade::Descriptor>)> {
+    if history { xiox_app::load_descriptors(cache) } else { Vec::new() }
+}
+
+/// The real sessions and history sources of this PC, listed through the cache in `cache`.
+fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
+    let cache = Some(cache);
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
-    let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache);
+    let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());
     let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
+    let listings = real_listings(history, cache.clone());
+    let sources: Vec<xiox_mukade::MukadeSessions> = listings
+        .iter()
+        .map(|(agent, _)| xiox_mukade::MukadeSessions::from_env(*agent).with_cache_dir(cache.clone()))
+        .collect();
+    let calls = history::MukadeCalls::new(&sources);
+    let user = history::UserDirs::from_env();
     let env = Env {
         sessions: &sessions,
         archived: &archived,
         health,
         search_roots: None,
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput { listings: &listings, calls: Some(&calls), user: &user },
     };
-    analyze_with(path, opts, &env)
+    run(&env)
 }
 
 /// [`analyze_project`] with `copies`/`named` searched only below `search_roots` (to depth 3)
 /// instead of the fixed drives and the home folder. Used by tests and by debug builds of `xiox`.
-/// Still reads the real sessions of this PC.
+/// Still reads the real sessions of this PC, but not their history: no `scratch` items.
 pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf]) -> Result<ProjectScan, Error> {
     let cache = Some(xiox_app::cache_dir());
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
@@ -318,12 +378,13 @@ pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf])
         health,
         search_roots: Some(search_roots.to_vec()),
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput::none(),
     };
     analyze_with(path, opts, &env)
 }
 
 /// [`analyze_project_in`] without reading any session of this PC (no `sessions` items, no live
-/// session blocks, nothing written to the cache). For tests that run on fake trees.
+/// session blocks, no history, nothing written to the cache). For tests that run on fake trees.
 pub fn analyze_project_without_sessions(
     path: &Path,
     opts: &Options,
@@ -335,6 +396,7 @@ pub fn analyze_project_without_sessions(
         health: SessionHealth::default(),
         search_roots: Some(search_roots.to_vec()),
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput::none(),
     };
     analyze_with(path, opts, &env)
 }
@@ -355,5 +417,16 @@ pub fn is_elevated() -> bool {
 
 /// [`analyze_project`] with everything outside the project tree injected.
 pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error> {
-    owned::analyze_with(path, opts, env)
+    owned::analyze_with(path, opts, env, history::BUDGET, &[])
+}
+
+/// [`analyze_with`] that also verifies `known`, folders found some other way than the search.
+pub(crate) fn analyze_known(path: &Path, opts: &Options, env: &Env, known: &[PathBuf]) -> Result<ProjectScan, Error> {
+    owned::analyze_with(path, opts, env, history::BUDGET, known)
+}
+
+/// The probe's analysis: light mode, history on, the given budget.
+pub(crate) fn probe_with(path: &Path, budget: history::Budget, env: &Env) -> Result<ProjectScan, Error> {
+    let opts = Options { measure: false, ..Options::default() };
+    owned::analyze_with(path, &opts, env, budget, &[])
 }

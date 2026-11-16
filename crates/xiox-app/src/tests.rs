@@ -1035,3 +1035,13 @@ fn the_probe_label_counts_the_projects_once_there_is_a_total() {
     assert_eq!(analysis_text(0, 0), "Analyzing projects…");
     assert_eq!(analysis_text(37, 139), "Analyzing projects… 37 of 139");
 }
+
+#[test]
+fn a_panicking_listing_becomes_a_warning_and_no_sessions() {
+    let panicked = guarded_listing(Agent::Pi, || panic!("boom"));
+    assert!(panicked.items.is_empty());
+    assert_eq!(panicked.warnings, ["Pi: internal error while listing the sessions, ignored"]);
+
+    let fine = guarded_listing(Agent::Pi, Loaded::default);
+    assert!(fine.items.is_empty() && fine.warnings.is_empty());
+}

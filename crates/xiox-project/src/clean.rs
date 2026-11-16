@@ -11,12 +11,13 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
+use crate::history::scope::unlinked_chain;
 use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
     Block, Category, Env, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
-    Why, analyze_with,
+    Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
@@ -65,6 +66,9 @@ pub enum SelectError {
     ContainsBlocked { path: PathBuf, inner: PathBuf, why: Vec<Block> },
     /// A category flag on a drive root, the user profile or a folder that holds several projects.
     ContainerRoot(PathBuf),
+    /// `--include` of a `scratch` item, or of a folder that holds one: folders found in the session
+    /// history are listed for review only.
+    ReviewOnly { path: PathBuf, inner: Option<PathBuf> },
 }
 
 impl fmt::Display for SelectError {
@@ -82,6 +86,17 @@ impl fmt::Display for SelectError {
                 "cannot be removed: it holds {} ({}): {}",
                 inner.display(),
                 join_blocks(why),
+                path.display()
+            ),
+            SelectError::ReviewOnly { path, inner: None } => write!(
+                f,
+                "listed for review only: folders found in session history cannot be removed yet: {}",
+                path.display()
+            ),
+            SelectError::ReviewOnly { path, inner: Some(inner) } => write!(
+                f,
+                "cannot be removed: it holds {}, found in session history: {}",
+                inner.display(),
                 path.display()
             ),
             SelectError::ContainerRoot(root) => {
@@ -133,6 +148,12 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
         if !i.blocked.is_empty() {
             return Err(SelectError::Blocked { path: given.clone(), why: i.blocked.clone() });
         }
+        if i.category == Category::Scratch {
+            return Err(SelectError::ReviewOnly { path: given.clone(), inner: None });
+        }
+        if let Some(inner) = scratch_inside(&scan.items, i) {
+            return Err(SelectError::ReviewOnly { path: given.clone(), inner: inner.path.clone() });
+        }
         if let Some(inner) = blocked_inside(&scan.items, i) {
             return Err(SelectError::ContainsBlocked {
                 path: given.clone(),
@@ -164,6 +185,13 @@ fn blocked_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
     items
         .iter()
         .find(|j| j.path.is_some() && j.key != outer.key && !j.blocked.is_empty() && key_within(&j.key, &outer.key))
+}
+
+/// The first `scratch` item of `items` that sits inside `outer`.
+fn scratch_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
+    items
+        .iter()
+        .find(|j| j.category == Category::Scratch && j.path.is_some() && j.key != outer.key && key_within(&j.key, &outer.key))
 }
 
 /// Keys of the items that sit inside another item of `items` (removing the outer one removes them).
@@ -489,7 +517,14 @@ fn clean_impl(
             let (loaded, loader_warnings) = xiox_app::load_sessions(cache.clone());
             let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache);
             let health = crate::session_health(&loaded, &loader_warnings, &archived, &archived_warnings);
-            let env = Env { sessions: &loaded, archived: &archived, health, search_roots, now_ms: xiox_app::now_ms() };
+            let env = Env {
+                sessions: &loaded,
+                archived: &archived,
+                health,
+                search_roots,
+                now_ms: xiox_app::now_ms(),
+                history: crate::history::HistoryInput::none(),
+            };
             let cli = SystemCli::locate();
             let io = Io { cli: &cli, trash: &SystemTrash, fresh: &xiox_app::fresh_archived };
             clean_with(scan, chosen, mode, dry_run, &env, &io)
@@ -501,6 +536,7 @@ fn clean_impl(
                 health: SessionHealth::default(),
                 search_roots,
                 now_ms: xiox_app::now_ms(),
+                history: crate::history::HistoryInput::none(),
             };
             // No harness program is looked for: nothing here can run one.
             let cli = SystemCli { codex: None, opencode: None, timeout: std::time::Duration::from_secs(1) };
@@ -528,8 +564,16 @@ pub(crate) fn clean_with(
         drives: wants_search && scan.search != SearchMode::ParentOnly,
         measure: false,
         admin: scan.search == SearchMode::MftIndex,
+        history: false,
     };
-    match analyze_with(&scan.project.root, &opts, env) {
+    // A copy or named folder the session history alone found is out of the search's reach: the
+    // check names it, and repeats the same identity checks as the analysis.
+    let known: Vec<PathBuf> = old
+        .iter()
+        .filter(|i| matches!(i.category, Category::Copies | Category::Named))
+        .filter_map(|i| i.path.clone())
+        .collect();
+    match crate::analyze_known(&scan.project.root, &opts, env, &known) {
         Ok(fresh) => {
             let run = Run { mode, dry_run, project: &fresh.project, items: &fresh.items, env, io };
             run.remove(&old, &fresh, &mut done);
@@ -897,6 +941,12 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
     }
     if !md.is_dir() {
         return Err("no longer a folder".to_string());
+    }
+    // The folder itself is checked above, so a link found here is one of its ancestors.
+    match unlinked_chain(path) {
+        Err(Exclusion::Link) => return Err("now behind a link: not followed".to_string()),
+        Err(_) => return Err("no longer there".to_string()),
+        Ok(()) => {}
     }
     let key = &fresh.key;
     let (kind, action) = match &fresh.target {

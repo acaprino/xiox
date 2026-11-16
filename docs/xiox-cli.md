@@ -165,6 +165,24 @@ that it has no unsaved work), or when it is itself a repository with uncommitted
 commits that no remote branch has (`unsaved-work`). A named folder that holds a git repository is
 also checked again when it is removed: see [Safety](#safety).
 
+**`scratch`: folders that agent sessions made.** Folders outside the project that the session
+history of your coding agents (`claude`, `codex`, `opencode`, `pi`) shows an agent made, or wrote
+files into, while working on the project: a run folder, a benchmark output, a scratch copy. A
+folder is proposed only when the history holds evidence at least at the level `written` (a file
+was written in it, or the folder itself was made, copied, moved or cloned); a folder that was
+only read, listed or entered is never proposed. The listing says what the sessions did (`made by
+a session`, `files written here by a session`), how many distinct sessions touched the folder,
+the date of the last one (`no date` when no session gave one), `from a script` when the evidence
+comes from a script that a session ran, and the **risks**: `no git`, `weak evidence`,
+`partial history` and `recent activity` (a session touched it in the last 24 hours, or the
+folder itself was modified in that time: the folder date feeds this risk only, never the
+provenance). `weak evidence` means the strongest evidence is below `created`: the folder was only
+written in, not made by a session. The category
+makes no promise that the content is useless: a session may have put something of yours there.
+**`xiox` cannot remove a scratch folder yet**: the category flags do not take it and `--include`
+refuses it. The listing is for review. Copies and named folders that the history also shows get
+`; seen in <n> sessions` added to their description.
+
 **`logs`: log and temporary files.** Files (not folders) ending in `.log`, `.tmp`, `.bak` or
 `.dmp`, at least 1 MiB, inside the project and its worktrees (not inside a build folder that is
 already listed), that git does not track. `recommended` when git ignores them, `caution` when
@@ -218,7 +236,7 @@ The `--json` output does not carry this marker.
 ## `analyze` reference
 
 ```text
-xiox analyze [<project>] [--json] [--no-drives]
+xiox analyze [<project>] [--json] [--no-drives] [--no-history]
 ```
 
 | Flag | Meaning |
@@ -226,6 +244,7 @@ xiox analyze [<project>] [--json] [--no-drives]
 | `<project>` | Any folder of the project. Default: the current folder. |
 | `--json` | Print one JSON object on stdout instead of the listing (see [JSON](#json)). |
 | `--no-drives` | Search copies and name-matched folders only next to the project (the immediate children of the project's parent folder), not on every fixed drive. Much faster on a PC with big drives. |
+| `--no-history` | Do not read the session history: no `scratch` items and no `History` line. The archived sessions of the project are listed all the same. |
 | `-h`, `--help` | Show the usage. |
 | `-V`, `--version` | Show the version. |
 
@@ -240,6 +259,17 @@ Reading the output (see the example above):
 - `Search ...`: how copies and name-matched folders were searched: `fixed drives to 3 levels
   (...)` (not elevated), `all fixed drives, MFT index` (elevated terminal, NTFS drives) or
   `project's parent only` (`--no-drives`).
+- `History  <n> sessions read of <m> related`: whenever the session history was asked for (not
+  with `--no-history`), even when no store could be listed (then the `history-not-read` note
+  follows). `<m>` is the number of listed sessions that look related to the project. It
+  continues with `; <f> could not be read` when some sessions failed (a timeout, an output over
+  the cap, a store without a reader) and with `; stopped at the session limit`, `tool call limit`
+  or `time limit` for every cap that was reached, and `scratch folder limit` when more than
+  **200** session folders were candidates and only the most recently active were examined. The
+  reading is bounded: at most **250 sessions**, **250,000 tool calls** and **240 seconds** in all
+  (no session is started after those 240 seconds; one already running is bounded by its own
+  **120 seconds**). A session is read, its folders are taken and it is released; one that fails is
+  counted and the others are still read.
 - One block per non-empty category, with its total size on the title line (an item inside
   another one is counted once). Each line is `level`, `size`, `path`, `description`. The
   description says why the item belongs to the project, or gives the block reason.
@@ -250,7 +280,9 @@ Reading the output (see the example above):
   incomplete; the session listing of this PC could not be read (a live agent session may be
   missed; `clean` then leaves worktrees, copies and named folders alone); git could not list the
   files of the project or of a worktree (its log files are not in the listing); the folder is a
-  drive root, your user profile or holds several projects (see `clean`).
+  drive root, your user profile or holds several projects (see `clean`); the session history was
+  read only in part (the `History` line says what stopped it, so folders made by agents may be
+  missing); the session history could not be listed at all (no folder was taken from it).
 - `Total <all> · recommended <n>`: the sum of everything listed, and of the recommended,
   unblocked, removable items. Then the `Clean with:` command. If nothing is found the output
   ends with `Nothing found for this project.`
@@ -270,6 +302,7 @@ Search   project's parent only
 ```text
 xiox clean [<project>] [--builds] [--worktrees] [--logs] [--sessions]
            [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
+           [--no-history]
 ```
 
 `clean` first runs the same analysis as `analyze`, then removes **only what the flags name**.
@@ -283,12 +316,13 @@ listing and `Nothing selected. Name what to clean: --builds --worktrees --logs -
 | `--worktrees` | The `recommended` linked worktrees. |
 | `--logs` | The `recommended` log files. |
 | `--sessions` | Every archived session of the project that is not blocked. |
-| `--include <path>` | One more item of the listing, of any level except blocked ones, by its path. Repeatable; `--include=<path>` works too. The only way to take copies, name-matched folders and `optional` or `caution` folders and files. |
+| `--include <path>` | One more item of the listing, of any level except blocked ones, by its path. Repeatable; `--include=<path>` works too. The only way to take copies, name-matched folders and `optional` or `caution` folders and files. A `scratch` item is refused. |
 | `--permanent` | Delete for good instead of moving to the Recycle Bin. |
 | `--yes` | Do not ask for confirmation. |
 | `--dry-run` | Do every check, remove nothing, say what would be freed. |
 | `--json` | One JSON object on stdout, see [JSON](#json). |
 | `--no-drives` | As for `analyze`. |
+| `--no-history` | As for `analyze`, for the analysis `clean` starts from. The check right before removing never reads the history. |
 
 **One project per run.** The category flags (`--builds`, `--worktrees`, `--logs`, `--sessions`)
 are refused, with exit code 2, when the folder is a drive root, your user profile or a folder
@@ -310,9 +344,10 @@ never taken as a group. Name each folder with `--include`:
 error: --copies/--named do not exist: name each folder with --include <path>
 
 Usage:
-  xiox analyze [<project>] [--json] [--no-drives]
+  xiox analyze [<project>] [--json] [--no-drives] [--no-history]
   xiox clean   [<project>] [--builds] [--worktrees] [--logs] [--sessions]
                [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
+               [--no-history]
   xiox observe [<project>] [--interval <seconds>] [--grow-threshold <size>]
                [--worktree-threshold <n>] [--no-drives] [--mcp]
   xiox --help | --version
@@ -524,6 +559,10 @@ sits inside another chosen item (a log inside a removed worktree) is reported as
 `--json` (on `analyze` and on `clean`) prints **one JSON object on one line to stdout** and
 nothing else there; every message for a person goes to stderr. The object has `"schema": 1`;
 field names are camelCase and enum values are kebab-case. Every text in it is English.
+Within one `schema`, new fields and new values may appear; a changed meaning increments it.
+A script should ignore the fields and the values it does not know. The session-history step only
+adds: the category `scratch`, the `why` type `session-folder`, `items[].provenance`, the
+top-level `history` and two notes; `schema` stays 1.
 
 - `analyze --json` prints the **scan** (below).
 - `clean --json` prints `{"schema":1,"scan":<the scan>,"outcome":<the outcome>|null}`: the scan
@@ -651,17 +690,19 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 | `project.isRepo` | bool | Is it a git repository. |
 | `project.origin` | string or null | `remote.origin.url` without the credentials of its authority (`user:token@` is dropped). |
 | `project.worktrees` | string[] | Existing linked worktrees. |
-| `items[]` | array | The listing, ordered by category, then size descending. |
+| `items[]` | array | The listing, ordered by category, then size descending; `scratch` items by observed activity, most recent first, the undated last. |
 | `items[].key` | string | Stable id: the lower-cased normalized path; `session:<agent>:<id>` for sessions. |
-| `items[].category` | string | `builds`, `worktrees`, `copies`, `named`, `logs`, `sessions`. |
+| `items[].category` | string | `builds`, `worktrees`, `copies`, `named`, `scratch`, `logs`, `sessions`. |
 | `items[].path` | string or null | Absolute path; `null` for sessions. |
 | `items[].bytes` | number or null | Size in bytes (the command line always measures). |
 | `items[].level` | string | `recommended`, `optional`, `caution`. A blocked worktree or copy is `caution`: check `blocked`. |
 | `items[].blocked` | string[] | Block values; non-empty means it cannot be removed. |
-| `items[].why` | object | `type` is `catalog-folder` (`labelEn`), `linked-worktree` (`branch`, `head`; either may be null), `same-repository` (`sharedRootCommit`, `sameOrigin`, `hasOwnWork`: true, false or null), `name-only`, `log-file` (`ignored`) or `archived-session` (`agent`, `title`). |
+| `items[].why` | object | `type` is `catalog-folder` (`labelEn`), `linked-worktree` (`branch`, `head`; either may be null), `same-repository` (`sharedRootCommit`, `sameOrigin`, `hasOwnWork`: true, false or null), `name-only`, `log-file` (`ignored`), `archived-session` (`agent`, `title`) or `session-folder` (`strength`: `used`, `written` or `created`; `fromScript`: bool; `risks`: `no-git`, `weak-evidence`, `partial-coverage`, `recent-activity`; `activity`: `active` or `unknown`, never "inactive": no source proves that a session is over). |
+| `items[].provenance` | object or null | The session evidence behind a `scratch`, `copies` or `named` item; `null` otherwise. `strength`, `lastActivityMs` and `sessions[]`, the distinct sessions (by store, harness and id), most recent first. A session has `agent`, `harness`, `store`, `id`, `parent`, `lastActivityMs`, `strength`, `listedCwd` (its own listing names the folder as its working folder), `operations[]` (references into the session: `source`, `outcome`, `strength`, `entry`, `call`, `time`, `cwd`; never the text of a command), `omitted` (operations left out to keep the result small), `failed` (operations that failed) and `gaps` (shell calls that the parsers could not fully read). |
 | `items[].target` | object | What removal means: `type` is `dir` (`kind`, e.g. `rust-target`, `node-modules`, `project-folder`), `file`, `worktree` (`repo`: where `git worktree remove` runs) or `session` (`agent`, `id`). |
 | `branches[]` | array | `name`, `merged`, `worktreeMissing`. Information only. |
-| `notes[]` | array | `type` is one of `not-a-repository`, `git-missing`, `name-too-short`, `walk-may-miss-deep-folders`, `prunable-worktree` (with `path`), `engine-warning`, `sessions-not-read`, `logs-not-checked`, `container-root`. |
+| `notes[]` | array | `type` is one of `not-a-repository`, `git-missing`, `name-too-short`, `walk-may-miss-deep-folders`, `prunable-worktree` (with `path`), `engine-warning`, `sessions-not-read`, `logs-not-checked`, `container-root`, `history-partial` (a cap was reached or a session could not be read: see `history`), `history-not-read` (no store could be listed). |
+| `history` | object or null | What the session history read; `null` with `--no-history` or when no store could be asked. `sources[]` (per agent: `agent`, `listingFailed`, `listed`, `related`, `read`, `failed` as a count by `no-reader`, `timed-out`, `too-large`, `failed` or `ambiguous-id`: several sessions of one store share the id, so none of them is read), `sessionsRead`, `calls`, `shell` (counters of the shell calls and of what the parsers could not read: `shellCalls`, `unresolved`, `looped`, `script`, `truncated`, `exhausted`), `excluded` (folders the history named and the scan left out, counted by reason `not-local`, `outside-scope`, `protected`, `inside-project`, `other-repository`, `not-a-project`, `missing` or `link`; the counts are events per stage, so one folder can be counted more than once, and none of them was entered) and `limits[]` (`type` `sessions`, `calls`, `duration` or `scratch`, with its cap and, where it applies, how many were `left`). |
 | `search` | string | `mft-index`, `bounded-walk` or `parent-only`. |
 | `scannedAtMs`, `elapsedMs` | number | Unix time of the analysis in milliseconds; how long it took. |
 
@@ -839,6 +880,15 @@ listed as removable`. A named folder that holds a copy with unsaved work is refu
 - A build folder that carries a blocked status of the analysis (a project in a dirty or
   unpushed agent worktree) is not turned into a block: the listing marks the builds of a
   project with an open session (`live-session`) and of an unreachable one (`unreachable`) only.
+- **The session history is evidence, not a census.** A session that began somewhere else and was
+  never linked to the project (a different working folder, no path of the project in its calls)
+  can escape. A folder is never called inactive: `activity` is `unknown` at best. Sessions
+  of one store that share an id are not read (they are counted as `ambiguous-id`), and a
+  chain of Claude Code subagents that the store reader refuses is not read either. A
+  command the parsers cannot read in full leaves its folders unresolved, and an unresolved path
+  is never a candidate. The `History` line and `history` in the JSON say what was left out.
+- `clean --include` of a `scratch` item is refused until the confirmations that will go with it
+  exist.
 - `--include` cannot name a session: sessions are taken together with `--sessions`.
 
 ## Troubleshooting

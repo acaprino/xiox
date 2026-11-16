@@ -17,7 +17,7 @@ use xiox_model::{
     Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
     Selection, SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
-use xiox_mukade::{ArchivedSession, MukadeSessions};
+use xiox_mukade::{ArchivedSession, Descriptor, MukadeSessions};
 use xiox_sessions::{HarnessCli, SessionOutcome, Trash};
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -217,6 +217,26 @@ pub fn load_sessions(cache_dir: Option<PathBuf>) -> (Vec<Preloaded>, Vec<String>
         out.push(Preloaded { agent, loaded, worktrees });
     }
     (out, warnings)
+}
+
+/// Every session of every harness, children included, one listing per agent in [`AGENTS`] order.
+/// A source that panics becomes a warning.
+pub fn load_descriptors(cache_dir: Option<PathBuf>) -> Vec<(Agent, Loaded<Descriptor>)> {
+    AGENTS
+        .into_iter()
+        .map(|agent| {
+            let src = MukadeSessions::from_env(agent).with_cache_dir(cache_dir.clone());
+            (agent, guarded_listing(agent, || src.descriptors()))
+        })
+        .collect()
+}
+
+/// `list` with a panic turned into an empty listing and a warning.
+fn guarded_listing(agent: Agent, list: impl FnOnce() -> Loaded<Descriptor>) -> Loaded<Descriptor> {
+    catch_unwind(AssertUnwindSafe(list)).unwrap_or_else(|_| Loaded {
+        items: Vec::new(),
+        warnings: vec![format!("{agent:?}: internal error while listing the sessions, ignored")],
+    })
 }
 
 /// Archived root sessions of every harness. A source that panics becomes a warning.

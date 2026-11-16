@@ -178,7 +178,7 @@ fn independent_verdict(dir: &Path) -> Verdict {
 /// being a repository with work of its own blocks it; a repository git cannot read, in it or
 /// below it, blocks it (nothing can show it has no unsaved work). What is below a folder and
 /// is not listed is checked again when the folder is removed (`clean::check_contents`).
-fn named_blocks(dir: &Path) -> Vec<Block> {
+pub(crate) fn named_blocks(dir: &Path) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut unknown = false;
     if is_git_repo(dir) {
@@ -201,24 +201,24 @@ fn named_blocks(dir: &Path) -> Vec<Block> {
 // ───────────────────────────────── helpers ─────────────────────────────────
 
 /// The project and its worktrees, as `path_key`s.
-struct Own {
+pub(crate) struct Own {
     all: Vec<String>,
 }
 
 impl Own {
-    fn new(project: &Project) -> Own {
+    pub(crate) fn new(project: &Project) -> Own {
         let mut all = vec![path_key(&project.root)];
         all.extend(project.worktrees.iter().map(|w| path_key(w)));
         Own { all }
     }
 
     /// `key` is the project or a worktree, or inside one.
-    fn holds(&self, key: &str) -> bool {
+    pub(crate) fn holds(&self, key: &str) -> bool {
         self.all.iter().any(|o| key_within(key, o))
     }
 
     /// `key` contains the project or a worktree (removing it would remove them).
-    fn inside(&self, key: &str) -> bool {
+    pub(crate) fn inside(&self, key: &str) -> bool {
         self.all.iter().any(|o| key_within(o, key))
     }
 }
@@ -247,7 +247,7 @@ pub(crate) fn is_git_repo(dir: &Path) -> bool {
 
 /// Some ancestor of `path` (not `path` itself) is a git repository. Like git, the folders in
 /// `GIT_CEILING_DIRECTORIES` and above them are not looked at.
-fn inside_other_repo(path: &Path) -> bool {
+pub(crate) fn inside_other_repo(path: &Path) -> bool {
     let ceilings: Vec<String> = std::env::var_os("GIT_CEILING_DIRECTORIES")
         .map(|v| std::env::split_paths(&v).map(|p| path_key(&p)).collect())
         .unwrap_or_default();
@@ -307,8 +307,49 @@ fn read_index(drives: &[xiox_disktree::FixedDrive]) -> Option<xiox_disktree::Dis
 
 // ───────────────────────────────── the search ───────────────────────────────
 
-/// Find the copies and the name-matched folders of `project`.
-pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
+/// The items among `dirs`: classified by identity or name, with their blocks and size. A folder
+/// that is neither is left out.
+pub(crate) fn verify_dirs(project: &Project, opts: &Options, env: &Env, dirs: &[PathBuf]) -> Vec<Item> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+    let roots: Vec<String> = if project.is_repo { xiox_git::root_commits(&project.root) } else { Vec::new() };
+    dirs.iter()
+        .filter_map(|dir| {
+            let (category, why) = classify(project, &roots, project.origin.as_deref(), dir)?;
+            Some(item_for(opts, env, dir, category, why))
+        })
+        .collect()
+}
+
+pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category, why: Why) -> Item {
+    // What cannot be removed at all: a copy with work the project lacks (or whose work cannot be
+    // checked), a repository git cannot read, a live agent session inside.
+    let mut blocked = match &why {
+        Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
+        Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
+        Why::NameOnly | Why::SessionFolder { .. } => named_blocks(dir),
+        _ => Vec::new(),
+    };
+    if live_session_in(dir, env) {
+        blocked.push(Block::LiveSession);
+    }
+    Item {
+        key: path_key(dir),
+        category,
+        bytes: opts.measure.then(|| xiox_cleaner::measure_dir(dir).effective_bytes()),
+        level: Level::Caution,
+        blocked,
+        why,
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        path: Some(dir.to_path_buf()),
+        provenance: None,
+    }
+}
+
+/// Find the copies and the name-matched folders of `project`. `extra` are folders found some
+/// other way (the working directories of sessions); they are verified like the walk's.
+pub(crate) fn search(project: &Project, opts: &Options, env: &Env, extra: &[PathBuf]) -> Found {
     // A short name is not searched by name: no `named` items and no index (the index only
     // offers names). Copies are still found by identity, by the walk.
     let by_name = project.name.chars().count() >= MIN_NAME_CHARS;
@@ -364,36 +405,10 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
 
     let mut candidates = walk_candidates(project, &walk);
     candidates.extend(hits);
+    candidates.extend(extra.iter().cloned());
     let mut seen = HashSet::new();
     candidates.retain(|c| seen.insert(path_key(c)));
 
-    let roots: Vec<String> = if project.is_repo { xiox_git::root_commits(&project.root) } else { Vec::new() };
-    let items = candidates
-        .into_iter()
-        .filter_map(|c| {
-            let (category, why) = classify(project, &roots, project.origin.as_deref(), &c)?;
-            // What cannot be removed at all: a copy with work the project lacks (or whose work
-            // cannot be checked), a repository git cannot read, a live agent session inside.
-            let mut blocked = match &why {
-                Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
-                Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
-                Why::NameOnly => named_blocks(&c),
-                _ => Vec::new(),
-            };
-            if live_session_in(&c, env) {
-                blocked.push(Block::LiveSession);
-            }
-            Some(Item {
-                key: path_key(&c),
-                category,
-                bytes: opts.measure.then(|| xiox_cleaner::measure_dir(&c).effective_bytes()),
-                level: Level::Caution,
-                blocked,
-                why,
-                target: Target::Dir { kind: ArtifactKind::ProjectFolder },
-                path: Some(c),
-            })
-        })
-        .collect();
+    let items = verify_dirs(project, opts, env, &candidates);
     Found { items, mode, notes }
 }

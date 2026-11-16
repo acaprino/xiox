@@ -119,7 +119,29 @@ pub fn env() -> Env<'static> {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     }
 }
 
 pub const MB: usize = 1 << 20;
+
+/// `git clone` of `src` into `dest` (not checked out with line-ending conversion).
+pub fn clone(src: &Path, dest: &Path) -> PathBuf {
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    git(src, &["clone", "-q", "-c", "core.autocrlf=false", &src.to_string_lossy(), &dest.to_string_lossy()]);
+    canon(dest)
+}
+
+/// A junction (or symlink) at `link` leading to `target`; `false` when this machine cannot make one.
+pub fn link_dir(link: &Path, target: &Path) -> bool {
+    #[cfg(windows)]
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    #[cfg(not(windows))]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    made
+}

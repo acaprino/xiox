@@ -84,6 +84,7 @@ pub struct FolderEvidence {
 
 /// What the shell parsers could not read, summed over the shell calls of a session.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Coverage {
     pub shell_calls: usize,
     /// Extractor and resolver combined.

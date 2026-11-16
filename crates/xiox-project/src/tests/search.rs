@@ -32,6 +32,7 @@ fn scan(project: &Path, roots: Vec<PathBuf>, opts: &Options) -> ProjectScan {
         search_roots: Some(roots),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     analyze_with(project, opts, &env).unwrap()
 }
@@ -44,13 +45,6 @@ fn found(scan: &ProjectScan) -> Vec<PathBuf> {
     let mut v = paths(scan, Category::Copies);
     v.extend(paths(scan, Category::Named));
     v
-}
-
-/// `git clone` of `src` into `dest` (not checked out with line-ending conversion).
-fn clone(src: &Path, dest: &Path) -> PathBuf {
-    fs::create_dir_all(dest.parent().unwrap()).unwrap();
-    git(src, &["clone", "-q", "-c", "core.autocrlf=false", &src.to_string_lossy(), &dest.to_string_lossy()]);
-    canon(dest)
 }
 
 #[test]
@@ -561,6 +555,7 @@ fn i4_a_live_session_inside_a_copy_or_a_named_folder_blocks_it() {
             search_roots: Some(vec![base.join("other")]),
             now_ms: xiox_app::now_ms(),
             health: Default::default(),
+            history: crate::history::HistoryInput::none(),
         };
         analyze_with(&project, &Options::default(), &env).unwrap()
     };
@@ -591,6 +586,7 @@ fn i4_a_copy_with_own_work_and_a_live_session_lists_both_blocks() {
         search_roots: Some(vec![base.join("other")]),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let s = analyze_with(&project, &Options::default(), &env).unwrap();
     let blocked = &copy_item(&s, &copy).blocked;
