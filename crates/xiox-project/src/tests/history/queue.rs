@@ -236,3 +236,23 @@ fn listing_failure_is_reported_apart_from_an_absent_store() {
         scan.history.unwrap().sources.iter().map(|s| (s.agent, s.listing_failed, s.listed)).collect();
     assert_eq!(rows, [(Agent::Claude, true, 0), (Agent::Codex, false, 0)]);
 }
+
+#[test]
+fn a_history_no_listing_gave_is_not_read_and_not_merely_partial() {
+    let (_t, base) = tmp();
+    let project = repo(&base.join("proj"));
+    let failed = || Loaded { items: Vec::<Descriptor>::new(), warnings: vec!["list failed".to_string()] };
+    let user = UserDirs::default();
+    let calls = FakeCalls::default();
+    let cases = [
+        (vec![(Agent::Claude, failed()), (Agent::Codex, failed())], Note::HistoryNotRead),
+        (vec![(Agent::Claude, failed()), listing(Agent::Codex, Vec::new())], Note::HistoryPartial),
+    ];
+    for (listings, want) in cases {
+        let env = Env { search_roots: Some(Vec::new()), history: input(&listings, Some(&calls), &user), ..env() };
+        let scan = crate::analyze_with(&project, &Options::default(), &env).unwrap();
+        let history_notes: Vec<&Note> =
+            scan.notes.iter().filter(|n| matches!(n, Note::HistoryPartial | Note::HistoryNotRead)).collect();
+        assert_eq!(history_notes, [&want]);
+    }
+}

@@ -187,6 +187,11 @@ pub struct HistoryReport {
 }
 
 impl HistoryReport {
+    /// No store could be listed, so no folder was taken from the history.
+    pub fn not_read(&self) -> bool {
+        !self.sources.is_empty() && self.sources.iter().all(|s| s.listing_failed)
+    }
+
     /// Something was not read: a cap was hit, a listing failed, or a session could not be read.
     pub fn partial(&self) -> bool {
         !self.limits.is_empty() || self.sources.iter().any(|s| s.listing_failed || !s.failed.is_empty())

@@ -3,8 +3,8 @@
 
 use xiox_model::{Agent, Level, RemoveMode};
 use xiox_project::{
-    Block, Category, Chosen, CleanOutcome, Item, Note, Outcome, ProjectScan, SearchMode, Target, Why, is_recommended,
-    key_within, normalize_remote, too_shallow,
+    Block, Category, Chosen, CleanOutcome, HistoryReport, Item, Limit, Note, Outcome, Provenance, ProjectScan, Risk,
+    SearchMode, Strength, Target, Why, is_recommended, key_within, normalize_remote, too_shallow,
 };
 // Only the tests of this module name them (the listing uses `too_shallow`).
 #[cfg(test)]
@@ -115,8 +115,13 @@ fn why_text(why: &Why) -> String {
             format!("copy of the repository: {identity}, {work}")
         }
         Why::NameOnly => "matched by name only".to_string(),
-        // The wording is the guide's; this placeholder is replaced when the listing shows risks.
-        Why::SessionFolder { .. } => "found in session history".to_string(),
+        // The sessions and the date come from the item's provenance: see `reason_text`.
+        Why::SessionFolder { strength, .. } => match strength {
+            Strength::Created => "made by a session",
+            Strength::Written => "files written here by a session",
+            Strength::Used => "used by a session",
+        }
+        .to_string(),
         Why::LogFile { ignored: true } => "log file, ignored by git".to_string(),
         Why::LogFile { ignored: false } => "log file".to_string(),
         Why::ArchivedSession { title, .. } => match title.as_deref().map(one_line).filter(|t| !t.is_empty()) {
@@ -134,12 +139,49 @@ fn path_text(item: &Item) -> String {
     }
 }
 
+fn plural(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+fn risk_name(r: Risk) -> &'static str {
+    match r {
+        Risk::NoGit => "no git",
+        Risk::WeakEvidence => "weak evidence",
+        Risk::PartialCoverage => "partial history",
+        Risk::RecentActivity => "recent activity",
+    }
+}
+
+/// What the sessions add to the reason: for a session folder its count, last date, origin and risks;
+/// for a copy or a named folder only how many sessions saw it.
+fn provenance_text(why: &Why, p: &Provenance) -> String {
+    let Why::SessionFolder { from_script, risks, .. } = why else {
+        return format!("; seen in {}", plural(p.sessions.len(), "session"));
+    };
+    let last = p
+        .last_activity_ms
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map_or("no date".to_string(), |t| format!("last {}", t.format("%Y-%m-%d")));
+    let mut text = format!(" ({}, {last})", plural(p.sessions.len(), "session"));
+    if *from_script {
+        text.push_str(", from a script");
+    }
+    if !risks.is_empty() {
+        let names: Vec<&str> = risks.iter().map(|r| risk_name(*r)).collect();
+        text.push_str(&format!("; risk: {}", names.join(", ")));
+    }
+    text
+}
+
 fn reason_text(item: &Item) -> String {
     let mut reason = if item.blocked.is_empty() {
         why_text(&item.why)
     } else {
         item.blocked.iter().map(|b| block_reason(*b)).collect::<Vec<_>>().join(", ")
     };
+    if let Some(p) = &item.provenance {
+        reason.push_str(&provenance_text(&item.why, p));
+    }
     if too_shallow(item) {
         reason.push_str("; cannot be removed: top-level folder");
     }
@@ -188,12 +230,39 @@ sessions may be missing; 'clean' leaves worktrees, copies and folders alone unti
             "git could not list the files of the project or of a worktree: its log files are not in the listing"
                 .to_string()
         }
-        Note::HistoryPartial => "the session history was read only in part: the scratch listing may be incomplete".to_string(),
-        Note::HistoryNotRead => "the session history could not be read: nothing is listed as scratch".to_string(),
+        Note::HistoryPartial => {
+            "the session history was read only in part: folders made by agents may be missing (see \"history\" in --json)"
+                .to_string()
+        }
+        Note::HistoryNotRead => {
+            "the session history could not be listed: no folder was taken from it".to_string()
+        }
         Note::ContainerRoot => "this folder is a drive root, your user profile, or holds several projects: \
 'xiox clean' refuses --builds, --worktrees, --logs and --sessions here (run it on one project, or name a path with --include)"
             .to_string(),
     })
+}
+
+fn limit_name(l: &Limit) -> &'static str {
+    match l {
+        Limit::Sessions { .. } => "session",
+        Limit::Calls { .. } => "tool call",
+        Limit::Duration { .. } => "time",
+    }
+}
+
+/// `History  3 sessions read of 4 related; 1 could not be read; stopped at the session limit`
+fn history_line(h: &HistoryReport) -> String {
+    let related: usize = h.sources.iter().map(|s| s.related).sum();
+    let failed: usize = h.sources.iter().flat_map(|s| s.failed.values()).sum();
+    let mut line = format!("History  {} read of {related} related", plural(h.sessions_read, "session"));
+    if failed > 0 {
+        line.push_str(&format!("; {failed} could not be read"));
+    }
+    for l in &h.limits {
+        line.push_str(&format!("; stopped at the {} limit", limit_name(l)));
+    }
+    line
 }
 
 pub fn render_scan(scan: &ProjectScan) -> String {
@@ -215,6 +284,9 @@ pub fn render_scan(scan: &ProjectScan) -> String {
         SearchMode::ParentOnly => "project's parent only",
     };
     o.push_str(&format!("Search   {search}\n"));
+    if let Some(h) = &scan.history {
+        o.push_str(&format!("{}\n", history_line(h)));
+    }
 
     // Column widths shared by every block.
     let path_w = scan.items.iter().map(|i| path_text(i).chars().count()).max().unwrap_or(0).min(MAX_PATH_COL);
@@ -823,5 +895,160 @@ mod tests {
         mixed.items.push(entry("D:\\p\\x",Category::Builds, Outcome::Skipped { reason: "no longer there".into() }));
         let out = render_outcome(&mixed);
         assert!(out.contains("Not everything was removed: 1 item skipped or failed."), "{out}");
+    }
+
+    // ── scratch, provenance and the history line ──
+
+    fn evidence(id: &str) -> xiox_project::SessionEvidence {
+        xiox_project::SessionEvidence {
+            agent: Agent::Claude,
+            harness: "claude".into(),
+            store: "s".into(),
+            id: id.into(),
+            parent: None,
+            last_activity_ms: None,
+            strength: None,
+            listed_cwd: false,
+            operations: Vec::new(),
+            omitted: 0,
+            failed: 0,
+            gaps: false,
+        }
+    }
+
+    fn provenance(sessions: usize, day: Option<(i32, u32, u32)>) -> xiox_project::Provenance {
+        let last_activity_ms = day.map(|(y, m, d)| {
+            chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp_millis()
+        });
+        xiox_project::Provenance {
+            strength: None,
+            last_activity_ms,
+            sessions: (0..sessions).map(|i| evidence(&format!("s{i}"))).collect(),
+        }
+    }
+
+    fn scratch(path: &str, why: Why, provenance: xiox_project::Provenance) -> Item {
+        let mut i = item(Category::Scratch, path, None, Level::Caution, vec![], why);
+        i.provenance = Some(provenance);
+        i
+    }
+
+    fn folder(strength: xiox_project::Strength, from_script: bool, risks: Vec<xiox_project::Risk>) -> Why {
+        Why::SessionFolder { strength, from_script, risks, activity: xiox_project::Activity::Unknown }
+    }
+
+    fn source_report(failed: &[(xiox_project::ReadFailure, usize)]) -> xiox_project::SourceReport {
+        xiox_project::SourceReport {
+            agent: Agent::Claude,
+            listing_failed: false,
+            listed: 5,
+            related: 4,
+            read: 3,
+            failed: failed.iter().cloned().collect(),
+        }
+    }
+
+    fn history(failed: &[(xiox_project::ReadFailure, usize)], limits: Vec<xiox_project::Limit>) -> xiox_project::HistoryReport {
+        xiox_project::HistoryReport {
+            sources: vec![source_report(failed)],
+            sessions_read: 3,
+            calls: 10,
+            shell: xiox_project::Coverage::default(),
+            excluded: Default::default(),
+            limits,
+        }
+    }
+
+    #[test]
+    fn scratch_block_and_history_line() {
+        use xiox_project::{Limit, ReadFailure, Risk, Strength};
+        let mut s = scan(vec![
+            scratch("D:/w/runs/a", folder(Strength::Created, false, vec![]), provenance(2, Some((2026, 11, 15)))),
+            scratch(
+                "D:/w/runs/b",
+                folder(Strength::Written, true, vec![Risk::NoGit, Risk::WeakEvidence]),
+                provenance(1, None),
+            ),
+        ]);
+        s.history = Some(history(&[(ReadFailure::TimedOut, 1)], vec![Limit::Sessions { max: 250, left: 2 }]));
+        let out = render_scan(&s);
+        for needle in [
+            "SCRATCH",
+            "made by a session (2 sessions, last 2026-11-15)",
+            "files written here by a session (1 session, no date), from a script; risk: no git, weak evidence",
+            "History  3 sessions read of 4 related; 1 could not be read; stopped at the session limit",
+        ] {
+            assert!(out.contains(needle), "{needle:?} missing in:\n{out}");
+        }
+    }
+
+    #[test]
+    fn session_folder_reason_cases() {
+        use xiox_project::{Risk, Strength};
+        let cases = [
+            (Strength::Created, true, vec![Risk::PartialCoverage, Risk::RecentActivity], 3,
+             "made by a session (3 sessions, no date), from a script; risk: partial history, recent activity"),
+            (Strength::Written, false, vec![Risk::NoGit], 1,
+             "files written here by a session (1 session, no date); risk: no git"),
+        ];
+        for (strength, script, risks, n, want) in cases {
+            let i = scratch("D:/w/x", folder(strength, script, risks), provenance(n, None));
+            assert_eq!(reason_text(&i), want);
+        }
+    }
+
+    #[test]
+    fn history_line_texts() {
+        use xiox_project::{Limit, ReadFailure};
+        let cases = [
+            (history(&[], vec![]), "History  3 sessions read of 4 related"),
+            (
+                history(&[(ReadFailure::Failed, 1), (ReadFailure::TooLarge, 1)], vec![Limit::Calls { max: 9 }]),
+                "History  3 sessions read of 4 related; 2 could not be read; stopped at the tool call limit",
+            ),
+            (
+                history(&[], vec![Limit::Duration { secs: 240, left: 1 }, Limit::Sessions { max: 1, left: 1 }]),
+                "History  3 sessions read of 4 related; stopped at the time limit; stopped at the session limit",
+            ),
+        ];
+        for (h, want) in cases {
+            let mut s = full_scan();
+            s.history = Some(h);
+            assert_eq!(line_with(&render_scan(&s), "History  "), want);
+        }
+    }
+
+    #[test]
+    fn provenance_adds_the_session_count_to_copies_and_named() {
+        let mut copy = full_scan().items.into_iter().find(|i| i.category == Category::Copies).unwrap();
+        let plain = reason_text(&copy);
+        copy.provenance = Some(provenance(2, None));
+        assert_eq!(reason_text(&copy), format!("{plain}; seen in 2 sessions"));
+        copy.provenance = Some(provenance(1, None));
+        assert_eq!(reason_text(&copy), format!("{plain}; seen in 1 session"));
+    }
+
+    #[test]
+    fn history_notes_have_their_text() {
+        let mut s = full_scan();
+        s.notes = vec![Note::HistoryPartial, Note::HistoryNotRead];
+        let out = render_scan(&s);
+        assert!(
+            out.contains(
+                "note: the session history was read only in part: folders made by agents may be missing (see \"history\" in --json)"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("note: the session history could not be listed: no folder was taken from it"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn no_history_line_without_history() {
+        let s = full_scan();
+        assert!(s.history.is_none());
+        assert!(!render_scan(&s).contains("History  "));
     }
 }

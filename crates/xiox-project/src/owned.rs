@@ -57,8 +57,11 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         Vec::new()
     };
     let history = history.map(crate::history::History::into_report);
-    if history.as_ref().is_some_and(|h| h.partial()) {
-        notes.push(Note::HistoryPartial);
+    // Nothing listed is stronger than "in part": the partial note would understate it.
+    match &history {
+        Some(h) if h.not_read() => notes.push(Note::HistoryNotRead),
+        Some(h) if h.partial() => notes.push(Note::HistoryPartial),
+        _ => {}
     }
     Ok(ProjectScan {
         schema: SCHEMA,
