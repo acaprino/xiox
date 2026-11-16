@@ -76,3 +76,93 @@ test('zoom is the page\'s job: engine zoom off, and the one webview permission i
   const capability = JSON.parse(file('src-tauri/capabilities/main.json')) as { permissions: string[] };
   assert.ok(capability.permissions.includes('core:webview:allow-set-webview-zoom'));
 });
+
+/** The text of the call that opens at `from` (the `(` of `h(`): up to its matching parenthesis. */
+function callAt(text: string, from: number): string {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')' && --depth === 0) return text.slice(from, i + 1);
+  }
+  return text.slice(from);
+}
+
+test('the window is clamped to the work area of its monitor, and its minimum fits a 1366x768 laptop at 125 %', () => {
+  const main = file('src-tauri/src/main.rs');
+  assert.match(main, /work_area\(\)/, 'main.rs reads the work area, not the monitor size');
+  assert.match(main, /window_state::clamp\(/, 'the restored and the first-launch size go through the clamp');
+  const config = JSON.parse(file('src-tauri/tauri.conf.json')) as { app: { windows: { minWidth: number; minHeight: number }[] } };
+  const main0 = config.app.windows[0];
+  assert.ok(main0);
+  // 1366x768 at 125 %: 1093 logical wide and, less the taskbar, about 582 high.
+  assert.ok(main0.minWidth <= 1093 && main0.minHeight <= 582, `${main0.minWidth}x${main0.minHeight}`);
+  const state = file('src-tauri/src/window_state.rs');
+  assert.equal(Number(/const MIN_WIDTH: u32 = (\d+)/.exec(state)?.[1]), main0.minWidth, 'window_state MIN_WIDTH follows tauri.conf.json');
+  assert.equal(Number(/const MIN_HEIGHT: u32 = (\d+)/.exec(state)?.[1]), main0.minHeight, 'window_state MIN_HEIGHT follows tauri.conf.json');
+});
+
+test('the ready signal does not depend on requestAnimationFrame alone (a hidden window may never run one)', () => {
+  const main = file('src/main.ts');
+  const signal = /function signalReady[\s\S]*?\n\}/.exec(main)?.[0] ?? '';
+  assert.match(signal, /requestAnimationFrame/, 'the double frame is still there: the first frame is drawn');
+  assert.match(signal, /setTimeout\(/, 'a timer races the frames');
+  assert.match(signal, /let sent|if \(sent\)|sent = true/, 'whichever comes first, the signal goes once');
+});
+
+test('the first focus is the list, and a native dialog gives the focus back to the page', () => {
+  assert.match(file('src/main.ts'), /async function start[\s\S]*?focusList\(\);\s*signalReady\(\)/, 'the page focuses the list after the first render');
+  assert.match(file('src/main.ts'), /function focusList[\s\S]*?gridNode\(\)/, 'the list is #rows .grid');
+  assert.match(file('src/render/dialog.ts'), /d\.permanent/, 'the danger variant comes from the view\'s flag');
+  assert.doesNotMatch(file('src/render/policy.ts'), /permanent\|cannot be undone|IRREVERSIBLE/, 'no reading of the dialog\'s English');
+  assert.match(file('src/main.ts'), /addEventListener\('focus'/, 'the window regaining the focus puts it back in the page');
+  const desktop = file('src-tauri/src/desktop.rs');
+  assert.match(desktop, /pub fn give_back_focus/);
+  const commands = file('src-tauri/src/commands.rs');
+  assert.equal(commands.match(/blocking_(pick_folder|save_file)/g)?.length, commands.match(/give_back_focus\(/g)?.length, 'every blocking dialog of commands.rs hands the focus back');
+  assert.match(desktop, /give_back_focus\(&webview\)/, 'so does the recovery message');
+  assert.match(file('src-tauri/src/dropped.rs'), /give_back_focus\(/, 'and the question about a dropped folder');
+});
+
+test('every button of the page has a name: a text or an aria-label, icon-only ones included', () => {
+  let buttons = 0;
+  for (const [name, text] of sources) {
+    for (const m of text.matchAll(/h\('button'|(?<![\w.])button\(/g)) {
+      const call = callAt(text, m.index + m[0].length - 1);
+      buttons++;
+      const named = /aria-label|aria-labelledby|h\('span'|, '[^']|`[^`]+`\)|\bkbd\(/.test(call) || /^\(\s*h\('(?!i')/.test(call);
+      assert.ok(named, `${name}: a button without text or aria-label: ${call.slice(0, 80)}`);
+    }
+  }
+  assert.ok(buttons > 10, 'the scan found the buttons');
+});
+
+test('colour is never the only signal of the bar state: the pip has a shape and a spoken name', () => {
+  const bar = file('src/render/bar2.ts');
+  assert.match(bar, /class: `pip [^`]*`, role: 'img', 'aria-label'/);
+  const list = styles.find(([name]) => name === 'list.css')?.[1] ?? '';
+  assert.match(list, /\.pip\.mixed\s*\{[^}]*linear-gradient/, 'a dash for partly ticked');
+  assert.match(list, /\.pip\.none\s*\{[^}]*dotted/, 'a dotted box for none');
+});
+
+test('dragging a folder onto the window is an explicit choice: Rust takes the drop and asks first', () => {
+  const config = file('src-tauri/tauri.conf.json');
+  assert.doesNotMatch(config, /dragDropEnabled":\s*false/, 'drag and drop stays on, so the drop reaches Rust and the page is never navigated');
+  const dropped = file('src-tauri/src/dropped.rs');
+  assert.match(dropped, /DragDropEvent::Drop/);
+  assert.match(dropped, /\.message\(/, 'the person is asked');
+  assert.match(dropped, /\.parent\(window\)/, 'by a message owned by the window');
+  assert.match(dropped, /add_root/, 'and the folder goes through the Developers flow');
+  assert.match(file('src-tauri/src/main.rs'), /dropped::/, 'wired in main.rs');
+});
+
+test('the title says the section, and the single-instance lookup does not need the exact title', () => {
+  assert.match(file('src-tauri/src/single_instance.rs'), /fn is_title_of/);
+  assert.match(file('src-tauri/src/chrome.rs'), /fn title\(/);
+  assert.match(file('src/main.ts'), /api\.chrome\(/, 'the page tells Rust the section and the job');
+});
+
+test('every scroll container gets the thin themed scrollbar from one rule', () => {
+  const rules = styles.flatMap(([name, text]) => [...text.matchAll(/scrollbar-width:\s*thin/g)].map(() => name));
+  assert.deepEqual(rules, ['tokens.css'], 'one rule sets scrollbar-width: thin, not one per container');
+  assert.match(tokens, /\n\* \{[^}]*scrollbar-width: thin; scrollbar-color: var\(--line\)/, 'on *, with scrollbar-color');
+});

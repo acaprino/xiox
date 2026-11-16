@@ -184,6 +184,14 @@ pub fn on_failure<R: Runtime>(webview: &Webview<R>, failure: Failure) {
     }
 }
 
+/// After a native dialog (folder, save, message) closes the window is active again, but WebView2 does not always hand the
+/// keyboard back to the page: without this the arrows, Space and Enter do nothing until the next click. The page's own
+/// `focus` handler (`src/main.ts`) then puts the focus on the list.
+pub fn give_back_focus<R: Runtime>(webview: &Webview<R>) {
+    let _ = webview.window().set_focus();
+    let _ = webview.set_focus();
+}
+
 /// The recovery message, owned by the window (modal to it), with the two ways out the failure leaves.
 fn ask<R: Runtime>(webview: &Webview<R>, failure: Failure) {
     if ASKING.swap(true, Ordering::SeqCst) {
@@ -212,6 +220,7 @@ fn ask<R: Runtime>(webview: &Webview<R>, failure: Failure) {
             .buttons(MessageDialogButtons::OkCancelCustom(yes.to_string(), no.to_string()))
             .blocking_show();
         ASKING.store(false, Ordering::SeqCst);
+        give_back_focus(&webview);
         let app = webview.app_handle();
         match (failure, yes_pressed) {
             (Failure::EngineGone, true) => restart(app),

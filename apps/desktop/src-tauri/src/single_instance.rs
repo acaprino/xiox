@@ -50,12 +50,19 @@ pub fn acquire(name: &str) -> Option<InstanceGuard> {
     Some(InstanceGuard(handle))
 }
 
-/// What the window search walks with: the title to match (UTF-16, no NUL), our own program's file
+/// What the window search walks with: the app name its titles end with, our own program's file
 /// name, and the window found.
 struct Search {
-    title: Vec<u16>,
+    app: String,
     exe: OsString,
     found: HWND,
+}
+
+/// Whether `title` is a title of this app's window: the name alone («Xiox», before the first section is shown) or a
+/// section followed by it («Cleanup - Xiox», `chrome::title`). The title changes with the section, so it is matched by
+/// what it ends with; the owner's program (`same_program`) tells our window from anyone else's.
+pub fn is_title_of(app: &str, title: &str) -> bool {
+    title == app || title.strip_suffix(app).is_some_and(|rest| rest.ends_with(" - "))
 }
 
 /// Whether `image` (the executable of the process that owns a window) is the same program as `exe`
@@ -90,14 +97,14 @@ unsafe fn owner_image(window: HWND) -> Option<PathBuf> {
     ok.then(|| PathBuf::from(OsString::from_wide(&buf[..len as usize])))
 }
 
-/// `EnumWindows` callback: stops (returns 0) at the first window with our title and our program.
+/// `EnumWindows` callback: stops (returns 0) at the first window with one of our titles and our program.
 unsafe extern "system" fn visit(window: HWND, lparam: LPARAM) -> i32 {
     // SAFETY: `lparam` is the `&mut Search` that `focus_existing` passed and keeps alive for the walk.
     let search = unsafe { &mut *(lparam as *mut Search) };
     let mut buf = [0u16; 256];
     // SAFETY: `buf` holds the length passed.
     let n = unsafe { GetWindowTextW(window, buf.as_mut_ptr(), buf.len() as i32) };
-    if n > 0 && buf[..n as usize] == search.title[..] {
+    if n > 0 && is_title_of(&search.app, &String::from_utf16_lossy(&buf[..n as usize])) {
         // SAFETY: a handle the system just gave us.
         if unsafe { owner_image(window) }.is_some_and(|image| same_program(&image, &search.exe)) {
             search.found = window;
@@ -107,13 +114,13 @@ unsafe extern "system" fn visit(window: HWND, lparam: LPARAM) -> i32 {
     1
 }
 
-/// Raises the window titled `title` that belongs to THIS program (restoring it first when
-/// minimized), if there is one. A window with that title of another program is left alone.
-pub fn focus_existing(title: &str) {
+/// Raises the window titled with `app` (see `is_title_of`) that belongs to THIS program (restoring it first when
+/// minimized), if there is one. A window with such a title of another program is left alone.
+pub fn focus_existing(app: &str) {
     let Some(exe) = std::env::current_exe().ok().and_then(|p| p.file_name().map(OsStr::to_os_string)) else {
         return;
     };
-    let mut search = Search { title: title.encode_utf16().collect(), exe, found: std::ptr::null_mut() };
+    let mut search = Search { app: app.to_string(), exe, found: std::ptr::null_mut() };
     // SAFETY: `visit` only reads and writes `search`, which outlives the walk; the handle found is
     // only passed back to the system.
     unsafe {
@@ -170,6 +177,18 @@ mod tests {
         assert!(acquire(&name).is_none(), "the second is refused while the first lives");
         drop(first);
         assert!(acquire(&name).is_some(), "the name is free again after the first is dropped");
+    }
+
+    /// The title follows the section (`Cleanup - Xiox`): the running window is found by its end, and nothing else is.
+    #[test]
+    fn the_title_of_any_section_is_ours_and_a_lookalike_is_not() {
+        assert!(is_title_of("Xiox", "Xiox"));
+        assert!(is_title_of("Xiox", "Cleanup - Xiox"));
+        assert!(is_title_of("Xiox", "Developers - Xiox"));
+        assert!(!is_title_of("Xiox", "Xiox Setup"));
+        assert!(!is_title_of("Xiox", "NotXiox"), "the suffix is a whole word after a separator");
+        assert!(!is_title_of("Xiox", "Cleanup-Xiox"));
+        assert!(!is_title_of("Xiox", ""));
     }
 
     /// The window titled “Xiox” is ours only if its owner is this program: an Explorer window on

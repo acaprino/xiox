@@ -8,6 +8,7 @@
 //! is given back when it closes.
 
 use crate::backend::{Backend, BackendState};
+use crate::desktop;
 use crate::error::{CmdError, CmdResult};
 use crate::files;
 #[cfg(any(debug_assertions, test))]
@@ -33,10 +34,10 @@ const ALREADY_OPEN: &str = "Already open.";
 static DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Held while a native dialog is open; dropping it (also on a panic) frees the slot.
-struct DialogSlot;
+pub(crate) struct DialogSlot;
 
 impl DialogSlot {
-    fn take() -> CmdResult<DialogSlot> {
+    pub(crate) fn take() -> CmdResult<DialogSlot> {
         match DIALOG_OPEN.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => Ok(DialogSlot),
             Err(_) => Err(CmdError::refused(ALREADY_OPEN)),
@@ -156,6 +157,7 @@ pub async fn developers_add_root(app: tauri::AppHandle, window: tauri::WebviewWi
         }
         let _slot = DialogSlot::take()?;
         let picked = app.dialog().file().set_parent(&window).set_title("Folder to analyze").blocking_pick_folder();
+        desktop::give_back_focus(window.as_ref());
         match picked.and_then(|path| path.into_path().ok()) {
             Some(dir) => b.add_root(dir),
             None => Ok(b.view(SectionId::Developers)),
@@ -186,6 +188,7 @@ pub async fn save_report(app: tauri::AppHandle, window: tauri::WebviewWindow, st
             .set_file_name("Xiox report.txt")
             .add_filter("Text", &["txt"])
             .blocking_save_file();
+        desktop::give_back_focus(window.as_ref());
         match picked.and_then(|path| path.into_path().ok()) {
             Some(path) => {
                 let (saved, ok) = files::write_report(&path, &text);

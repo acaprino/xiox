@@ -113,6 +113,7 @@ function render(): void {
     const lost = document.activeElement === null || document.activeElement === document.body;
     if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .grid')?.focus();
   }
+  syncChrome();
 }
 
 async function open(section: SectionId): Promise<void> {
@@ -356,15 +357,55 @@ async function start(): Promise<void> {
       // News about another section ends an error that was about this one.
       if (error !== null && error.section !== view.section) error = null;
       if (acceptView(ui, view) && view.section === ui.section) render();
+      syncChrome();
     });
     await open('cleanup');
   } catch (failure) {
     // No window state to draw: say what happened instead of leaving a blank window.
     renderFailure(errorText(failure));
   }
-  // The window opens hidden: once this frame is on screen (two animation frames: the second starts after the first
-  // was painted), Rust shows it. A failure to ask is not shown: Rust shows the window anyway after a few seconds.
-  requestAnimationFrame(() => requestAnimationFrame(() => { void api.ready().catch(() => undefined); }));
+  focusList();
+  signalReady();
+}
+
+/** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */
+function focusList(): void {
+  const dialog = document.querySelector<HTMLElement>('#modal:not([hidden]) [role=dialog]');
+  (dialog ?? gridNode() ?? document.getElementById('rows'))?.focus();
+}
+
+// A native dialog (folder, save, the recovery message) closing gives the window back, but WebView2 does not always put the
+// focus back in the page: with nothing focused the list takes it, so the keys work without a click.
+window.addEventListener('focus', () => {
+  if (document.activeElement === null || document.activeElement === document.body) focusList();
+});
+
+/**
+ * The window opens hidden and Rust shows it on this signal. The page is already in the DOM: once its first frame is on
+ * screen (two animation frames: the second starts after the first was painted) the window can be seen. A hidden window may
+ * run no animation frame at all, so a timer races them and the first to fire signals, once. A failure to ask is not shown:
+ * Rust shows the window anyway after a few seconds.
+ */
+function signalReady(): void {
+  let sent = false;
+  const send = (): void => {
+    if (sent) return;
+    sent = true;
+    void api.ready().catch(() => undefined);
+  };
+  requestAnimationFrame(() => requestAnimationFrame(send));
+  setTimeout(send, 0);
+}
+
+/** What the window says outside the page (title, taskbar): the last thing sent, so that only a change is sent. */
+let chromeSent = '';
+function syncChrome(): void {
+  const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
+  const next = { section: ui.section, job: job === null ? null : Math.round(job.fraction * 100) };
+  const key = JSON.stringify(next);
+  if (key === chromeSent) return;
+  chromeSent = key;
+  void api.chrome(next.section, next.job).catch(() => undefined);
 }
 
 void start();

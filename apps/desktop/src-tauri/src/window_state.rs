@@ -5,9 +5,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// The smallest window the app is designed for (the same as `minWidth` / `minHeight` in `tauri.conf.json`).
-const MIN_WIDTH: u32 = 1000;
-const MIN_HEIGHT: u32 = 640;
+/// The smallest window the app is designed for (the same as `minWidth` / `minHeight` in `tauri.conf.json`): it fits a
+/// 1366x768 laptop at 125 % (1093 x 582 logical once the taskbar is taken out).
+const MIN_WIDTH: u32 = 960;
+const MIN_HEIGHT: u32 = 560;
 /// How much of the window's top-left corner must lie on a monitor for the title bar to stay reachable.
 const GRAB: i64 = 64;
 
@@ -81,6 +82,28 @@ pub fn fits(g: &Geometry, monitors: &[(i32, i32, u32, u32)]) -> bool {
     })
 }
 
+/// A rectangle `(x, y, width, height)` in physical pixels: a monitor's work area (the screen without the taskbar).
+pub type Rect = (i32, i32, u32, u32);
+
+/// The geometry brought inside the work area that holds its top-left corner (the first one when none does):
+/// never larger than the area, and moved so that the whole window, its frame included, is in it. `frame` is the
+/// window's outer size minus its inner size (title bar and borders), because the geometry holds the inner size.
+/// Without any work area the geometry is returned as it is.
+pub fn clamp(g: Geometry, frame: (u32, u32), areas: &[Rect]) -> Geometry {
+    let holds = |&(ax, ay, aw, ah): &Rect| g.x >= ax && g.y >= ay && i64::from(g.x) < i64::from(ax) + i64::from(aw) && i64::from(g.y) < i64::from(ay) + i64::from(ah);
+    let Some(&(ax, ay, aw, ah)) = areas.iter().find(|a| holds(a)).or(areas.first()) else {
+        return g;
+    };
+    let width = g.width.min(aw.saturating_sub(frame.0));
+    let height = g.height.min(ah.saturating_sub(frame.1));
+    let (outer_w, outer_h) = (i64::from(width) + i64::from(frame.0), i64::from(height) + i64::from(frame.1));
+    let place = |at: i32, start: i32, room: u32, outer: i64| {
+        let far = i64::from(start) + i64::from(room) - outer;
+        i32::try_from(i64::from(at).clamp(i64::from(start), far.max(i64::from(start)))).unwrap_or(start)
+    };
+    Geometry { x: place(g.x, ax, aw, outer_w), y: place(g.y, ay, ah, outer_h), width, height, ..g }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,9 +169,47 @@ mod tests {
 
     #[test]
     fn a_window_below_the_minimum_is_not_restored() {
-        assert!(fits(&Geometry { width: 1000, height: 640, ..BIG }, &[SCREEN]));
-        assert!(!fits(&Geometry { width: 999, ..BIG }, &[SCREEN]));
-        assert!(!fits(&Geometry { height: 639, ..BIG }, &[SCREEN]));
+        assert!(fits(&Geometry { width: 960, height: 560, ..BIG }, &[SCREEN]));
+        assert!(!fits(&Geometry { width: 959, ..BIG }, &[SCREEN]));
+        assert!(!fits(&Geometry { height: 559, ..BIG }, &[SCREEN]));
         assert!(!fits(&Geometry { width: 0, height: 0, ..BIG }, &[SCREEN]));
+    }
+
+    /// The title bar and borders of a window at 100 %: 16 x 39 physical pixels around the page.
+    const FRAME: (u32, u32) = (16, 39);
+    /// A 1366x768 laptop at 100 %: the taskbar takes 40 pixels.
+    const LAPTOP: Rect = (0, 0, 1366, 728);
+
+    #[test]
+    fn a_window_taller_than_the_work_area_is_shrunk_to_fit_with_its_frame() {
+        let g = clamp(BIG, FRAME, &[LAPTOP]);
+        assert_eq!((g.width, g.height), (1280, 728 - 39), "the page plus the title bar is the work area");
+        assert_eq!((g.x, g.y), (70, 0), "moved up and left until the whole window is in");
+        assert_eq!(g.maximized, BIG.maximized);
+    }
+
+    #[test]
+    fn a_window_that_fits_is_left_alone() {
+        let g = Geometry { x: 10, y: 10, width: 1000, height: 600, maximized: true };
+        assert_eq!(clamp(g, FRAME, &[SCREEN]), g);
+        // Without a work area there is nothing to clamp to.
+        assert_eq!(clamp(BIG, FRAME, &[]), BIG);
+    }
+
+    #[test]
+    fn a_window_wider_than_the_area_is_cut_to_it_and_clamped_on_the_monitor_it_is_on() {
+        // On the second monitor (1280x1024 at x = 1920) the 1400-wide window is cut to the area and sits at its left edge.
+        let wide = Geometry { x: 2000, y: 100, width: 1400, height: 900, maximized: false };
+        let g = clamp(wide, FRAME, &[SCREEN, SECOND]);
+        assert_eq!((g.x, g.width), (1920, 1280 - 16));
+        assert_eq!((g.y, g.height), (85, 900), "the height fits; the window moves up just enough to have its frame in");
+        // A corner on no monitor: the first work area decides.
+        assert_eq!(clamp(Geometry { x: 9000, ..wide }, FRAME, &[SCREEN]).x, 1920 - 1400 - 16);
+    }
+
+    #[test]
+    fn the_minimum_fits_a_1366x768_laptop_at_125_percent() {
+        // 1366x768 at 125 %: 1093 x 614 logical, 1093 x 582 below the 40 px taskbar.
+        assert!(MIN_WIDTH <= 1093 && MIN_HEIGHT <= 582, "{MIN_WIDTH}x{MIN_HEIGHT}");
     }
 }

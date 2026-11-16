@@ -41,6 +41,8 @@ export const api = {
   saveReport: (s: SectionId) => invoke<SectionView>('save_report', { section: s }),
   /** The first frame is drawn: Rust shows the window, which opens hidden so that the page is the first thing seen. */
   ready: () => invoke<void>('window_ready'),
+  /** The open section (its name goes in the window title) and the running job's percent, if any (the taskbar button shows it). */
+  chrome: (section: SectionId, job: number | null) => invoke<void>('window_chrome', { section, job }),
 };
 
 /** Views pushed by the core (`xiox:view` in Tauri, the mock's emitter outside). */
