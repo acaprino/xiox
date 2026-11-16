@@ -17,7 +17,7 @@
         "width": 1280,
         "height": 800,
         "minWidth": 960,
-        "minHeight": 560,
+        "minHeight": 540,
         "theme": "Dark",
         "backgroundColor": "#0b0416",
         "visible": false,

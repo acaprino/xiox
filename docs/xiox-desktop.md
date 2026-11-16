@@ -149,7 +149,7 @@ selection is what the job is working on.
 and the taskbar tell the sections apart. While a job runs the taskbar button shows its progress, and
 when it ends while Xiox is behind other windows the button flashes once. The window never opens
 larger than the work area of the screen it opens on (the saved size included), and the smallest size
-(960 x 560) fits a 1366 x 768 laptop at 125 % scaling. A folder dragged onto the window is offered to
+(960 x 540, title bar included) fits the work area of a 1366 x 768 laptop at 125 % scaling. A folder dragged onto the window is offered to
 Developers: a message asks `Add "<folder>" to the folders Developers analyzes?` and nothing is added
 until you answer `Add`; anything that is not a folder only gets a message saying so.
 
