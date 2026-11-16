@@ -3,6 +3,7 @@
 
 mod args;
 mod budget;
+mod call;
 mod command;
 mod dialect;
 mod extract;
@@ -15,6 +16,7 @@ mod script;
 
 pub use args::{Posix, PsParams, posix, powershell};
 pub use budget::Budget;
+pub use call::{shell_command, ShellCommand};
 pub use command::{Arg, Node, Simple, parse};
 pub use dialect::Shell;
 pub use extract::extract;
