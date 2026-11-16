@@ -2,6 +2,7 @@
 //! analysis reads. The logic that fills the shape lives in the modules of the later stages.
 
 mod conflicts;
+mod danger;
 mod folders;
 mod mukade;
 mod queue;
@@ -19,6 +20,7 @@ use std::time::Instant;
 use xiox_model::{path_key, Agent, Loaded};
 use xiox_mukade::{strip_verbatim, Descriptor, ToolCall};
 
+pub(crate) use danger::{assess, RiskContext};
 pub(crate) use folders::Folders;
 pub(crate) use mukade::MukadeCalls;
 pub(crate) use scratch::scratch_items;
@@ -266,9 +268,10 @@ impl<'a> History<'a> {
         self.unchecked.extend(near.iter().map(|&c| candidates[c].0.clone()));
     }
 
-    /// The candidates a session of another project may have written in unseen.
-    pub fn unchecked(&self) -> &HashSet<String> {
-        &self.unchecked
+    /// What the risks of the items read from this history: whether it was read in part, and
+    /// the candidates a session of another project may have written in unseen.
+    pub fn risk_context(&self, now_ms: i64) -> RiskContext<'_> {
+        RiskContext { partial: self.report.partial(), unchecked: &self.unchecked, now_ms }
     }
 
     /// The first cap the reading has reached, with the related sessions it leaves.
@@ -347,7 +350,8 @@ impl<'a> History<'a> {
 
     /// The provenance of the items the sessions can speak about.
     pub fn attach(&self, items: &mut [Item]) {
-        for item in items.iter_mut().filter(|i| matches!(i.category, Category::Copies | Category::Named | Category::Scratch)) {
+        let spoken = |c| matches!(c, Category::Copies | Category::Named | Category::Scratch | Category::Worktrees);
+        for item in items.iter_mut().filter(|i| spoken(i.category)) {
             item.provenance = self.folders.provenance_within(&item.key);
         }
     }

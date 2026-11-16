@@ -1,5 +1,6 @@
 //! Risks, activity and the order of the scratch candidates.
 
+use std::collections::HashSet;
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -8,6 +9,7 @@ use xiox_model::{Agent, Loaded, SessionRecord};
 
 use super::scratch::{Do::*, Site};
 use crate::history::risk::{activity, risks, RECENT_MS};
+use crate::history::{assess, RiskContext};
 use crate::history::{Provenance, SessionEvidence};
 use crate::owned::sort_items;
 use crate::tests::fixtures::{env, tmp};
@@ -67,7 +69,7 @@ fn risks_table() {
         }
         set_mtime(&dir, mtime);
 
-        let found = risks(&dir, &provenance(strength, Some(last), gaps), partial, NOW);
+        let found = risks(&dir, Some(&provenance(strength, Some(last), gaps)), partial, NOW);
 
         assert_eq!(found, expected, "{name}");
     }
@@ -167,7 +169,9 @@ fn scratch_items_carry_their_risks() {
     let site = Site::new();
     fs::create_dir_all(site.at("agent-runs/run1")).unwrap();
 
-    let (items, _) = site.within_base(&[Mkdir("agent-runs/run1"), Write("agent-runs/run1/a.txt")]);
+    let (mut items, _) = site.within_base(&[Mkdir("agent-runs/run1"), Write("agent-runs/run1/a.txt")]);
+    let unchecked = HashSet::new();
+    assess(&mut items, &RiskContext { partial: false, unchecked: &unchecked, now_ms: xiox_app::now_ms() });
 
     // A folder made now, outside any repository: the folder date is only recency.
     assert_eq!(items[0].risks, [Risk::NoGit, Risk::RecentActivity]);

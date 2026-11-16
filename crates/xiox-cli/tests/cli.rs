@@ -291,9 +291,20 @@ fn clean_include_removes_a_name_matched_folder() {
     assert!(stdout.contains("matched by name only"), "an --include is listed prominently: {stdout}");
 }
 
+/// Moves the modified date of `dir` three days back: the folder is no longer recent activity.
+fn age(dir: &Path) {
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut open, 0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS
+    let three_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 60 * 60);
+    open.open(dir).unwrap().set_times(std::fs::FileTimes::new().set_modified(three_days_ago)).unwrap();
+}
+
 #[test]
 fn clean_worktrees_removes_the_clean_one_and_says_git_removes_them_permanently() {
     let (_t, project, wt) = project_with_worktree();
+    age(&wt);
     let out = run_clean(&project, &["--worktrees", "--yes"]);
     let stdout = text(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "stderr: {}\nstdout: {stdout}", text(&out.stderr));

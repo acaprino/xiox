@@ -121,3 +121,13 @@ fn unread_writers_leave_the_folder_unchecked() {
     assert!(!item.blocked.contains(&Block::OtherProjectWrites));
     assert_eq!(scan.history.as_ref().unwrap().conflicts, ConflictReport { read: 0, unread: 1 });
 }
+
+#[test]
+fn unchecked_conflicts_are_partial_coverage() {
+    let w = World::new();
+    let shared = w.at("shared");
+    let others = [("B", shared.clone(), vec![write_to(&w.at("shared/run/b.txt"), &shared)])];
+    let partial = |budget| run_item(&w.analyze(&others, budget).0, &w).risks.contains(&Risk::PartialCoverage);
+    assert!(partial(Budget { max_sessions: 1, ..BUDGET }), "a writer left unread");
+    assert!(!partial(BUDGET), "every writer read");
+}

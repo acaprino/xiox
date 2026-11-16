@@ -10,7 +10,7 @@ use xiox_cleaner::guard::in_system_area;
 use xiox_scanner::{is_broad_dir, is_cloud_dir};
 
 use super::folders::{Folders, Standing};
-use super::risk::{activity, risks};
+use super::risk::activity;
 use super::scope::{has_short_component, local_dir, unlinked_chain, FixedDrives, Scope};
 use super::{Exclusion, HistoryReport, Limit};
 use crate::owned::key_within;
@@ -60,7 +60,6 @@ pub(crate) fn scratch_items(
         candidates.truncate(MAX_SCRATCH);
         candidates.sort_by_key(|(path, ..)| path_key(path));
     }
-    let partial = report.partial();
     candidates
         .into_iter()
         .map(|(path, standing, provenance, target)| {
@@ -69,14 +68,13 @@ pub(crate) fn scratch_items(
                 from_script: standing.from_script,
                 activity: activity(&path, env),
             };
-            let risks = risks(&path, &provenance, partial, env.now_ms);
             let mut item = item_for(opts, env, &path, Category::Scratch, why);
             if let Target::Subtree { repo } = &target {
                 let mut blocked = tracked_blocks(repo, &path);
                 blocked.extend(item.blocked.drain(..).filter(|b| !blocked.contains(b)).collect::<Vec<_>>());
                 item.blocked = blocked;
             }
-            Item { risks, target, provenance: Some(provenance), ..item }
+            Item { target, provenance: Some(provenance), ..item }
         })
         .collect()
 }

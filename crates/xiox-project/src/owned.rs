@@ -11,6 +11,7 @@ use xiox_model::{
     SessionSource, normalize_path, path_key,
 };
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -54,6 +55,12 @@ pub(crate) fn analyze_with(
         h.attach(&mut items);
         h.conflicts(&mut items);
     }
+    let none = HashSet::new();
+    let risk_context = match &history {
+        Some(h) => h.risk_context(env.now_ms),
+        None => crate::history::RiskContext { partial: false, unchecked: &none, now_ms: env.now_ms },
+    };
+    crate::history::assess(&mut items, &risk_context);
     sort_items(&mut items);
 
     let branches = if project.is_repo {

@@ -1,6 +1,7 @@
 pub mod fake;
 mod analyze;
 mod conflicts;
+mod danger;
 mod folders;
 mod json;
 mod queue;

@@ -348,7 +348,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         sessions: &sessions,
         archived: &[],
         search_roots: Some(Vec::new()),
-        now_ms: xiox_app::now_ms(),
+        now_ms: xiox_app::now_ms() + TWO_DAYS_MS,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     };
@@ -364,7 +364,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         sessions: &sessions,
         archived: &[],
         search_roots: Some(Vec::new()),
-        now_ms: xiox_app::now_ms(),
+        now_ms: xiox_app::now_ms() + TWO_DAYS_MS,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     };

@@ -177,7 +177,8 @@ pub struct Item {
     pub blocked: Vec<Block>,
     pub why: Why,
     pub target: Target,
-    /// The session evidence behind a `scratch` item; `None` for every other category.
+    /// The session evidence behind a `scratch` item, and behind the `named`, `copies` and
+    /// `worktrees` folders the sessions speak about; `None` otherwise.
     pub provenance: Option<Provenance>,
 }
 
