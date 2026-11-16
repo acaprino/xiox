@@ -55,6 +55,7 @@ pub(crate) fn log_items(project: &Project, build_dirs: &[PathBuf], notes: &mut V
                     blocked: Vec::new(),
                     why: Why::LogFile { ignored },
                     target: Target::File,
+                    provenance: None,
                 });
             }
         }

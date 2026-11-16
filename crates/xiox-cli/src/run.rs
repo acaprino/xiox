@@ -86,7 +86,7 @@ fn clean_project(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run:
 /// Analyze the project (the current folder by default), telling the person on `err`.
 fn analyze_path(project: Option<PathBuf>, no_drives: bool, err: &mut dyn Write) -> Result<ProjectScan, i32> {
     let path = project.unwrap_or_else(|| PathBuf::from("."));
-    let opts = Options { drives: !no_drives, measure: true, admin: xiox_project::is_elevated() };
+    let opts = Options { drives: !no_drives, measure: true, admin: xiox_project::is_elevated(), history: true };
     let _ = writeln!(err, "Analyzing {} ...", path.display());
     scan_project(&path, &opts).map_err(|e| {
         let _ = writeln!(err, "error: {e}");

@@ -27,6 +27,7 @@ pub fn scan(items: Vec<Item>) -> ProjectScan {
         search: SearchMode::BoundedWalk,
         scanned_at_ms: 0,
         elapsed_ms: 0,
+        history: None,
     }
 }
 
@@ -47,7 +48,7 @@ pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, bl
         Category::Logs => (Target::File, Why::LogFile { ignored: false }),
         _ => (Target::Dir { kind: ArtifactKind::Catalog }, Why::CatalogFolder { label_en: "Rust build".into() }),
     };
-    Item { key: xiox_model::path_key(&p), category, path: Some(p), bytes, level, blocked, why, target }
+    Item { key: xiox_model::path_key(&p), category, path: Some(p), bytes, level, blocked, why, target, provenance: None }
 }
 
 /// A recommended, unblocked build folder two levels deep.

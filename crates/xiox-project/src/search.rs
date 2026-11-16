@@ -392,6 +392,7 @@ pub(crate) fn search(project: &Project, opts: &Options, env: &Env) -> Found {
                 why,
                 target: Target::Dir { kind: ArtifactKind::ProjectFolder },
                 path: Some(c),
+                provenance: None,
             })
         })
         .collect();

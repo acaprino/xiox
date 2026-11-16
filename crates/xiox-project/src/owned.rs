@@ -57,6 +57,7 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         search: found.mode,
         scanned_at_ms: env.now_ms,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        history: None,
     })
 }
 
@@ -196,6 +197,7 @@ pub(crate) fn builds(project: &Project, reports: &[ProjectReport], opts: &Option
                 blocked: blocked.clone(),
                 why: Why::CatalogFolder { label_en: label_en(a) },
                 target: Target::Dir { kind: a.kind },
+                provenance: None,
             });
         }
     }
@@ -251,6 +253,7 @@ fn worktrees(
             why: Why::LinkedWorktree { branch: e.branch.clone(), head: e.head.clone() },
             target: Target::Worktree { repo: project.root.clone() },
             path: Some(path),
+            provenance: None,
         });
     }
     out
@@ -275,6 +278,7 @@ fn sessions(project: &Project, entries: &[WorktreeEntry], env: &Env) -> Vec<Item
             blocked: if s.blocked.is_some() { vec![Block::SessionLocked] } else { Vec::new() },
             why: Why::ArchivedSession { agent: s.agent, title: s.title.clone() },
             target: Target::Session { agent: s.agent, id: s.id.clone() },
+            provenance: None,
         })
         .collect()
 }

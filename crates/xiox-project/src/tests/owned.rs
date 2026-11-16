@@ -114,6 +114,7 @@ fn rust_target_and_node_modules_are_builds_recommended_even_if_the_project_was_u
         search_roots: Some(Vec::new()),
         now_ms: now,
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -231,6 +232,7 @@ fn archived_session_started_in_a_worktree_belongs_to_the_project_and_one_elsewhe
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -261,6 +263,7 @@ fn light_mode_measures_nothing() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let opts = Options { measure: false, ..Options::default() };
@@ -291,6 +294,7 @@ fn items_are_ordered_by_category_then_size() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -346,6 +350,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -361,6 +366,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
     let w = item(&scan, &wt);
@@ -380,6 +386,7 @@ fn build_of_a_project_with_a_live_session_is_blocked_live_session_and_keeps_its_
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -465,6 +472,7 @@ fn build_inside_a_worktree_nested_under_the_root_is_listed_once_with_the_live_se
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
 
     let scan = analyze_with(&root, &Options::default(), &env).unwrap();
@@ -486,7 +494,7 @@ fn analyze_project_without_sessions_searches_only_the_given_roots_and_lists_no_s
     let other = base.join("other");
     let copy = base.join("other").join("proj-scratch");
     fs::create_dir_all(&copy).unwrap();
-    let opts = Options { drives: true, measure: false, admin: false };
+    let opts = Options { drives: true, measure: false, admin: false, history: false };
     let scan = analyze_project_without_sessions(&root, &opts, &[other]).unwrap();
     assert_eq!(item(&scan, &target).category, Category::Builds);
     assert!(of(&scan, Category::Sessions).is_empty());
@@ -617,6 +625,7 @@ fn the_remote_credentials_never_reach_the_project() {
         search_roots: Some(vec![base.join("other")]),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     };
     let scan = analyze_with(&root, &Options::default(), &e).unwrap();
     assert!(scan.items.iter().any(|i| i.category == Category::Copies), "{:?}", scan.items);
@@ -632,6 +641,7 @@ fn m4_a_failed_session_read_is_a_note_and_a_clean_read_is_not() {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health,
+        history: crate::history::HistoryInput::none(),
     };
     let ok = analyze_with(&root, &Options::default(), &mk(SessionHealth::default())).unwrap();
     assert!(!ok.notes.contains(&Note::SessionsNotRead), "{:?}", ok.notes);

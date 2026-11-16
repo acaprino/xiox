@@ -62,16 +62,18 @@ fn title_of(c: Category) -> &'static str {
         Category::Worktrees => "WORKTREES",
         Category::Copies => "COPIES",
         Category::Named => "NAMED",
+        Category::Scratch => "SCRATCH",
         Category::Logs => "LOGS",
         Category::Sessions => "SESSIONS",
     }
 }
 
-const ORDER: [Category; 6] = [
+const ORDER: [Category; 7] = [
     Category::Builds,
     Category::Worktrees,
     Category::Copies,
     Category::Named,
+    Category::Scratch,
     Category::Logs,
     Category::Sessions,
 ];
@@ -113,6 +115,8 @@ fn why_text(why: &Why) -> String {
             format!("copy of the repository: {identity}, {work}")
         }
         Why::NameOnly => "matched by name only".to_string(),
+        // The wording is the guide's; this placeholder is replaced when the listing shows risks.
+        Why::SessionFolder { .. } => "found in session history".to_string(),
         Why::LogFile { ignored: true } => "log file, ignored by git".to_string(),
         Why::LogFile { ignored: false } => "log file".to_string(),
         Why::ArchivedSession { title, .. } => match title.as_deref().map(one_line).filter(|t| !t.is_empty()) {
@@ -184,6 +188,8 @@ sessions may be missing; 'clean' leaves worktrees, copies and folders alone unti
             "git could not list the files of the project or of a worktree: its log files are not in the listing"
                 .to_string()
         }
+        Note::HistoryPartial => "the session history was read only in part: the scratch listing may be incomplete".to_string(),
+        Note::HistoryNotRead => "the session history could not be read: nothing is listed as scratch".to_string(),
         Note::ContainerRoot => "this folder is a drive root, your user profile, or holds several projects: \
 'xiox clean' refuses --builds, --worktrees, --logs and --sessions here (run it on one project, or name a path with --include)"
             .to_string(),

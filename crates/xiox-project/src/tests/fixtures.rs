@@ -119,6 +119,7 @@ pub fn env() -> Env<'static> {
         search_roots: Some(Vec::new()),
         now_ms: xiox_app::now_ms(),
         health: Default::default(),
+        history: crate::history::HistoryInput::none(),
     }
 }
 

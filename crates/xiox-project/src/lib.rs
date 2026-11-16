@@ -11,6 +11,7 @@
 mod clean;
 mod container;
 mod hint;
+mod history;
 mod logs;
 mod nested;
 mod owned;
@@ -27,6 +28,10 @@ pub use clean::{
 };
 pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};
+pub use history::{
+    Activity, CallOutcome, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure, Risk,
+    SessionEvidence, SourceReport,
+};
 pub use owned::key_within;
 pub use provenance::{
     Candidate, Completeness, Coverage, Env as PathEnv, EvidenceRef, Extraction, Flags, FolderEvidence, Ledger, OpKind,
@@ -51,6 +56,8 @@ pub enum Category {
     Worktrees,
     Copies,
     Named,
+    /// A folder the session history shows an agent made: listed for review only.
+    Scratch,
     Logs,
     Sessions,
 }
@@ -95,6 +102,7 @@ impl fmt::Display for Category {
             Category::Worktrees => "worktrees",
             Category::Copies => "copies",
             Category::Named => "named",
+            Category::Scratch => "scratch",
             Category::Logs => "logs",
             Category::Sessions => "sessions",
         })
@@ -118,6 +126,8 @@ pub enum Why {
     NameOnly,
     LogFile { ignored: bool },
     ArchivedSession { agent: Agent, title: Option<String> },
+    /// A folder that agent sessions made or used, found in the session history.
+    SessionFolder { strength: Strength, from_script: bool, risks: Vec<Risk>, activity: Activity },
 }
 
 /// What removing the item means.
@@ -146,6 +156,8 @@ pub struct Item {
     pub blocked: Vec<Block>,
     pub why: Why,
     pub target: Target,
+    /// The session evidence behind a `scratch` item; `None` for every other category.
+    pub provenance: Option<Provenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -191,6 +203,10 @@ pub enum Note {
     /// The folder is a drive root, the user profile (or a folder above it), or holds several
     /// projects: the category flags of `clean` refuse it.
     ContainerRoot,
+    /// The session history was read only in part: a cap was hit or a store could not be read.
+    HistoryPartial,
+    /// The session history could not be read at all, so `scratch` is empty.
+    HistoryNotRead,
 }
 
 /// A local branch that looks stale: listed, never deleted.
@@ -212,6 +228,8 @@ pub struct ProjectScan {
     pub items: Vec<Item>,
     pub branches: Vec<StaleBranch>,
     pub notes: Vec<Note>,
+    /// What the session history gave; `None` when it was not asked for or had no source.
+    pub history: Option<HistoryReport>,
     pub search: SearchMode,
     pub scanned_at_ms: i64,
     pub elapsed_ms: u64,
@@ -225,11 +243,13 @@ pub struct Options {
     pub measure: bool,
     /// The process is elevated (the MFT index may be read).
     pub admin: bool,
+    /// Read the session history for folders the project does not list otherwise.
+    pub history: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { drives: true, measure: true, admin: false }
+        Self { drives: true, measure: true, admin: false, history: true }
     }
 }
 
@@ -285,6 +305,7 @@ pub(crate) struct Env<'a> {
     /// fixed drive and the user's home.
     pub search_roots: Option<Vec<PathBuf>>,
     pub now_ms: i64,
+    pub history: history::HistoryInput<'a>,
 }
 
 /// Analyze the project that holds `path` with the real sessions of this PC. Writes nothing
@@ -300,6 +321,7 @@ pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error
         health,
         search_roots: None,
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput::none(),
     };
     analyze_with(path, opts, &env)
 }
@@ -318,6 +340,7 @@ pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf])
         health,
         search_roots: Some(search_roots.to_vec()),
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput::none(),
     };
     analyze_with(path, opts, &env)
 }
@@ -335,6 +358,7 @@ pub fn analyze_project_without_sessions(
         health: SessionHealth::default(),
         search_roots: Some(search_roots.to_vec()),
         now_ms: xiox_app::now_ms(),
+        history: history::HistoryInput::none(),
     };
     analyze_with(path, opts, &env)
 }

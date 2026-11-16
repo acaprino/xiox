@@ -74,6 +74,7 @@ pub fn observe_options(cmd: &ObserveArgs) -> Options {
         drives: !cmd.no_drives,
         measure: false,
         admin: false,
+        history: false,
     }
 }
 
@@ -712,6 +713,7 @@ pub(crate) mod fakes {
             search: SearchMode::BoundedWalk,
             scanned_at_ms: 0,
             elapsed_ms: 0,
+            history: None,
         }
     }
 
@@ -730,6 +732,7 @@ pub(crate) mod fakes {
             target: Target::Dir {
                 kind: ArtifactKind::Catalog,
             },
+            provenance: None,
         }
     }
 
@@ -751,6 +754,7 @@ pub(crate) mod fakes {
                 agent: Agent::Claude,
                 id,
             },
+            provenance: None,
         }
     }
 
@@ -770,6 +774,7 @@ pub(crate) mod fakes {
             target: Target::Worktree {
                 repo: PathBuf::from(r"D:\Projects\mukade"),
             },
+            provenance: None,
         }
     }
 

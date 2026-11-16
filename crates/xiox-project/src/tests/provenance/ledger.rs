@@ -303,5 +303,5 @@ fn ledger_types_serialize_for_the_probe() {
     assert_eq!(reference["source"]["structured"]["canonical"], "write");
     assert_eq!(reference["session"]["store"], "store");
     let coverage = serde_json::to_value(ledger.coverage()).unwrap();
-    assert_eq!(coverage["shell_calls"], 0);
+    assert_eq!(coverage["shellCalls"], 0);
 }

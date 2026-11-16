@@ -35,6 +35,7 @@ pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, bl
         blocked,
         why,
         target,
+        provenance: None,
     }
 }
 
@@ -48,6 +49,7 @@ pub fn scan(items: Vec<Item>) -> ProjectScan {
         search: SearchMode::BoundedWalk,
         scanned_at_ms: 1_700_000_000_000,
         elapsed_ms: 1234,
+        history: None,
     }
 }
 
@@ -110,6 +112,7 @@ pub fn session() -> Item {
         blocked: vec![],
         why: Why::ArchivedSession { agent: Agent::Claude, title: Some("refactor the parser".into()) },
         target: Target::Session { agent: Agent::Claude, id: "abc-123".into() },
+        provenance: None,
     }
 }
 
