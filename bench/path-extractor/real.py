@@ -8,7 +8,7 @@
         labels.json: {event id: [[op, resolved dst], ...]}, written by hand from the sample
     python real.py parity --calls calls.jsonl --rust <dir> [--home <dir>]
         the Rust probe's output (crates/xiox-project/examples/shell_probe.rs) against this prototype,
-        field by field; declared divergences D2-D13 are counted apart. --self-test needs neither.
+        field by field; declared divergences D2-D14 are counted apart. --self-test needs neither.
 
 Strata: det-found (the deterministic extractor gives a candidate), det-unsure (it flags a loop or
 script, or a path it cannot resolve), det-empty (neither). Real commands stay in the scratch files."""
@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench import key, run_model, score, table  # noqa: E402
-from extract import extract, resolve  # noqa: E402
+from extract import INTERPRETERS, LOOPS, extract, resolve  # noqa: E402
 
 SHELLS = {"bash": "bash", "power_shell": "powershell", "powershell": "powershell", "shell": None,
           "exec_command": None, "terminal": "bash", "cmd": "cmd"}
@@ -141,7 +141,7 @@ HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 BUN_INIT = re.compile(r"\bbun\s+init\b")
 NESTED_SHELL = re.compile(r"\b(?:ba|z|da)?sh\b[^\n]*\s-\w*c\b|\b(?:pwsh|powershell)(?:\.exe)?\b[^\n]*-Command", re.I)
 FILE_WRITES = re.compile(r"\bcat\s*>>?\s*(\S+)|\btee\s+(?:-a\s+)?(\S+)|<<[^\n]*?>\s*(\S+)")
-CLASS_ORDER = ("D2", "D3", "D4", "D5/D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13")
+CLASS_ORDER = ("D2", "D3", "D4", "D5/D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14")
 # `cd -`, `cd -P dir`, `cd -- dir`, PowerShell `cd -`: the prototype takes the option word as the directory.
 D10_CD = re.compile(r"(?i)(?:^|[;&|(\n])\s*(?:cd|chdir|pushd|push-location|set-location|sl)\s+(?:-[LPe@]*|--)(?=\s|$|[;&|)])")
 INVENTED_DIR = re.compile(r"\\-[^\\]*(?:\\|$)")   # a path component that is an option word
@@ -160,16 +160,64 @@ EXPLAINS = {"D2": ((MORE,), {"candidates", "flags", "unresolved"}),    # Python 
             "D10": ((FEWER, SAME), {"candidates", "unresolved"}),      # the option word was a directory
             "D11": ((FEWER, MORE, SAME), {"candidates", "flags", "unresolved"}),  # a brace expression was one literal path
             "D12": ((FEWER,), {"candidates", "unresolved"}),           # a path Windows cannot hold was a candidate
-            "D13": ((FEWER, MORE, SAME), {"candidates", "unresolved"})}      # here-string text was words and paths
+            "D13": ((FEWER, MORE, SAME), {"candidates", "flags", "unresolved"}),  # here-string text was words and paths
+            "D14": ((FEWER,), {"flags"})}                              # a loop word in text made the prototype flag a loop
 # The directions a class explains in the other fields and in the folders, when they are not those above.
 FIELD_WAYS = {("D10", "unresolved"): (MORE,), ("D11", "unresolved"): (MORE, FEWER), ("D11", "flags"): (FEWER,),
-              ("D12", "unresolved"): (MORE,), ("D13", "unresolved"): (FEWER,)}
-FOLDER_WAYS = {"D10": (FEWER, MORE), "D11": (FEWER, MORE), "D12": (FEWER,), "D13": (FEWER,)}
+              ("D12", "unresolved"): (MORE,), ("D13", "unresolved"): (FEWER,), ("D13", "flags"): (FEWER,)}
+FOLDER_WAYS = {"D10": (FEWER, MORE), "D11": (FEWER, MORE), "D12": (FEWER,), "D13": (FEWER, MORE), "D14": ()}
 # `for x in a b{1,2}`: the items hold a brace expression, which Rust expands and the prototype leaves unresolved.
 FOR_BRACE = re.compile(r"\bfor\s+\w+\s+in\s+([^;\n]*\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}[^;\n]*)")
 # `@'` or `@"` ending its line, at the start of a word: a PowerShell here-string.
 HERE_OPEN = re.compile(r"(?:^|(?<=[\s;|&(,{}]))@(['\"])\r?\n")
 IMPOSSIBLE = re.compile(r'[\x00-\x1f\x7f"<>|]')   # characters a Windows path cannot hold, besides a colon past the drive
+
+
+CONTRACTION = re.compile(r"(?<=[A-Za-z])'(?=[a-z])")
+QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+LOOP_COMMAND = re.compile(r"(?:^|[;&|({\n]|\bdo\b|\bthen\b)\s*(?:for|foreach|foreach-object|%)(?![\w-])", re.I)
+WORD_BREAKS = re.compile(r"[\s;|&(){}\"'`]+")
+
+
+def words_of(text):
+    """D13, D14: the lowercase words of a text, split at spaces, separators, brackets and quotes."""
+    return {w.lower() for w in WORD_BREAKS.split(text) if w}
+
+
+def code_outside_text(text):
+    """D14: the text without heredoc bodies, here-strings and quoted strings, which are data, not commands."""
+    for m in reversed(list(HEREDOC.finditer(text))):
+        start = text.find("\n", m.end()) + 1
+        end = re.compile(rf"(?m)^[ \t]*{re.escape(m[2])}[ \t\r]*$").search(text, start)
+        text = text[:start] + (text[end.end():] if end else "") if start else text
+    for body in here_strings(text):
+        text = text.replace(body, "")
+    return QUOTED.sub(" ", text)
+
+
+def quotes_slip(text):
+    """D14: whether the quotes of a text cannot pair as the prototype pairs them: an odd count of one
+    kind, or an apostrophe between two letters (`don't`), which closes a string early."""
+    return text.count("'") % 2 == 1 or text.count('"') % 2 == 1 or bool(CONTRACTION.search(text))
+
+
+def loop_word_in_text(text):
+    """D14: whether a loop word (`for`, `foreach`, `foreach-object`, `%`) stands in the text without being
+    a loop command: it sits in data (a quoted string, a heredoc) or in text whose quotes slip. The
+    prototype flags a loop for such a word as the first word of a command, and its scanner reads text
+    that is not a command as commands once a quote closes early."""
+    outside = code_outside_text(text)
+    return bool(words_of(text) & LOOPS) and (not LOOP_COMMAND.search(outside) or quotes_slip(text))
+
+
+def brace_candidates(cands):
+    """D11: the candidates that hold a brace expression, in their source or destination."""
+    return [c for c in cands if BRACE_EXPR.search(c[2]) or BRACE_EXPR.search(c[1] or "")]
+
+
+def brace_expansion(c):
+    """D11: the candidates a brace candidate expands to."""
+    return {(c[0], s, d) for s in brace_expand(c[1]) for d in brace_expand(c[2])}
 
 
 def impossible(path):
@@ -285,6 +333,7 @@ class Diff:
             self.py_only = list((counts(py) - counts(rust)).elements())
         elif field == "flags":
             self.rust_only = sorted(set(rust) - set(py))
+            self.py_only = sorted(set(py) - set(rust))
 
 
 def explains(cls, diff):
@@ -314,25 +363,35 @@ def explains(cls, diff):
             return (bool(diff.py_only) and all(INVENTED_DIR.search(c[2]) for c in diff.py_only)
                     and len(diff.rust_only) <= len(diff.py_only))
         if cls == "D11":
-            if not diff.py_only:   # a loop over brace items: Rust expands them, what it adds names an item
-                return bool(diff.rust_only) and call["loop"] and all(names_an_item(c, call) for c in diff.rust_only)
-            # what Rust lacks has a brace expression, and Rust has only its expansion
-            if not all(BRACE_EXPR.search(c[2]) or BRACE_EXPR.search(c[1] or "") for c in diff.py_only):
+            # what Rust lacks has a brace expression; what it adds is that expansion or, in a loop over
+            # brace items, a path naming an item or a repeat of what the prototype also found
+            if len(brace_candidates(diff.py_only)) != len(diff.py_only):
                 return False
-            expected = {(c[0], s, d) for c in diff.py_only for s in brace_expand(c[1]) for d in brace_expand(c[2])}
-            return all(tuple(c) in expected for c in diff.rust_only)
+            expected = set().union(*map(brace_expansion, diff.py_only))
+            known = {tuple(c) for c in diff.py}
+            return (bool(diff.py_only) or (call["loop"] and bool(diff.rust_only))) and all(
+                tuple(c) in expected or (call["loop"] and (tuple(c) in known or names_an_item(c, call)))
+                for c in diff.rust_only)
         if cls == "D12":   # what Rust lacks holds a character Windows forbids, and Rust adds nothing
             return bool(diff.py_only) and not diff.rust_only and all(impossible(c[2]) for c in diff.py_only)
         if cls == "D13":   # what Python adds comes from the here-string's text; what Rust adds is written outside it
             return bool(call["here"]) and all(in_here_string(c, call) for c in diff.py_only) \
                 and all(written_outside(c, call) for c in diff.rust_only)
-    if cls == "D11" and diff.field == "flags":   # Rust has no `looped` where the loop items were braces
-        return call["loop"]
+    if diff.field == "flags":
+        if cls == "D11":   # Rust has no `looped` where the loop items were braces
+            return call["loop"]
+        if cls == "D13":   # the here-string text holds the word that made the prototype flag it
+            return bool(call["here"]) and not diff.rust_only and all(
+                bool(words_of(" ".join(call["here"])) & (LOOPS if f == "looped" else INTERPRETERS)) for f in diff.py_only)
+        if cls == "D14":   # a loop word in the text, and no other flag the prototype alone made
+            return diff.py_only == ["looped"] and not diff.rust_only and loop_word_in_text(call["text"])
     if diff.field == "unresolved":
         if cls == "D10":
             return call["cand_dir"] != MORE
         if cls == "D11":   # more: the limit left a word unknown; fewer: the loop's variable was expanded
-            return call["cand_dir"] == FEWER if diff.sign == MORE else call["loop"]
+            if diff.sign == MORE:
+                return call["cand_dir"] == FEWER or diff.rust - diff.py <= call["unexpanded"]
+            return call["loop"]
         if cls == "D12":
             return call["cand_dir"] != MORE
     return True
@@ -450,7 +509,9 @@ def compare_calls(py_rows, rust_rows, report):
         tail = crlf_tail(p["text"])
         scripts = written_scripts(p["text"])
         loop = FOR_BRACE.search(p["text"]) if "looped" in p["flags"] and p["shell"] == "bash" else None
-        call = {"tail": tail, "scripts": scripts, "cwd": p["cwd"], "text": p["text"], "loop": bool(loop),
+        rust_found = {tuple(c) for c in r["candidates"]}
+        unexpanded = sum(not brace_expansion(c) <= rust_found for c in brace_candidates(p["candidates"]))
+        call = {"tail": tail, "unexpanded": unexpanded, "scripts": scripts, "cwd": p["cwd"], "text": p["text"], "loop": bool(loop),
                 "loop_items": loop[1] if loop else "", "cand_dir": direction(p["candidates"], r["candidates"]),
                 "here": here_strings(p["text"]) if p["shell"] == "powershell" else []}
         tail_info = tail_extraction(tail, p) if tail is not None else None
@@ -463,7 +524,8 @@ def compare_calls(py_rows, rust_rows, report):
         for cls, on in (("D2", tail is not None), ("D8", bool(BUN_INIT.search(p["text"]))), ("D9", bool(scripts)),
                         ("D10", bool(D10_CD.search(p["text"]))),
                         ("D11", p["shell"] == "bash" and bool(BRACE_EXPR.search(p["text"]))),
-                        ("D12", any(impossible(c[2]) for c in p["candidates"])), ("D13", bool(call["here"]))):
+                        ("D12", any(impossible(c[2]) for c in p["candidates"])), ("D13", bool(call["here"])),
+                        ("D14", loop_word_in_text(p["text"]))):
             if on:
                 active.add(cls)
         explained = set()
@@ -752,6 +814,33 @@ def parity_self_test():
         case("d13-rust-extra", d13, [wz, mk("zzz")], diffs={"candidates": 1}, shell="powershell")
         case("d13-no-here-string", "Set-Content D:/a/z.ts; mkdir D:/no", [wz], diffs={"candidates": 1}, shell="powershell")
         case("d13-bash", d13, [wz], diffs={"candidates": 1})
+        # D11 also covers a loop over brace items whose body does not use the item (Rust repeats the write
+        # once per item and sets no `looped`), brace expressions beside other effects, and the limit
+        loop_body = "for f in a/{x,y}.rs b.rs; do git show HEAD:$f > out.txt; done"
+        wo = ["write", None, r"D:\w\out.txt"]
+        case("d11-loop-body", loop_body, [wo, wo, wo], classes={"D11": 1})
+        case("d11-loop-body-unrelated", loop_body, [wo, wo, mk("zzz")], diffs={"candidates": 1}, classes={"D11": 1})
+        case("d11-repeat-no-loop", "echo hi > out.txt", [wo, wo], diffs={"candidates": 1})
+        case("d11-mixed", "mkdir D:/x/{a,b} && echo hi > out.txt", [mk("a"), mk("b"), wo], classes={"D11": 1})
+        case("d11-mixed-unrelated", "mkdir D:/x/{a,b} && echo hi > out.txt", [mk("a"), mk("b"), wo, mk("zzz")],
+             diffs={"candidates": 1})
+        case("d11-mixed-limit", "mkdir D:/x/{a,b} D:/x/{c,d}", [mk("a"), mk("b")], unresolved=1, classes={"D11": 1})
+        case("d11-mixed-limit-more", "mkdir D:/x/{a,b} D:/x/{c,d}", [mk("a"), mk("b")], unresolved=2,
+             diffs={"unresolved": 1}, classes={"D11": 1})
+        # D13 also explains a flag the prototype set from here-string text holding the triggering word;
+        # D14 explains a `looped` the prototype set from non-command text, and only that flag
+        here_loop = "$body = @'\nit's a % thing\nforeach z\n'@\nmkdir D:/x/a"
+        here_script = "$body = @'\nit's a thing\npython -c \"x\"\n'@\nmkdir D:/x/a"
+        here_plain = "@'\nabc\n'@ | Out-Null\nforeach ($x in 1,2) { mkdir D:/x/a }"
+        apostrophe = "Write-Output 'don't\nforeach thing\nmkdir D:/x/a"
+        case("d13-flag-loop", here_loop, [mk("a")], classes={"D13": 1, "D14": 1}, shell="power_shell")
+        case("d13-flag-script", here_script, [mk("a")], classes={"D13": 1}, shell="power_shell")
+        case("d13-flag-no-trigger", here_plain, [mk("a")], diffs={"flags": 1}, shell="power_shell")
+        case("d13-flag-rust-only", here_loop, [mk("a")], ["script"], classes={"D13": 1}, diffs={"flags": 1}, shell="power_shell")
+        case("d14", apostrophe, [mk("a")], classes={"D14": 1}, shell="power_shell")
+        case("d14-heredoc", "python - <<'EOF'\nfor i in x:\n  print(i % 2)\nEOF\nmkdir D:/x/a", [mk("a")], ["script"], classes={})
+        case("d14-real-loop", "foreach ($x in 1,2) { mkdir D:/x/a }", [mk("a")], diffs={"flags": 1}, shell="power_shell")
+        case("d14-script-flag", "Write-Output 'don't\npython -c \"x\"\nmkdir D:/x/a", [mk("a")], diffs={"flags": 1}, shell="power_shell")
         # Folders: each class explains only the folders it can make differ
         wf = lambda f, s=3, src="shell:create", ref=None: (f, s, src, ref)  # noqa: E731
         cwd = wf("D:\\w", 1, "cwd")
@@ -770,6 +859,8 @@ def parity_self_test():
               diffs={"folder missing in python": 1})
         fcase("f-d12", 'mkdir "D:/w/a\nb/x"', [], [cwd], unresolved=1, classes={"D12": 1})
         fcase("f-d13", d13, [wz], [cwd, wf("D:\\a", 2, "shell:write")], shell="powershell", classes={"D13": 1})
+        fcase("f-d14", apostrophe, [mk("a")], [cwd, wf(r"D:\x\a"), wf(r"D:\zz", ref="other")],
+              diffs={"folder missing in python": 1}, shell="powershell")
         # D3/D4: a cut or exhausted call can only give fewer candidates
         case("d3", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["truncated"], classes={"D3": 1})
         case("d3-more", "mkdir D:/x/a", [mk("a"), mk("b")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
@@ -777,7 +868,7 @@ def parity_self_test():
         if failures:
             print("SELF-TEST FAILED:\n  " + "\n  ".join(failures))
             sys.exit(1)
-        print("self-test passed: exact output 0 differences, 9 altered copies, 60 class cases (D2-D13, positive and negative)")
+        print("self-test passed: exact output 0 differences, 9 altered copies, 76 class cases (D2-D14, positive and negative)")
 
 
 def cmd_parity(args):
