@@ -55,7 +55,10 @@ fn read_calls(path: &Path) -> Result<Vec<ToolCall>, Box<dyn Error>> {
         if line.trim().is_empty() {
             continue;
         }
-        calls.push(serde_json::from_str(&line).map_err(|e| format!("row {}: {e}", n + 1))?);
+        // Not `{e}`: a serde message can quote a fragment of the row, which may be command text.
+        let row = serde_json::from_str(&line)
+            .map_err(|e| format!("row {}: {:?} error at column {}", n + 1, e.classify(), e.column()))?;
+        calls.push(row);
     }
     Ok(calls)
 }

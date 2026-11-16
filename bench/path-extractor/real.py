@@ -15,6 +15,7 @@ script, or a path it cannot resolve), det-empty (neither). Real commands stay in
 import argparse
 import collections
 import json
+import ntpath
 import os
 import random
 import re
@@ -139,23 +140,65 @@ COMPARED_FLAGS = {"loop": "looped", "script": "script"}   # prototype flag -> pr
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 BUN_INIT = re.compile(r"\bbun\s+init\b")
 NESTED_SHELL = re.compile(r"\b(?:ba|z|da)?sh\b[^\n]*\s-\w*c\b|\b(?:pwsh|powershell)(?:\.exe)?\b[^\n]*-Command", re.I)
-WRITES_FILE = re.compile(r"<<|[^>]>[^>&]")
+FILE_WRITES = re.compile(r"\bcat\s*>>?\s*(\S+)|\btee\s+(?:-a\s+)?(\S+)|<<[^\n]*?>\s*(\S+)")
 CLASS_ORDER = ("D2", "D3", "D4", "D5/D6", "D7", "D8", "D9")
 
+# A declared divergence explains a difference only in the direction it can make the Rust side differ
+# (+1: Rust has more, -1: fewer) and only in the fields it touches. D6 (script arguments counted in
+# Rust only) touches no compared field: it is counted, never an explanation.
+FEWER, MORE = -1, 1
+EXPLAINS = {"D2": (MORE, {"candidates", "flags", "unresolved"}),    # Python swallows the commands after `EOF\r`
+            "D3": (FEWER, {"candidates", "flags", "unresolved"}),   # the cut text drops its last command
+            "D4": (FEWER, {"candidates", "flags", "unresolved"}),   # the budget ran out
+            "D5/D6": (FEWER, {"candidates"}),                       # Python also finds callers inside strings
+            "D8": (MORE, {"candidates"}),                           # `bun init <dir>` creates the dir
+            "D9": (MORE, {"candidates"})}                           # a nested shell reads the outer script
 
-def crlf_heredoc(text):
-    """D2: a heredoc delimiter followed by a carriage return, which the prototype does not close on."""
-    return any(re.search(rf"(?m)^[ \t]*{re.escape(m[2])}\r$", text) for m in HEREDOC.finditer(text))
+
+def crlf_tail(text):
+    """D2: the text after the first heredoc delimiter followed by a carriage return, else None."""
+    for m in HEREDOC.finditer(text):
+        end = re.compile(rf"(?m)^[ \t]*{re.escape(m[2])}\r$").search(text, m.end())
+        if end:
+            return text[end.end():]
+    return None
 
 
-def text_classes(text):
-    """Declared divergences recognised in the command text: D2, D8, D9 (a nested shell beside a file write)."""
-    found = {"D2"} if crlf_heredoc(text) else set()
-    if BUN_INIT.search(text):
-        found.add("D8")
-    if NESTED_SHELL.search(text) and WRITES_FILE.search(text):
-        found.add("D9")
-    return found
+def runs_written_script(text):
+    """D9: a nested shell whose command names a file an earlier heredoc, `cat >` or `tee` wrote."""
+    nested = NESTED_SHELL.search(text)
+    if not nested:
+        return False
+    for w in FILE_WRITES.finditer(text[:nested.start()]):
+        name = ntpath.basename(next(g for g in w.groups() if g).strip("'\"").replace("/", "\\"))
+        if name and name in text[nested.start():]:
+            return True
+    return False
+
+
+def counts(items):
+    return collections.Counter(tuple(x) if isinstance(x, list) else x for x in items)
+
+
+def direction(py, rust):
+    """FEWER or MORE when one side is a proper part of the other; 0 for a different order or anything else."""
+    if isinstance(py, int):
+        return (rust > py) - (rust < py)
+    a, b = counts(py), counts(rust)
+    return FEWER if b < a else MORE if b > a else 0
+
+
+def explains(cls, field, sign, extras, tail):
+    way, fields = EXPLAINS[cls]
+    if sign != way or field not in fields:
+        return False
+    if field != "candidates":
+        return True
+    if cls == "D2":   # what Rust adds must come from the swallowed tail
+        return all(ntpath.basename(c[2]) in tail for c in extras)
+    if cls == "D8":   # only a create with no source
+        return all(c[0] == "create" and c[1] is None for c in extras)
+    return True
 
 
 def read_rows(path):
@@ -191,7 +234,7 @@ def python_calls(calls_path):
         cwd = c["cwd"].removeprefix("\\?\\").replace("/", "\\")
         raw, flags = extract(s[1].strip(), s[0])
         cands, unresolved = resolve(raw, cwd, ENV)
-        rows.append({"store": c["store"], "session": c["session"], "entry": c.get("entry"), "call": c.get("call"),
+        rows.append({"store": c.get("store"), "session": c.get("session"), "entry": c.get("entry"), "call": c.get("call"),
                      "candidates": [[o["op"], o["src"], o["dst"]] for o in cands],
                      "flags": sorted(COMPARED_FLAGS[f] for f in flags if f in COMPARED_FLAGS),
                      "unresolved": unresolved, "text": s[1]})
@@ -226,7 +269,7 @@ def ident(key):
 
 
 def compare_calls(py_rows, rust_rows, report):
-    """Field-by-field comparison of the shell calls; returns the classes of every call by key."""
+    """Field-by-field comparison of the shell calls; returns, per call, the classes that explained a difference."""
     py, rs = keyed(py_rows, call_key), keyed(rust_rows, call_key)
     claimed = {}
     for k in sorted(py.keys() | rs.keys(), key=str):
@@ -236,24 +279,33 @@ def compare_calls(py_rows, rust_rows, report):
         p, r = py[k], rs[k]
         report.compared["calls"] += 1
         rust_flags = set(r["flags"])
-        classes = {c for flag, c in (("truncated", "D3"), ("exhausted", "D4")) if flag in rust_flags}
-        if r["extract_unresolved"] and not classes:
-            classes.add("D5/D6")  # script arguments the prototype does not count, compared on the Rust side only
-        if not classes:
-            fields = {"candidates": p["candidates"] != r["candidates"],
-                      "flags": p["flags"] != sorted(rust_flags & set(COMPARED_FLAGS.values())),
-                      "unresolved": p["unresolved"] != r["unresolved"]}
-            if any(fields.values()):
-                classes = text_classes(p["text"])
-                if not classes and "script" in set(p["flags"]) | rust_flags and [f for f, d in fields.items() if d] == ["candidates"]:
-                    classes.add("D5/D6")  # callers searched inside script strings
-                if not classes:
-                    for field, differs in fields.items():
-                        if differs:
-                            report.diffs[field].append(ident(k))
-        for c in classes:
+        tail = crlf_tail(p["text"])
+        active = {c for flag, c in (("truncated", "D3"), ("exhausted", "D4")) if flag in rust_flags}
+        counted = set(active)   # D3 and D4 are known from the Rust flags alone
+        if "script" in set(p["flags"]) | rust_flags:
+            active.add("D5/D6")
+        if r["extract_unresolved"] and not counted:
+            counted.add("D5/D6")   # D6: counted on the Rust side only, never compared
+        for cls, on in (("D2", tail is not None), ("D8", bool(BUN_INIT.search(p["text"]))),
+                        ("D9", runs_written_script(p["text"]))):
+            if on:
+                active.add(cls)
+        explained = set()
+        fields = (("candidates", p["candidates"], r["candidates"]),
+                  ("flags", p["flags"], sorted(rust_flags & set(COMPARED_FLAGS.values()))),
+                  ("unresolved", p["unresolved"], r["unresolved"]))
+        for field, pv, rv in fields:
+            if pv == rv:
+                continue
+            extras = list((counts(rv) - counts(pv)).elements()) if field == "candidates" else []
+            by = {c for c in active if explains(c, field, direction(pv, rv), extras, tail)}
+            if by:
+                explained |= by
+            else:
+                report.diffs[field].append(ident(k))
+        for c in counted | explained:
             report.classes["calls"][c].append(ident(k))
-        claimed[k] = classes
+        claimed[k] = explained
     return claimed
 
 
@@ -268,15 +320,16 @@ def compare_folders(py_rows, rust_rows, claimed, report):
         refs = {(k[0], k[1], *ref) for row in (p, r) if row for ref in row["refs"]}
         explaining = set().union(*(claimed.get(ref, set()) for ref in refs))
         if p is None or r is None:
-            fields = ["folder missing in " + ("rust" if r is None else "python")]
+            differing = [("folder missing in " + ("rust" if r is None else "python"), FEWER if r is None else MORE)]
         else:
-            fields = [f for f in ("strength", "failed") if p[f] != r[f]]
-        if fields and explaining:
-            for c in explaining:
+            differing = [(f, (r[f] or 0) - (p[f] or 0)) for f in ("strength", "failed") if p[f] != r[f]]
+        for field, delta in differing:
+            sign = (delta > 0) - (delta < 0)
+            by = {c for c in explaining if EXPLAINS[c][0] == sign}
+            if not by:
+                report.diffs[field].append(ident(k))
+            for c in by:
                 report.classes["folders"][c].append(ident(k))
-        else:
-            for f in fields:
-                report.diffs[f].append(ident(k))
 
 
 def parity(calls_path, rust_dir):
@@ -377,10 +430,54 @@ def parity_self_test():
             report = run(c, l)
             if report.total() or len(report.classes["calls"][klass]) != 1:
                 failures.append(f"{flag}: expected one {klass} call and no difference, got {report.total()}")
+        def case(name, command, cands, flags=(), unresolved=0, extract_unresolved=0, diffs=None, classes=None):
+            """One shell call against hand-written Rust output: the differences and classes it must give."""
+            row = {"harness": "h", "store": "st", "session": "c", "entry": name, "call": name, "tool": "Bash",
+                   "canonical": "bash", "cwd": r"D:\w", "input": {"command": command}}
+            path = tmp / "case.jsonl"
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            rust = [{"store": "st", "session": "c", "entry": name, "call": name, "candidates": cands,
+                     "flags": list(flags), "unresolved": unresolved, "extract_unresolved": extract_unresolved}]
+            report = Parity()
+            compare_calls(python_calls(path), rust, report)
+            got = ({f: len(v) for f, v in report.diffs.items()}, {c: len(v) for c, v in report.classes["calls"].items() if v})
+            if got != (diffs or {}, classes or {}):
+                failures.append(f"case {name}: expected {(diffs or {}, classes or {})}, got {got}")
+
+        mk = lambda p: ["create", None, "D:\\x\\" + p]  # noqa: E731
+        d5 = '''python -c "import os; os.makedirs('D:/x/a'); print(\\"os.makedirs('D:/x/b')\\")"'''
+        d2 = "cat > a.txt <<EOF\r\nhello\r\nEOF\r\nmkdir D:\\x\\after"
+        d9 = "cat > s.py <<'EOF'\nimport os\nos.makedirs('D:/x/n')\nEOF\nbash -c \"python s.py\""
+        wr = ["write", None, r"D:\w\a.txt"]
+        ws = ["write", None, r"D:\w\s.py"]
+        # D5/D6: the script string callers are not found, the arguments are counted on the Rust side only
+        case("d5-fewer", d5, [mk("a")], ["script"], classes={"D5/D6": 1})
+        case("d6-count", d5, [mk("a"), mk("b")], ["script"], extract_unresolved=2, classes={"D5/D6": 1})
+        case("d5-extra", d5, [mk("a"), mk("zzz")], ["script"], extract_unresolved=1, diffs={"candidates": 1}, classes={"D5/D6": 1})
+        case("d5-wrong-dst", d5, [mk("a"), mk("c")], ["script"], diffs={"candidates": 1})
+        case("d6-flag", d5, [mk("a"), mk("b")], [], extract_unresolved=1, diffs={"flags": 1}, classes={"D5/D6": 1})
+        case("d6-unresolved", d5, [mk("a"), mk("b")], ["script"], unresolved=1, extract_unresolved=1, diffs={"unresolved": 1}, classes={"D5/D6": 1})
+        # D2: Python swallows the commands after `EOF\r`; only Rust-only candidates from that tail are explained
+        case("d2", d2, [wr, mk("after")], classes={"D2": 1})
+        case("d2-unrelated", d2, [wr, mk("unrelated")], diffs={"candidates": 1})
+        case("d2-fewer", d2, [], diffs={"candidates": 1})
+        # D8: `bun init <dir>` gives a create on the Rust side
+        case("d8", r"bun init D:\x\app", [mk("app")], classes={"D8": 1})
+        case("d8-not-create", r"bun init D:\x\app", [["write", None, r"D:\x\app"]], diffs={"candidates": 1})
+        case("d8-src", r"bun init D:\x\app", [["create", "D:\\x", r"D:\x\app"]], diffs={"candidates": 1})
+        # D9: a nested shell runs a script written earlier in the same command
+        case("d9", d9, [ws, mk("n")], classes={"D9": 1})
+        case("d9-unrelated", d9, [ws], unresolved=1, diffs={"unresolved": 1})
+        case("d9-no-script", 'bash -c "python s.py"', [mk("n")], diffs={"candidates": 1})
+        case("d9-redirect", 'mkdir D:/x/q 2>nul; bash -c "echo hi"', [mk("q"), mk("n")], diffs={"candidates": 1})
+        # D3/D4: a cut or exhausted call can only give fewer candidates
+        case("d3", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["truncated"], classes={"D3": 1})
+        case("d3-more", "mkdir D:/x/a", [mk("a"), mk("b")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
+        case("d4", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["exhausted"], classes={"D4": 1})
         if failures:
             print("SELF-TEST FAILED:\n  " + "\n  ".join(failures))
             sys.exit(1)
-        print("self-test passed: exact output 0 differences, 6 altered copies, D3/D4 and D7 classes")
+        print("self-test passed: exact output 0 differences, 6 altered copies, 19 class cases (D2-D9, positive and negative)")
 
 
 def cmd_parity(args):

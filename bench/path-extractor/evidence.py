@@ -99,7 +99,7 @@ def failed(call: dict) -> bool:
 def evidence_of(call: dict):
     """Every piece of folder evidence one tool call gives."""
     cwd = (call.get("cwd") or "").removeprefix("\\\\?\\").replace("/", "\\") or None
-    ref = lambda source: Ref(call["session"], call.get("entry"), call.get("call"), source)  # noqa: E731
+    ref = lambda source: Ref(call.get("session"), call.get("entry"), call.get("call"), source)  # noqa: E731
     bad = failed(call)
     if cwd:
         yield Evidence(cwd, Strength.USED, ref("cwd"))
@@ -147,7 +147,7 @@ def ledger_rows(calls_path: str) -> list[dict]:
         for line in f:
             call = json.loads(line)
             for ev in evidence_of(call):
-                books[(call.get("store"), call["session"])].add(ev)
+                books[(call.get("store"), call.get("session"))].add(ev)
     rows = []
     for (store, session), book in books.items():
         for fe in book:
