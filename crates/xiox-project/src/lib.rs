@@ -32,6 +32,7 @@ pub use provenance::{
     Candidate, Completeness, Env as PathEnv, Extraction, Flags, OpKind, PathError, RawOp, Resolved, Shell, extract, is_null_device,
     resolve, resolve_path,
     strip_verbatim,
+    Coverage, EvidenceRef, FolderEvidence, Ledger, SessionKey, Source, Strength, folder_of, session_ledgers,
 };
 pub use resolve::{linked_worktree_count, resolve_project};
 

@@ -2,6 +2,8 @@
 //!
 //! Pure string work: components are normalised by hand and the disk is never touched.
 
+use std::borrow::Cow;
+
 use super::op::{Candidate, OpKind, RawOp};
 
 /// The user directories a command may name through `~` and `/tmp`.
@@ -33,11 +35,16 @@ pub struct Resolved {
 }
 
 const VERBATIM_PREFIX: &str = r"\\?\";
+const VERBATIM_UNC_PREFIX: &str = r"\\?\UNC\";
 const NULL_DEVICES: [&str; 5] = ["/dev/null", "nul", "nul:", "$null", "-"];
 
-/// Drops the `\\?\` prefix Windows APIs add to canonical paths.
-pub fn strip_verbatim(p: &str) -> &str {
-    p.strip_prefix(VERBATIM_PREFIX).unwrap_or(p)
+/// Drops the `\\?\` prefix Windows APIs add to canonical paths; `\\?\UNC\server\share` is `\\server\share`.
+pub fn strip_verbatim(p: &str) -> Cow<'_, str> {
+    if let Some(unc) = p.strip_prefix(VERBATIM_UNC_PREFIX) {
+        Cow::Owned(format!(r"\\{unc}"))
+    } else {
+        Cow::Borrowed(p.strip_prefix(VERBATIM_PREFIX).unwrap_or(p))
+    }
 }
 
 pub fn is_null_device(p: &str) -> bool {

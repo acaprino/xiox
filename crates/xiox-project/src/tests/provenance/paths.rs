@@ -55,8 +55,15 @@ fn resolve_path_table() {
 
 #[test]
 fn strip_verbatim_and_null_devices() {
-    assert_eq!(strip_verbatim(r"\\?\D:\x"), r"D:\x");
-    assert_eq!(strip_verbatim(r"D:\x"), r"D:\x");
+    let verbatim = [
+        (r"\\?\D:\x", r"D:\x"),
+        (r"\\?\UNC\server\share\x", r"\\server\share\x"),
+        (r"D:\x", r"D:\x"),
+        (r"\\server\share", r"\\server\share"),
+    ];
+    for (input, expected) in verbatim {
+        assert_eq!(strip_verbatim(input), expected, "{input}");
+    }
     for device in ["/dev/null", "NUL", "nul:", "$null", "-", " Nul "] {
         assert!(is_null_device(device), "{device}");
     }
