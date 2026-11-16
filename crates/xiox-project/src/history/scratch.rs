@@ -14,7 +14,7 @@ use super::risk::activity;
 use super::scope::{has_short_component, local_dir, unlinked_chain, FixedDrives, Scope};
 use super::{Exclusion, HistoryReport, Limit};
 use crate::owned::key_within;
-use crate::search::{inside_other_repo, item_for, Own};
+use crate::search::{inside_other_repo, is_git_repo, item_for, Own};
 use super::subtree::tracked_blocks;
 use crate::{Category, Env, Item, Options, Project, Target, Why};
 
@@ -157,6 +157,9 @@ impl Policy {
             }
             unlinked_chain(&path)?;
             present_dir(&path)?;
+            if repo_between(&repo, &path) {
+                return Err(Exclusion::OtherRepository);
+            }
             return Ok((path, Target::Subtree { repo }));
         }
         if self.own.holds(&key) {
@@ -216,6 +219,13 @@ impl Policy {
         }
         Ok(())
     }
+}
+
+/// `path`, or a folder between it and `repo`, is a git repository of its own (a nested clone, a
+/// vendored repository, a submodule): `repo`'s index cannot speak for what is in it.
+fn repo_between(repo: &Path, path: &Path) -> bool {
+    let top = path_key(repo);
+    path.ancestors().take_while(|a| path_key(a) != top).any(is_git_repo)
 }
 
 /// The folder is there and is a folder; an access error is not taken for its absence.

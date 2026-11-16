@@ -31,6 +31,20 @@ fn session_folders_inside_the_project_get_the_subtree_policy() {
             },
             Expect::Item("work/proj/vendor/lib", vec![Block::HoldsRepositories]),
         ),
+        (
+            "a tracked folder the session spelled in another case",
+            vec![Mkdir("work/proj/Docs")],
+            |s| commit(&s.project.root, "docs/a.md"),
+            Expect::Item("work/proj/Docs", vec![Block::TrackedFiles]),
+        ),
+        (
+            "a folder inside a repository nested in the project",
+            vec![Mkdir("work/proj/external/lib/src")],
+            |s| {
+                repo(&s.project.root.join("external").join("lib"));
+            },
+            Expect::Excluded(Exclusion::OtherRepository),
+        ),
         ("a file in the project itself", vec![Write("work/proj/notes.txt")], |_| {}, Expect::Excluded(Exclusion::InsideProject)),
         ("the git folder", vec![Write("work/proj/.git/x/a.txt")], |_| {}, Expect::Excluded(Exclusion::Protected)),
         (
