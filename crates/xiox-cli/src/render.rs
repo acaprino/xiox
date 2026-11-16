@@ -248,6 +248,7 @@ fn limit_name(l: &Limit) -> &'static str {
         Limit::Sessions { .. } => "session",
         Limit::Calls { .. } => "tool call",
         Limit::Duration { .. } => "time",
+        Limit::Scratch { .. } => "scratch folder",
     }
 }
 

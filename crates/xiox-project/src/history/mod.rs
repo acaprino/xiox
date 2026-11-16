@@ -20,6 +20,8 @@ use xiox_mukade::{strip_verbatim, Descriptor, ToolCall};
 pub(crate) use folders::Folders;
 pub(crate) use mukade::MukadeCalls;
 pub(crate) use scratch::scratch_items;
+#[cfg(test)]
+pub(crate) use scratch::MAX_SCRATCH;
 pub(crate) use queue::{Budget, BUDGET};
 use queue::Queue;
 use scope::{cwd_roots, local_dir, Scope};
@@ -105,14 +107,7 @@ impl<'a> History<'a> {
                 failed: BTreeMap::new(),
             })
             .collect();
-        let report = HistoryReport {
-            sources,
-            sessions_read: 0,
-            calls: 0,
-            shell: Coverage::default(),
-            excluded: BTreeMap::new(),
-            limits: Vec::new(),
-        };
+        let report = HistoryReport::new(sources);
         Some(History { input: env.history, scope: Scope::of(project, opts, env), folders: Folders::default(), report, budget: BUDGET })
     }
 
@@ -161,6 +156,10 @@ impl<'a> History<'a> {
                 break;
             }
             let Some(session) = queue.next() else { break };
+            if queue.is_ambiguous(session) {
+                self.count_failure(session, ReadFailure::AmbiguousId);
+                continue;
+            }
             attempts += 1;
             if self.read_session(source, session) {
                 for item in self.new_copies(project, &mut checked, items, verify) {
@@ -199,7 +198,7 @@ impl<'a> History<'a> {
         let calls = match read {
             Ok(calls) => calls,
             Err(why) => {
-                *self.report.sources[row].failed.entry(why).or_default() += 1;
+                self.count_failure(session, why);
                 return false;
             }
         };
@@ -211,6 +210,11 @@ impl<'a> History<'a> {
             add_coverage(&mut self.report.shell, ledger.coverage());
         }
         true
+    }
+
+    fn count_failure(&mut self, session: &Descriptor, why: ReadFailure) {
+        let row = self.row(session.agent);
+        *self.report.sources[row].failed.entry(why).or_default() += 1;
     }
 
     /// The copies among the folders the last session named, outside the project and not looked
@@ -243,7 +247,7 @@ impl<'a> History<'a> {
     /// The folders the sessions created or wrote in, as review candidates. `items` are what the
     /// analysis lists otherwise.
     pub fn scratch(&mut self, project: &Project, items: &[Item], env: &Env, opts: &Options) -> Vec<Item> {
-        scratch_items(project, &self.folders, items, self.report.partial(), env, opts, &mut self.report.excluded)
+        scratch_items(project, &self.folders, items, env, opts, &mut self.report)
     }
 
     /// The provenance of the items the sessions can speak about.

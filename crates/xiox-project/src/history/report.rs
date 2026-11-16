@@ -137,6 +137,8 @@ pub enum ReadFailure {
     TimedOut,
     TooLarge,
     Failed,
+    /// Several sessions of one store share an id: no read can tell which one it would return.
+    AmbiguousId,
 }
 
 /// Why a folder the history named is not listed.
@@ -160,6 +162,8 @@ pub enum Limit {
     Sessions { max: usize, left: usize },
     Calls { max: usize },
     Duration { secs: u64, left: usize },
+    /// Only the `max` most recently active session folders were examined as `scratch`.
+    Scratch { max: usize, left: usize },
 }
 
 /// What one agent's store gave.
@@ -187,6 +191,18 @@ pub struct HistoryReport {
 }
 
 impl HistoryReport {
+    /// Nothing read yet: the sources as listed.
+    pub(crate) fn new(sources: Vec<SourceReport>) -> HistoryReport {
+        HistoryReport {
+            sources,
+            sessions_read: 0,
+            calls: 0,
+            shell: Coverage::default(),
+            excluded: BTreeMap::new(),
+            limits: Vec::new(),
+        }
+    }
+
     /// No store could be listed, so no folder was taken from the history.
     pub fn not_read(&self) -> bool {
         !self.sources.is_empty() && self.sources.iter().all(|s| s.listing_failed)

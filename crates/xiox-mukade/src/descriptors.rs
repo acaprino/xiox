@@ -41,7 +41,16 @@ impl MukadeSessions {
     /// quietly; a failed `mukade list` is one warning.
     pub fn descriptors(&self) -> Loaded<Descriptor> {
         let mut out = Loaded::default();
-        let Some(store) = self.store_root().filter(|p| p.exists()) else { return out };
+        let Some(store) = self.store_root() else { return out };
+        // Absent is not unreadable: only an answer of "no such store" lists nothing quietly.
+        match store.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return out,
+            Err(e) => {
+                out.warnings.push(format!("{:?}: the store cannot be checked: {e}", self.agent));
+                return out;
+            }
+        }
         match self.run_list(true) {
             Ok(infos) => {
                 let store = store.to_string_lossy();
@@ -119,6 +128,20 @@ mod tests {
         let listed = sessions.descriptors();
         assert!(listed.items.is_empty());
         assert!(listed.warnings.is_empty(), "{:?}", listed.warnings);
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_checked_is_a_warning_not_an_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A name no Windows path can carry: the lookup fails instead of answering "not there".
+        let bad = tmp.path().join("bad|name");
+        let sessions = MukadeSessions::with_roots(
+            Agent::Claude,
+            StoreRoots { claude_config_dir: Some(bad), ..Default::default() },
+        );
+        let listed = sessions.descriptors();
+        assert!(listed.items.is_empty());
+        assert_eq!(listed.warnings.len(), 1, "{:?}", listed.warnings);
     }
 
     #[test]

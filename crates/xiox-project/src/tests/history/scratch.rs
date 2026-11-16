@@ -9,7 +9,7 @@ use xiox_model::{path_key, Agent, ArtifactKind, Level};
 use xiox_mukade::ToolCall;
 
 use super::fake::{bash, call, descriptor, input, listing, FakeCalls};
-use crate::history::scratch_items;
+use crate::history::{scratch_items, MAX_SCRATCH};
 use crate::history::{Folders, UserDirs};
 use crate::tests::fixtures::*;
 use crate::*;
@@ -99,10 +99,9 @@ impl Site {
         sessions: &[xiox_app::Preloaded],
     ) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
         let env = Env { sessions, search_roots: reach, history: input(&[], None, &self.user), ..env() };
-        let mut excluded = BTreeMap::new();
-        let items =
-            scratch_items(&self.project, &self.folders(session), &[], false, &env, &Options::default(), &mut excluded);
-        (items, excluded)
+        let mut report = HistoryReport::new(Vec::new());
+        let items = scratch_items(&self.project, &self.folders(session), &[], &env, &Options::default(), &mut report);
+        (items, report.excluded)
     }
 
     pub(super) fn within_base(&self, session: &[Do]) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
@@ -365,4 +364,36 @@ fn folders_around_the_home_or_a_plain_temp_are_protected() {
             }
         }
     }
+}
+
+#[test]
+fn scratch_candidates_are_capped_to_the_most_recent_and_the_cap_is_reported() {
+    let site = Site::new();
+    let names: Vec<&'static str> =
+        (0..=MAX_SCRATCH).map(|n| &*Box::leak(format!("agent-runs/f{n:03}").into_boxed_str())).collect();
+    for name in &names {
+        fs::create_dir_all(site.at(name)).unwrap();
+    }
+    let cwd = site.project.root.to_string_lossy().into_owned();
+    let mut folders = Folders::default();
+    // The first folder comes from an old session, the others from a newer one.
+    let mut at = |session: &[Do], id: &str, time: &str| {
+        let mut calls = site.calls(session);
+        calls.iter_mut().for_each(|c| c.time = Some(time.into()));
+        let d = descriptor(Agent::Claude, "main", id, &cwd, time, None);
+        for ledger in session_ledgers(&calls, &site.user.path_env()).values() {
+            folders.add_ledger(&d, ledger);
+        }
+    };
+    at(&[Mkdir(names[0])], "old", "2026-10-01T10:00:00Z");
+    let newer: Vec<Do> = names[1..].iter().map(|n| Mkdir(n)).collect();
+    at(&newer, "new", "2026-11-10T10:00:00Z");
+    let env = Env { search_roots: Some(vec![site.base.clone()]), history: input(&[], None, &site.user), ..env() };
+    let mut report = HistoryReport::new(Vec::new());
+
+    let items = scratch_items(&site.project, &folders, &[], &env, &Options::default(), &mut report);
+
+    assert_eq!(items.len(), MAX_SCRATCH);
+    assert!(items.iter().all(|i| i.key != path_key(&site.at(names[0]))), "the oldest folder is the one left out");
+    assert_eq!(report.limits, [Limit::Scratch { max: MAX_SCRATCH, left: 1 }]);
 }

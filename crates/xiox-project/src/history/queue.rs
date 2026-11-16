@@ -1,7 +1,7 @@
 //! Which listed sessions belong to the project, and in which order they are read.
 
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -46,18 +46,20 @@ struct Entry<'a> {
 pub(crate) struct Queue<'a> {
     entries: Vec<Entry<'a>>,
     roots: Vec<String>,
+    /// Sessions whose id another session of the same store and harness shares.
+    ambiguous: HashSet<Key<'a>>,
 }
 
 impl<'a> Queue<'a> {
     pub fn new(listings: &'a [(Agent, Loaded<Descriptor>)], roots: &[PathBuf]) -> Queue<'a> {
-        let mut unique: HashMap<Key<'a>, &'a Descriptor> = HashMap::new();
-        for session in listings.iter().flat_map(|(_, l)| &l.items) {
-            unique.entry(key_of(session)).or_insert(session);
-        }
-        let mut sessions: Vec<&'a Descriptor> = unique.into_values().collect();
+        let mut sessions: Vec<&'a Descriptor> = listings.iter().flat_map(|(_, l)| &l.items).collect();
         // Most recent first; the undated and the ties by (store, harness, id).
         sessions.sort_by_cached_key(|&s| (Reverse(s.updated_ms()), key_of(s)));
-        let position: HashMap<Key<'a>, usize> = sessions.iter().enumerate().map(|(i, s)| (key_of(s), i)).collect();
+        let mut seen: HashSet<Key<'a>> = HashSet::new();
+        let ambiguous: HashSet<Key<'a>> = sessions.iter().map(|&s| key_of(s)).filter(|k| !seen.insert(*k)).collect();
+        // An ambiguous id names no single session, so it cannot be a parent.
+        let position: HashMap<Key<'a>, usize> =
+            sessions.iter().enumerate().map(|(i, s)| (key_of(s), i)).filter(|(k, _)| !ambiguous.contains(k)).collect();
         let entries = sessions
             .iter()
             .map(|&session| Entry {
@@ -72,7 +74,7 @@ impl<'a> Queue<'a> {
                 taken: false,
             })
             .collect();
-        let mut queue = Queue { entries, roots: roots.iter().map(|r| path_key(r)).collect() };
+        let mut queue = Queue { entries, roots: roots.iter().map(|r| path_key(r)).collect(), ambiguous };
         queue.relate();
         queue
     }
@@ -88,6 +90,11 @@ impl<'a> Queue<'a> {
         let entry = self.entries.iter_mut().find(|e| e.related && !e.taken)?;
         entry.taken = true;
         Some(entry.session)
+    }
+
+    /// Another session of the same store and harness has this session's id.
+    pub fn is_ambiguous(&self, session: &Descriptor) -> bool {
+        self.ambiguous.contains(&key_of(session))
     }
 
     /// The related sessions not read yet.

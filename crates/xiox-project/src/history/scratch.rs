@@ -2,7 +2,7 @@
 //! project. The first rules are lexical and run before any access to the disk; a folder that
 //! fails one is only counted.
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 
 use xiox_model::{is_system_dir, path_key};
@@ -11,10 +11,13 @@ use xiox_scanner::{is_broad_dir, is_cloud_dir};
 use super::folders::{Folders, Standing};
 use super::risk::{activity, risks};
 use super::scope::{local_dir, unlinked_chain, FixedDrives, Scope};
-use super::Exclusion;
+use super::{Exclusion, HistoryReport, Limit};
 use crate::owned::key_within;
 use crate::search::{inside_other_repo, item_for, Own};
 use crate::{Category, Env, Item, Options, Project, Why};
+
+/// The session folders examined as `scratch` candidates, most recently active first.
+pub(crate) const MAX_SCRATCH: usize = 200;
 
 /// The review candidates the sessions' own work gives, in key order. `listed` are the items
 /// found otherwise: a folder inside one of them is already covered, its provenance comes from
@@ -23,10 +26,9 @@ pub(crate) fn scratch_items(
     project: &Project,
     folders: &Folders,
     listed: &[Item],
-    report_partial: bool,
     env: &Env,
     opts: &Options,
-    excluded: &mut BTreeMap<Exclusion, usize>,
+    report: &mut HistoryReport,
 ) -> Vec<Item> {
     let policy = Policy::new(project, opts, env);
     // Parents come before the folders inside them, so a folder is merged into the outermost
@@ -42,20 +44,31 @@ pub(crate) fn scratch_items(
         }
         match policy.admit(marked.path) {
             Ok(path) => accepted.push((path, marked.key.to_string(), marked.standing)),
-            Err(why) => *excluded.entry(why).or_default() += 1,
+            Err(why) => *report.excluded.entry(why).or_default() += 1,
         }
     }
-    accepted
+    // Sizing and git status are the costly part: only the most recently active folders get them.
+    let mut candidates: Vec<_> = accepted
         .into_iter()
-        .filter_map(|(path, key, standing)| {
-            let provenance = folders.provenance_within(&key)?;
+        .filter_map(|(path, key, standing)| Some((path, standing, folders.provenance_within(&key)?)))
+        .collect();
+    if candidates.len() > MAX_SCRATCH {
+        candidates.sort_by_key(|(_, _, p)| (p.last_activity_ms.is_none(), Reverse(p.last_activity_ms)));
+        report.limits.push(Limit::Scratch { max: MAX_SCRATCH, left: candidates.len() - MAX_SCRATCH });
+        candidates.truncate(MAX_SCRATCH);
+        candidates.sort_by_key(|(path, ..)| path_key(path));
+    }
+    let partial = report.partial();
+    candidates
+        .into_iter()
+        .map(|(path, standing, provenance)| {
             let why = Why::SessionFolder {
                 strength: standing.strength,
                 from_script: standing.from_script,
-                risks: risks(&path, &provenance, report_partial, env.now_ms),
+                risks: risks(&path, &provenance, partial, env.now_ms),
                 activity: activity(&path, env),
             };
-            Some(Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) })
+            Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
         })
         .collect()
 }

@@ -256,3 +256,28 @@ fn a_history_no_listing_gave_is_not_read_and_not_merely_partial() {
         assert_eq!(history_notes, [&want]);
     }
 }
+
+#[test]
+fn sessions_sharing_an_id_in_one_store_are_counted_and_not_read() {
+    let (_t, base) = tmp();
+    let project = repo(&base.join("proj"));
+    let elsewhere = base.join("elsewhere");
+    let listings = [listing(
+        Agent::Claude,
+        vec![
+            claude("main", "session", &project, "2026-11-19T10:00:00Z", None),
+            claude("main", "session", &elsewhere, "2026-11-18T10:00:00Z", None),
+            claude("main", "s1", &project, "2026-11-17T10:00:00Z", None),
+            // Its parent id names two sessions: no link is drawn from it.
+            claude("main", "child", &elsewhere, "2026-11-16T10:00:00Z", Some("session")),
+        ],
+    )];
+    let calls = FakeCalls::default();
+
+    let run = run(&project, &listings, &calls, BUDGET, Vec::new());
+
+    assert_eq!(calls.asked(), ["s1"]);
+    assert_eq!(claude_row(&run).failed, BTreeMap::from([(ReadFailure::AmbiguousId, 1)]));
+    assert_eq!(claude_row(&run).related, 2);
+    assert_eq!(run.report.sessions_read, 1);
+}

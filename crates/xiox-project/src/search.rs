@@ -310,6 +310,9 @@ fn read_index(drives: &[xiox_disktree::FixedDrive]) -> Option<xiox_disktree::Dis
 /// The items among `dirs`: classified by identity or name, with their blocks and size. A folder
 /// that is neither is left out.
 pub(crate) fn verify_dirs(project: &Project, opts: &Options, env: &Env, dirs: &[PathBuf]) -> Vec<Item> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
     let roots: Vec<String> = if project.is_repo { xiox_git::root_commits(&project.root) } else { Vec::new() };
     dirs.iter()
         .filter_map(|dir| {
