@@ -1,7 +1,7 @@
 //! Hand-built scans for the unit tests of `render` and `json`.
 
 use xiox_model::{Agent, ArtifactKind};
-use xiox_project::Level;
+use xiox_project::{Activity, Level, Risk, Strength};
 use xiox_project::{
     Block, Category, Item, Note, Project, ProjectScan, SCHEMA, SearchMode, StaleBranch, Target, Why,
 };
@@ -119,6 +119,25 @@ pub fn session() -> Item {
         target: Target::Session { agent: Agent::Claude, id: "abc-123".into() },
         provenance: None,
     }
+}
+
+/// A folder an agent session made, outside any repository: `danger`.
+pub fn danger_scratch() -> Item {
+    let why = Why::SessionFolder { strength: Strength::Created, from_script: false, activity: Activity::Unknown };
+    let mut i = item(Category::Scratch, "D:\\agent-runs\\bench", Some(5 * MB), Level::Danger, vec![], why);
+    i.target = Target::Dir { kind: ArtifactKind::ProjectFolder };
+    i.risks = vec![Risk::NoGit];
+    i
+}
+
+/// A clean linked worktree used in the last day: `danger`.
+pub fn danger_worktree() -> Item {
+    Item { level: Level::Danger, risks: vec![Risk::RecentActivity], ..clean_worktree() }
+}
+
+/// A build, a `danger` session folder and a `danger` worktree.
+pub fn danger_scan() -> ProjectScan {
+    scan(vec![build(), danger_scratch(), danger_worktree()])
 }
 
 /// The scan of the reference example: builds, worktrees (one blocked), named, copies, sessions.

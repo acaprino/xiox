@@ -4,7 +4,7 @@
 use crate::args::{self, Command};
 use crate::{json, observe, render};
 use xiox_model::RemoveMode;
-use xiox_project::{Category, Chosen, CleanOutcome, CleanRequest, Error, Options, ProjectScan};
+use xiox_project::{Category, Chosen, CleanOutcome, CleanRequest, Confirmation, DANGER_TEXT, Error, Options, ProjectScan};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -28,8 +28,9 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             let cmd = observe::ObserveArgs { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp };
             observe::run_observe(cmd, out, err)
         }
-        Ok(Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history }) => {
-            let flags = CleanFlags { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history };
+        Ok(Command::Clean { project, categories, include, confirm_danger, permanent, yes, dry_run, json, no_drives, no_history }) => {
+            let flags =
+                CleanFlags { project, categories, include, confirm_danger, permanent, yes, dry_run, json, no_drives, no_history };
             clean(&flags, out, err)
         }
     }
@@ -154,6 +155,7 @@ struct CleanFlags {
     project: Option<PathBuf>,
     categories: Vec<Category>,
     include: Vec<PathBuf>,
+    confirm_danger: Vec<PathBuf>,
     permanent: bool,
     yes: bool,
     dry_run: bool,
@@ -193,13 +195,13 @@ impl Sink<'_> {
         let _ = self.err.flush();
     }
 
-    /// End of a run that has a result: with `--json` the one object on stdout (`outcome` is
-    /// `None` when nothing was run). Returns the exit code.
-    fn conclude(&mut self, scan: &ProjectScan, outcome: Option<&CleanOutcome>, code: i32) -> i32 {
+    /// End of a run that has a result: with `--json` the one object on stdout (`chosen` is
+    /// `None` when nothing was named, `outcome` when nothing was run). Returns the exit code.
+    fn conclude(&mut self, scan: &ProjectScan, chosen: Option<&Chosen>, outcome: Option<&CleanOutcome>, code: i32) -> i32 {
         if !self.json {
             return code;
         }
-        match json::outcome_json(scan, outcome) {
+        match json::outcome_json(scan, chosen, outcome) {
             Ok(v) => match write_result(self.out, self.err, &format!("{v}\n")) {
                 Ok(()) => code,
                 Err(_) => write_failed_code(outcome),
@@ -247,6 +249,24 @@ fn confirm(err: &mut dyn Write, input: &mut dyn BufRead, chosen: &Chosen, mode: 
     let _ = err.flush();
     let mut line = String::new();
     input.read_line(&mut line).is_ok() && is_yes(&line)
+}
+
+/// Ask about one `danger` item on `err`: its path, why it is danger, how it would go, and
+/// `Remove this danger item? [y/N] `; read one line from `input`. End of input is a no.
+fn danger_question(err: &mut dyn Write, input: &mut dyn BufRead, path: &Path, c: &Confirmation) -> bool {
+    let _ = writeln!(err, "{}\n  {DANGER_TEXT}", path.display());
+    for r in &c.risks {
+        let _ = writeln!(err, "  - {}", r.reason());
+    }
+    let _ = write!(err, "  removal: {}\nRemove this danger item? [y/N] ", c.method.describe());
+    let _ = err.flush();
+    let mut line = String::new();
+    input.read_line(&mut line).is_ok() && is_yes(&line)
+}
+
+/// The path of the item `key` names, for the person; the key itself when the scan lacks it.
+fn path_of<'a>(scan: &'a ProjectScan, key: &'a str) -> &'a Path {
+    scan.items.iter().find(|i| i.key == key).and_then(|i| i.path.as_deref()).unwrap_or(Path::new(key))
 }
 
 /// What `clean_run` takes from outside (tests pass fakes): the answer to the question, the
@@ -299,14 +319,18 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
             s.say(&render::render_scan(&scan))?;
         }
         s.say(&format!("{NOTHING_SELECTED}\n"))?;
-        return Ok(s.conclude(&scan, None, EXIT_OK));
+        return Ok(s.conclude(&scan, None, None, EXIT_OK));
     }
 
     // 2. Select. A refusal removes nothing.
     let mode = if f.permanent { RemoveMode::Permanent } else { RemoveMode::Recycle };
-    let request =
-        CleanRequest { categories: f.categories.clone(), include: f.include.clone(), confirm_danger: Vec::new(), mode };
-    let chosen = match xiox_project::select(&scan, &request) {
+    let request = CleanRequest {
+        categories: f.categories.clone(),
+        include: f.include.clone(),
+        confirm_danger: f.confirm_danger.clone(),
+        mode,
+    };
+    let mut chosen = match xiox_project::select(&scan, &request) {
         Ok(c) => c,
         Err(e) => {
             s.fail(&format!("error: {e}"));
@@ -315,10 +339,30 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
     };
     if chosen.keys.is_empty() {
         s.say("Nothing to clean.\n")?;
-        return Ok(s.conclude(&scan, None, EXIT_OK));
+        return Ok(s.conclude(&scan, Some(&chosen), None, EXIT_OK));
     }
 
-    // 3. Summary, and the Recycle Bin check.
+    // 3. The danger items no --confirm-danger named: asked one by one at a terminal, never
+    // taken without it. A dry run asks nothing: the removal reports them as unconfirmed.
+    if !chosen.pending.is_empty() && !f.dry_run {
+        if f.yes || f.json || !deps.stdin_is_terminal {
+            for c in &chosen.pending {
+                let path = path_of(&scan, &c.key).display();
+                let reasons = render::risk_reasons(&c.risks);
+                s.fail(&format!("error: {path}: {DANGER_TEXT} ({reasons}): add --confirm-danger \"{path}\""));
+            }
+            return Ok(EXIT_USAGE);
+        }
+        for c in chosen.pending.clone() {
+            if !danger_question(s.err, deps.stdin, path_of(&scan, &c.key), &c) {
+                s.note("Cancelled.\n");
+                return Ok(EXIT_OK);
+            }
+            chosen.confirm(&c.key);
+        }
+    }
+
+    // 4. Summary, and the Recycle Bin check.
     let asks = !f.yes && !f.dry_run && !f.json;
     let shortfall = (deps.shortfall)(&scan, &chosen, mode);
     let summary = render::render_summary(&scan, &chosen, mode, &shortfall);
@@ -332,15 +376,15 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
         return Ok(EXIT_ERROR);
     }
 
-    // 4. Dry run: every check, no removal.
+    // 5. Dry run: every check, no removal.
     if f.dry_run {
         let outcome = (deps.remove)(&scan, &chosen, mode, true);
         s.say("Dry run: nothing was removed.\n")?;
         s.say(&render::render_outcome(&outcome))?;
-        return Ok(s.conclude(&scan, Some(&outcome), EXIT_OK));
+        return Ok(s.conclude(&scan, Some(&chosen), Some(&outcome), EXIT_OK));
     }
 
-    // 5. Confirmation.
+    // 6. Confirmation.
     if !f.yes {
         if f.json {
             s.fail("error: --json needs --yes to remove anything");
@@ -356,7 +400,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
         }
     }
 
-    // 6. Remove, and say what happened. From here on something may be gone: a report that
+    // 7. Remove, and say what happened. From here on something may be gone: a report that
     // cannot be written to stdout goes to stderr, and the exit code still tells partial from not.
     let outcome = (deps.remove)(&scan, &chosen, mode, false);
     let report = render::render_outcome(&outcome);
@@ -365,7 +409,7 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
         return Ok(write_failed_code(Some(&outcome)));
     }
     let code = if outcome.partial() { EXIT_PARTIAL } else { EXIT_OK };
-    Ok(s.conclude(&scan, Some(&outcome), code))
+    Ok(s.conclude(&scan, Some(&chosen), Some(&outcome), code))
 }
 
 #[cfg(test)]
@@ -427,7 +471,7 @@ mod tests {
 
     use crate::testdata::{GB, build, scan};
     use xiox_project::Outcome;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     /// A stdout that takes `ok` writes and then fails, as a closed handle or a full disk does.
     struct FlakyOut {
@@ -451,6 +495,7 @@ mod tests {
             project: None,
             categories: vec![Category::Builds],
             include: Vec::new(),
+            confirm_danger: Vec::new(),
             permanent,
             yes,
             dry_run,
@@ -466,6 +511,8 @@ mod tests {
         err: String,
         removals: usize,
         dry_removals: usize,
+        /// What the last removal that was not a dry run was given.
+        chosen: Option<Chosen>,
     }
 
     /// Run `clean_run` on a one-build scan. `answer`: `Some(text)` is a terminal that types it,
@@ -477,13 +524,27 @@ mod tests {
         partial: bool,
         out: &mut dyn Write,
     ) -> Ran {
+        run_clean_on(scan(vec![build()]), f, answer, shortfall, partial, out)
+    }
+
+    /// [`run_clean`] on `scan`.
+    fn run_clean_on(
+        scan: ProjectScan,
+        f: &CleanFlags,
+        answer: Option<&str>,
+        shortfall: Vec<(char, u64, u64)>,
+        partial: bool,
+        out: &mut dyn Write,
+    ) -> Ran {
         let removals = Cell::new(0);
         let dry = Cell::new(0);
+        let given = RefCell::new(None);
         let remove = |s: &ProjectScan, c: &Chosen, mode: RemoveMode, dry_run: bool| {
             if dry_run {
                 dry.set(dry.get() + 1);
             } else {
                 removals.set(removals.get() + 1);
+                given.replace(Some(c.clone()));
             }
             let items = c
                 .keys
@@ -520,7 +581,7 @@ mod tests {
         let mut err = Vec::new();
         let code = {
             let mut sink = Sink { out, err: &mut err, json: f.json };
-            match clean_run(f, &mut sink, scan(vec![build()]), &mut deps) {
+            match clean_run(f, &mut sink, scan, &mut deps) {
                 Ok(c) | Err(c) => c,
             }
         };
@@ -530,6 +591,7 @@ mod tests {
             err: String::from_utf8(err).unwrap(),
             removals: removals.get(),
             dry_removals: dry.get(),
+            chosen: given.into_inner(),
         }
     }
 
@@ -629,5 +691,102 @@ mod tests {
     #[test]
     fn write_failed_code_is_3_only_for_a_partial_removal() {
         assert_eq!(write_failed_code(None), EXIT_ERROR);
+    }
+
+    // ── danger items ──
+
+    use crate::testdata::{danger_scan, danger_scratch};
+
+    const BENCH: &str = "D:\\agent-runs\\bench";
+    const WORKTREE: &str = "D:\\Projects\\mukade-chunked";
+    const BUILD: &str = "D:\\Projects\\mukade\\target";
+
+    /// `--include paths --confirm-danger confirm`, in Recycle Bin mode.
+    fn include(paths: &[&str], confirm: &[&str], yes: bool, dry_run: bool, json: bool) -> CleanFlags {
+        CleanFlags {
+            categories: Vec::new(),
+            include: paths.iter().map(PathBuf::from).collect(),
+            confirm_danger: confirm.iter().map(PathBuf::from).collect(),
+            ..flags(yes, dry_run, json, false)
+        }
+    }
+
+    fn run_danger(f: &CleanFlags, answer: Option<&str>) -> Ran {
+        let mut out = Vec::new();
+        let mut r = run_clean_on(danger_scan(), f, answer, vec![], false, &mut out);
+        r.out = String::from_utf8(out).unwrap();
+        r
+    }
+
+    #[test]
+    fn yes_alone_or_another_path_removes_nothing() {
+        let not_danger = xiox_project::SelectError::ConfirmNotDanger(PathBuf::from(BUILD)).to_string();
+        let not_included = xiox_project::SelectError::ConfirmNotIncluded(PathBuf::from(BENCH)).to_string();
+        let add = format!("add --confirm-danger \"{BENCH}\"");
+        let why = "danger: explicit confirmation required (not a git repository)";
+        // (flags, a terminal's answer or no terminal, what stderr says)
+        let table: Vec<(CleanFlags, Option<&str>, Vec<&str>)> = vec![
+            (include(&[BENCH], &[], true, false, false), Some("y\n"), vec![why, &add]),
+            (include(&[BENCH, BUILD], &[BUILD], true, false, false), Some("y\n"), vec![&not_danger]),
+            (include(&[BUILD], &[BENCH], true, false, false), Some("y\n"), vec![&not_included]),
+            (include(&[BENCH], &[], true, false, true), Some("y\n"), vec![why, &add]),
+            (include(&[BENCH], &[], false, false, false), None, vec![why, &add]),
+        ];
+        for (f, answer, says) in table {
+            let r = run_danger(&f, answer);
+            assert_eq!((r.code, r.removals), (EXIT_USAGE, 0), "{:?}: {}", f.include, r.err);
+            for s in says {
+                assert!(r.err.contains(s), "{:?}: {s:?} missing in {}", f.include, r.err);
+            }
+            if f.json {
+                assert_eq!(r.out, "", "stdout stays empty");
+            }
+        }
+    }
+
+    #[test]
+    fn agent_confirms_a_danger_item_with_confirm_danger() {
+        let r = run_danger(&include(&[BENCH], &[BENCH], true, false, false), None);
+        assert_eq!((r.code, r.removals), (EXIT_OK, 1), "{}", r.err);
+        let chosen = r.chosen.expect("the removal was given a choice");
+        let confirmed: Vec<&str> = chosen.confirmed.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(confirmed, [danger_scratch().key.as_str()]);
+        assert!(chosen.pending.is_empty(), "{:?}", chosen.pending);
+    }
+
+    #[test]
+    fn the_danger_question_names_the_risks_and_the_method() {
+        let r = run_danger(&include(&[BENCH], &[], false, false, false), Some("y\ny\n"));
+        assert_eq!((r.code, r.removals), (EXIT_OK, 1), "{}", r.err);
+        let mut at = 0;
+        for needle in [
+            BENCH,
+            "danger: explicit confirmation required",
+            "- not a git repository",
+            "removal: to the Recycle Bin",
+            "Remove this danger item? [y/N] ",
+            "Remove 1 item",
+        ] {
+            let found = r.err[at..].find(needle).unwrap_or_else(|| panic!("{needle:?} not in order in:\n{}", r.err));
+            at += found + needle.len();
+        }
+        let r = run_danger(&include(&[WORKTREE], &[], false, false, false), Some("y\ny\n"));
+        assert!(r.err.contains("- used or changed in the last 24 hours"), "{}", r.err);
+        assert!(r.err.contains("removal: removed by git for good, not to the Recycle Bin"), "{}", r.err);
+    }
+
+    #[test]
+    fn a_no_to_a_danger_question_cancels_everything() {
+        let r = run_danger(&include(&[BENCH, WORKTREE], &[], false, false, false), Some("y\nn\n"));
+        assert_eq!((r.code, r.removals, r.dry_removals), (EXIT_OK, 0, 0), "{}", r.err);
+        assert!(r.err.contains("Cancelled."), "{}", r.err);
+        assert!(!r.err.contains("Remove 2 items"), "the final question is never reached: {}", r.err);
+    }
+
+    #[test]
+    fn dry_run_asks_nothing_and_reports_the_confirmation() {
+        let r = run_danger(&include(&[BENCH], &[], false, true, false), Some("n\n"));
+        assert_eq!((r.code, r.removals, r.dry_removals), (EXIT_OK, 0, 1), "{}", r.err);
+        assert!(!r.err.contains("Remove this danger item"), "{}", r.err);
     }
 }

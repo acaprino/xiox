@@ -3,8 +3,9 @@
 
 use xiox_model::{Agent, RemoveMode};
 use xiox_project::{
-    Block, Category, Chosen, CleanOutcome, HistoryReport, Item, Level, Limit, Note, Outcome, Provenance, ProjectScan, Risk,
-    SearchMode, Strength, Target, Why, is_recommended, key_within, normalize_remote, too_shallow,
+    Block, Category, Chosen, CleanOutcome, DANGER_TEXT, HistoryReport, Item, Level, Limit, Method, Note, Outcome,
+    Provenance, ProjectScan, Risk, SearchMode, Strength, Target, Why, is_recommended, key_within, normalize_remote,
+    too_shallow,
 };
 // Only the tests of this module name them (the listing uses `too_shallow`).
 #[cfg(test)]
@@ -142,6 +143,11 @@ fn path_text(item: &Item) -> String {
 
 fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The reasons of `risks`, in the guide's wording: `not a git repository, used or changed in …`.
+pub fn risk_reasons(risks: &[Risk]) -> String {
+    risks.iter().map(|r| r.reason()).collect::<Vec<_>>().join(", ")
 }
 
 fn risk_name(r: Risk) -> &'static str {
@@ -310,6 +316,11 @@ pub fn render_scan(scan: &ProjectScan) -> String {
                 format!("  {level:<LEVEL_W$}  {size:>SIZE_W$}  {:<path_w$}  {}", path_text(item), reason_text(item));
             o.push_str(line.trim_end());
             o.push('\n');
+            // A blocked item cannot be removed at all: no confirmation would let it go.
+            if item.level == Level::Danger && item.blocked.is_empty() {
+                let under_path = 2 + LEVEL_W + 2 + SIZE_W + 2;
+                o.push_str(&format!("{:under_path$}{DANGER_TEXT}: {}\n", "", risk_reasons(&item.risks)));
+            }
         }
     }
 
@@ -426,6 +437,20 @@ pub fn render_summary(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, sho
                 other => why_text(other),
             };
             o.push_str(&format!("  {}  {note}\n", path_text(i)));
+        }
+    }
+
+    // How the danger items go, as confirmed (those inside a chosen folder too), and the worktrees.
+    let path_of = |key: &str| scan.items.iter().find(|i| i.key == key).map_or_else(|| key.to_string(), path_text);
+    let mut ways: Vec<(String, &str)> = chosen.confirmed.iter().map(|c| (path_of(&c.key), c.method.describe())).collect();
+    let worktrees = items.iter().filter(|i| matches!(i.target, Target::Worktree { .. }));
+    for wt in worktrees.filter(|i| !chosen.confirmed.iter().any(|c| c.key == i.key)) {
+        ways.push((path_text(wt), Method::GitWorktreeRemove.describe()));
+    }
+    if !ways.is_empty() {
+        o.push_str("\nHow danger items and worktrees go:\n");
+        for (path, how) in ways {
+            o.push_str(&format!("  {path}: {how}\n"));
         }
     }
 
@@ -1056,6 +1081,33 @@ mod tests {
             out.contains("note: the session history could not be listed: no folder was taken from it"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn danger_items_say_why_in_the_listing() {
+        use xiox_project::Risk;
+        let mut bench = danger_scratch();
+        bench.risks = vec![Risk::NoGit, Risk::RecentActivity];
+        let out = render_scan(&scan(vec![bench, build()]));
+        assert!(line_with(&out, "D:\\agent-runs\\bench").trim_start().starts_with("danger"), "{out}");
+        let why = "danger: explicit confirmation required: not a git repository, used or changed in the last 24 hours";
+        assert!(out.contains(why), "{out}");
+        assert_eq!(out.matches("explicit confirmation required").count(), 1, "only the danger item: {out}");
+    }
+
+    #[test]
+    fn summary_names_the_method_of_danger_items_and_worktrees() {
+        use xiox_project::{Confirmation, Method};
+        let s = danger_scan();
+        let (bench, wt) = (danger_scratch(), danger_worktree());
+        let plan = |i: &Item, method| Confirmation { key: i.key.clone(), risks: i.risks.clone(), method };
+        let mut chosen = chosen_of(&s, &[&bench.key, &wt.key, &build().key]);
+        chosen.confirmed = vec![plan(&bench, Method::RecycleBin), plan(&wt, Method::GitWorktreeRemove)];
+        let out = render_summary(&s, &chosen, RemoveMode::Recycle, &[]);
+        assert!(out.contains("D:\\agent-runs\\bench: to the Recycle Bin"), "{out}");
+        assert!(out.contains("D:\\Projects\\mukade-chunked: removed by git for good, not to the Recycle Bin"), "{out}");
+        assert!(!out.contains("target: "), "a build has no method line: {out}");
+        assert!(out.contains("Worktrees are removed by git and do not go to the Recycle Bin."), "{out}");
     }
 
     #[test]

@@ -443,10 +443,39 @@ fn c1_include_of_a_named_folder_that_holds_a_copy_with_work_exits_2_and_the_copy
 fn c1_with_no_drives_the_copy_is_not_listed_but_the_folder_is_still_not_removed() {
     let (_t, project, named, copy) = project_with_a_named_folder_holding_a_copy_with_work();
     // Without git the folder is danger: --permanent is refused before anything is checked.
-    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent", "--no-drives"]);
+    let path = named.to_string_lossy().into_owned();
+    let out = run_clean(&project, &["--include", &path, "--yes", "--permanent", "--no-drives"]);
     assert_eq!(out.status.code(), Some(2), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
     assert!(text(&out.stderr).contains("refusing --permanent"), "{}", text(&out.stderr));
+    // Confirmed, in a dry run (the Recycle Bin is never reached from a test): the removal-time
+    // check still finds the repository the analysis did not list.
+    let out = run_clean(&project, &["--include", &path, "--confirm-danger", &path, "--yes", "--dry-run", "--no-drives"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
+    assert!(stdout.contains("skipped") && stdout.contains("git repository"), "{stdout}");
     assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+}
+
+#[test]
+fn clean_danger_without_confirmation_exits_2() {
+    let (_t, project) = fake_project();
+    let named = project.parent().unwrap().join("fakeproj-old");
+    std::fs::create_dir_all(&named).unwrap();
+    std::fs::write(named.join("a.txt"), "x").unwrap();
+    let path = named.to_string_lossy().into_owned();
+    let out = run_clean(&project, &["--include", &path, "--yes", "--no-history"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
+    let err = text(&out.stderr);
+    assert!(err.contains("danger: explicit confirmation required (not a git repository"), "{err}");
+    assert!(err.contains(&format!("add --confirm-danger \"{path}\"")), "{err}");
+    assert!(named.join("a.txt").exists());
+
+    // Confirmed, in a dry run: no removal ever reaches the real Recycle Bin from a test.
+    let out = run_clean(&project, &["--include", &path, "--confirm-danger", &path, "--yes", "--dry-run", "--no-history"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
+    assert!(stdout.contains("would remove"), "{stdout}");
+    assert!(named.join("a.txt").exists());
 }
 
 #[test]
