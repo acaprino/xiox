@@ -12,6 +12,8 @@ mod clean;
 mod container;
 mod hint;
 mod history;
+mod identity;
+mod level;
 mod logs;
 mod nested;
 mod owned;
@@ -23,13 +25,13 @@ mod search;
 mod tests;
 
 pub use clean::{
-    CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, clean_in, clean_without_sessions, recycle_shortfall,
-    select,
+    CleanOutcome, CleanRequest, Chosen, Confirmation, Method, Outcome, OutcomeItem, SelectError, clean, clean_in,
+    clean_without_sessions, method_of, recycle_shortfall, select,
 };
 pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};
 pub use history::{
-    Activity, CallOutcome, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure, Risk,
+    Activity, CallOutcome, ConflictReport, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure, Risk,
     SessionEvidence, SourceReport,
 };
 pub use owned::key_within;
@@ -40,13 +42,16 @@ pub use provenance::{
 };
 pub use resolve::{linked_worktree_count, resolve_project};
 
-use xiox_model::{Agent, ArtifactKind, Level};
+use xiox_model::{Agent, ArtifactKind};
+
+pub use identity::FolderId;
+pub use level::{DANGER_TEXT, Level};
 use serde::Serialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Version of the JSON shape of [`ProjectScan`].
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// What kind of thing an [`Item`] is. The order of the variants is the order of the listing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -76,6 +81,12 @@ pub enum Block {
     /// A copy, or a folder that is or holds a git repository, whose unsaved work git could not
     /// check (it cannot read the repository, or answered nothing).
     UnsavedWorkUnknown,
+    /// Sessions of another project wrote in the folder too.
+    OtherProjectWrites,
+    /// The folder holds git repositories of its own.
+    HoldsRepositories,
+    /// The folder holds files git tracks.
+    TrackedFiles,
     Unknown,
 }
 
@@ -90,6 +101,9 @@ impl Block {
             Block::SessionLocked => "session locked by its harness",
             Block::UnsavedWork => "has commits or changes the project does not have",
             Block::UnsavedWorkUnknown => "could not be checked for unsaved work",
+            Block::OtherProjectWrites => "sessions of another project wrote here",
+            Block::HoldsRepositories => "holds git repositories",
+            Block::TrackedFiles => "holds files tracked by git",
             Block::Unknown => "unknown reason",
         }
     }
@@ -127,7 +141,7 @@ pub enum Why {
     LogFile { ignored: bool },
     ArchivedSession { agent: Agent, title: Option<String> },
     /// A folder that agent sessions made or used, found in the session history.
-    SessionFolder { strength: Strength, from_script: bool, risks: Vec<Risk>, activity: Activity },
+    SessionFolder { strength: Strength, from_script: bool, activity: Activity },
 }
 
 /// What removing the item means.
@@ -139,6 +153,8 @@ pub enum Target {
     /// `git worktree remove` run from `repo`.
     Worktree { repo: PathBuf },
     Session { agent: Agent, id: String },
+    /// A folder inside the project or one of its worktrees; `repo` is that repository.
+    Subtree { repo: PathBuf },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -152,11 +168,17 @@ pub struct Item {
     /// `None` when not measured (light mode).
     pub bytes: Option<u64>,
     pub level: Level,
+    /// What makes the item risky to remove, in the order of [`Risk`], without repeats.
+    pub risks: Vec<Risk>,
+    /// The folder as it was when analysed; checked again before removal.
+    #[serde(skip)]
+    pub identity: Option<FolderId>,
     /// Non-empty: cannot be removed at all.
     pub blocked: Vec<Block>,
     pub why: Why,
     pub target: Target,
-    /// The session evidence behind a `scratch` item; `None` for every other category.
+    /// The session evidence behind a `scratch` item, and behind the `named`, `copies` and
+    /// `worktrees` folders the sessions speak about; `None` otherwise.
     pub provenance: Option<Provenance>,
 }
 
@@ -341,7 +363,7 @@ fn real_listings(history: bool, cache: Option<PathBuf>) -> Vec<(Agent, xiox_mode
 }
 
 /// The real sessions and history sources of this PC, listed through the cache in `cache`.
-fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
+pub(crate) fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
     let cache = Some(cache);
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
     let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());

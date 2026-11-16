@@ -459,7 +459,7 @@ pub(crate) fn json_line(value: &Value) -> String {
     line
 }
 
-/// `{"schema":1,"event":"<kebab>","time":"<RFC 3339 UTC>", …event fields}` as one line. A `report`
+/// `{"schema":2,"event":"<kebab>","time":"<RFC 3339 UTC>", …event fields}` as one line. A `report`
 /// carries its own `schema`: it is not added twice.
 fn event_line(event: &Event, time_ms: i64) -> Result<String, String> {
     let value =
@@ -687,7 +687,8 @@ pub(crate) mod fakes {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
     use std::time::Duration;
-    use xiox_model::{Agent, ArtifactKind, Level};
+    use xiox_model::{Agent, ArtifactKind};
+    use xiox_project::Level;
     use xiox_observer::Measured;
     use xiox_project::{Category, Item, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
 
@@ -725,6 +726,8 @@ pub(crate) mod fakes {
             path: Some(p),
             bytes: None,
             level: Level::Recommended,
+            risks: Vec::new(),
+            identity: None,
             blocked: vec![],
             why: Why::CatalogFolder {
                 label_en: "Rust build".into(),
@@ -745,6 +748,8 @@ pub(crate) mod fakes {
             path: None,
             bytes: None,
             level: Level::Optional,
+            risks: Vec::new(),
+            identity: None,
             blocked: vec![],
             why: Why::ArchivedSession {
                 agent: Agent::Claude,
@@ -766,6 +771,8 @@ pub(crate) mod fakes {
             path: Some(p),
             bytes: None,
             level: Level::Optional,
+            risks: Vec::new(),
+            identity: None,
             blocked: vec![],
             why: Why::LinkedWorktree {
                 branch: None,
@@ -963,7 +970,7 @@ mod tests {
         assert_eq!(lines[0]["event"], "started");
         for v in &lines {
             assert!(v.is_object(), "{v}");
-            assert_eq!(v["schema"], 1, "{v}");
+            assert_eq!(v["schema"], 2, "{v}");
             let time = v["time"]
                 .as_str()
                 .unwrap_or_else(|| panic!("no time in {v}"));
@@ -1198,7 +1205,7 @@ mod tests {
                 serde_json::from_str(line).unwrap_or_else(|e| panic!("stdout line {line:?}: {e}"));
             assert!(
                 v.is_object()
-                    && v["schema"] == 1
+                    && v["schema"] == 2
                     && v["event"].is_string()
                     && v["time"].is_string(),
                 "{line}"

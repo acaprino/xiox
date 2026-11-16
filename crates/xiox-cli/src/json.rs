@@ -1,8 +1,8 @@
-//! `--json`: the scan (`analyze`) or the scan and the outcome (`clean`) as one JSON object (schema 1).
+//! `--json`: the scan (`analyze`) or the scan and the outcome (`clean`) as one JSON object (schema 2).
 
-use xiox_project::{CleanOutcome, ProjectScan};
+use xiox_project::{Chosen, CleanOutcome, ProjectScan, SCHEMA};
 
-/// The `ProjectScan` serialization: `{"schema":1,"project":…,"items":[…],…}`. Field names are
+/// The `ProjectScan` serialization: `{"schema":2,"project":…,"items":[…],…}`. Field names are
 /// camelCase, enum values kebab-case; every text in it is English.
 ///
 /// `Err` when a path is not valid Unicode (JSON cannot carry it).
@@ -10,42 +10,25 @@ pub fn scan_json(scan: &ProjectScan) -> Result<serde_json::Value, serde_json::Er
     serde_json::to_value(scan)
 }
 
-/// The result of `clean --json`: `{"schema":1,"scan":<scan_json>,"outcome":<outcome>|null}`.
-/// `outcome` is `null` when nothing was run. Its items are objects
-/// (`{"key","path","category","outcome":{"type":"removed"|"skipped"|"failed",…}}`), not the
-/// tuples of `CleanOutcome`, so the shape is stable and readable by name.
+/// The result of `clean --json`:
+/// `{"schema":2,"scan":<scan_json>,"chosen":<Chosen>|null,"outcome":<CleanOutcome>|null}`.
+/// `chosen` is what the selection took, with the `danger` plans confirmed and pending; `outcome`
+/// is `null` when nothing was run, and its items are `OutcomeItem` objects
+/// (`{"key","path","category","method","outcome":{"type":"removed"|"skipped"|"failed",…}}`).
 ///
 /// `Err` when a path is not valid Unicode (JSON cannot carry it).
-pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Result<serde_json::Value, serde_json::Error> {
+pub fn outcome_json(
+    scan: &ProjectScan,
+    chosen: Option<&Chosen>,
+    outcome: Option<&CleanOutcome>,
+) -> Result<serde_json::Value, serde_json::Error> {
     // `to_value` (not `json!`, which panics) so that a path JSON cannot carry is an `Err`.
     use serde_json::{Map, Value, to_value};
-    let outcome = match outcome {
-        None => Value::Null,
-        Some(o) => {
-            let mut items = Vec::with_capacity(o.items.len());
-            for (key, path, category, result) in &o.items {
-                let mut item = Map::new();
-                item.insert("key".into(), to_value(key)?);
-                item.insert("path".into(), to_value(path)?);
-                item.insert("category".into(), to_value(category)?);
-                item.insert("outcome".into(), to_value(result)?);
-                items.push(Value::Object(item));
-            }
-            let mut m = Map::new();
-            m.insert("schema".into(), to_value(o.schema)?);
-            m.insert("mode".into(), to_value(o.mode)?);
-            m.insert("dryRun".into(), to_value(o.dry_run)?);
-            m.insert("items".into(), Value::Array(items));
-            m.insert("bytesFreed".into(), to_value(o.bytes_freed)?);
-            m.insert("recycledBytes".into(), to_value(o.recycled_bytes)?);
-            m.insert("elapsedMs".into(), to_value(o.elapsed_ms)?);
-            Value::Object(m)
-        }
-    };
     let mut m = Map::new();
-    m.insert("schema".into(), to_value(1)?);
+    m.insert("schema".into(), to_value(SCHEMA)?);
     m.insert("scan".into(), scan_json(scan)?);
-    m.insert("outcome".into(), outcome);
+    m.insert("chosen".into(), to_value(chosen)?);
+    m.insert("outcome".into(), to_value(outcome)?);
     Ok(Value::Object(m))
 }
 
@@ -53,16 +36,23 @@ pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Resul
 mod tests {
     use super::*;
     use crate::testdata::*;
-    use xiox_model::{Level, RemoveMode};
+    use xiox_model::RemoveMode;
+    use xiox_project::Level;
     use xiox_project::{Category, Outcome};
     use std::path::PathBuf;
 
     fn outcome_of_one(path: Option<PathBuf>, o: Outcome) -> CleanOutcome {
         CleanOutcome {
-            schema: 1,
+            schema: SCHEMA,
             mode: RemoveMode::Recycle,
             dry_run: false,
-            items: vec![("k".into(), path, Category::Builds, o)],
+            items: vec![xiox_project::OutcomeItem {
+                key: "k".into(),
+                path,
+                category: Category::Builds,
+                method: xiox_project::Method::RecycleBin,
+                outcome: o,
+            }],
             bytes_freed: 7,
             recycled_bytes: 7,
             elapsed_ms: 3,
@@ -73,9 +63,9 @@ mod tests {
     fn outcome_json_wraps_scan_and_outcome_with_named_fields() {
         let scan = scan(vec![item(Category::Builds, "D:\\p\\target", Some(7), Level::Recommended, vec![], xiox_project::Why::NameOnly)]);
         let o = outcome_of_one(Some(PathBuf::from("D:\\p\\target")), Outcome::Removed { bytes_freed: 7 });
-        let v = outcome_json(&scan, Some(&o)).unwrap();
-        assert_eq!(v["schema"], 1);
-        assert_eq!(v["scan"]["schema"], 1);
+        let v = outcome_json(&scan, None, Some(&o)).unwrap();
+        assert_eq!(v["schema"], 2);
+        assert_eq!(v["scan"]["schema"], 2);
         assert_eq!(v["outcome"]["mode"], "recycle");
         assert_eq!(v["outcome"]["dryRun"], false);
         assert_eq!(v["outcome"]["bytesFreed"], 7);
@@ -88,11 +78,30 @@ mod tests {
         assert_eq!(item["outcome"]["bytesFreed"], 7);
 
         let skipped = outcome_of_one(None, Outcome::Skipped { reason: "no longer there".into() });
-        let v = outcome_json(&scan, Some(&skipped)).unwrap();
+        let v = outcome_json(&scan, None, Some(&skipped)).unwrap();
         assert!(v["outcome"]["items"][0]["path"].is_null());
         assert_eq!(v["outcome"]["items"][0]["outcome"]["type"], "skipped");
         assert_eq!(v["outcome"]["items"][0]["outcome"]["reason"], "no longer there");
         assert!(!v.to_string().contains("bytes_freed"));
+    }
+
+    #[test]
+    fn clean_json_is_schema_2_with_method_and_confirmations() {
+        use xiox_project::{Chosen, Confirmation, Method};
+        let bench = danger_scratch();
+        let plan = Confirmation { key: bench.key.clone(), risks: bench.risks.clone(), method: Method::RecycleBin };
+        let chosen = Chosen { keys: vec![bench.key.clone()], confirmed: vec![plan], ..Chosen::default() };
+        let o = outcome_of_one(bench.path.clone(), Outcome::Removed { bytes_freed: 7 });
+        let v = outcome_json(&danger_scan(), Some(&chosen), Some(&o)).unwrap();
+        assert_eq!(v["schema"], SCHEMA);
+        assert_eq!(v["chosen"]["confirmed"][0]["method"], "recycle-bin");
+        assert_eq!(v["chosen"]["confirmed"][0]["risks"][0], "no-git");
+        assert!(v["chosen"]["pending"].as_array().is_some_and(Vec::is_empty), "{v}");
+        let item = v["outcome"]["items"][0].as_object().unwrap();
+        let mut keys: Vec<&str> = item.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["category", "key", "method", "outcome", "path"]);
+        assert_eq!(item["method"], "recycle-bin");
     }
 
     #[test]
@@ -109,16 +118,17 @@ mod tests {
 
     #[test]
     fn outcome_json_is_null_when_nothing_was_run() {
-        let v = outcome_json(&scan(vec![]), None).unwrap();
-        assert_eq!(v["schema"], 1);
+        let v = outcome_json(&scan(vec![]), None, None).unwrap();
+        assert_eq!(v["schema"], 2);
         assert!(v["outcome"].is_null());
+        assert!(v["chosen"].is_null());
         assert!(v["scan"].is_object());
     }
 
     #[test]
     fn json_has_schema_1_and_camel_case_kebab_case_fields() {
         let v = scan_json(&full_scan()).unwrap();
-        assert_eq!(v["schema"], 1);
+        assert_eq!(v["schema"], 2);
         assert_eq!(v["project"]["name"], "mukade");
         assert_eq!(v["project"]["isRepo"], true);
         assert_eq!(v["search"], "bounded-walk");

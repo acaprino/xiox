@@ -4,7 +4,7 @@
 //! Same rules as the rest of the crate: every call goes through `git()` (timeout, no console
 //! window, literal pathspecs) and a failure is an empty / `None` answer, never a panic.
 
-use crate::{git, main_worktree, unquote_c};
+use crate::{git, git_magic, main_worktree, unquote_c};
 use xiox_model::normalize_path;
 use std::path::{Path, PathBuf};
 
@@ -218,6 +218,30 @@ pub fn strip_credentials(url: &str) -> String {
 pub fn working_tree_dirty(dir: &Path) -> Option<bool> {
     let o = git(dir, &["status", "--porcelain=v1", "--untracked-files=normal"]).filter(|o| o.ok)?;
     Some(o.stdout.iter().any(|b| !b.is_ascii_whitespace()))
+}
+
+/// Whether git tracks any file under `dir` in the index of `repo`, whatever the case `dir` is
+/// spelled in. `None` when git cannot answer, or `dir` is not inside `repo`.
+pub fn tracked_under(repo: &Path, dir: &Path) -> Option<bool> {
+    // Windows paths compare without case; git pathspecs do not, unless told to. `literal`
+    // keeps `[`, `*` and `?` in a folder name what they are.
+    let spec = format!(":(literal,icase){}", relative_in(repo, dir)?);
+    let o = git_magic(repo, &["ls-files", "-z", "--cached", "--", &spec]).filter(|o| o.ok)?;
+    Some(!o.stdout.is_empty())
+}
+
+/// `dir` relative to `repo` in git's `/` form, the components of `repo` compared without case;
+/// `None` when `dir` is not inside `repo`.
+fn relative_in(repo: &Path, dir: &Path) -> Option<String> {
+    let fold = |c: std::path::Component| c.as_os_str().to_string_lossy().to_lowercase();
+    let mut rest = dir.components();
+    for r in repo.components() {
+        if rest.next().map(fold) != Some(fold(r)) {
+            return None;
+        }
+    }
+    let parts: Vec<String> = rest.map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    Some(parts.join("/"))
 }
 
 /// The commits of `repo` that would be lost with it: HEAD, every local branch, every tag and

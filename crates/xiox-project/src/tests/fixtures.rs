@@ -111,13 +111,17 @@ pub fn node_modules(project: &Path, bytes: usize) -> PathBuf {
     nm
 }
 
-/// No sessions, no archived sessions, nothing searched.
+/// Two days, in milliseconds.
+pub const TWO_DAYS_MS: i64 = 2 * 24 * 60 * 60 * 1000;
+
+/// No sessions, no archived sessions, nothing searched. The clock is two days after the test
+/// made its folders: nothing is recent unless a test sets its own clock.
 pub fn env() -> Env<'static> {
     Env {
         sessions: &[],
         archived: &[],
         search_roots: Some(Vec::new()),
-        now_ms: xiox_app::now_ms(),
+        now_ms: xiox_app::now_ms() + TWO_DAYS_MS,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     }

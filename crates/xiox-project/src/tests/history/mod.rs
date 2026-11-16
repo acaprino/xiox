@@ -1,8 +1,11 @@
 pub mod fake;
 mod analyze;
+mod conflicts;
+mod danger;
 mod folders;
 mod json;
 mod queue;
 mod risk;
 mod scratch;
 mod scope;
+mod subtree;

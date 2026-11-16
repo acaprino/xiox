@@ -19,6 +19,17 @@ fn system_first_component(first: &str) -> bool {
         || first.starts_with("program files")
 }
 
+/// The first folder under the drive is a system one (`C:\Windows\…`, `D:\Program Files\…`): the
+/// path and everything below it belong to the system.
+pub fn in_system_area(path: &Path) -> bool {
+    path.components()
+        .find_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            _ => None,
+        })
+        .is_some_and(|first| system_first_component(&first))
+}
+
 /// Names that are never artifacts, whatever the plan says.
 const DENY_NAMES: &[&str] = &[
     ".git", ".ssh", ".gnupg", ".claude", ".codex", ".config", "appdata", "desktop", "documents", "downloads",
@@ -110,7 +121,7 @@ fn lexical_refusal(path: &Path, kind: ArtifactKind) -> Option<String> {
             normals.len()
         ));
     }
-    if system_first_component(&normals[0]) {
+    if in_system_area(path) {
         return Some(format!("protected system location (\\{})", normals[0]));
     }
     if normals[0] == "users" && normals.len() <= 2 {

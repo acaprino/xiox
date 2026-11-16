@@ -262,3 +262,53 @@ fn a_cwd_on_a_drive_that_is_not_fixed_is_not_local() {
     assert!(copies(&s).is_empty());
     assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::NotLocal), Some(&1));
 }
+
+#[test]
+fn short_components_are_recognised() {
+    use crate::history::scope::has_short_component;
+    let table = [
+        ("ALFIOC~1", true),
+        ("PROGRA~1", true),
+        ("LONGNA~12.TXT", true),
+        ("A~1", true),
+        ("a~b", false),
+        ("~1", false),
+        ("report~final", false),
+        ("x~", false),
+        ("name~1x", false),
+        ("~", false),
+    ];
+    for (name, expected) in table {
+        let path = Path::new(r"C:\base").join(name).join("child");
+        assert_eq!(has_short_component(&path), expected, "{name}");
+    }
+}
+
+#[test]
+fn permission_denied_is_not_missing() {
+    use crate::history::scope::unlinked_chain;
+    let (_guard, base) = tmp();
+    let locked = base.join("locked");
+    let child = locked.join("child");
+    fs::create_dir_all(&child).unwrap();
+    // Windows lets anyone read the attributes of a folder they can list: deny the listing of
+    // the parent and everything on the folder itself.
+    let deny_child = child.clone();
+    let icacls = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("icacls").arg(dir).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !(icacls(&locked, &["/deny", "*S-1-1-0:(RX)"]) && icacls(&deny_child, &["/deny", "*S-1-1-0:(F)"])) {
+        icacls(&locked, &["/remove:d", "*S-1-1-0"]);
+        println!("skipped: icacls could not deny");
+        return;
+    }
+    let denied = deny_child.symlink_metadata().is_err();
+    let result = unlinked_chain(&child);
+    icacls(&deny_child, &["/remove:d", "*S-1-1-0"]);
+    icacls(&locked, &["/remove:d", "*S-1-1-0"]);
+    if !denied {
+        println!("skipped: the deny did not take (administrator)");
+        return;
+    }
+    assert_eq!(result, Err(Exclusion::Unreadable));
+}

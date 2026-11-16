@@ -90,6 +90,10 @@ shortened (`...\w` stands for `C:\Users\alice\AppData\Local\Temp\w`):
 | `...\w\sampleapp-feature` | a linked worktree (branch `feature`) that existed before the observer started |
 | `...\w\sampleapp-spike1`, `...\w\sampleapp-spike2` | two linked worktrees created while the observer was running |
 
+The examples are real runs from before the `danger` level, edited by hand to the current output:
+the project and `sampleapp-feature` are taken as made days ago, so only the two spike worktrees,
+made during the run, are recent activity (`danger`).
+
 On stderr, a person sees what the process is doing:
 
 ```text
@@ -101,7 +105,7 @@ output it is one line:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "event": "started",
   "time": "2026-11-13T20:30:52.871Z",
   "project": {
@@ -136,7 +140,7 @@ items is shown), and an `attention` event for each threshold that is now exceede
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "event": "changed",
   "time": "2026-11-13T20:30:22.707Z",
   "added": [
@@ -145,7 +149,10 @@ items is shown), and an `attention` event for each threshold that is now exceede
       "category": "worktrees",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1",
       "bytes": 171,
-      "level": "recommended",
+      "level": "danger",
+      "risks": [
+        "recent-activity"
+      ],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -156,6 +163,7 @@ items is shown), and an `attention` event for each threshold that is now exceede
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": true,
       "firstSeenMs": 1794601822706,
       "measuredAtMs": 1794601822706,
@@ -168,21 +176,24 @@ items is shown), and an `attention` event for each threshold that is now exceede
 ```
 
 ```json
-{"schema":1,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"growth","value":2097494,"threshold":1048576,"cleanCommand":"xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike2\""}
-{"schema":1,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"worktrees","value":2,"threshold":1,"cleanCommand":"xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike2\""}
+{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"growth","value":2097494,"threshold":1048576,"cleanCommand":null}
+{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"worktrees","value":2,"threshold":1,"cleanCommand":null}
 ```
+
+Both worktrees were made during the run, so they are `danger` (`recent-activity`) and
+`cleanCommand` is `null`: they need `xiox clean --include <path> --confirm-danger <path>`.
 
 A line that is not `report` or `stop` gets an `error` event, and the observer goes on:
 
 ```json
-{"schema":1,"event":"error","time":"2026-11-13T20:30:22.868Z","message":"unknown command: hello (expected report or stop)"}
+{"schema":2,"event":"error","time":"2026-11-13T20:30:22.868Z","message":"unknown command: hello (expected report or stop)"}
 ```
 
 After `git worktree remove` of one of the worktrees, the next check says it is gone (the removed
 entries are item keys, the normalised paths) and the growth is recomputed:
 
 ```json
-{"schema":1,"event":"changed","time":"2026-11-13T20:30:32.967Z","added":[],"removed":["c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp-spike1"],"growthBytes":2097323}
+{"schema":2,"event":"changed","time":"2026-11-13T20:30:32.967Z","added":[],"removed":["c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp-spike1"],"growthBytes":2097323}
 ```
 
 Finally `report` (a fresh check, then the complete picture; see
@@ -234,7 +245,7 @@ Everything meant for a person goes to **stderr**.
 
 ## Events (JSON lines)
 
-Every line is an object with `"schema": 1`, `"event"` and `"time"` (RFC 3339, UTC, to the
+Every line is an object with `"schema": 2`, `"event"` and `"time"` (RFC 3339, UTC, to the
 millisecond), followed by the fields of the event. Field names are camelCase, enum values are
 kebab-case. Fields that end in `Ms` (`firstSeenMs`, `startedAtMs`, ...) are Unix times in
 milliseconds.
@@ -248,7 +259,7 @@ milliseconds.
 | `error` | A check failed (the reason starts with `check failed:`), or a stdin line was unknown or too long. The process goes on. | `message`. |
 
 An **item** has the fields of an item of `xiox analyze --json` (`key`, `category`, `path`,
-`bytes`, `level`, `blocked`, `why`, `target`; see [`xiox-cli.md`](xiox-cli.md#json)) plus four
+`bytes`, `level`, `risks`, `blocked`, `why`, `target`, `provenance`; see [`xiox-cli.md`](xiox-cli.md#json)) plus four
 that only the observer knows:
 
 | Field | Meaning |
@@ -294,7 +305,7 @@ existed at the start, both `new: false`, the third is new.
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "project": {
     "root": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp",
     "name": "sampleapp",
@@ -312,6 +323,7 @@ existed at the start, both `new: false`, the third is new.
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\\target",
       "bytes": 3145772,
       "level": "recommended",
+      "risks": [],
       "blocked": [],
       "why": {
         "type": "catalog-folder",
@@ -321,6 +333,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "dir",
         "kind": "rust-target"
       },
+      "provenance": null,
       "new": false,
       "firstSeenMs": 1794601865194,
       "measuredAtMs": 1794601871137,
@@ -332,6 +345,7 @@ existed at the start, both `new: false`, the third is new.
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-feature",
       "bytes": 172,
       "level": "recommended",
+      "risks": [],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -342,6 +356,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": false,
       "firstSeenMs": 1794601865194,
       "measuredAtMs": 1794601865194,
@@ -352,7 +367,10 @@ existed at the start, both `new: false`, the third is new.
       "category": "worktrees",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1",
       "bytes": 171,
-      "level": "recommended",
+      "level": "danger",
+      "risks": [
+        "recent-activity"
+      ],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -363,6 +381,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": true,
       "firstSeenMs": 1794601871137,
       "measuredAtMs": 1794601871137,
@@ -400,7 +419,7 @@ existed at the start, both `new: false`, the third is new.
   "growthBytes": 171,
   "attention": [],
   "stale": false,
-  "cleanCommand": "xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\"",
+  "cleanCommand": null,
   "cleanCommandTruncated": false,
   "startedAtMs": 1794601865194,
   "checkedAtMs": 1794601871137
@@ -422,10 +441,11 @@ The `report` event is the same object with `"event"` and `"time"` after `"schema
 **`cleanCommand`** is a ready-made `xiox clean` command, or `null`. It is built from
 `--include <path>` entries, **one for each new item that `xiox clean` would accept as
 recommended** (level `recommended`, not blocked, with a folder, not directly under a drive
-root, not holding a blocked item), in the order of the report:
+root, not holding a blocked item), in the order of the report. For a new recommended build
+folder `dist` it reads:
 
 ```text
-xiox clean "C:\Users\alice\AppData\Local\Temp\w\sampleapp" --include "C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1"
+xiox clean "C:\Users\alice\AppData\Local\Temp\w\sampleapp" --include "C:\Users\alice\AppData\Local\Temp\w\sampleapp\dist"
 ```
 
 It uses `--include` and not `--worktrees` or `--builds` because the category flags would take
@@ -434,7 +454,10 @@ observer started and that the observer never vouched for. The command names only
 since the start. At most **25** items go into one command; when there are more,
 `cleanCommandTruncated` is `true` (run the command, then ask for a new report). Copies and
 name-matched folders are `caution` items, so they are never in it: they need your own decision
-and `--include`. Archived sessions have no folder and are never in it.
+and `--include`. Items at level `danger` are never in it either: they need
+`xiox clean --include <path> --confirm-danger <path>`, after you have read their risks (see
+[`xiox-cli.md`](xiox-cli.md#confirming-danger-items)). Archived sessions have no folder and are
+never in it.
 
 The observer never runs this command and a program should not either without asking the
 person: `xiox clean` shows a summary, asks for confirmation (unless `--yes`), and re-analyses
@@ -532,7 +555,7 @@ The reply to `tools/list`:
     "tools": [
       {
         "name": "project_leftovers",
-        "description": "Lists what this project has left on this PC since this server started: build folders, linked worktrees, copies of the repository, folders named like the project, log files and archived agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the new recommended items. Runs a fresh check on every call (the call that receives the first analysis reports it as it is). The result has two parts: a compact text (totals, growth, attention, stale, cleanCommand and only the NEW items, at most 50, one line each) and the full report with every item as structuredContent; a client that forwards only the text to the model sees the compact view. Read-only: it only reports and never removes anything.",
+        "description": "Lists what this project has left on this PC since this server started: build folders, linked worktrees, copies of the repository, folders named like the project, log files and archived agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the new recommended items. Items at level danger are never in cleanCommand: they need xiox clean --include <path> --confirm-danger <path>. Runs a fresh check on every call (the call that receives the first analysis reports it as it is). The result has two parts: a compact text (totals, growth, attention, stale, cleanCommand and only the NEW items, at most 50, one line each) and the full report with every item as structuredContent; a client that forwards only the text to the model sees the compact view. Read-only: it only reports and never removes anything.",
         "inputSchema": {
           "type": "object",
           "properties": {},
@@ -579,7 +602,7 @@ attention: none
 cleanCommand: none
 New items: 2
 - builds | caution | 2097152 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1\target
-- worktrees | caution | 2097298 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1 | blocked: uncommitted changes
+- worktrees | danger | 2097298 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1 | blocked: uncommitted changes
 Other items not listed here: 1. The full listing of every item is in structuredContent.
 ```
 

@@ -147,6 +147,7 @@ impl Folders {
             strength: sessions.iter().filter_map(|s| s.strength).max(),
             last_activity_ms: sessions.iter().filter_map(|s| s.last_activity_ms).max(),
             sessions,
+            other_projects: Vec::new(),
         })
     }
 }

@@ -217,13 +217,25 @@ fn base_command() -> Command {
     c
 }
 
-pub(crate) fn git(root: &Path, args: &[&str]) -> Option<Out> {
+fn in_repo(root: &Path, args: &[&str]) -> Command {
     let mut c = base_command();
     c.arg("-C")
         .arg(root)
         .arg("--no-optional-locks")
         .args(["-c", "core.fsmonitor=false"])
         .args(args);
+    c
+}
+
+pub(crate) fn git(root: &Path, args: &[&str]) -> Option<Out> {
+    run_cmd(in_repo(root, args), TIMEOUT)
+}
+
+/// [`git`] with pathspec magic allowed. Every pathspec in `args` must carry its own magic,
+/// `literal` included, so that nothing in a path is read as a wildcard.
+pub(crate) fn git_magic(root: &Path, args: &[&str]) -> Option<Out> {
+    let mut c = in_repo(root, args);
+    c.env_remove("GIT_LITERAL_PATHSPECS");
     run_cmd(c, TIMEOUT)
 }
 
@@ -346,6 +358,21 @@ mod tests {
         #[cfg(windows)]
         c.creation_flags(CREATE_NO_WINDOW);
         c
+    }
+
+    #[test]
+    fn tracked_under_reads_the_index() {
+        let t = Tmp::new();
+        let repo = t.sub("repo");
+        init(&repo);
+        commit_file(&repo, "bench/a.txt", "a");
+        write(&repo, "loose/b.txt", "b");
+        assert_eq!(tracked_under(&repo, &repo.join("bench")), Some(true));
+        assert_eq!(tracked_under(&repo, &repo.join("BENCH")), Some(true), "spelled in another case");
+        assert_eq!(tracked_under(&repo, &repo.join("loose")), Some(false));
+        assert_eq!(tracked_under(&repo, &t.sub("elsewhere")), None, "not inside the repository");
+        let plain = t.sub("plain");
+        assert_eq!(tracked_under(&plain, &plain.join("x")), None);
     }
 
     #[test]

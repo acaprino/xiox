@@ -84,10 +84,11 @@ xiox clean C:\work\sampleapp --builds --yes --json         # for scripts and age
 |---|---|
 | `--builds` `--worktrees` `--logs` `--sessions` | take the `recommended`, unblocked entries of that category |
 | `--include <path>` | add one entry of any level from the listing (never a blocked one) |
-| `--permanent` | delete instead of sending to the Recycle Bin (worktrees are always removed by git) |
+| `--confirm-danger <path>` | confirm one `danger` entry (the included folder, or one inside it); `--yes` alone never removes it |
+| `--permanent` | delete instead of sending to the Recycle Bin (worktrees are always removed by git; refused for `danger` folders) |
 | `--dry-run` | run every check, remove nothing |
 | `--yes` | skip the question (required with `--json`) |
-| `--json` | one JSON object on stdout, schema 1 |
+| `--json` | one JSON object on stdout, schema 2 |
 
 Exit codes: `0` done, `1` error, `2` bad usage or refused, `3` partial (something was skipped or failed).
 

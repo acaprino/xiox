@@ -681,3 +681,20 @@ fn item_replaced_by_a_dir_symlink_after_validation_loses_only_the_link() {
     // Needs the symlink privilege (Developer Mode or admin): skipped without it.
     root_swapped_for_a_link(|link, target| std::os::windows::fs::symlink_dir(target, link).is_ok(), false);
 }
+
+#[test]
+fn system_area_is_the_first_component_rule() {
+    use crate::guard::in_system_area;
+    let table = [
+        (r"C:\Windows\Temp\x", true),
+        (r"D:\Program Files (x86)\a\b", true),
+        (r"C:\ProgramData\x", true),
+        (r"C:\$Recycle.Bin\x", true),
+        (r"C:\Projects\windows", false),
+        (r"D:\agent-runs\x", false),
+        (r"C:\Users\me\Program Files", false),
+    ];
+    for (path, expected) in table {
+        assert_eq!(in_system_area(std::path::Path::new(path)), expected, "{path}");
+    }
+}

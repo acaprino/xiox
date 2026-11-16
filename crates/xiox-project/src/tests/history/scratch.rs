@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde_json::json;
-use xiox_model::{path_key, Agent, ArtifactKind, Level};
+use xiox_model::{path_key, Agent, ArtifactKind};
 use xiox_mukade::ToolCall;
 
 use super::fake::{bash, call, descriptor, input, listing, FakeCalls};
@@ -39,7 +39,7 @@ impl Site {
         let (guard, base) = tmp();
         let root = repo(&base.join("work").join("proj"));
         worktree(&root, &base.join("wt-box").join("wt"), "wt");
-        let user = UserDirs { home: base.join("home"), temp: base.join("home").join("AppData").join("Local").join("Temp") };
+        let user = UserDirs { home: base.join("home"), temp: base.join("home").join("AppData").join("Local").join("Temp"), resolved: true };
         Site { _guard: guard, base, project: resolve_project(&root).unwrap(), user }
     }
 
@@ -218,14 +218,13 @@ fn the_folders_inside_a_candidate_give_it_all_their_operations() {
 #[test]
 fn broad_and_protected_folders_are_never_scratch() {
     // (name, what the session did, the folder it points at, why it is left out; `None`: allowed)
-    let table: [(&str, Vec<Do>, &str, Option<Exclusion>); 9] = [
+    let table: [(&str, Vec<Do>, &str, Option<Exclusion>); 8] = [
         ("the home", vec![Write("~/notes.txt")], "~", Some(Exclusion::Protected)),
         ("a folder of the home", vec![Write("~/Desktop/a.txt")], "~/Desktop", Some(Exclusion::Protected)),
         ("a drive root", vec![Write("/out.txt")], "/", Some(Exclusion::Protected)),
         ("%TEMP% itself", vec![Write("%TEMP%/a.txt")], "%TEMP%", Some(Exclusion::Protected)),
         ("the parent of the project", vec![Write("work/a.txt")], "work", Some(Exclusion::Protected)),
         ("the folder around a worktree", vec![Write("wt-box/a.txt")], "wt-box", Some(Exclusion::Protected)),
-        ("inside the project", vec![Write("work/proj/tmp/a.txt")], "work/proj/tmp", Some(Exclusion::InsideProject)),
         ("a new folder of the home", vec![Mkdir("~/x")], "~/x", None),
         ("a folder inside %TEMP%", vec![Write("%TEMP%/run1/a.txt")], "%TEMP%/run1", None),
     ];
@@ -346,7 +345,7 @@ fn folders_around_the_home_or_a_plain_temp_are_protected() {
     ];
     for (name, home, temp, session, folder, expected) in table {
         let mut site = Site::new();
-        site.user = UserDirs { home: site.base.join(home), temp: site.base.join(temp) };
+        site.user = UserDirs { home: site.base.join(home), temp: site.base.join(temp), resolved: true };
         fs::create_dir_all(&site.user.home).unwrap();
         fs::create_dir_all(&site.user.temp).unwrap();
         fs::create_dir_all(site.at(folder)).unwrap();
@@ -396,4 +395,147 @@ fn scratch_candidates_are_capped_to_the_most_recent_and_the_cap_is_reported() {
     assert_eq!(items.len(), MAX_SCRATCH);
     assert!(items.iter().all(|i| i.key != path_key(&site.at(names[0]))), "the oldest folder is the one left out");
     assert_eq!(report.limits, [Limit::Scratch { max: MAX_SCRATCH, left: 1 }]);
+}
+
+#[test]
+fn short_names_never_slip_past_the_guards() {
+    let drive = |rest: &str| -> &'static str { Box::leak(format!(r"{}\{rest}",&Site::new().base.to_string_lossy()[..2]).into_boxed_str()) };
+    let table: [(&str, Vec<Do>, Exclusion); 2] = [
+        ("a write under a short home name", vec![Write(drive(r"Users\ALFIOC~1\x\a.txt"))], Exclusion::ShortName),
+        ("a folder under a short program folder", vec![Mkdir("PROGRA~1/App/data")], Exclusion::ShortName),
+    ];
+    for (name, session, why) in table {
+        let site = Site::new();
+        let (items, excluded) = site.scratch(&session, None);
+        assert!(items.is_empty(), "{name}: {items:?}");
+        assert_eq!(excluded.get(&why), Some(&1), "{name}: {excluded:?}");
+    }
+
+    let mut site = Site::new();
+    site.user.resolved = false;
+    fs::create_dir_all(site.at("runs/a")).unwrap();
+    let (items, excluded) = site.scratch(&[Write("runs/a/x.txt")], None);
+    assert!(items.is_empty(), "{items:?}");
+    assert_eq!(excluded, BTreeMap::from([(Exclusion::Protected, 1)]));
+}
+
+#[test]
+fn unresolvable_short_home_is_not_resolved() {
+    let user = UserDirs::from_dirs(PathBuf::from(r"C:\Users\NOSUCH~1"), PathBuf::from(r"C:\Users\NOSUCH~1\AppData\Local\Temp"));
+    assert!(!user.resolved);
+}
+
+#[test]
+fn system_descendants_and_other_profiles_are_protected() {
+    let mut site = Site::new();
+    site.user = UserDirs { home: PathBuf::from(r"C:\Users\me"), temp: PathBuf::from(r"C:\Users\me\AppData\Local\Temp"), resolved: true };
+    let table = [r"C:\Windows\Temp\x", r"C:\Program Files\App\data", r"C:\ProgramData\x", r"C:\Users\other\work", r"C:\Users\Public\x"];
+    for folder in table {
+        let file: &'static str = Box::leak(format!(r"{folder}\a.txt").into_boxed_str());
+        let (items, excluded) = site.scratch(&[Write(file)], None);
+        assert!(items.is_empty(), "{folder}: {items:?}");
+        assert_eq!(excluded, BTreeMap::from([(Exclusion::Protected, 1)]), "{folder}");
+    }
+
+    let mut site = Site::new();
+    site.user = UserDirs { home: site.base.join(r"Users\me"), temp: site.base.join(r"Users\me\AppData\Local\Temp"), resolved: true };
+    fs::create_dir_all(site.at("Users/me/work/run1")).unwrap();
+    let (items, excluded) = site.scratch(&[Mkdir("Users/me/work/run1")], None);
+    let keys: Vec<&String> = items.iter().map(|i| &i.key).collect();
+    assert_eq!(keys, vec![&path_key(&site.at("Users/me/work/run1"))], "{excluded:?}");
+}
+
+#[test]
+fn broad_temps_exempt_nothing() {
+    // (temp, the folder the session made, admitted)
+    let table: [(&str, &str, bool); 5] = [
+        ("~/AppData/Local", "~/AppData/Local/Microsoft/x", false),
+        ("~/AppData/Local/Temp", "~/AppData/Local/Temp/run1", true),
+        ("/", "/", false),
+        ("/", "~/AppData/x", false),
+        ("tmp", "tmp/run1", true),
+    ];
+    for (temp, folder, admitted) in table {
+        let mut site = Site::new();
+        site.user.temp = site.at(temp);
+        fs::create_dir_all(&site.user.temp).unwrap();
+        let dir = site.at(folder);
+        fs::create_dir_all(&dir).unwrap();
+        let file: &'static str = Box::leak(dir.join("a.txt").to_string_lossy().into_owned().into_boxed_str());
+        let (items, excluded) = site.scratch(&[Write(file)], None);
+        if admitted {
+            let keys: Vec<&String> = items.iter().map(|i| &i.key).collect();
+            assert_eq!(keys, vec![&path_key(&dir)], "{temp} {folder}: {excluded:?}");
+        } else {
+            assert!(items.is_empty(), "{temp} {folder}: {items:?}");
+            assert_eq!(excluded.get(&Exclusion::Protected), Some(&1), "{temp} {folder}: {excluded:?}");
+        }
+    }
+}
+
+#[test]
+fn a_written_folder_holding_clean_repos_is_blocked() {
+    let site = Site::new();
+    repo(&site.at("notes-area/a"));
+    repo(&site.at("notes-area/b"));
+    let (items, excluded) = site.within_base(&[Write("notes-area/notes.txt")]);
+    assert_eq!(items.len(), 1, "{excluded:?}");
+    assert_eq!(items[0].key, path_key(&site.at("notes-area")));
+    assert_eq!(items[0].blocked, vec![Block::HoldsRepositories]);
+}
+
+#[test]
+fn a_scratch_folder_under_an_unreadable_parent_is_unreadable() {
+    let site = Site::new();
+    let locked = site.at("locked");
+    fs::create_dir_all(locked.join("child")).unwrap();
+    // Windows lets anyone read the attributes of a folder they can list: deny the listing of
+    // the parent and everything on the folder itself.
+    let deny_child = locked.join("child").clone();
+    let icacls = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("icacls").arg(dir).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !(icacls(&locked, &["/deny", "*S-1-1-0:(RX)"]) && icacls(&deny_child, &["/deny", "*S-1-1-0:(F)"])) {
+        icacls(&locked, &["/remove:d", "*S-1-1-0"]);
+        println!("skipped: icacls could not deny");
+        return;
+    }
+    let denied = deny_child.symlink_metadata().is_err();
+    let (items, excluded) = site.within_base(&[Mkdir("locked/child")]);
+    icacls(&deny_child, &["/remove:d", "*S-1-1-0"]);
+    icacls(&locked, &["/remove:d", "*S-1-1-0"]);
+    if !denied {
+        println!("skipped: the deny did not take (administrator)");
+        return;
+    }
+    assert!(items.is_empty(), "{items:?}");
+    assert_eq!(excluded.get(&Exclusion::Unreadable), Some(&1), "{excluded:?}");
+    assert_eq!(excluded.get(&Exclusion::Missing), None, "{excluded:?}");
+}
+
+#[test]
+fn a_scratch_folder_with_an_unreadable_folder_inside_is_blocked_as_unknown() {
+    let site = Site::new();
+    let run = site.at("agent-runs/run1");
+    let inner = run.join("inner");
+    fs::create_dir_all(&inner).unwrap();
+    let icacls = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("icacls").arg(dir).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !icacls(&inner, &["/deny", "*S-1-1-0:(RX)"]) {
+        println!("skipped: icacls could not deny");
+        return;
+    }
+    let denied = fs::read_dir(&inner).is_err();
+    let walked = crate::nested::nested_repos(&run);
+    let (items, excluded) = site.within_base(&[Mkdir("agent-runs/run1")]);
+    icacls(&inner, &["/remove:d", "*S-1-1-0"]);
+    if !denied {
+        println!("skipped: the deny did not take (administrator)");
+        return;
+    }
+    // A folder that cannot be listed may hold a repository: never "verified empty".
+    assert_eq!(walked, Err(crate::nested::NotChecked::Unreadable));
+    assert_eq!(items.len(), 1, "{excluded:?}");
+    assert!(items[0].blocked.contains(&Block::UnsavedWorkUnknown), "{:?}", items[0].blocked);
 }

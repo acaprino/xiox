@@ -3,10 +3,12 @@
 //! engine's folder recycling (the `trash` crate) is not exercised here.
 
 use super::fixtures::*;
+use super::history::fake::{bash, descriptor, input, listing, FakeCalls};
+use crate::history::{ReadFailure, UserDirs};
 use crate::clean::{Io, check_dir, english_error, strip_os_text, clean_with, overlaps_project, shortfall_with};
 use crate::*;
-use xiox_model::{Agent, ArtifactKind, Level, RemoveMode, path_key};
-use xiox_mukade::ArchivedSession;
+use xiox_model::{Agent, ArtifactKind, RemoveMode, path_key};
+use xiox_mukade::{ArchivedSession, Descriptor, ToolCall};
 use xiox_sessions::{HarnessCli, Trash};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,7 @@ fn req(categories: &[Category], include: &[&Path]) -> CleanRequest {
     CleanRequest {
         categories: categories.to_vec(),
         include: include.iter().map(|p| p.to_path_buf()).collect(),
+        confirm_danger: Vec::new(),
         mode: RemoveMode::Permanent,
     }
 }
@@ -81,9 +84,20 @@ fn run(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry: bool) -> Clea
     run_with(scan, chosen, mode, dry, &env(), &bin, &|_| Vec::new())
 }
 
+/// `dir`, named after the project, as a clean clone of an unrelated repository: git vouches for
+/// it and on the fixture clock it is old, so it is neither blocked nor `danger`.
+fn named_clone(base: &Path, dir: &Path) -> PathBuf {
+    clone(&repo(&base.join("upstream")), dir)
+}
+
+/// The outcome of a log file `k`.
+fn log_outcome(outcome: Outcome) -> OutcomeItem {
+    OutcomeItem { key: "k".into(), path: None, category: Category::Logs, method: Method::Permanent, outcome }
+}
+
 fn outcome_of<'a>(out: &'a CleanOutcome, path: &Path) -> &'a Outcome {
     let k = path_key(path);
-    &out.items.iter().find(|(key, ..)| *key == k).unwrap_or_else(|| panic!("no outcome for {k}: {:#?}", out.items)).3
+    &out.items.iter().find(|i| i.key == k).unwrap_or_else(|| panic!("no outcome for {k}: {:#?}", out.items)).outcome
 }
 
 fn archived(agent: Agent, id: &str, cwd: &Path, file: Option<PathBuf>, blocked: bool) -> ArchivedSession {
@@ -115,8 +129,8 @@ fn project_ignoring_logs(base: &Path) -> PathBuf {
 
 /// Every reason and error of the outcome is plain English: nothing the engine says in Italian.
 fn assert_english(out: &CleanOutcome) {
-    for (key, _, _, o) in &out.items {
-        let text = match o {
+    for OutcomeItem { key, outcome, .. } in &out.items {
+        let text = match outcome {
             Outcome::Removed { .. } => continue,
             Outcome::Skipped { reason } => reason,
             Outcome::Failed { error } => error,
@@ -138,7 +152,7 @@ fn no_category_and_no_include_chooses_nothing() {
     assert!(!scan.items.is_empty());
 
     let chosen = select(&scan, &req(&[], &[])).unwrap();
-    assert_eq!(chosen, Chosen { keys: Vec::new(), bytes: 0, permanent_anyway: Vec::new() });
+    assert_eq!(chosen, Chosen::default());
 }
 
 #[test]
@@ -185,13 +199,16 @@ fn include_takes_a_named_folder_and_a_caution_build() {
     let scan = scan_of(&root);
     assert_eq!(scan.items.iter().filter(|i| i.category == Category::Named).count(), 1, "{:#?}", scan.items);
 
-    let chosen = select(&scan, &req(&[], &[&named, &nm])).unwrap();
+    let chosen = select(&scan, &asked(&[&named, &nm], &[], RemoveMode::Recycle)).unwrap();
     let mut keys = chosen.keys.clone();
     keys.sort();
     let mut want = vec![path_key(&named), path_key(&nm)];
     want.sort();
     assert_eq!(keys, want);
     assert!(chosen.bytes >= 3 * MB64, "{}", chosen.bytes);
+    // Without git the named folder is danger: it waits for its confirmation.
+    let pending: Vec<&str> = chosen.pending.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(pending, [path_key(&named).as_str()]);
 }
 
 #[test]
@@ -275,12 +292,12 @@ fn clean_permanent_removes_the_build_folder_and_reports_its_bytes() {
         Outcome::Removed { bytes_freed } => assert!(*bytes_freed >= 2 * MB64, "{bytes_freed}"),
         o => panic!("{o:?}"),
     }
-    assert_eq!((out.schema, out.mode, out.dry_run), (1, RemoveMode::Permanent, false));
+    assert_eq!((out.schema, out.mode, out.dry_run), (SCHEMA, RemoveMode::Permanent, false));
     assert!(out.bytes_freed >= 2 * MB64);
     assert_eq!(out.recycled_bytes, 0);
     assert!(!out.partial());
-    assert_eq!(out.items[0].1.as_deref(), Some(target.as_path()));
-    assert_eq!(out.items[0].2, Category::Builds);
+    assert_eq!(out.items[0].path.as_deref(), Some(target.as_path()));
+    assert_eq!(out.items[0].category, Category::Builds);
     // The project itself is untouched.
     assert!(root.join("Cargo.toml").exists() && root.join("README.md").exists());
 }
@@ -496,8 +513,7 @@ fn dry_run_still_runs_the_checks() {
 fn a_named_folder_chosen_with_include_is_removed_and_nothing_else() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));
-    let named = base.join("proj-scratch");
-    fill(&named, 1, MB);
+    let named = named_clone(&base, &base.join("proj-scratch"));
     let bystander = base.join("proj2");
     fill(&bystander, 1, MB);
     let scan = scan_of(&root);
@@ -534,7 +550,7 @@ fn a_log_inside_a_selected_worktree_is_skipped_as_already_removed_and_not_counte
         o => panic!("{o:?}"),
     }
     assert!(!wt.exists());
-    assert!(!out.items.iter().any(|(.., o)| matches!(o, Outcome::Failed { .. })));
+    assert!(!out.items.iter().any(|i| matches!(i.outcome, Outcome::Failed { .. })));
     assert_english(&out);
 }
 
@@ -593,11 +609,11 @@ fn sessions_are_revalidated_then_deleted_and_one_that_got_locked_is_skipped() {
     let bin = FakeBin::new(base.join("fake-bin"));
     let out = run_with(&scan, &chosen, RemoveMode::Permanent, false, &e, &bin, &fresh);
 
-    let by_key = |k: &str| out.items.iter().find(|(key, ..)| key == k).unwrap();
-    assert_eq!(by_key("session:claude:s1").3, Outcome::Removed { bytes_freed: 1234 });
-    assert_eq!(by_key("session:claude:s1").1, None);
-    assert_eq!(by_key("session:claude:s1").2, Category::Sessions);
-    assert!(matches!(by_key("session:claude:s2").3, Outcome::Skipped { .. }), "{:#?}", out.items);
+    let by_key = |k: &str| out.items.iter().find(|i| i.key == k).unwrap();
+    assert_eq!(by_key("session:claude:s1").outcome, Outcome::Removed { bytes_freed: 1234 });
+    assert_eq!(by_key("session:claude:s1").path, None);
+    assert_eq!(by_key("session:claude:s1").category, Category::Sessions);
+    assert!(matches!(by_key("session:claude:s2").outcome, Outcome::Skipped { .. }), "{:#?}", out.items);
     assert!(!f1.exists() && f2.exists());
     assert!(out.partial());
     assert_eq!(out.bytes_freed, 1234);
@@ -625,7 +641,7 @@ fn sessions_dry_run_deletes_nothing() {
     let bin = FakeBin::new(base.join("fake-bin"));
 
     let out = run_with(&scan, &chosen, RemoveMode::Permanent, true, &e, &bin, &fresh);
-    assert_eq!(out.items[0].3, Outcome::Removed { bytes_freed: 1234 });
+    assert_eq!(out.items[0].outcome, Outcome::Removed { bytes_freed: 1234 });
     assert!(f1.exists());
 }
 
@@ -690,6 +706,8 @@ fn check_dir_refuses_a_junction_a_file_a_missing_path_and_a_project_folder_aroun
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Recommended,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
@@ -778,30 +796,19 @@ fn copy_of(base: &Path, root: &Path) -> PathBuf {
     canon(&dest)
 }
 
+/// The fixture env with the copies searched in `base/other`.
+fn copies_env(base: &Path) -> Env<'static> {
+    Env { search_roots: Some(vec![base.join("other")]), ..env() }
+}
+
 /// `scan_in` for a project whose copies are searched in `base/other`.
 fn scan_with_copies(root: &Path, base: &Path) -> ProjectScan {
-    let e = Env {
-        sessions: &[],
-        archived: &[],
-        search_roots: Some(vec![base.join("other")]),
-        now_ms: xiox_app::now_ms(),
-        health: Default::default(),
-        history: crate::history::HistoryInput::none(),
-    };
-    scan_in(root, &e)
+    scan_in(root, &copies_env(base))
 }
 
 fn rerun(scan: &ProjectScan, chosen: &Chosen, base: &Path) -> CleanOutcome {
-    let e = Env {
-        sessions: &[],
-        archived: &[],
-        search_roots: Some(vec![base.join("other")]),
-        now_ms: xiox_app::now_ms(),
-        health: Default::default(),
-        history: crate::history::HistoryInput::none(),
-    };
     let bin = FakeBin::new(PathBuf::from("unused"));
-    run_with(scan, chosen, RemoveMode::Permanent, false, &e, &bin, &|_| Vec::new())
+    run_with(scan, chosen, RemoveMode::Permanent, false, &copies_env(base), &bin, &|_| Vec::new())
 }
 
 #[test]
@@ -838,17 +845,19 @@ fn recheck_skips_a_copy_whose_fresh_listing_says_it_has_own_work_even_if_unblock
         path: Some(PathBuf::from("X-a-b")),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked,
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
         provenance: None,
     };
     let old = mk(Some(false), Vec::new());
-    assert!(crate::clean::recheck(&old, Some(&mk(Some(false), Vec::new()))).is_ok());
+    assert!(crate::clean::recheck(&old, Some(&mk(Some(false), Vec::new())), None, RemoveMode::Permanent).is_ok());
     // No answer from git now is not "no own work": see the m1 test further down.
-    assert!(crate::clean::recheck(&old, Some(&mk(None, Vec::new()))).is_err());
+    assert!(crate::clean::recheck(&old, Some(&mk(None, Vec::new())), None, RemoveMode::Permanent).is_err());
     assert_eq!(
-        crate::clean::recheck(&old, Some(&mk(Some(true), Vec::new()))).unwrap_err(),
+        crate::clean::recheck(&old, Some(&mk(Some(true), Vec::new())), None, RemoveMode::Permanent).unwrap_err(),
         "now has commits or changes the project does not have"
     );
 }
@@ -885,15 +894,15 @@ fn an_item_skipped_because_its_outer_item_went_is_not_a_partial_result() {
     let chosen = select(&scan, &req(&[Category::Worktrees, Category::Logs], &[])).unwrap();
 
     let out = run(&scan, &chosen, RemoveMode::Permanent, false);
-    assert!(out.items.iter().any(|(.., o)| matches!(o, Outcome::Skipped { reason } if reason.starts_with("already removed with "))));
+    assert!(out.items.iter().any(|i| matches!(&i.outcome, Outcome::Skipped { reason } if reason.starts_with("already removed with "))));
     assert!(!out.partial(), "{:#?}", out.items);
 
     // A real skip or failure still is.
     let mut other = out.clone();
-    other.items.push(("k".into(), None, Category::Logs, Outcome::Skipped { reason: "no longer there".into() }));
+    other.items.push(log_outcome(Outcome::Skipped { reason: "no longer there".into() }));
     assert!(other.partial());
     let mut failed = out;
-    failed.items.push(("k".into(), None, Category::Logs, Outcome::Failed { error: "x".into() }));
+    failed.items.push(log_outcome(Outcome::Failed { error: "x".into() }));
     assert!(failed.partial());
 }
 
@@ -904,7 +913,7 @@ fn clean_with_nothing_chosen_returns_an_empty_outcome_at_once() {
     let scan = scan_of(&root);
     let out = clean(&scan, &Chosen::default(), RemoveMode::Recycle, false);
     assert!(out.items.is_empty() && !out.partial());
-    assert_eq!((out.schema, out.mode, out.bytes_freed, out.recycled_bytes), (1, RemoveMode::Recycle, 0, 0));
+    assert_eq!((out.schema, out.mode, out.bytes_freed, out.recycled_bytes), (SCHEMA, RemoveMode::Recycle, 0, 0));
 }
 
 #[test]
@@ -928,6 +937,8 @@ fn a_top_level_project_folder_is_refused_with_an_english_reason() {
         path: Some(top.clone()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -957,7 +968,7 @@ fn clean_without_sessions_removes_a_chosen_build_and_reads_no_session() {
 
     let out = clean_without_sessions(&scan, &chosen, RemoveMode::Permanent, false, &roots);
     assert!(!out.partial(), "{out:?}");
-    assert!(matches!(out.items[0].3, Outcome::Removed { .. }), "{out:?}");
+    assert!(matches!(out.items[0].outcome, Outcome::Removed { .. }), "{out:?}");
     assert!(!target.exists());
     assert!(p.join("Cargo.toml").exists());
 
@@ -968,7 +979,13 @@ fn clean_without_sessions_removes_a_chosen_build_and_reads_no_session() {
 
 #[test]
 fn not_removed_counts_skipped_and_failed_but_not_the_overlap_with_a_removed_folder() {
-    let item = |k: &str, o: Outcome| (k.to_string(), Some(PathBuf::from(k)), Category::Builds, o);
+    let item = |k: &str, o: Outcome| OutcomeItem {
+        key: k.to_string(),
+        path: Some(PathBuf::from(k)),
+        category: Category::Builds,
+        method: Method::Permanent,
+        outcome: o,
+    };
     let out = CleanOutcome {
         schema: SCHEMA,
         mode: RemoveMode::Permanent,
@@ -1070,9 +1087,11 @@ fn c1_without_the_wide_search_the_copy_is_not_listed_and_the_removal_still_refus
     let scan = analyze_with(&root, &opts, &env()).unwrap();
     assert_eq!(scan.search, SearchMode::ParentOnly);
     assert!(scan.items.iter().all(|i| i.key != path_key(&copy)), "the copy must not be listed at depth 2");
-    let chosen = select(&scan, &req(&[], &[&named])).expect("nothing in the scan says it is blocked");
+    let chosen = select(&scan, &asked(&[&named], &[&named], RemoveMode::Recycle))
+        .expect("nothing in the scan says it is blocked");
 
-    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    // Without git the folder is danger, so Recycle Bin only: a dry run runs the same checks.
+    let out = run(&scan, &chosen, RemoveMode::Recycle, true);
     match outcome_of(&out, &named) {
         Outcome::Skipped { reason } => {
             assert!(reason.contains("git repository"), "{reason}");
@@ -1081,12 +1100,8 @@ fn c1_without_the_wide_search_the_copy_is_not_listed_and_the_removal_still_refus
         other => panic!("{other:?}"),
     }
     assert!(out.partial());
-    assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+    assert!(copy.join("private.txt").exists());
     assert_english(&out);
-
-    // A dry run runs the same check.
-    let dry = run(&scan, &chosen, RemoveMode::Permanent, true);
-    assert!(matches!(outcome_of(&dry, &named), Outcome::Skipped { .. }), "{:#?}", dry.items);
 }
 
 #[test]
@@ -1095,10 +1110,13 @@ fn c1_a_hand_made_choice_of_the_folder_is_skipped_too_when_the_copy_is_listed_an
     let root = repo(&base.join("proj"));
     let (named, copy) = named_folder_holding_a_blocked_copy(&base, &root);
     let scan = scan_with_copies(&root, &base);
-    let chosen = Chosen { keys: vec![path_key(&named)], bytes: 0, permanent_anyway: Vec::new() };
+    // Without git the folder is danger: its plan is confirmed, so the blocked copy is what stops it.
+    let risks = scan.items.iter().find(|i| i.key == path_key(&named)).unwrap().risks.clone();
+    let plan = Confirmation { key: path_key(&named), risks, method: Method::Permanent };
+    let chosen = Chosen { keys: vec![path_key(&named)], confirmed: vec![plan], ..Chosen::default() };
     let out = rerun(&scan, &chosen, &base);
     match outcome_of(&out, &named) {
-        Outcome::Skipped { reason } => assert!(reason.contains("is blocked"), "{reason}"),
+        Outcome::Skipped { reason } => assert!(reason.starts_with("cannot be removed: it holds "), "{reason}"),
         other => panic!("{other:?}"),
     }
     assert!(copy.join("private.txt").exists());
@@ -1117,10 +1135,11 @@ fn a_named_folder_holding_a_clean_listed_copy_goes_with_it() {
     let (named, copy) = (canon(&named), canon(&copy));
     let scan = scan_with_copies(&root, &base);
     assert!(scan.items.iter().find(|i| i.key == path_key(&copy)).is_some_and(|i| i.blocked.is_empty()));
-    let chosen = select(&scan, &req(&[], &[&named])).unwrap();
-    let out = rerun(&scan, &chosen, &base);
+    let chosen = select(&scan, &asked(&[&named], &[&named], RemoveMode::Recycle)).unwrap();
+    // Without git the folder is danger, so Recycle Bin only: a dry run says it would go.
+    let bin = FakeBin::new(PathBuf::from("unused"));
+    let out = run_with(&scan, &chosen, RemoveMode::Recycle, true, &copies_env(&base), &bin, &|_| Vec::new());
     assert!(matches!(outcome_of(&out, &named), Outcome::Removed { .. }), "{:#?}", out.items);
-    assert!(!named.exists());
 }
 
 #[test]
@@ -1135,8 +1154,9 @@ fn a_named_folder_with_an_unlisted_git_repository_inside_is_refused_whatever_tha
     let opts = Options { drives: false, ..Options::default() };
     let scan = analyze_with(&root, &opts, &env()).unwrap();
     let named = canon(&named);
-    let chosen = select(&scan, &req(&[], &[&named])).unwrap();
-    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    let chosen = select(&scan, &asked(&[&named], &[&named], RemoveMode::Recycle)).unwrap();
+    // Without git the folder is danger, so Recycle Bin only: a dry run runs the same checks.
+    let out = run(&scan, &chosen, RemoveMode::Recycle, true);
     assert!(matches!(outcome_of(&out, &named), Outcome::Skipped { .. }), "{:#?}", out.items);
     assert!(inner.join("README.md").exists());
 }
@@ -1148,6 +1168,8 @@ fn contents_item(path: &Path, kind: ArtifactKind, category: Category) -> Item {
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
@@ -1221,19 +1243,21 @@ fn m1_a_copy_whose_fresh_own_work_check_gives_no_answer_is_skipped() {
         path: Some(PathBuf::from("X-a-b")),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
         provenance: None,
     };
     let old = mk(Some(false));
-    assert!(crate::clean::recheck(&old, Some(&mk(Some(false)))).is_ok());
+    assert!(crate::clean::recheck(&old, Some(&mk(Some(false))), None, RemoveMode::Permanent).is_ok());
     assert_eq!(
-        crate::clean::recheck(&old, Some(&mk(None))).unwrap_err(),
+        crate::clean::recheck(&old, Some(&mk(None)), None, RemoveMode::Permanent).unwrap_err(),
         "git could not say whether it has commits or changes the project does not have"
     );
     assert_eq!(
-        crate::clean::recheck(&old, Some(&mk(Some(true)))).unwrap_err(),
+        crate::clean::recheck(&old, Some(&mk(Some(true))), None, RemoveMode::Permanent).unwrap_err(),
         "now has commits or changes the project does not have"
     );
 }
@@ -1244,9 +1268,7 @@ fn m4_a_failed_session_read_skips_worktrees_copies_and_named_folders_but_not_bui
     let root = repo(&base.join("proj"));
     let wt = worktree(&root, &base.join("proj-wt"), "feature");
     let target = rust_build(&root, 2 * MB);
-    let named = base.join("proj-scratch");
-    fill(&named, 1, 100);
-    let named = canon(&named);
+    let named = named_clone(&base, &base.join("proj-scratch"));
     let scan = scan_of(&root);
     let chosen = select(&scan, &req(&[Category::Builds, Category::Worktrees], &[&named])).unwrap();
     assert!(chosen.keys.contains(&path_key(&wt)) && chosen.keys.contains(&path_key(&target)));
@@ -1304,6 +1326,8 @@ fn listed(category: Category, path: &Path, why: Why) -> Item {
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -1329,39 +1353,217 @@ fn session_folder() -> Why {
     Why::SessionFolder {
         strength: Strength::Created,
         from_script: false,
-        risks: vec![Risk::NoGit],
         activity: Activity::Unknown,
     }
 }
 
+// ─────────────────────────── admission and confirmations ───────────────────────────
+
+fn at_risk(item: Item, risks: &[Risk]) -> Item {
+    Item { level: Level::Danger, risks: risks.to_vec(), ..item }
+}
+
+fn worktree_item(path: &Path, base: &Path) -> Item {
+    let item = listed(Category::Worktrees, path, Why::NameOnly);
+    Item { target: Target::Worktree { repo: base.join("proj") }, ..item }
+}
+
+fn asked(include: &[&Path], confirm: &[&Path], mode: RemoveMode) -> CleanRequest {
+    CleanRequest {
+        categories: Vec::new(),
+        include: include.iter().map(|p| p.to_path_buf()).collect(),
+        confirm_danger: confirm.iter().map(|p| p.to_path_buf()).collect(),
+        mode,
+    }
+}
+
+fn plan(path: &Path, risks: &[Risk], method: Method) -> Confirmation {
+    Confirmation { key: path_key(path), risks: risks.to_vec(), method }
+}
+
 #[test]
-fn select_refuses_a_scratch_item() {
+fn scratch_is_selectable_with_confirmation() {
     let (_t, base) = tmp();
-    let scratch = base.join("scratch");
-    let scan = scratch_scan(&base, vec![listed(Category::Scratch, &scratch, session_folder())]);
-    let err = select(&scan, &req(&[], &[&scratch])).unwrap_err();
-    assert_eq!(err, SelectError::ReviewOnly { path: scratch.clone(), inner: None });
+    let bench = base.join("agent-runs").join("bench-1");
+    let scan = scratch_scan(&base, vec![at_risk(listed(Category::Scratch, &bench, session_folder()), &[Risk::NoGit])]);
+    let expected = plan(&bench, &[Risk::NoGit], Method::RecycleBin);
+
+    let chosen = select(&scan, &asked(&[&bench], &[], RemoveMode::Recycle)).unwrap();
+    assert_eq!((chosen.keys, chosen.confirmed, chosen.pending), (vec![path_key(&bench)], vec![], vec![expected.clone()]));
+
+    let chosen = select(&scan, &asked(&[&bench], &[&bench], RemoveMode::Recycle)).unwrap();
+    assert_eq!((chosen.confirmed, chosen.pending), (vec![expected], vec![]));
+}
+
+#[test]
+fn container_needs_the_confirmations_of_its_descendants() {
+    let (_t, base) = tmp();
+    let runs = base.join("agent-runs");
+    let (a, b) = (runs.join("a"), runs.join("b"));
+    let scratch = |p: &Path| at_risk(listed(Category::Scratch, p, session_folder()), &[Risk::NoGit]);
+    let scan = scratch_scan(&base, vec![listed(Category::Named, &runs, Why::NameOnly), scratch(&a), scratch(&b)]);
+    let planned = |p: &Path| plan(p, &[Risk::NoGit], Method::RecycleBin);
+    let recycle = |scan: &ProjectScan, confirm: &[&Path]| select(scan, &asked(&[&runs], confirm, RemoveMode::Recycle));
+
+    let chosen = recycle(&scan, &[]).unwrap();
+    assert_eq!((chosen.keys, chosen.confirmed, chosen.pending), (vec![path_key(&runs)], vec![], vec![planned(&a), planned(&b)]));
+    assert_eq!(recycle(&scan, &[&runs]).unwrap_err(), SelectError::ConfirmNotDanger(runs.clone()));
+    let chosen = recycle(&scan, &[&a]).unwrap();
+    assert_eq!((chosen.confirmed, chosen.pending), (vec![planned(&a)], vec![planned(&b)]));
+
+    let mut blocked = scan.clone();
+    blocked.items[2].blocked = vec![Block::OtherProjectWrites];
     assert_eq!(
-        err.to_string(),
-        format!("listed for review only: folders found in session history cannot be removed yet: {}", scratch.display())
+        recycle(&blocked, &[]).unwrap_err(),
+        SelectError::ContainsBlocked { path: runs.clone(), inner: b.clone(), why: vec![Block::OtherProjectWrites] }
     );
 }
 
 #[test]
-fn select_refuses_a_folder_that_holds_a_scratch_item() {
+fn confirm_must_name_an_included_danger_item() {
     let (_t, base) = tmp();
-    let named = base.join("named");
-    let scratch = named.join("scratch");
+    let bench = base.join("agent-runs").join("bench-1");
+    let target = base.join("proj").join("target");
+    let unknown = base.join("nowhere");
     let scan = scratch_scan(
         &base,
-        vec![listed(Category::Named, &named, Why::NameOnly), listed(Category::Scratch, &scratch, session_folder())],
+        vec![
+            at_risk(listed(Category::Scratch, &bench, session_folder()), &[Risk::NoGit]),
+            Item { level: Level::Recommended, ..listed(Category::Builds, &target, Why::NameOnly) },
+        ],
     );
-    let err = select(&scan, &req(&[], &[&named])).unwrap_err();
-    assert_eq!(err, SelectError::ReviewOnly { path: named.clone(), inner: Some(scratch.clone()) });
+    // (name, included, confirmed, error)
+    let table: [(&str, &Path, &Path, SelectError); 3] = [
+        ("not analysed", &bench, &unknown, SelectError::NotInAnalysis(unknown.clone())),
+        ("danger but not included", &target, &bench, SelectError::ConfirmNotIncluded(bench.clone())),
+        ("included but not danger", &target, &target, SelectError::ConfirmNotDanger(target.clone())),
+    ];
+    for (name, include, confirm, expected) in table {
+        let err = select(&scan, &asked(&[include], &[confirm], RemoveMode::Recycle)).unwrap_err();
+        assert_eq!(err, expected, "{name}");
+    }
+}
+
+#[test]
+fn category_never_takes_danger() {
+    let (_t, base) = tmp();
+    let wt = base.join("proj-wt");
+    let target = base.join("proj").join("target");
+    let build = Item { level: Level::Recommended, ..listed(Category::Builds, &target, Why::NameOnly) };
+    let scan = scratch_scan(
+        &base,
+        vec![
+            build.clone(),
+            at_risk(listed(Category::Scratch, &target.join("run"), session_folder()), &[Risk::NoGit]),
+            at_risk(worktree_item(&wt, &base), &[Risk::RecentActivity]),
+        ],
+    );
+    let take = |scan: &ProjectScan, c: Category| {
+        select(scan, &CleanRequest { categories: vec![c], ..asked(&[], &[], RemoveMode::Recycle) }).unwrap().keys
+    };
+    assert_eq!(take(&scan, Category::Worktrees), Vec::<String>::new());
+    assert_eq!(take(&scan, Category::Builds), Vec::<String>::new());
+    // The same build with nothing at risk inside is taken.
+    assert_eq!(take(&scratch_scan(&base, vec![build]), Category::Builds), vec![path_key(&target)]);
+}
+
+#[test]
+fn permanent_refuses_danger_folders_but_not_worktrees() {
+    let (_t, base) = tmp();
+    let runs = base.join("agent-runs");
+    let bench = runs.join("bench-1");
+    let wt = base.join("proj-wt");
+    let scan = scratch_scan(
+        &base,
+        vec![
+            listed(Category::Named, &runs, Why::NameOnly),
+            at_risk(listed(Category::Scratch, &bench, session_folder()), &[Risk::NoGit]),
+            at_risk(worktree_item(&wt, &base), &[Risk::RecentActivity]),
+        ],
+    );
+    let permanent = |include: &Path| select(&scan, &asked(&[include], &[], RemoveMode::Permanent));
+
+    assert_eq!(permanent(&bench).unwrap_err(), SelectError::DangerPermanent { path: bench.clone(), inner: None });
+    assert_eq!(permanent(&runs).unwrap_err(), SelectError::DangerPermanent { path: runs.clone(), inner: Some(bench.clone()) });
+    let chosen = permanent(&wt).unwrap();
+    assert_eq!(chosen.pending, vec![plan(&wt, &[Risk::RecentActivity], Method::GitWorktreeRemove)]);
+    assert_eq!(chosen.permanent_anyway, vec![path_key(&wt)]);
+}
+
+#[test]
+fn chosen_confirm_moves_only_pending_keys() {
+    let planned = |k: &str| Confirmation { key: k.into(), risks: vec![Risk::NoGit], method: Method::RecycleBin };
+    let mut chosen =
+        Chosen { keys: vec!["a".into(), "b".into()], pending: vec![planned("a")], confirmed: vec![planned("b")], ..Chosen::default() };
+    let before = chosen.clone();
+
+    assert!(!chosen.confirm("b"), "already confirmed");
+    assert!(!chosen.confirm("z"), "not chosen");
+    assert_eq!(chosen, before);
+    assert!(chosen.confirm("a"));
+    assert_eq!((chosen.pending, chosen.confirmed), (vec![], vec![planned("b"), planned("a")]));
+}
+
+#[test]
+fn method_follows_the_target_and_the_mode() {
+    use Method::*;
+    let dir = Target::Dir { kind: ArtifactKind::ProjectFolder };
+    let worktree = Target::Worktree { repo: PathBuf::from(r"C:\p") };
+    let subtree = Target::Subtree { repo: PathBuf::from(r"C:\p") };
+    let session = Target::Session { agent: Agent::Claude, id: "s".into() };
+    // (target, method in Recycle mode, method in Permanent mode)
+    let table = [
+        (&dir, RecycleBin, Permanent),
+        (&Target::File, RecycleBin, Permanent),
+        (&subtree, RecycleBin, Permanent),
+        (&worktree, GitWorktreeRemove, GitWorktreeRemove),
+        (&session, HarnessSession, HarnessSession),
+    ];
+    for (target, recycle, permanent) in table {
+        let methods = (method_of(target, RemoveMode::Recycle), method_of(target, RemoveMode::Permanent));
+        assert_eq!(methods, (recycle, permanent), "{target:?}");
+    }
+    let texts: Vec<&str> = [RecycleBin, Permanent, GitWorktreeRemove, HarnessSession].iter().map(|m| m.describe()).collect();
     assert_eq!(
-        err.to_string(),
-        format!("cannot be removed: it holds {}, found in session history: {}", scratch.display(), named.display())
+        texts,
+        [
+            "to the Recycle Bin",
+            "deleted for good",
+            "removed by git for good, not to the Recycle Bin",
+            "removed with the session tools of its harness",
+        ]
     );
+}
+
+#[test]
+fn the_confirmation_errors_say_what_to_do() {
+    let path = PathBuf::from(r"C:\w\agent-runs");
+    let inner = path.join("bench-1");
+    let table = [
+        (
+            SelectError::ConfirmNotIncluded(path.clone()),
+            format!("--confirm-danger needs that folder, or a folder that holds it, with --include: {}", path.display()),
+        ),
+        (
+            SelectError::ConfirmNotDanger(path.clone()),
+            format!("--confirm-danger is only for danger items, and this one is not: {}", path.display()),
+        ),
+        (
+            SelectError::DangerPermanent { path: path.clone(), inner: None },
+            format!("refusing --permanent: danger folders go to the Recycle Bin only: {}", path.display()),
+        ),
+        (
+            SelectError::DangerPermanent { path: path.clone(), inner: Some(inner.clone()) },
+            format!(
+                "refusing --permanent: it holds {}, a danger folder that goes to the Recycle Bin only: {}",
+                inner.display(),
+                path.display()
+            ),
+        ),
+    ];
+    for (err, text) in table {
+        assert_eq!(err.to_string(), text);
+    }
 }
 
 #[test]
@@ -1383,6 +1585,8 @@ fn check_dir_refuses_a_target_under_a_linked_ancestor() {
         path: Some(through),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -1413,11 +1617,421 @@ fn a_copy_only_the_session_history_found_is_chosen_and_checked_again() {
     assert_eq!(item.category, Category::Copies);
     let chosen = select(&scan, &req(&[], &[&deep])).unwrap();
 
-    // The clean checks again without the history.
+    // The clean reads the history again: without it the copy the history found is left alone.
     let without = Env { search_roots: Some(vec![base.clone()]), ..env() };
     let bin = FakeBin::new(PathBuf::from("unused"));
     let out = run_with(&scan, &chosen, RemoveMode::Permanent, true, &without, &bin, &|_| Vec::new());
+    assert_eq!(outcome_of(&out, &deep), &skipped_with("the session history could not be read again"));
 
+    let out = run_with(&scan, &chosen, RemoveMode::Permanent, true, &with_history, &bin, &|_| Vec::new());
     assert!(matches!(outcome_of(&out, &deep), Outcome::Removed { .. }), "{:#?}", out.items);
     assert!(deep.join("README.md").exists());
+}
+
+#[test]
+fn check_dir_keeps_subtrees_inside_their_repo() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let other = repo(&base.join("other"));
+    let project = resolve_project(&root).unwrap();
+    let make = |path: &Path, target: Target| Item {
+        key: path_key(path),
+        category: Category::Scratch,
+        path: Some(path.to_path_buf()),
+        bytes: None,
+        level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target,
+        provenance: None,
+    };
+    let run1 = root.join("tmp").join("run1");
+    fs::create_dir_all(&run1).unwrap();
+    let outside = base.join("loose");
+    fs::create_dir_all(&outside).unwrap();
+    let in_git = root.join(".git").join("x");
+    fs::create_dir_all(&in_git).unwrap();
+    let subtree = |repo: &Path| Target::Subtree { repo: repo.to_path_buf() };
+    let refused = [
+        (make(&other.join("x"), subtree(&other)), "its repository is no longer the project or one of its worktrees"),
+        (make(&outside, subtree(&root)), "it overlaps the project or one of its worktrees"),
+        (make(&in_git, subtree(&root)), "it is inside the git folder"),
+        (make(&run1, Target::Dir { kind: ArtifactKind::ProjectFolder }), "it overlaps the project or one of its worktrees"),
+    ];
+    fs::create_dir_all(other.join("x")).unwrap();
+    for (item, why) in refused {
+        assert_eq!(check_dir(&item, 1, &project).unwrap_err(), why, "{:?}", item.path);
+    }
+    let plan = check_dir(&make(&run1, subtree(&root)), 1, &project).unwrap();
+    assert_eq!((plan.kind, plan.action), (ArtifactKind::Other, xiox_model::PlanAction::RemoveDir));
+}
+
+// ─────────────────────────── revalidation at removal ───────────────────────────
+
+const DAY: i64 = 24 * 60 * 60 * 1000;
+
+/// A session the fake store lists: `(id, cwd, updated, calls)`.
+type Session = (&'static str, PathBuf, i64, Vec<ToolCall>);
+
+/// What the fake stores list, and the calls each session made.
+struct Stores {
+    listings: Vec<(Agent, xiox_model::Loaded<Descriptor>)>,
+    calls: FakeCalls,
+}
+
+impl Stores {
+    fn of(sessions: Vec<Session>) -> Stores {
+        let mut calls = FakeCalls::default();
+        let mut listed = Vec::new();
+        for (id, cwd, updated, made) in sessions {
+            listed.push(descriptor(Agent::Claude, "main", id, &cwd.to_string_lossy(), &updated.to_string(), None));
+            calls = calls.answer("main", id, Ok(made));
+        }
+        Stores { listings: vec![listing(Agent::Claude, listed)], calls }
+    }
+
+    /// A store whose listing fails and whose sessions cannot be read.
+    fn failing(sessions: Vec<Session>) -> Stores {
+        let ids: Vec<&str> = sessions.iter().map(|s| s.0).collect();
+        let mut stores = Stores::of(sessions.clone());
+        stores.listings[0].1.warnings.push("the store could not be listed".into());
+        stores.calls = ids.into_iter().fold(FakeCalls::default(), |c, id| c.answer("main", id, Err(ReadFailure::Failed)));
+        stores
+    }
+}
+
+/// The project `<base>\work\proj`, whose session `s1` made `<base>\agent-runs\bench-1` and wrote
+/// in it.
+struct Lab {
+    _guard: tempfile::TempDir,
+    base: PathBuf,
+    project: PathBuf,
+    user: UserDirs,
+}
+
+impl Lab {
+    fn new() -> Lab {
+        let (guard, base) = tmp();
+        let project = repo(&base.join("work").join("proj"));
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let user = UserDirs { home: home.clone(), temp: home.join("AppData").join("Local").join("Temp"), resolved: true };
+        let lab = Lab { _guard: guard, base, project, user };
+        fs::create_dir_all(lab.bench()).unwrap();
+        fs::write(lab.bench().join("a.txt"), "x").unwrap();
+        lab
+    }
+
+    fn bench(&self) -> PathBuf {
+        self.base.join("agent-runs").join("bench-1")
+    }
+
+    fn slash(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
+    /// `s1`, updated at `updated`: it made bench-1 and wrote `a.txt` in it.
+    fn s1(&self, updated: i64) -> Session {
+        let (bench, cwd) = (Lab::slash(&self.bench()), self.project.to_string_lossy().into_owned());
+        let calls = vec![bash(&format!("mkdir -p {bench}"), &cwd), bash(&format!("echo x > {bench}/a.txt"), &cwd)];
+        ("s1", self.project.clone(), updated, calls)
+    }
+
+    /// A session `id` working in `cwd`, updated at `updated`, that wrote `file` in bench-1.
+    fn writer(&self, id: &'static str, cwd: &Path, updated: i64, file: &str) -> Session {
+        let target = Lab::slash(&self.bench().join(file));
+        (id, cwd.to_path_buf(), updated, vec![bash(&format!("echo y > {target}"), &cwd.to_string_lossy())])
+    }
+
+    fn env<'a>(&'a self, stores: &'a Stores, now_ms: i64) -> Env<'a> {
+        Env {
+            search_roots: Some(vec![self.base.clone()]),
+            now_ms,
+            history: input(&stores.listings, Some(&stores.calls), &self.user),
+            ..env()
+        }
+    }
+
+    /// The analysis, and bench-1 chosen with its confirmation in Recycle mode.
+    fn confirmed_bench(&self, env: &Env) -> (ProjectScan, Chosen) {
+        let scan = scan_in(&self.project, env);
+        let bench = self.bench();
+        let chosen = select(&scan, &asked(&[&bench], &[&bench], RemoveMode::Recycle)).unwrap();
+        assert_eq!(chosen.confirmed.len(), 1, "{:#?}", scan.items);
+        (scan, chosen)
+    }
+}
+
+fn clean_in_recycle(scan: &ProjectScan, chosen: &Chosen, dry: bool, env: &Env, bin: &FakeBin) -> CleanOutcome {
+    run_with(scan, chosen, RemoveMode::Recycle, dry, env, bin, &|_| Vec::new())
+}
+
+fn scan_item<'a>(scan: &'a ProjectScan, path: &Path) -> &'a Item {
+    let key = path_key(path);
+    scan.items.iter().find(|i| i.key == key).unwrap_or_else(|| panic!("{key} not listed: {:#?}", scan.items))
+}
+
+fn skipped_with(reason: impl Into<String>) -> Outcome {
+    Outcome::Skipped { reason: reason.into() }
+}
+
+const RISKS_CHANGED: &str = "its risks changed since it was confirmed: choose it again";
+
+#[test]
+fn hand_made_chosen_gets_no_more_than_select() {
+    let lab = Lab::new();
+    // The copy made now is recent activity, so it is danger inside the named folder.
+    let now = xiox_app::now_ms();
+    let named = lab.base.join("work").join("proj-box");
+    fs::create_dir_all(&named).unwrap();
+    let copy = clone(&lab.project, &named.join("c"));
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let env = lab.env(&stores, now);
+    let scan = scan_in(&lab.project, &env);
+    let bench = lab.bench();
+    let plan = |p: &Path, risks: Vec<Risk>| Confirmation { key: path_key(p), risks, method: Method::RecycleBin };
+    let right = |p: &Path| plan(p, scan_item(&scan, p).risks.clone());
+    assert_eq!(scan_item(&scan, &copy).level, Level::Danger);
+
+    // (name, chosen folder, its confirmations, outcome)
+    let table = [
+        ("the container alone", &named, vec![right(&named)], skipped_with(format!("it holds {}, which needs an explicit confirmation", copy.display()))),
+        (
+            "the container and a false plan of its copy",
+            &named,
+            vec![right(&named), plan(&copy, Vec::new())],
+            skipped_with(format!("it holds {}, whose risks changed since it was confirmed", copy.display())),
+        ),
+        ("a danger folder without its confirmation", &bench, Vec::new(), skipped_with(DANGER_TEXT)),
+        ("a danger folder with false risks", &bench, vec![plan(&bench, Vec::new())], skipped_with(RISKS_CHANGED)),
+    ];
+    let bin = FakeBin::new(lab.base.join("fake-bin"));
+    for (name, folder, confirmed, expected) in table {
+        let chosen = Chosen { keys: vec![path_key(folder)], confirmed, ..Chosen::default() };
+        // A dry run: the same checks, and a regression never reaches the real Recycle Bin.
+        let out = clean_in_recycle(&scan, &chosen, true, &env, &bin);
+        assert_eq!(outcome_of(&out, folder), &expected, "{name}");
+    }
+    assert!(bench.join("a.txt").exists() && copy.join("README.md").exists() && named.exists());
+    assert!(bin.taken.lock().unwrap().is_empty());
+}
+
+#[test]
+fn replaced_folder_is_skipped_by_identity() {
+    for case in ["recreated", "junction"] {
+        let lab = Lab::new();
+        let now = env().now_ms;
+        let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+        let env = lab.env(&stores, now);
+        let (scan, chosen) = lab.confirmed_bench(&env);
+        let bench = lab.bench();
+        let target = lab.base.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep.txt"), "keep").unwrap();
+
+        fs::remove_dir_all(&bench).unwrap();
+        let expected = match case {
+            "recreated" => {
+                fs::create_dir(&bench).unwrap();
+                "it is not the folder that was analysed: it was replaced"
+            }
+            _ => {
+                if !link_dir(&bench, &target) {
+                    println!("skipped: this machine cannot make a junction");
+                    continue;
+                }
+                // The fresh analysis never follows the link: the folder it analysed is gone.
+                "no longer there"
+            }
+        };
+        let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("fake-bin")));
+        assert_eq!(outcome_of(&out, &bench), &skipped_with(expected), "{case}");
+        assert!(target.join("keep.txt").exists(), "{case}");
+    }
+}
+
+#[test]
+fn a_changed_risk_needs_a_new_choice() {
+    let later = env().now_ms;
+    let now = xiox_app::now_ms();
+    // (name, clock of the analysis, clock of the removal, what happens in between, outcome)
+    type Change = fn(&Lab, i64) -> Vec<Session>;
+    let table: [(&str, i64, i64, Change, &str); 4] = [
+        // Made now it is recent; two days later it is not: fewer risks are a change too.
+        ("a risk goes away", now, later, |_, _| Vec::new(), RISKS_CHANGED),
+        ("the project used it a minute ago", later, later, |lab, at| vec![lab.writer("s2", &lab.project, at - 60_000, "b.txt")], RISKS_CHANGED),
+        (
+            "another project wrote in it",
+            later,
+            later,
+            |lab, at| vec![lab.writer("x1", &lab.base.join("agent-runs"), at - 3 * DAY, "c.txt")],
+            "now blocked: sessions of another project wrote here",
+        ),
+        (
+            "a repository with unsaved work appeared in it",
+            later,
+            later,
+            |lab, _| {
+                git(&lab.bench(), &["init", "-q", "-b", "main"]);
+                Vec::new()
+            },
+            "now blocked: ",
+        ),
+    ];
+    for (name, analysed_at, removed_at, change, expected) in table {
+        let lab = Lab::new();
+        let stores = Stores::of(vec![lab.s1(analysed_at - 3 * DAY)]);
+        let (scan, chosen) = lab.confirmed_bench(&lab.env(&stores, analysed_at));
+
+        let mut sessions = vec![lab.s1(analysed_at - 3 * DAY)];
+        sessions.extend(change(&lab, removed_at));
+        let again = Stores::of(sessions);
+        let out = clean_in_recycle(&scan, &chosen, true, &lab.env(&again, removed_at), &FakeBin::new(lab.base.join("bin")));
+        match outcome_of(&out, &lab.bench()) {
+            Outcome::Skipped { reason } => assert!(reason.starts_with(expected), "{name}: {reason}"),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn history_is_read_again_at_removal() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let (scan, chosen) = lab.confirmed_bench(&lab.env(&stores, now));
+    let bin = FakeBin::new(lab.base.join("bin"));
+
+    let again = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let out = clean_in_recycle(&scan, &chosen, true, &lab.env(&again, now), &bin);
+    assert!(again.calls.asked().contains(&"s1".to_string()), "{:?}", again.calls.asked());
+    assert!(matches!(outcome_of(&out, &lab.bench()), Outcome::Removed { .. }), "{:#?}", out.items);
+
+    let failing = Stores::failing(vec![lab.s1(now - 3 * DAY)]);
+    let out = clean_in_recycle(&scan, &chosen, true, &lab.env(&failing, now), &bin);
+    assert_eq!(outcome_of(&out, &lab.bench()), &skipped_with("the session history could not be read again"));
+}
+
+#[test]
+fn confirmed_scratch_passes_every_check_in_a_dry_run() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let env = lab.env(&stores, now);
+    let (scan, chosen) = lab.confirmed_bench(&env);
+
+    let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("bin")));
+    let item = out.items.iter().find(|i| i.key == path_key(&lab.bench())).expect("bench-1 has an outcome");
+    assert!(matches!(item.outcome, Outcome::Removed { .. }), "{item:?}");
+    assert_eq!((item.method, item.category), (Method::RecycleBin, Category::Scratch));
+    assert!(lab.bench().join("a.txt").exists());
+}
+
+#[test]
+fn a_confirmed_folder_inside_the_project_is_checked_as_a_folder() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let runs = lab.project.join("runs");
+    fs::create_dir_all(&runs).unwrap();
+    fs::write(runs.join("r.txt"), "x").unwrap();
+    let cwd = lab.project.to_string_lossy().into_owned();
+    let stores = Stores::of(vec![("s1", lab.project.clone(), now - 3 * DAY, vec![bash(&format!("mkdir -p {}", Lab::slash(&runs)), &cwd)])]);
+    let env = lab.env(&stores, now);
+    let scan = scan_in(&lab.project, &env);
+    assert!(matches!(scan_item(&scan, &runs).target, Target::Subtree { .. }), "{:#?}", scan.items);
+    let chosen = select(&scan, &asked(&[&runs], &[&runs], RemoveMode::Recycle)).unwrap();
+
+    let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("bin")));
+    assert!(matches!(outcome_of(&out, &runs), Outcome::Removed { .. }), "{:#?}", out.items);
+}
+
+#[test]
+fn permanent_never_reaches_a_danger_folder() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let env = lab.env(&stores, now);
+    let scan = scan_in(&lab.project, &env);
+    let bench = lab.bench();
+    // A plan that names the permanent method, so only the danger rule can stop it.
+    let plan = Confirmation { key: path_key(&bench), risks: scan_item(&scan, &bench).risks.clone(), method: Method::Permanent };
+    let chosen = Chosen { keys: vec![path_key(&bench)], confirmed: vec![plan], ..Chosen::default() };
+
+    let out = run_with(&scan, &chosen, RemoveMode::Permanent, false, &env, &FakeBin::new(lab.base.join("bin")), &|_| Vec::new());
+    assert_eq!(outcome_of(&out, &bench), &skipped_with("refusing --permanent: danger folders go to the Recycle Bin only"));
+    assert!(bench.join("a.txt").exists());
+}
+
+#[test]
+fn danger_worktree_is_removed_by_git_never_forced() {
+    let lab = Lab::new();
+    // Worktrees made now are recent activity: danger.
+    let now = xiox_app::now_ms();
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let env = lab.env(&stores, now);
+    let one = worktree(&lab.project, &lab.base.join("wt").join("one"), "one");
+    let two = worktree(&lab.project, &lab.base.join("wt").join("two"), "two");
+    let scan = scan_in(&lab.project, &env);
+    assert_eq!((scan_item(&scan, &one).level, &scan_item(&scan, &one).risks), (Level::Danger, &vec![Risk::RecentActivity]));
+    let chosen = select(&scan, &asked(&[&one, &two], &[&one, &two], RemoveMode::Recycle)).unwrap();
+    assert!(chosen.confirmed.iter().all(|c| c.method == Method::GitWorktreeRemove), "{:?}", chosen.confirmed);
+    fs::write(two.join("untracked.txt"), "work in progress").unwrap();
+
+    let out = clean_in_recycle(&scan, &chosen, false, &env, &FakeBin::new(lab.base.join("bin")));
+    let removed = out.items.iter().find(|i| i.key == path_key(&one)).expect("one has an outcome");
+    assert!(matches!(removed.outcome, Outcome::Removed { .. }), "{removed:?}");
+    assert_eq!(removed.method, Method::GitWorktreeRemove);
+    assert!(!one.exists());
+    assert!(matches!(outcome_of(&out, &two), Outcome::Skipped { .. } | Outcome::Failed { .. }), "{:#?}", out.items);
+    assert!(two.join("untracked.txt").exists());
+}
+
+#[test]
+fn a_failed_session_read_leaves_session_folders_alone_too() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let (scan, chosen) = lab.confirmed_bench(&lab.env(&stores, now));
+    let blind = Env { health: SessionHealth { live_failed: true, archived_failed: false }, ..lab.env(&stores, now) };
+
+    let out = clean_in_recycle(&scan, &chosen, true, &blind, &FakeBin::new(lab.base.join("bin")));
+    let expected = "the sessions of this PC could not be read, so a live agent session cannot be ruled out";
+    assert_eq!(outcome_of(&out, &lab.bench()), &skipped_with(expected));
+}
+
+#[test]
+fn a_scan_made_without_the_history_is_checked_without_it() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let named = lab.base.join("work").join("proj-old");
+    fs::create_dir_all(&named).unwrap();
+    let cwd = lab.project.to_string_lossy().into_owned();
+    let wrote = bash(&format!("echo x > {}/n.txt", Lab::slash(&named)), &cwd);
+    let stores = Stores::of(vec![("s1", lab.project.clone(), now - 3 * DAY, vec![wrote])]);
+    let env = lab.env(&stores, now);
+    // `--no-history`: the folder is danger for its missing git alone, and no session is read.
+    let scan = analyze_with(&lab.project, &Options { history: false, ..Options::default() }, &env).unwrap();
+    assert_eq!(scan_item(&scan, &named).risks, vec![Risk::NoGit]);
+    let chosen = select(&scan, &asked(&[&named], &[&named], RemoveMode::Recycle)).unwrap();
+
+    let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("bin")));
+    assert!(matches!(outcome_of(&out, &named), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert!(stores.calls.asked().is_empty(), "the history was read: {:?}", stores.calls.asked());
+}
+
+#[test]
+fn a_folder_inside_the_project_counts_for_the_recycle_bin() {
+    let (_t, base) = tmp();
+    let runs = base.join("proj").join("runs");
+    fill(&runs, 1, MB);
+    let scratch = at_risk(listed(Category::Scratch, &runs, session_folder()), &[Risk::NoGit]);
+    let scan = scratch_scan(&base, vec![Item { target: Target::Subtree { repo: base.join("proj") }, ..scratch }]);
+    let chosen = Chosen { keys: vec![path_key(&runs)], ..Chosen::default() };
+
+    // It goes to the bin like any folder; unmeasured in the scan, it is measured now.
+    let short = shortfall_with(&scan, &chosen, RemoveMode::Recycle, |_| Some(1));
+    assert_eq!(short.len(), 1, "{short:?}");
+    assert!(short[0].1 >= MB64, "{short:?}");
 }

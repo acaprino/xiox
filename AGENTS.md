@@ -64,6 +64,19 @@
   - tool `shell` di OpenCode (17): 22/22 contro 12/22; Rust 0 inventati, il prototipo 29.
 - Etichette: `sed -i` è una scrittura, e un heredoc col corpo tagliato scrive comunque il suo
   bersaglio. Le prossime istruzioni agli etichettatori lo devono dire.
+- Passo 4, selezione e pulizia (piano `docs/superpowers/plans/2026-11-16-step4-selection-cleanup.md`,
+  ramo `feat/step4`): schema 2 e livello `danger` di `xiox-project` (non di `xiox_model`), rischi per
+  categoria in `history/danger.rs`, una sola ammissione `clean/admit.rs` per `select` e per la
+  riconvalida, `--confirm-danger` e domanda per voce nella CLI. Alla pulizia la cronologia si
+  rilegge solo se la scansione mostrata l'aveva letta (`--no-history` vale anche lì); identità
+  della cartella, rischi e metodo devono restare quelli confermati. Le cartelle `danger` vanno
+  solo nel Cestino, i worktree solo con `git worktree remove`. Il desktop non mostra voci della
+  cronologia.
+- Test della pulizia: nessun test raggiunge il Cestino reale (le cartelle in modalità Cestino
+  passano dal `ParallelRemover`, non dalla `Trash` finta). Una cartella `danger` si prova con
+  `dry_run: true`; una rimozione vera si prova solo su una cartella che non è `danger` (per una
+  `named`, un clone pulito di un repository estraneo). La fixture `env()` ha l'orologio due giorni
+  avanti: ciò che il test crea non è attività recente, salvo un orologio proprio.
 - Limiti di Mukade trovati il 2026-11-15:
   - `list pi` dà lo stesso id `session` a 50 sessioni;
   - 7 catene di subagent di Claude Code vengono rifiutate;

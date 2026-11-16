@@ -9,10 +9,10 @@
 //! tested as a candidate but never descended into.
 
 use crate::owned::key_within;
-use crate::{Block, Category, Env, Item, Note, Options, Project, SearchMode, Target, Why};
+use crate::{Block, Category, Env, Item, Level, Note, Options, Project, SearchMode, Target, Why};
 use crate::nested::nested_repos;
 use crate::owned::live_session_in;
-use xiox_model::{ArtifactKind, DirIndex, Level, is_system_dir, normalize_path, path_key};
+use xiox_model::{ArtifactKind, DirIndex, is_system_dir, normalize_path, path_key};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,7 +178,10 @@ fn independent_verdict(dir: &Path) -> Verdict {
 /// being a repository with work of its own blocks it; a repository git cannot read, in it or
 /// below it, blocks it (nothing can show it has no unsaved work). What is below a folder and
 /// is not listed is checked again when the folder is removed (`clean::check_contents`).
-pub(crate) fn named_blocks(dir: &Path) -> Vec<Block> {
+/// With `repos_block`, any git repository inside the folder blocks it too: a session folder is
+/// nobody's copy, so what it holds cannot be vouched for (a named folder's nested copies are
+/// checked one by one at removal instead).
+pub(crate) fn named_blocks(dir: &Path, repos_block: bool) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut unknown = false;
     if is_git_repo(dir) {
@@ -189,7 +192,12 @@ pub(crate) fn named_blocks(dir: &Path) -> Vec<Block> {
         }
     }
     match nested_repos(dir) {
-        Ok(repos) => unknown |= repos.iter().any(|r| xiox_git::working_tree_dirty(r).is_none()),
+        Ok(repos) => {
+            unknown |= repos.iter().any(|r| xiox_git::working_tree_dirty(r).is_none());
+            if repos_block && !repos.is_empty() {
+                blocks.push(Block::HoldsRepositories);
+            }
+        }
         Err(_) => unknown = true,
     }
     if unknown {
@@ -328,7 +336,8 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
     let mut blocked = match &why {
         Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
         Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
-        Why::NameOnly | Why::SessionFolder { .. } => named_blocks(dir),
+        Why::NameOnly => named_blocks(dir, false),
+        Why::SessionFolder { .. } => named_blocks(dir, true),
         _ => Vec::new(),
     };
     if live_session_in(dir, env) {
@@ -339,6 +348,8 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
         category,
         bytes: opts.measure.then(|| xiox_cleaner::measure_dir(dir).effective_bytes()),
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: crate::identity::folder_id(dir),
         blocked,
         why,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },

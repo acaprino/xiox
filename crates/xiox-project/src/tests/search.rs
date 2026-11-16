@@ -4,7 +4,9 @@ use super::fixtures::*;
 use crate::search::{mft_hits, name_matches_project, walk_candidates};
 use crate::{Block, Category, Env, Note, Options, ProjectScan, SearchMode, Target, Why, analyze_with, resolve_project};
 use xiox_disktree::{DiskIndex, Node};
-use xiox_model::{ArtifactKind, Level};
+use xiox_model::ArtifactKind;
+
+use crate::Level;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +32,7 @@ fn scan(project: &Path, roots: Vec<PathBuf>, opts: &Options) -> ProjectScan {
         sessions: &[],
         archived: &[],
         search_roots: Some(roots),
-        now_ms: xiox_app::now_ms(),
+        now_ms: env().now_ms,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     };
@@ -48,7 +50,7 @@ fn found(scan: &ProjectScan) -> Vec<PathBuf> {
 }
 
 #[test]
-fn sibling_folder_with_the_project_name_is_named_caution() {
+fn sibling_folder_with_the_project_name_is_named_and_danger_without_git() {
     let (_t, base) = tmp();
     let project = project_in(&base);
     let sibling = base.join("work").join("mukade-test-scratch");
@@ -61,7 +63,7 @@ fn sibling_folder_with_the_project_name_is_named_caution() {
     assert_eq!(named.len(), 1, "{named:?}");
     let item = named[0];
     assert_eq!(item.path.as_deref(), Some(canon(&sibling).as_path()));
-    assert_eq!(item.level, Level::Caution);
+    assert_eq!((item.level, &item.risks), (Level::Danger, &vec![crate::Risk::NoGit]));
     assert_eq!(item.why, Why::NameOnly);
     assert_eq!(item.target, Target::Dir { kind: ArtifactKind::ProjectFolder });
     assert!(item.blocked.is_empty());

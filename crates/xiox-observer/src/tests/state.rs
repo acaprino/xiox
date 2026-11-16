@@ -1,6 +1,6 @@
 use super::fixtures::{GB, MB, build, item, scan, scan_at, worktree};
 use crate::{AttentionKind, Event, Observer, PARTIAL_BACK_OFF_MS, Params};
-use xiox_model::Level;
+use xiox_project::Level;
 use xiox_project::{Block, Category, SCHEMA};
 
 const T0: i64 = 1_000;
@@ -653,4 +653,20 @@ fn a_partial_baseline_item_that_grows_beyond_what_was_walked_counts_what_was_see
     let mut o = Observer::new_measured(scan(vec![build("target", Some(GB))]), params(GB, 3), T0, &partial_of(&["target"]));
     let events = o.update_measured(scan(vec![build("target", Some(3 * GB))]), T0 + 1, &partial_of(&["target"]));
     assert!(events.iter().any(|e| matches!(e, Event::Attention { kind: AttentionKind::Growth, .. })), "{events:?}");
+}
+
+#[test]
+fn clean_command_never_carries_danger() {
+    let mut o = Observer::new(scan(vec![]), quiet(), T0);
+    let dist = build("dist", Some(MB));
+    let wt = item(Category::Worktrees, r"D:\Projects\mukade-spike", Some(MB), Level::Recommended, vec![]);
+    o.update(scan(vec![dist.clone(), wt.clone()]), T0 + 1);
+    assert!(o.report(false).clean_command.unwrap().contains(&path_of(&wt)), "recommended, it is offered");
+
+    // Used again in the last day: danger, which only `--confirm-danger` takes.
+    let danger = xiox_project::Item { level: Level::Danger, risks: vec![xiox_project::Risk::RecentActivity], ..wt.clone() };
+    o.update(scan(vec![dist.clone(), danger]), T0 + 2);
+    let cmd = o.report(false).clean_command.unwrap();
+    assert!(cmd.contains(&path_of(&dist)), "{cmd}");
+    assert!(!cmd.contains(&path_of(&wt)), "{cmd}");
 }

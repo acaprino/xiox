@@ -16,6 +16,7 @@ pub enum Command {
         project: Option<PathBuf>,
         categories: Vec<Category>,
         include: Vec<PathBuf>,
+        confirm_danger: Vec<PathBuf>,
         permanent: bool,
         yes: bool,
         dry_run: bool,
@@ -39,8 +40,8 @@ pub const USAGE: &str = "\
 Usage:
   xiox analyze [<project>] [--json] [--no-drives] [--no-history]
   xiox clean   [<project>] [--builds] [--worktrees] [--logs] [--sessions]
-               [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
-               [--no-history]
+               [--include <path>]... [--confirm-danger <path>]... [--permanent]
+               [--yes] [--dry-run] [--json] [--no-drives] [--no-history]
   xiox observe [<project>] [--interval <seconds>] [--grow-threshold <size>]
                [--worktree-threshold <n>] [--no-drives] [--mcp]
   xiox --help | --version";
@@ -74,10 +75,14 @@ Flags:
   --sessions       clean: every archived agent session that is not blocked
   --include <path> clean: one more item of the listing, of any level (repeatable).
                    Copies and name-matched folders can only be taken this way.
+  --confirm-danger <path>
+                   clean: confirm one danger item: the folder, or one inside a folder given
+                   with --include (repeatable). A danger item goes only with it, or with a
+                   yes at the terminal, and never with --permanent.
   --permanent      clean: delete for good instead of moving to the Recycle Bin
-  --yes            clean: do not ask for confirmation
+  --yes            clean: do not ask the final question (danger items still need --confirm-danger)
   --dry-run        clean: do everything except deleting, and say what would be freed
-  --json           print a single JSON object (schema 1) on stdout; messages go to stderr
+  --json           print a single JSON object (schema 2) on stdout; messages go to stderr
   --no-drives      search only next to the project, not on every fixed drive
   --no-history     analyze, clean: do not read the agent session history (no `scratch` folders)
   --interval <s>   observe: seconds between checks (default 600, from 60 to 2592000)
@@ -120,10 +125,27 @@ const DEFAULT_WORKTREE_THRESHOLD: usize = 3;
 
 const NO_COPIES_FLAG: &str = "--copies/--named do not exist: name each folder with --include <path>";
 const INCLUDE_NEEDS_PATH: &str = "--include needs a path: --include <path>";
+const CONFIRM_NEEDS_PATH: &str = "--confirm-danger needs a path: --confirm-danger <path>";
 
 /// The flags that take a value: `--flag value` or `--flag=value`.
 fn takes_value(flag: &str) -> bool {
-    matches!(flag, "--include" | "--interval" | "--grow-threshold" | "--worktree-threshold")
+    matches!(flag, "--include" | "--confirm-danger" | "--interval" | "--grow-threshold" | "--worktree-threshold")
+}
+
+/// The path of `--flag <path>` or `--flag=<path>`; a following `--flag` or an empty value is
+/// `needs`, the usage error.
+fn path_value<'a>(inline: Option<String>, it: &mut impl Iterator<Item = &'a String>, needs: &str) -> Result<PathBuf, String> {
+    let value = match inline {
+        Some(v) => v,
+        None => match it.next() {
+            Some(v) if !v.starts_with("--") => v.clone(),
+            _ => return Err(needs.to_string()),
+        },
+    };
+    if value.is_empty() {
+        return Err(needs.to_string());
+    }
+    Ok(PathBuf::from(value))
 }
 
 /// The value of `--flag value` or `--flag=value`; a following `--flag` is not a value.
@@ -159,6 +181,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut project: Option<PathBuf> = None;
     let mut categories: Vec<Category> = Vec::new();
     let mut include: Vec<PathBuf> = Vec::new();
+    let mut confirm_danger: Vec<PathBuf> = Vec::new();
     let (mut permanent, mut yes, mut dry_run, mut json, mut no_drives) = (false, false, false, false, false);
     let mut no_history = false;
     let mut interval_secs = DEFAULT_INTERVAL_SECS;
@@ -270,17 +293,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             }
             "--include" => {
                 only_clean(flag)?;
-                let value = match inline {
-                    Some(v) => v,
-                    None => match it.next() {
-                        Some(v) if !v.starts_with("--") => v.clone(),
-                        _ => return Err(INCLUDE_NEEDS_PATH.to_string()),
-                    },
-                };
-                if value.is_empty() {
-                    return Err(INCLUDE_NEEDS_PATH.to_string());
-                }
-                include.push(PathBuf::from(value));
+                include.push(path_value(inline, &mut it, INCLUDE_NEEDS_PATH)?);
+            }
+            "--confirm-danger" => {
+                only_clean(flag)?;
+                confirm_danger.push(path_value(inline, &mut it, CONFIRM_NEEDS_PATH)?);
             }
             f if f.starts_with('-') && f.len() > 1 => return Err(format!("unknown flag: {f}")),
             _ => {
@@ -295,7 +312,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     Ok(match which {
         Which::Observe => Command::Observe { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp },
         Which::Analyze => Command::Analyze { project, json, no_drives, no_history },
-        Which::Clean => Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history },
+        Which::Clean => {
+            Command::Clean { project, categories, include, confirm_danger, permanent, yes, dry_run, json, no_drives, no_history }
+        }
     })
 }
 
@@ -349,6 +368,8 @@ mod tests {
             "--include",
             "D:\\a",
             "--include=D:\\b",
+            "--confirm-danger",
+            "D:\\a",
             "--permanent",
             "--yes",
             "--dry-run",
@@ -361,6 +382,7 @@ mod tests {
                 project: Some(PathBuf::from("D:\\proj")),
                 categories: vec![Category::Builds, Category::Worktrees, Category::Logs, Category::Sessions],
                 include: vec![PathBuf::from("D:\\a"), PathBuf::from("D:\\b")],
+                confirm_danger: vec![PathBuf::from("D:\\a")],
                 permanent: true,
                 yes: true,
                 dry_run: true,
@@ -377,6 +399,7 @@ mod tests {
                 project: Some(PathBuf::from("D:\\proj")),
                 categories: vec![Category::Builds],
                 include: vec![],
+                confirm_danger: vec![],
                 permanent: false,
                 yes: false,
                 dry_run: false,
@@ -385,6 +408,28 @@ mod tests {
                 no_history: false,
             })
         );
+    }
+
+    #[test]
+    fn clean_confirm_danger_repeats() {
+        let got = p(&["clean", "--include", "a", "--confirm-danger", "a", "--confirm-danger", "b"]);
+        let Ok(Command::Clean { include, confirm_danger, .. }) = got else { panic!("a clean command: {got:?}") };
+        assert_eq!(include, vec![PathBuf::from("a")]);
+        assert_eq!(confirm_danger, vec![PathBuf::from("a"), PathBuf::from("b")]);
+        let got = p(&["clean", "--confirm-danger=D:\\x"]);
+        let Ok(Command::Clean { confirm_danger, .. }) = got else { panic!("a clean command: {got:?}") };
+        assert_eq!(confirm_danger, vec![PathBuf::from("D:\\x")]);
+    }
+
+    #[test]
+    fn confirm_danger_needs_a_value() {
+        let needs = Err("--confirm-danger needs a path: --confirm-danger <path>".to_string());
+        for args in [&["clean", "--confirm-danger"][..], &["clean", "--confirm-danger", "--yes"], &["clean", "--confirm-danger="]] {
+            assert_eq!(p(args), needs, "{args:?}");
+        }
+        assert!(p(&["analyze", "--confirm-danger", "a"]).unwrap_err().contains("only valid for clean"));
+        assert!(help().contains("--confirm-danger <path>"), "{}", help());
+        assert!(USAGE.contains("[--confirm-danger <path>]..."), "{USAGE}");
     }
 
     #[test]

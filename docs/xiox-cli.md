@@ -54,7 +54,9 @@ is inside a git repository, or is one of its linked worktrees, the project is th
 main working tree. Otherwise the folder itself is the project.
 
 The examples in this guide come from real runs on a throwaway project whose files were created
-only for this purpose (the user name in the paths is replaced by `alice`):
+only for this purpose (the user name in the paths is replaced by `alice`). The `danger` level came
+later: its lines were added to these examples by hand, in the exact format of the current version,
+and the folders are taken as made days ago (nothing in them is recent activity):
 
 | Folder | What it is |
 |---|---|
@@ -85,7 +87,8 @@ COPIES                                                                        2 
   caution           1 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp-clone       copy of the repository: same origin and first commit, no own work
 
 NAMED                                                                         1 MB
-  caution           1 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench       matched by name only
+  danger            1 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench       matched by name only
+                          danger: explicit confirmation required: not a git repository
 
 LOGS                                                                          2 MB
   recommended       2 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp\debug.log   log file, ignored by git
@@ -104,7 +107,9 @@ Progress and errors go to stderr (`Analyzing <folder> ...`); the listing goes to
 
 Read it as a shopping list. The last line is a ready-made command for the recommended part:
 `xiox clean "<project>" --builds --worktrees --logs`. Everything else is listed so that you
-can see it, but needs a deliberate choice, or cannot be removed at all.
+can see it, but needs a deliberate choice, or cannot be removed at all. A `danger` line (here the
+folder that is not a git repository) needs more than a choice: an explicit confirmation of that
+one item, see [Confirming danger items](#confirming-danger-items).
 
 ## What belongs to a project
 
@@ -126,7 +131,8 @@ ones, so not `node_modules`, and never the personal-data ones) or `--include <pa
 (`git worktree list`), wherever they are on disk. A worktree is `recommended` when it is clean
 and its HEAD commit is also contained in a remote branch or in a local branch other than the
 one checked out there, so no commit can be lost. Otherwise it is blocked (see the table
-below); so it is when an agent session is open in it. A registered worktree whose folder no longer exists is not an item: it appears as a
+below); so it is when an agent session is open in it. A worktree used or changed in the last 24
+hours (a session worked in it, or its folder changed) is `danger`. A registered worktree whose folder no longer exists is not an item: it appears as a
 `note:` ("git still lists a worktree whose folder is gone"), and `git worktree prune` clears
 it. Selected with `--worktrees` or `--include <path>`.
 
@@ -134,7 +140,8 @@ it. Selected with `--worktrees` or `--include <path>`.
 identity as the project: they share at least one root (first) commit with it, or their
 `origin` URL is the same after normalisation (case and a trailing `.git` are ignored, and
 `git@host:a/b` equals `https://host/a/b`). They are found by identity, whatever the folder is
-called. A fork has the same identity too, so a copy is **always `caution`**. The listing says
+called. A fork has the same identity too, so a copy is **`caution`**, and `danger` when it was
+used or changed in the last 24 hours. The listing says
 whether the copy has work of its own:
 
 - `no own work`: it is clean, and its HEAD, every local branch, every tag and every stash
@@ -156,8 +163,10 @@ repository, or containing the project is never listed. Copies can only be remove
 **`named`: folders named like the project.** Folders outside the project whose name is the
 project name followed by `-`, `_`, `.` or a space and at least one more character
 (case-insensitive): `sampleapp-bench`, `sampleapp_tmp`. Nothing but the name links them to the
-project, so they are **always `caution`** ("matched by name only"). They are never taken by a
-category flag, only by `--include <path>`.
+project, so they are **`caution`** ("matched by name only"), and `danger` when the folder is
+not a git repository or was used or changed in the last 24 hours (with session evidence, every
+risk of the table below counts). They are never taken by a category flag, only by
+`--include <path>`.
 
 A named folder is blocked when an agent session is open inside it (`live-session`), and when it
 is, or holds, a git repository that git cannot read (`unsaved-work-unknown`: nothing can show
@@ -173,15 +182,22 @@ was written in it, or the folder itself was made, copied, moved or cloned); a fo
 only read, listed or entered is never proposed. The listing says what the sessions did (`made by
 a session`, `files written here by a session`), how many distinct sessions touched the folder,
 the date of the last one (`no date` when no session gave one), `from a script` when the evidence
-comes from a script that a session ran, and the **risks**: `no git`, `weak evidence`,
-`partial history` and `recent activity` (a session touched it in the last 24 hours, or the
-folder itself was modified in that time: the folder date feeds this risk only, never the
-provenance). `weak evidence` means the strongest evidence is below `created`: the folder was only
-written in, not made by a session. The category
-makes no promise that the content is useless: a session may have put something of yours there.
-**`xiox` cannot remove a scratch folder yet**: the category flags do not take it and `--include`
-refuses it. The listing is for review. Copies and named folders that the history also shows get
-`; seen in <n> sessions` added to their description.
+comes from a script that a session ran, and the **risks** in short (`risk: no git, weak
+evidence, partial history, recent activity`; the folder date feeds `recent activity` only, never
+the provenance). A scratch folder with any risk is `danger`, so it goes only with an explicit
+confirmation (see [Confirming danger items](#confirming-danger-items)); one without risks is
+`caution`. The category makes no promise that the content is useless: a session may have put
+something of yours there. Category flags never take a scratch folder; `--include` does.
+
+A scratch folder is blocked when it holds a git repository (`holds-repositories`: a session folder
+is nobody's copy, so a repository in it cannot be vouched for) and when a session of another
+project wrote in it (`other-project-writes`, see [Safety](#safety)). A folder that sessions made
+**inside the project** or one of its worktrees can be a candidate too, under the **subtree
+policy**: never one inside the `.git` folder or one that holds the project or a worktree; blocked
+(`tracked-files`) when git tracks files in it, and (`unsaved-work-unknown`) when git cannot tell;
+at removal it must still be strictly inside its repository, which must still be the project or
+one of its worktrees. Its target is `subtree` in JSON. Copies and named folders that the history
+also shows get `; seen in <n> sessions` added to their description.
 
 **`logs`: log and temporary files.** Files (not folders) ending in `.log`, `.tmp`, `.bak` or
 `.dmp`, at least 1 MiB, inside the project and its worktrees (not inside a build folder that is
@@ -211,7 +227,29 @@ Every item has a **level**: how strongly the tool recommends removing it.
 | `recommended` | Regenerates, or carries nothing that would be lost. | its category flag, or `--include` |
 | `optional` | Can be lost, but you may still want it (dependency folders, sessions). | `--sessions` for sessions; `--include` for folders |
 | `caution` | Needs your judgement: only the project's name or identity links it, or git tracks something in it. | `--include` only |
+| `danger` | At least one risk its category weighs (table below). The listing adds `danger: explicit confirmation required: <reasons>` under it. | `--include` plus an explicit confirmation of that item (`--confirm-danger <path>`, or a yes to its own question); never a category flag; a folder never with `--permanent` |
 | `blocked` | Cannot be removed. Shown in the level column in place of the level. | nothing, not even `--include` |
+
+**Risks.** A risk is a fact about the folder, not a verdict on it; the category decides which
+risks count:
+
+| Category | Risks that make it `danger` |
+|---|---|
+| `scratch` | all four |
+| `named` that the session history shows | all four |
+| `named` that only its name links | `no-git`, `recent-activity` |
+| `copies`, `worktrees` | `recent-activity` |
+| `builds`, `logs`, `sessions` | none |
+
+| JSON value | Text (listing, questions, errors) | Holds when |
+|---|---|---|
+| `no-git` | not a git repository | the folder has no `.git` of its own |
+| `weak-evidence` | the sessions wrote or worked here; no creation is recorded | no session is recorded making the folder |
+| `partial-coverage` | the session history was read only in part | a cap was reached, a session could not be read, a session has calls the parsers could not fully read, or a nearby session of another project could not be read |
+| `recent-activity` | used or changed in the last 24 hours | a session's last activity there, or the folder's own date, is within the last 24 hours; activity inside a folder counts for every listed folder that holds it |
+
+Recent activity is a risk, not a block: an open agent session still blocks (`live-session`), and
+a session that may still be running is not proof of one.
 
 An item is blocked when it has at least one **block**. In the listing the reason replaces the
 description; in JSON the `blocked` array holds the value of the first column.
@@ -224,7 +262,10 @@ description; in JSON the `blocked` array holds the value of the first column.
 | `unreachable` | could not be checked | builds |
 | `session-locked` | session locked by its harness | sessions |
 | `unsaved-work` | has commits or changes the project does not have | copies, named folders that are repositories |
-| `unsaved-work-unknown` | could not be checked for unsaved work | copies, named folders that are or hold a repository |
+| `unsaved-work-unknown` | could not be checked for unsaved work | copies, named folders that are or hold a repository, scratch folders inside the project when git cannot tell |
+| `other-project-writes` | sessions of another project wrote here | scratch folders, named folders the session history shows |
+| `holds-repositories` | holds git repositories | scratch folders |
+| `tracked-files` | holds files tracked by git | scratch folders inside the project |
 | `unknown` | unknown reason | reserved: the current version never produces it |
 
 **Top-level folders.** A folder directly under a drive or share root (such as `D:\sampleapp-old`)
@@ -278,7 +319,7 @@ Reading the output (see the example above):
   name is too short to match folders by name; some drives were searched only to 3 levels;
   a registered worktree is gone; the analysis reported warnings and the listing may be
   incomplete; the session listing of this PC could not be read (a live agent session may be
-  missed; `clean` then leaves worktrees, copies and named folders alone); git could not list the
+  missed; `clean` then leaves worktrees, copies, named and scratch folders alone); git could not list the
   files of the project or of a worktree (its log files are not in the listing); the folder is a
   drive root, your user profile or holds several projects (see `clean`); the session history was
   read only in part (the `History` line says what stopped it, so folders made by agents may be
@@ -301,8 +342,8 @@ Search   project's parent only
 
 ```text
 xiox clean [<project>] [--builds] [--worktrees] [--logs] [--sessions]
-           [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
-           [--no-history]
+           [--include <path>]... [--confirm-danger <path>]... [--permanent]
+           [--yes] [--dry-run] [--json] [--no-drives] [--no-history]
 ```
 
 `clean` first runs the same analysis as `analyze`, then removes **only what the flags name**.
@@ -312,17 +353,18 @@ listing and `Nothing selected. Name what to clean: --builds --worktrees --logs -
 
 | Flag | Meaning |
 |---|---|
-| `--builds` | The `recommended` build folders that are not blocked. |
+| `--builds` | The `recommended` build folders that are not blocked. A category flag never takes a `danger` item, nor an item that holds one. |
 | `--worktrees` | The `recommended` linked worktrees. |
 | `--logs` | The `recommended` log files. |
 | `--sessions` | Every archived session of the project that is not blocked. |
-| `--include <path>` | One more item of the listing, of any level except blocked ones, by its path. Repeatable; `--include=<path>` works too. The only way to take copies, name-matched folders and `optional` or `caution` folders and files. A `scratch` item is refused. |
-| `--permanent` | Delete for good instead of moving to the Recycle Bin. |
-| `--yes` | Do not ask for confirmation. |
+| `--include <path>` | One more item of the listing, of any level except blocked ones, by its path. Repeatable; `--include=<path>` works too. The only way to take copies, name-matched folders, scratch folders and `optional`, `caution` or `danger` folders and files. A `danger` item, or one inside the folder you name, also needs its confirmation. |
+| `--confirm-danger <path>` | Confirm one `danger` item: the folder you named with `--include`, or a `danger` item inside it. Repeatable. See [Confirming danger items](#confirming-danger-items). |
+| `--permanent` | Delete for good instead of moving to the Recycle Bin. Refused for a `danger` folder and for a folder that holds one. |
+| `--yes` | Do not ask the final question. It never confirms a `danger` item: those still need `--confirm-danger`. |
 | `--dry-run` | Do every check, remove nothing, say what would be freed. |
 | `--json` | One JSON object on stdout, see [JSON](#json). |
 | `--no-drives` | As for `analyze`. |
-| `--no-history` | As for `analyze`, for the analysis `clean` starts from. The check right before removing never reads the history. |
+| `--no-history` | As for `analyze`, for the analysis `clean` starts from. The check right before removing then does not read the history either. |
 
 **One project per run.** The category flags (`--builds`, `--worktrees`, `--logs`, `--sessions`)
 are refused, with exit code 2, when the folder is a drive root, your user profile or a folder
@@ -375,12 +417,75 @@ error: not found in the analysis of this project: C:\Users\alice\AppData\Local\T
 error: cannot be removed: it holds C:\Users\alice\AppData\Local\Temp\w\sampleapp-old\copy (has commits or changes the project does not have): C:\Users\alice\AppData\Local\Temp\w\sampleapp-old
 ```
 
+### Confirming danger items
+
+A `danger` item is never removed on a general yes. It goes only when the request names it and
+confirms it, item by item:
+
+1. `--include <path>` names the item, or a folder that holds it. Taking a folder takes every
+   `danger` item inside it, and each of them needs its own confirmation; confirming the folder
+   does not confirm what is inside.
+2. The confirmation is `--confirm-danger <path>` with the same path (repeatable), or a yes to the
+   item's own question at a terminal. `--confirm-danger` is refused for a path the analysis did not
+   produce (`not found in the analysis of this project`), for an item that is not `danger`
+   (`--confirm-danger is only for danger items, and this one is not: <path>`) and for a `danger`
+   item that no `--include` takes (`--confirm-danger needs that folder, or a folder that holds it,
+   with --include: <path>`). It never names an arbitrary path.
+3. Without the confirmation, `--yes`, `--json` and a stdin that is not a terminal remove nothing:
+   every item that is still waiting gets one line on stderr and the exit code is 2.
+
+```text
+> xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench --yes
+error: C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench: danger: explicit confirmation required (not a git repository): add --confirm-danger "C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench"
+```
+
+(exit code 2)
+
+**At a terminal**, without `--confirm-danger`, each `danger` item gets its own question before
+the summary. It says why the item is `danger` and how it would go:
+
+```text
+C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench
+  danger: explicit confirmation required
+  - not a git repository
+  removal: to the Recycle Bin
+Remove this danger item? [y/N]
+```
+
+A yes confirms that item; the first no prints `Cancelled.`, removes nothing and exits with 0.
+Then the summary and the usual final question follow.
+
+**An agent** confirms on the command line, and only after the person agreed to that exact path:
+
+```text
+xiox clean "C:\src\my-project" --include "C:\src\agent-runs\bench-42" --confirm-danger "C:\src\agent-runs\bench-42" --yes --json
+```
+
+**The Recycle Bin is the only way for a `danger` folder.** `--permanent` is refused for it, and for
+a folder that holds one (`refusing --permanent: danger folders go to the Recycle Bin only: <path>`,
+or `refusing --permanent: it holds <inner>, a danger folder that goes to the Recycle Bin only:
+<path>`). A `danger` worktree is the exception: a worktree is always removed by `git worktree
+remove`, for good, never forced and never through the bin, whatever the mode, and its question
+says `removal: removed by git for good, not to the Recycle Bin`.
+
+**At removal the plan is checked again.** The confirmed plan is the item's risks and its method.
+Right before removing, the fresh analysis (with the session history read again, see
+[Safety](#safety)) must find the same folder with the same risks and the same method; any change,
+fewer risks included, skips the item with `its risks changed since it was confirmed: choose it
+again` or `its removal method changed since it was confirmed: choose it again`. A `danger` item
+inside a chosen folder that has no confirmation now, or whose risks changed, stops the folder (`it
+holds <path>, which needs an explicit confirmation`, `it holds <path>, whose risks changed since it
+was confirmed`). A dry run asks nothing: a `danger` item without its confirmation comes out as
+`skipped` with `danger: explicit confirmation required`.
+
 ### Summary, confirmation and `--yes`
 
 Before anything is removed `xiox` prints a summary: the chosen items by category, the total,
 where they go (`to the Recycle Bin` or `permanently`), a line for every folder named with
 `--include` that deserves a second look, a warning for top-level folders that will be skipped,
-and a warning for a Recycle Bin that is too small. Then it asks a question of this form:
+the way each confirmed `danger` item and each worktree goes (`How danger items and worktrees
+go:`, one `<path>: <method>` line each), and a warning for a Recycle Bin that is too small. Then it
+asks a question of this form:
 
 ```text
 Remove 2 items (12 MB)? [y/N]
@@ -505,10 +610,11 @@ Total 1 MB in 1 item, permanently.
 Freed 1 MB
 ```
 
-A name-matched folder (a copy is named the same way), taken with `--include`:
+A name-matched folder (a copy is named the same way), taken with `--include`. It is not a git
+repository, so it is `danger`: it needs its confirmation and goes to the Recycle Bin:
 
 ```text
-> xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench --yes --permanent
+> xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench --confirm-danger C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench --yes
 To be removed:
 
 NAMED                                                       1 MB
@@ -517,9 +623,12 @@ NAMED                                                       1 MB
 Named with --include (check each one before you go on):
   C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench  matched by name only: nothing else shows it belongs to the project
 
-Total 1 MB in 1 item, permanently.
+How danger items and worktrees go:
+  C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench: to the Recycle Bin
+
+Total 1 MB in 1 item, to the Recycle Bin.
   removed            1 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench
-Freed 1 MB
+Freed 1 MB (1 MB in the Recycle Bin: freed when it is emptied)
 ```
 
 Afterwards the listing shows what is left: the blocked worktree and copy, the unblocked copy
@@ -557,17 +666,35 @@ sits inside another chosen item (a log inside a removed worktree) is reported as
 ### JSON
 
 `--json` (on `analyze` and on `clean`) prints **one JSON object on one line to stdout** and
-nothing else there; every message for a person goes to stderr. The object has `"schema": 1`;
+nothing else there; every message for a person goes to stderr. The object has `"schema": 2`;
 field names are camelCase and enum values are kebab-case. Every text in it is English.
 Within one `schema`, new fields and new values may appear; a changed meaning increments it.
-A script should ignore the fields and the values it does not know. The session-history step only
-adds: the category `scratch`, the `why` type `session-folder`, `items[].provenance`, the
-top-level `history` and two notes; `schema` stays 1.
+A script should ignore the fields and the values it does not know, and check `schema` first.
+
+**Schema 1 → 2.** The meanings changed, not only the fields: the level `danger`, which no
+category selects; a selection that wants a confirmation for `danger` items; `scratch` folders,
+which can now be removed; and `risks`, which moved from `why` to every item.
+
+| Field | Schema 1 | Schema 2 |
+|---|---|---|
+| `items[].level` | `recommended`, `optional`, `caution` | also `danger` |
+| `items[].risks` | absent; `why.risks` in `session-folder` only | on every item, `[]` when there is none; `why.risks` is gone |
+| `items[].blocked` | | new values `other-project-writes`, `holds-repositories`, `tracked-files` |
+| `items[].target` | `dir`, `file`, `worktree`, `session` | also `subtree` (`repo`): a scratch folder inside the project or a worktree |
+| `items[].provenance.otherProjects` | absent | the sessions of other projects that wrote in the folder |
+| `history.conflicts` | absent | `read`, `unread`: the nearby sessions of other projects read, and left unread, to look for their writes |
+| `history.excluded` | | new keys `short-name`, `unreadable` |
+| `clean --json`: `chosen` | absent | what the selection took, with `confirmed` and `pending` |
+| `clean --json`: `outcome.items[]` | `key`, `path`, `category`, `outcome` | also `method`: `recycle-bin`, `permanent`, `git-worktree-remove` or `harness-session` |
+| `xiox observe` events and MCP `structuredContent` | `schema` 1 | `schema` 2, with the new item fields |
 
 - `analyze --json` prints the **scan** (below).
-- `clean --json` prints `{"schema":1,"scan":<the scan>,"outcome":<the outcome>|null}`: the scan
-  as it was before removing, and what happened. `outcome` is `null` when nothing was run (no
-  flag named anything, or nothing matched).
+- `clean --json` prints `{"schema":2,"scan":<the scan>,"chosen":<the choice>|null,"outcome":<the outcome>|null}`:
+  the scan as it was before removing, what was chosen, and what happened. `chosen` is `null` when
+  no flag named anything; `outcome` is `null` when nothing was run (no flag named anything, or
+  nothing matched).
+- `clean --json` never asks: a `danger` item needs `--confirm-danger` (exit 2 otherwise, stdout
+  empty).
 - `clean --json` never asks, so it **needs `--yes` to remove anything**; without it, it exits
   with 2 (`error: --json needs --yes to remove anything`). `--dry-run --json` works without
   `--yes`.
@@ -577,7 +704,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 
 ```jsonc
 {
-  "schema": 1,
+  "schema": 2,
   "project": {
     "root": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp",
     "name": "sampleapp",
@@ -595,6 +722,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\\target",
       "bytes": 11538432,
       "level": "recommended",
+      "risks": [],
       "blocked": [],
       "why": {
         "type": "catalog-folder",
@@ -611,6 +739,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-wip",
       "bytes": 1048800,
       "level": "caution",
+      "risks": [],
       "blocked": [
         "dirty-git"
       ],
@@ -630,6 +759,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-experiment",
       "bytes": 1098640,
       "level": "caution",
+      "risks": [],
       "blocked": [
         "unsaved-work"
       ],
@@ -649,7 +779,10 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
       "category": "named",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-bench",
       "bytes": 1048600,
-      "level": "caution",
+      "level": "danger",
+      "risks": [
+        "no-git"
+      ],
       "blocked": [],
       "why": {
         "type": "name-only"
@@ -684,7 +817,7 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema` | number | Shape version, `1`. |
+| `schema` | number | Shape version, `2`. |
 | `project.root` | string | Main working tree (or the folder itself). |
 | `project.name` | string | Last component of `root`. |
 | `project.isRepo` | bool | Is it a git repository. |
@@ -695,26 +828,37 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 | `items[].category` | string | `builds`, `worktrees`, `copies`, `named`, `scratch`, `logs`, `sessions`. |
 | `items[].path` | string or null | Absolute path; `null` for sessions. |
 | `items[].bytes` | number or null | Size in bytes (the command line always measures). |
-| `items[].level` | string | `recommended`, `optional`, `caution`. A blocked worktree or copy is `caution`: check `blocked`. |
+| `items[].level` | string | `recommended`, `optional`, `caution`, `danger`. A blocked worktree or copy is `caution`: check `blocked`. |
+| `items[].risks` | string[] | `no-git`, `weak-evidence`, `partial-coverage`, `recent-activity`, in that order: the risks its category weighs (see [Levels and blocks](#levels-and-blocks)); non-empty means `danger`. |
 | `items[].blocked` | string[] | Block values; non-empty means it cannot be removed. |
-| `items[].why` | object | `type` is `catalog-folder` (`labelEn`), `linked-worktree` (`branch`, `head`; either may be null), `same-repository` (`sharedRootCommit`, `sameOrigin`, `hasOwnWork`: true, false or null), `name-only`, `log-file` (`ignored`), `archived-session` (`agent`, `title`) or `session-folder` (`strength`: `used`, `written` or `created`; `fromScript`: bool; `risks`: `no-git`, `weak-evidence`, `partial-coverage`, `recent-activity`; `activity`: `active` or `unknown`, never "inactive": no source proves that a session is over). |
-| `items[].provenance` | object or null | The session evidence behind a `scratch`, `copies` or `named` item; `null` otherwise. `strength`, `lastActivityMs` and `sessions[]`, the distinct sessions (by store, harness and id), most recent first. A session has `agent`, `harness`, `store`, `id`, `parent`, `lastActivityMs`, `strength`, `listedCwd` (its own listing names the folder as its working folder), `operations[]` (references into the session: `source`, `outcome`, `strength`, `entry`, `call`, `time`, `cwd`; never the text of a command), `omitted` (operations left out to keep the result small), `failed` (operations that failed) and `gaps` (shell calls that the parsers could not fully read). |
-| `items[].target` | object | What removal means: `type` is `dir` (`kind`, e.g. `rust-target`, `node-modules`, `project-folder`), `file`, `worktree` (`repo`: where `git worktree remove` runs) or `session` (`agent`, `id`). |
+| `items[].why` | object | `type` is `catalog-folder` (`labelEn`), `linked-worktree` (`branch`, `head`; either may be null), `same-repository` (`sharedRootCommit`, `sameOrigin`, `hasOwnWork`: true, false or null), `name-only`, `log-file` (`ignored`), `archived-session` (`agent`, `title`) or `session-folder` (`strength`: `used`, `written` or `created`; `fromScript`: bool; `activity`: `active` or `unknown`, never "inactive": no source proves that a session is over). |
+| `items[].provenance` | object or null | The session evidence behind a `scratch` item, and behind the `named`, `copies` and `worktrees` items the sessions speak about; `null` otherwise. `strength`, `lastActivityMs`, `otherProjects[]` (the sessions of other projects that wrote in it, shaped like `sessions[]`) and `sessions[]`, the distinct sessions (by store, harness and id), most recent first. A session has `agent`, `harness`, `store`, `id`, `parent`, `lastActivityMs`, `strength`, `listedCwd` (its own listing names the folder as its working folder), `operations[]` (references into the session: `source`, `outcome`, `strength`, `entry`, `call`, `time`, `cwd`; never the text of a command), `omitted` (operations left out to keep the result small), `failed` (operations that failed) and `gaps` (shell calls that the parsers could not fully read). |
+| `items[].target` | object | What removal means: `type` is `dir` (`kind`, e.g. `rust-target`, `node-modules`, `project-folder`), `file`, `worktree` (`repo`: where `git worktree remove` runs), `subtree` (`repo`: the repository a scratch folder inside the project belongs to) or `session` (`agent`, `id`). |
 | `branches[]` | array | `name`, `merged`, `worktreeMissing`. Information only. |
 | `notes[]` | array | `type` is one of `not-a-repository`, `git-missing`, `name-too-short`, `walk-may-miss-deep-folders`, `prunable-worktree` (with `path`), `engine-warning`, `sessions-not-read`, `logs-not-checked`, `container-root`, `history-partial` (a cap was reached or a session could not be read: see `history`), `history-not-read` (no store could be listed). |
-| `history` | object or null | What the session history read; `null` with `--no-history` or when no store could be asked. `sources[]` (per agent: `agent`, `listingFailed`, `listed`, `related`, `read`, `failed` as a count by `no-reader`, `timed-out`, `too-large`, `failed` or `ambiguous-id`: several sessions of one store share the id, so none of them is read), `sessionsRead`, `calls`, `shell` (counters of the shell calls and of what the parsers could not read: `shellCalls`, `unresolved`, `looped`, `script`, `truncated`, `exhausted`), `excluded` (folders the history named and the scan left out, counted by reason `not-local`, `outside-scope`, `protected`, `inside-project`, `other-repository`, `not-a-project`, `missing` or `link`; the counts are events per stage, so one folder can be counted more than once, and none of them was entered) and `limits[]` (`type` `sessions`, `calls`, `duration` or `scratch`, with its cap and, where it applies, how many were `left`). |
+| `history` | object or null | What the session history read; `null` with `--no-history` or when no store could be asked. `sources[]` (per agent: `agent`, `listingFailed`, `listed`, `related`, `read`, `failed` as a count by `no-reader`, `timed-out`, `too-large`, `failed` or `ambiguous-id`: several sessions of one store share the id, so none of them is read), `sessionsRead`, `calls`, `shell` (counters of the shell calls and of what the parsers could not read: `shellCalls`, `unresolved`, `looped`, `script`, `truncated`, `exhausted`), `excluded` (folders the history named and the scan left out, counted by reason `not-local`, `outside-scope`, `protected`, `inside-project`, `other-repository`, `not-a-project`, `missing`, `link`, `short-name` (an 8.3 short name, never followed) or `unreadable` (a folder above it could not be read); the counts are events per stage, so one folder can be counted more than once, and none of them was entered) `limits[]` (`type` `sessions`, `calls`, `duration` or `scratch`, with its cap and, where it applies, how many were `left`) and `conflicts` (`read`, `unread`: the nearby sessions of other projects read, and left unread within the budget, to look for their writes). |
 | `search` | string | `mft-index`, `bounded-walk` or `parent-only`. |
 | `scannedAtMs`, `elapsedMs` | number | Unix time of the analysis in milliseconds; how long it took. |
+
+**The choice** (`clean --json`, field `chosen`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `keys` | string[] | The chosen items, in the order of the listing. |
+| `bytes` | number | Their size, an item inside another chosen one counted once. |
+| `permanentAnyway` | string[] | The chosen worktrees: removed by git for good in every mode. |
+| `confirmed[]`, `pending[]` | array | The `danger` items the removal takes (the chosen ones and those inside them), confirmed or still waiting: `key`, `risks` and `method`, the plan that is checked again at removal. |
 
 **The outcome** (`clean --json`, field `outcome`)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema` | number | `1`. |
+| `schema` | number | `2`. |
 | `mode` | string | `recycle` or `permanent`. |
 | `dryRun` | bool | `true` when nothing was removed. |
 | `items[]` | array | One entry per chosen item, in the order of the listing. |
 | `items[].key`, `path`, `category` | | As in the scan (`path` is `null` for sessions). |
+| `items[].method` | string | How it went, or would go: `recycle-bin`, `permanent`, `git-worktree-remove` or `harness-session`. |
 | `items[].outcome` | object | `type` is `removed` (`bytesFreed`), `skipped` (`reason`) or `failed` (`error`). In a dry run `removed` means "would be removed". |
 | `bytesFreed` | number | Sum of the removed bytes, what went to the Recycle Bin included. |
 | `recycledBytes` | number | The part of `bytesFreed` that went (in a dry run: would go) to the Recycle Bin, freed only when it is emptied. |
@@ -723,10 +867,10 @@ A real `analyze --json` run (formatted and shortened: four items of seven are sh
 A real dry-run result (shortened to the `outcome`):
 
 ```jsonc
-// clean --json prints {"schema":1,"scan":{...as above...},"outcome":{...}}
+// clean --json prints {"schema":2,"scan":{...as above...},"chosen":{...},"outcome":{...}}
 // the outcome:
 {
-  "schema": 1,
+  "schema": 2,
   "mode": "recycle",
   "dryRun": true,
   "items": [
@@ -734,6 +878,7 @@ A real dry-run result (shortened to the `outcome`):
       "key": "c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp\\target",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\\target",
       "category": "builds",
+      "method": "recycle-bin",
       "outcome": {
         "type": "removed",
         "bytesFreed": 11538432
@@ -743,6 +888,7 @@ A real dry-run result (shortened to the `outcome`):
       "key": "c:\\users\\alice\\appdata\\local\\temp\\w\\sampleapp\\debug.log",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\\debug.log",
       "category": "logs",
+      "method": "recycle-bin",
       "outcome": {
         "type": "removed",
         "bytesFreed": 2097152
@@ -761,7 +907,7 @@ A real dry-run result (shortened to the `outcome`):
 |---|---|
 | `0` | Done. This includes any `analyze`, any `--dry-run` (even one whose outcome has `skipped` items: check them), `Nothing selected`, `Nothing to clean`, and an answer of no (`Cancelled.`). |
 | `1` | Error: the path does not exist or is not a folder; not enough room in the Recycle Bin; the result could not be written (for example a path JSON cannot carry). Nothing was removed, except when the report itself could not be written after a removal (it then goes to stderr when possible). |
-| `2` | Wrong usage: unknown command or flag, a `clean` flag given to `analyze`, `--copies` or `--named`, `--include` without a value, a second project, an `--include` that is not in the analysis or is blocked, no terminal and no `--yes`, `--json` without `--yes`. Nothing was removed. |
+| `2` | Wrong usage: unknown command or flag, a `clean` flag given to `analyze`, `--copies` or `--named`, `--include` without a value, a second project, an `--include` that is not in the analysis or is blocked, a `danger` item without its confirmation under `--yes`, `--json` or without a terminal, a refused `--confirm-danger`, `--permanent` with a `danger` folder, no terminal and no `--yes`, `--json` without `--yes`. Nothing was removed. |
 | `3` | Partly cleaned: at least one item was skipped or failed. Read the report, or `outcome.items`. |
 
 ### PowerShell example
@@ -806,7 +952,10 @@ You can call `xiox` as a tool. A safe routine:
    or log that git tracks) **without asking the user**, and never use `--permanent` unless the
    user asked for it. Do not try to get around a `blocked` item: it is blocked because removing
    it would lose work or because a session is using it.
-4. Check the exit code. `3` means something was not removed: read `outcome.items` and tell the
+4. **A `danger` item needs the person's yes to that exact path.** Show its `risks` and ask; only
+   then pass `--include <path> --confirm-danger <path>`. `--yes` alone never removes it, and
+   `--permanent` is refused for a `danger` folder.
+5. Check the exit code. `3` means something was not removed: read `outcome.items` and tell the
    user. Never remove the folder you are working in.
 
 **Watching a project over time.** `xiox observe` is a separate, read-only command for a process
@@ -837,12 +986,20 @@ removes nothing. See [xiox-observe.md](xiox-observe.md).
 **Re-validation.** The listing is a proposal, not a promise. Right before it removes anything,
 `clean` analyses the project again and keeps only the chosen items that are still listed, in
 the same category, unblocked and not more suspect than before (an item that now needs a manual
-review, or a copy that gained commits or changes, is skipped). The item that is removed is the
+review, or a copy that gained commits or changes, is skipped). When the listing read the session
+history and a chosen item depends on it (it has provenance, or it is `danger`), the history is
+read again through the same stores; if it cannot be read now, every chosen item with provenance is
+skipped (`the session history could not be read again`). Each folder must be the very folder that
+was analysed (its file identity, not only its path: a folder deleted and made again is skipped
+with `it is not the folder that was analysed: it was replaced`), and a `danger` item must match
+its confirmed plan (see [Confirming danger items](#confirming-danger-items)). The selection rules
+run again on the fresh item, so a hand-made request gets no more than `--include` and
+`--confirm-danger` would give. The item that is removed is the
 fresh one, and a folder is checked once more right before it goes (still there, still a real
 folder and not a link, not overlapping the project, and with nothing in it that is blocked).
 A copy must have a fresh, positive answer that it has no work of its own; no answer is a refusal.
-A chosen worktree, copy or named folder is also left alone when the session listing of this PC
-cannot be read now (`the sessions of this PC could not be read, so a live agent session cannot
+A chosen worktree, copy, named or scratch folder is also left alone when the session listing of
+this PC cannot be read now (`the sessions of this PC could not be read, so a live agent session cannot
 be ruled out`). An item that no longer passes is reported
 as `skipped` with the reason (`no longer there`, `now blocked: uncommitted changes`, `now has
 commits or changes the project does not have`, ...). A dry run makes the same checks.
@@ -855,6 +1012,19 @@ the search is bounded (three levels, one level with `--no-drives`), so a reposit
 list cannot be vouched for. The reason is `it holds the git repository <path>, which is not
 listed as removable`. A named folder that holds a copy with unsaved work is refused by
 `--include` before anything runs.
+
+**Folders two projects share.** A folder that this project's sessions made can also be where
+another project's sessions work. For every scratch candidate, and every named folder the history
+shows, `xiox` reads the sessions of other projects whose working folder is that folder, inside
+it, or above it (not a drive root, the home folder or a broad folder such as `Documents`), within
+what is left of the reading budget. A folder where one of them wrote is blocked
+(`other-project-writes`) and the JSON names those sessions in `provenance.otherProjects`. A
+nearby session that could not be read leaves the folder unchecked: it gets the risk
+`partial-coverage` (`history.conflicts.unread` counts them). Sessions that worked elsewhere are
+never read for this.
+
+**The desktop app.** Folders found in the session history are removed only by `xiox clean`; the
+desktop app does not list them.
 
 ## Limits
 
@@ -887,8 +1057,9 @@ listed as removable`. A named folder that holds a copy with unsaved work is refu
   chain of Claude Code subagents that the store reader refuses is not read either. A
   command the parsers cannot read in full leaves its folders unresolved, and an unresolved path
   is never a candidate. The `History` line and `history` in the JSON say what was left out.
-- `clean --include` of a `scratch` item is refused until the confirmations that will go with it
-  exist.
+- **Two projects in one folder are seen only through their sessions.** The conflict check reads
+  only the sessions of other projects that worked in or around the folder; a project that wrote
+  there from a session working somewhere else is not seen.
 - `--include` cannot name a session: sessions are taken together with `--sessions`.
 
 ## Troubleshooting
@@ -909,7 +1080,7 @@ project's folder, or name items with `--include <path>`.
 
 **`note: the sessions of this PC could not be read ...`.** The list of agent sessions could not
 be read, so an open session cannot be ruled out. `analyze` shows it; `clean` skips worktrees,
-copies and named folders (reason `the sessions of this PC could not be read, so a live agent
+copies, named and scratch folders (reason `the sessions of this PC could not be read, so a live agent
 session cannot be ruled out`) until a run can read them.
 
 **`error: path not found: ...` or `error: not a directory: ...`** (exit code 1). Check the path;
@@ -919,6 +1090,14 @@ it must be a folder. Quote paths that contain spaces.
 started with its input redirected. Run it in an interactive terminal, or add `--yes`.
 
 **`error: --json needs --yes to remove anything`** (exit code 2). Add `--yes`, or `--dry-run`.
+
+**`error: <path>: danger: explicit confirmation required (...): add --confirm-danger "<path>"`**
+(exit code 2). The item, or one inside the folder you named, is `danger`. Read the reasons, and if
+you still want it gone add the `--confirm-danger` the line gives, or run without `--yes` at a
+terminal to answer its question.
+
+**`refusing --permanent: danger folders go to the Recycle Bin only`** (exit code 2). Drop
+`--permanent`: a `danger` folder goes to the Recycle Bin, so it can be restored.
 
 **`Recycle Bin on C: is too small ...`** (exit code 1, nothing removed). The Recycle Bin of that
 drive cannot take what you chose. Empty it, or add `--permanent`.

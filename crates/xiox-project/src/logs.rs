@@ -3,7 +3,9 @@
 
 use crate::owned::key_within;
 use crate::{Category, Item, Note, Project, Target, Why};
-use xiox_model::{Level, normalize_path, path_key};
+use xiox_model::{normalize_path, path_key};
+
+use crate::Level;
 use std::path::{Path, PathBuf};
 
 /// Smallest file that is listed.
@@ -52,6 +54,8 @@ pub(crate) fn log_items(project: &Project, build_dirs: &[PathBuf], notes: &mut V
                     path: Some(normalize_path(&path)),
                     bytes: Some(meta.len()),
                     level,
+                    risks: Vec::new(),
+                    identity: None,
                     blocked: Vec::new(),
                     why: Why::LogFile { ignored },
                     target: Target::File,

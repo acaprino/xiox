@@ -84,7 +84,7 @@ fn analyze_json_stdout_is_one_json_object() {
     assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is exactly one JSON value");
     assert!(v.is_object());
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert_eq!(v["project"]["name"], "fakeproj");
     assert_eq!(v["items"][0]["category"], "builds");
     assert!(out.stdout.ends_with(b"}\n"), "one object and a newline");
@@ -281,8 +281,7 @@ fn clean_include_of_an_unknown_path_exits_2() {
 fn clean_include_removes_a_name_matched_folder() {
     let (_t, project) = fake_project();
     let named = project.parent().unwrap().join("fakeproj-old");
-    std::fs::create_dir_all(&named).unwrap();
-    std::fs::write(named.join("a.txt"), "x").unwrap();
+    old_clean_clone(&named);
     let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent"]);
     let stdout = text(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "stderr: {}\nstdout: {stdout}", text(&out.stderr));
@@ -292,8 +291,46 @@ fn clean_include_removes_a_name_matched_folder() {
 }
 
 #[test]
+fn clean_permanent_refuses_a_danger_folder_and_it_survives() {
+    let (_t, project) = fake_project();
+    let named = project.parent().unwrap().join("fakeproj-old");
+    std::fs::create_dir_all(&named).unwrap();
+    std::fs::write(named.join("a.txt"), "x").unwrap();
+    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
+    let err = text(&out.stderr);
+    assert!(err.contains("refusing --permanent: danger folders go to the Recycle Bin only"), "{err}");
+    assert!(named.join("a.txt").exists());
+}
+
+/// `dir` as a clean clone of a new, unrelated repository, dated three days back: git vouches for
+/// it and it is not recent, so it is not `danger`.
+fn old_clean_clone(dir: &Path) {
+    let parent = dir.parent().unwrap();
+    let upstream = parent.join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    git(&upstream, &["init", "-q", "-b", "main"]);
+    std::fs::write(upstream.join("a.txt"), "x").unwrap();
+    git(&upstream, &["add", "-A"]);
+    git(&upstream, &["commit", "-q", "-m", "first"]);
+    git(parent, &["clone", "-q", &upstream.to_string_lossy(), &dir.to_string_lossy()]);
+    age(dir);
+}
+
+/// Moves the modified date of `dir` three days back: the folder is no longer recent activity.
+fn age(dir: &Path) {
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut open, 0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS
+    let three_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 60 * 60);
+    open.open(dir).unwrap().set_times(std::fs::FileTimes::new().set_modified(three_days_ago)).unwrap();
+}
+
+#[test]
 fn clean_worktrees_removes_the_clean_one_and_says_git_removes_them_permanently() {
     let (_t, project, wt) = project_with_worktree();
+    age(&wt);
     let out = run_clean(&project, &["--worktrees", "--yes"]);
     let stdout = text(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "stderr: {}\nstdout: {stdout}", text(&out.stderr));
@@ -318,7 +355,7 @@ fn clean_json_yes_stdout_is_one_object_with_scan_and_outcome() {
     let out = run_clean(&project, &["--builds", "--yes", "--permanent", "--json"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is exactly one JSON value");
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert_eq!(v["scan"]["project"]["name"], "fakeproj");
     assert_eq!(v["scan"]["items"][0]["category"], "builds");
     assert_eq!(v["outcome"]["mode"], "permanent");
@@ -336,7 +373,7 @@ fn clean_json_with_nothing_named_prints_the_scan_and_a_null_outcome() {
     let out = run_clean(&project, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert!(v["scan"].is_object() && v["outcome"].is_null());
     assert!(project.join("target").exists());
 }
@@ -405,12 +442,40 @@ fn c1_include_of_a_named_folder_that_holds_a_copy_with_work_exits_2_and_the_copy
 #[test]
 fn c1_with_no_drives_the_copy_is_not_listed_but_the_folder_is_still_not_removed() {
     let (_t, project, named, copy) = project_with_a_named_folder_holding_a_copy_with_work();
-    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent", "--no-drives"]);
+    // Without git the folder is danger: --permanent is refused before anything is checked.
+    let path = named.to_string_lossy().into_owned();
+    let out = run_clean(&project, &["--include", &path, "--yes", "--permanent", "--no-drives"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
+    assert!(text(&out.stderr).contains("refusing --permanent"), "{}", text(&out.stderr));
+    // Confirmed, in a dry run (the Recycle Bin is never reached from a test): the removal-time
+    // check still finds the repository the analysis did not list.
+    let out = run_clean(&project, &["--include", &path, "--confirm-danger", &path, "--yes", "--dry-run", "--no-drives"]);
     let stdout = text(&out.stdout);
-    assert_eq!(out.status.code(), Some(3), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
-    assert!(stdout.contains("skipped"), "{stdout}");
-    assert!(stdout.contains("git repository"), "{stdout}");
+    assert_eq!(out.status.code(), Some(0), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
+    assert!(stdout.contains("skipped") && stdout.contains("git repository"), "{stdout}");
     assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
+}
+
+#[test]
+fn clean_danger_without_confirmation_exits_2() {
+    let (_t, project) = fake_project();
+    let named = project.parent().unwrap().join("fakeproj-old");
+    std::fs::create_dir_all(&named).unwrap();
+    std::fs::write(named.join("a.txt"), "x").unwrap();
+    let path = named.to_string_lossy().into_owned();
+    let out = run_clean(&project, &["--include", &path, "--yes", "--no-history"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
+    let err = text(&out.stderr);
+    assert!(err.contains("danger: explicit confirmation required (not a git repository"), "{err}");
+    assert!(err.contains(&format!("add --confirm-danger \"{path}\"")), "{err}");
+    assert!(named.join("a.txt").exists());
+
+    // Confirmed, in a dry run: no removal ever reaches the real Recycle Bin from a test.
+    let out = run_clean(&project, &["--include", &path, "--confirm-danger", &path, "--yes", "--dry-run", "--no-history"]);
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
+    assert!(stdout.contains("would remove"), "{stdout}");
+    assert!(named.join("a.txt").exists());
 }
 
 #[test]
@@ -560,7 +625,7 @@ fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added(
     let mut o = Observer::spawn(&project, &["--no-drives"]);
     let started = o.next(60);
     assert_eq!(started["event"], "started");
-    assert_eq!(started["schema"], 1);
+    assert_eq!(started["schema"], 2);
     assert_eq!(started["project"]["name"], "fakeproj");
     // The baseline has weights: the 3 MB build folder is counted at the start.
     assert!(started["totals"]["byCategory"]["builds"].as_u64().unwrap() >= 3 * 1024 * 1024, "{started}");
@@ -576,7 +641,7 @@ fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added(
     while category != "worktrees" {
         let line = o.next(60);
         assert_eq!(line["event"], "changed", "only changes until the worktree is listed: {line}");
-        assert_eq!(line["schema"], 1);
+        assert_eq!(line["schema"], 2);
         for added in line["added"].as_array().unwrap() {
             if added["path"].as_str().unwrap().ends_with("wt") {
                 assert_eq!(added["new"], true, "{line}");

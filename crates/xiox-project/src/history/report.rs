@@ -19,6 +19,18 @@ pub enum Risk {
     RecentActivity,
 }
 
+impl Risk {
+    /// The English reason, in the one wording used by the listing and the guide.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Risk::NoGit => "not a git repository",
+            Risk::WeakEvidence => "the sessions wrote or worked here; no creation is recorded",
+            Risk::PartialCoverage => "the session history was read only in part",
+            Risk::RecentActivity => "used or changed in the last 24 hours",
+        }
+    }
+}
+
 /// Whether a session that touched the folder may still be running.
 // shortcut: no source verifies "not active" (Mukade's `live: None` means "not known"); add the
 // variant when one does.
@@ -127,6 +139,8 @@ pub struct Provenance {
     pub strength: Option<Strength>,
     pub last_activity_ms: Option<i64>,
     pub sessions: Vec<SessionEvidence>,
+    /// Sessions of other projects that wrote in the folder.
+    pub other_projects: Vec<SessionEvidence>,
 }
 
 /// Why the calls of a session could not be read.
@@ -153,6 +167,10 @@ pub enum Exclusion {
     NotAProject,
     Missing,
     Link,
+    /// The path has an 8.3 short-name component that could hide a protected folder.
+    ShortName,
+    /// An ancestor or the folder itself could not be read.
+    Unreadable,
 }
 
 /// A cap that stopped the reading.
@@ -188,6 +206,15 @@ pub struct HistoryReport {
     pub shell: Coverage,
     pub excluded: BTreeMap<Exclusion, usize>,
     pub limits: Vec<Limit>,
+    pub conflicts: ConflictReport,
+}
+
+/// Sessions of other projects read to find writes they share with this project's folders.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictReport {
+    pub read: usize,
+    pub unread: usize,
 }
 
 impl HistoryReport {
@@ -200,6 +227,7 @@ impl HistoryReport {
             shell: Coverage::default(),
             excluded: BTreeMap::new(),
             limits: Vec::new(),
+            conflicts: ConflictReport::default(),
         }
     }
 

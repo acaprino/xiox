@@ -1,9 +1,12 @@
 //! Selection, re-validation and removal: the only code of the targeted cleanup that deletes.
 //!
-//! [`select`] turns the flags into the keys of a [`ProjectScan`]; [`clean`] never trusts that
-//! scan. Right before removing anything it runs the (light) analysis of the project again and
-//! keeps only the chosen keys that are still listed, in the same category, unblocked and not
-//! more suspect than before; the item that is removed is the *fresh* one. Folders and worktrees
+//! [`select`] turns the flags into the keys of a [`ProjectScan`], each through one admission rule
+//! (`admit`: blocks, the `danger` items to confirm, `--permanent`); [`clean`] never trusts that
+//! scan, nor the [`Chosen`] it is given. Right before removing anything it runs the (light)
+//! analysis of the project again, the session history included when a chosen item depends on it,
+//! and keeps only the chosen keys that are still listed, in the same category, the same folder,
+//! unblocked and not more suspect than before, with the `danger` plans the user confirmed still
+//! true; `admit` runs again on the fresh item. The item that is removed is the *fresh* one. Folders and worktrees
 //! go through one `CleanPlan` (`guard::validate`, links never followed, worktrees with
 //! `git worktree remove` and never `--force`), loose files through `guard::validate_file`, and
 //! archived sessions through `xiox_app::revalidate_archived` and `xiox_app::delete_archived`.
@@ -11,16 +14,22 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
-use crate::history::scope::unlinked_chain;
-use crate::nested::nested_repos;
+mod admit;
+mod method;
+
+pub use method::{Method, method_of};
+
+use admit::{Refusal, admit, blocked_inside};
+use crate::history::scope::{has_short_component, unlinked_chain};
+use crate::nested::{NotChecked, nested_repos};
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
-    Block, Category, Env, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
-    Why, Exclusion,
+    Block, Category, DANGER_TEXT, Env, Item, Level, Note, Options, Project, ProjectScan, Risk, SCHEMA, SearchMode,
+    SessionHealth, Target, Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
-use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
+use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, PlanAction, PlanItem, RemoveMode, path_key};
 use xiox_mukade::ArchivedSession;
 use xiox_sessions::{HarnessCli, SessionOutcome, SystemCli, SystemTrash, Trash};
 use serde::Serialize;
@@ -31,8 +40,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Why worktrees, copies and named folders are left alone when the sessions could not be read.
+/// Why worktrees, copies, named and session folders are left alone when the sessions could not
+/// be read.
 const SESSIONS_UNREAD: &str = "the sessions of this PC could not be read, so a live agent session cannot be ruled out";
+
+/// Why an item the session history speaks about is left alone when that history is not read again.
+const HISTORY_UNREAD: &str = "the session history could not be read again";
+
+const RISKS_CHANGED: &str = "its risks changed since it was confirmed: choose it again";
+const METHOD_CHANGED: &str = "its removal method changed since it was confirmed: choose it again";
 
 /// Start of the reason of an item that went with a chosen item that holds it.
 pub(crate) const ALREADY_REMOVED: &str = "already removed with ";
@@ -50,12 +66,14 @@ pub struct CleanRequest {
     pub categories: Vec<Category>,
     /// `--include <path>`, any number.
     pub include: Vec<PathBuf>,
+    /// `--confirm-danger <path>`, any number: `danger` items the user confirms removing.
+    pub confirm_danger: Vec<PathBuf>,
     pub mode: RemoveMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SelectError {
-    /// `--include` of a path the analysis did not produce.
+    /// `--include` or `--confirm-danger` of a path the analysis did not produce.
     NotInAnalysis(PathBuf),
     /// `--include` of an item that cannot be removed at all.
     Blocked { path: PathBuf, why: Vec<Block> },
@@ -66,9 +84,12 @@ pub enum SelectError {
     ContainsBlocked { path: PathBuf, inner: PathBuf, why: Vec<Block> },
     /// A category flag on a drive root, the user profile or a folder that holds several projects.
     ContainerRoot(PathBuf),
-    /// `--include` of a `scratch` item, or of a folder that holds one: folders found in the session
-    /// history are listed for review only.
-    ReviewOnly { path: PathBuf, inner: Option<PathBuf> },
+    /// `--confirm-danger` of a `danger` item that no `--include` takes.
+    ConfirmNotIncluded(PathBuf),
+    /// `--confirm-danger` of an item that is not `danger`.
+    ConfirmNotDanger(PathBuf),
+    /// `--permanent` with a `danger` folder, or a folder that holds one (`inner`).
+    DangerPermanent { path: PathBuf, inner: Option<PathBuf> },
 }
 
 impl fmt::Display for SelectError {
@@ -88,25 +109,40 @@ impl fmt::Display for SelectError {
                 join_blocks(why),
                 path.display()
             ),
-            SelectError::ReviewOnly { path, inner: None } => write!(
-                f,
-                "listed for review only: folders found in session history cannot be removed yet: {}",
-                path.display()
-            ),
-            SelectError::ReviewOnly { path, inner: Some(inner) } => write!(
-                f,
-                "cannot be removed: it holds {}, found in session history: {}",
-                inner.display(),
-                path.display()
-            ),
             SelectError::ContainerRoot(root) => {
                 write!(f, "refusing to clean everything under {}: run it on one project", root.display())
             }
+            SelectError::ConfirmNotIncluded(p) => write!(
+                f,
+                "--confirm-danger needs that folder, or a folder that holds it, with --include: {}",
+                p.display()
+            ),
+            SelectError::ConfirmNotDanger(p) => {
+                write!(f, "--confirm-danger is only for danger items, and this one is not: {}", p.display())
+            }
+            SelectError::DangerPermanent { path, inner: None } => {
+                write!(f, "refusing --permanent: danger folders go to the Recycle Bin only: {}", path.display())
+            }
+            SelectError::DangerPermanent { path, inner: Some(inner) } => write!(
+                f,
+                "refusing --permanent: it holds {}, a danger folder that goes to the Recycle Bin only: {}",
+                inner.display(),
+                path.display()
+            ),
         }
     }
 }
 
 impl std::error::Error for SelectError {}
+
+/// The plan of a `danger` item, as the user confirms it: what makes it risky and how it goes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Confirmation {
+    pub key: String,
+    pub risks: Vec<Risk>,
+    pub method: Method,
+}
 
 /// What was chosen: the keys of [`ProjectScan::items`], in the order of the listing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -118,12 +154,27 @@ pub struct Chosen {
     pub bytes: u64,
     /// The chosen worktrees: they are removed by git for good, also in Recycle Bin mode.
     pub permanent_anyway: Vec<String>,
+    /// The `danger` items the removal takes that the user confirmed, in the order of the listing.
+    pub confirmed: Vec<Confirmation>,
+    /// The `danger` items the removal takes that still wait for a confirmation.
+    pub pending: Vec<Confirmation>,
 }
 
-/// Category flags take the `Recommended`, unblocked items (for `Sessions`: every unblocked one).
-/// `include` adds any unblocked item of any level except sessions, by path; a folder that holds a
-/// blocked item is refused (it would take the blocked item with it). Category flags are refused
-/// on a container root. Nothing is chosen when the request is refused.
+impl Chosen {
+    /// Moves `key` from `pending` to the end of `confirmed`; `false` when it is not pending.
+    pub fn confirm(&mut self, key: &str) -> bool {
+        let Some(at) = self.pending.iter().position(|c| c.key == key) else { return false };
+        let confirmation = self.pending.remove(at);
+        self.confirmed.push(confirmation);
+        true
+    }
+}
+
+/// Category flags take the `Recommended`, unblocked items (for `Sessions`: every unblocked one)
+/// that are not `danger` and hold nothing `danger` or blocked. `include` adds any item of any
+/// level except sessions, by path, when [`admit`] lets it in; the `danger` items it takes wait
+/// for a `confirm_danger` that names them. Category flags are refused on a container root.
+/// Nothing is chosen when the request is refused.
 pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectError> {
     if let Some(c) = req.categories.iter().find(|c| matches!(c, Category::Copies | Category::Named)) {
         return Err(SelectError::CategoryNeedsInclude(*c));
@@ -133,37 +184,38 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
     }
     let mut keys: HashSet<&str> = HashSet::new();
     for c in &req.categories {
-        for i in scan.items.iter().filter(|i| i.category == *c && i.blocked.is_empty()) {
-            if *c == Category::Sessions || i.level == Level::Recommended {
+        for i in scan.items.iter().filter(|i| i.category == *c) {
+            let level_ok = *c == Category::Sessions || i.level == Level::Recommended;
+            if level_ok && admit(&scan.items, i, req.mode).is_ok_and(|danger| danger.is_empty()) {
                 keys.insert(&i.key);
             }
         }
     }
+    let mut asked: HashSet<&str> = HashSet::new();
     for given in &req.include {
-        let abs = std::path::absolute(given).unwrap_or_else(|_| given.clone());
-        let key = path_key(&abs);
-        let Some(i) = scan.items.iter().find(|i| i.path.is_some() && i.key == key) else {
-            return Err(SelectError::NotInAnalysis(given.clone()));
-        };
-        if !i.blocked.is_empty() {
-            return Err(SelectError::Blocked { path: given.clone(), why: i.blocked.clone() });
-        }
-        if i.category == Category::Scratch {
-            return Err(SelectError::ReviewOnly { path: given.clone(), inner: None });
-        }
-        if let Some(inner) = scratch_inside(&scan.items, i) {
-            return Err(SelectError::ReviewOnly { path: given.clone(), inner: inner.path.clone() });
-        }
-        if let Some(inner) = blocked_inside(&scan.items, i) {
-            return Err(SelectError::ContainsBlocked {
-                path: given.clone(),
-                inner: inner.path.clone().unwrap_or_default(),
-                why: inner.blocked.clone(),
-            });
-        }
+        let i = listed_at(scan, given)?;
+        let danger = admit(&scan.items, i, req.mode).map_err(|r| refused(given, r))?;
+        asked.extend(danger.iter().map(|d| d.key.as_str()));
         keys.insert(&i.key);
     }
+    let mut confirmed: HashSet<&str> = HashSet::new();
+    for given in &req.confirm_danger {
+        let i = listed_at(scan, given)?;
+        if i.level != Level::Danger {
+            return Err(SelectError::ConfirmNotDanger(given.clone()));
+        }
+        if !asked.contains(i.key.as_str()) {
+            return Err(SelectError::ConfirmNotIncluded(given.clone()));
+        }
+        confirmed.insert(&i.key);
+    }
 
+    let (confirmed, pending) = scan
+        .items
+        .iter()
+        .filter(|i| asked.contains(i.key.as_str()))
+        .map(|i| Confirmation { key: i.key.clone(), risks: i.risks.clone(), method: method_of(&i.target, req.mode) })
+        .partition(|c| confirmed.contains(c.key.as_str()));
     let chosen: Vec<&Item> = scan.items.iter().filter(|i| keys.contains(i.key.as_str())).collect();
     let nested = nested_keys(&chosen);
     Ok(Chosen {
@@ -177,21 +229,33 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
             .map(|i| i.key.clone())
             .collect(),
         keys: chosen.iter().map(|i| i.key.clone()).collect(),
+        confirmed,
+        pending,
     })
 }
 
-/// The first item of `items` that sits inside `outer` (not `outer` itself) and is blocked.
-fn blocked_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
-    items
-        .iter()
-        .find(|j| j.path.is_some() && j.key != outer.key && !j.blocked.is_empty() && key_within(&j.key, &outer.key))
+/// The folder item `given` names, resolved as the shell would.
+fn listed_at<'a>(scan: &'a ProjectScan, given: &Path) -> Result<&'a Item, SelectError> {
+    let abs = std::path::absolute(given).unwrap_or_else(|_| given.to_path_buf());
+    let key = path_key(&abs);
+    scan.items.iter().find(|i| i.path.is_some() && i.key == key).ok_or_else(|| SelectError::NotInAnalysis(given.to_path_buf()))
 }
 
-/// The first `scratch` item of `items` that sits inside `outer`.
-fn scratch_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
-    items
-        .iter()
-        .find(|j| j.category == Category::Scratch && j.path.is_some() && j.key != outer.key && key_within(&j.key, &outer.key))
+/// The error of an `--include` that [`admit`] refuses.
+fn refused(given: &Path, refusal: Refusal) -> SelectError {
+    let path = given.to_path_buf();
+    match refusal {
+        Refusal::Blocked(why) => SelectError::Blocked { path, why },
+        Refusal::ContainsBlocked { inner, why } => SelectError::ContainsBlocked { path, inner, why },
+        Refusal::DangerPermanent { inner } => SelectError::DangerPermanent { path, inner },
+    }
+}
+
+/// The text of a refusal at removal: the selection's own, without the item's path at its end.
+fn refusal_reason(refusal: Refusal) -> String {
+    // Every refusal of the selection ends in ": {path}"; with no path that is a bare ": ".
+    let text = refused(Path::new(""), refusal).to_string();
+    text.strip_suffix(": ").unwrap_or(&text).to_string()
 }
 
 /// Keys of the items that sit inside another item of `items` (removing the outer one removes them).
@@ -221,6 +285,19 @@ pub enum Outcome {
     Failed { error: String },
 }
 
+/// What happened to one chosen item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutcomeItem {
+    pub key: String,
+    /// `None` for sessions.
+    pub path: Option<PathBuf>,
+    pub category: Category,
+    /// How it goes, or would have gone, from its target as the analysis listed it.
+    pub method: Method,
+    pub outcome: Outcome,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanOutcome {
@@ -228,8 +305,8 @@ pub struct CleanOutcome {
     pub schema: u32,
     pub mode: RemoveMode,
     pub dry_run: bool,
-    /// In the order of `Chosen::keys`: key, path (`None` for sessions), category, what happened.
-    pub items: Vec<(String, Option<PathBuf>, Category, Outcome)>,
+    /// In the order of `Chosen::keys`.
+    pub items: Vec<OutcomeItem>,
     /// Sum of the `Removed` bytes, what went to the Recycle Bin included.
     pub bytes_freed: u64,
     /// The part of `bytes_freed` moved to the Recycle Bin: freed only when it is emptied.
@@ -244,7 +321,7 @@ impl CleanOutcome {
     pub fn not_removed(&self) -> usize {
         self.items
             .iter()
-            .filter(|(.., o)| match o {
+            .filter(|i| match &i.outcome {
                 Outcome::Removed { .. } => false,
                 Outcome::Skipped { reason } => !reason.starts_with(ALREADY_REMOVED),
                 Outcome::Failed { .. } => true,
@@ -396,14 +473,16 @@ fn expected_bytes(item: &Item) -> u64 {
     }
     match (&item.target, &item.path) {
         (Target::File, Some(p)) => fs::symlink_metadata(p).map_or(0, |m| m.len()),
-        (Target::Dir { .. } | Target::Worktree { .. }, Some(p)) => xiox_cleaner::measure_dir(p).effective_bytes(),
+        (Target::Dir { .. } | Target::Subtree { .. } | Target::Worktree { .. }, Some(p)) => {
+            xiox_cleaner::measure_dir(p).effective_bytes()
+        }
         _ => 0,
     }
 }
 
 /// Volumes whose Recycle Bin cannot take the chosen items: `(drive, bytes moved, room)`. Empty
-/// for `Permanent`. Only folders and files go to the bin: a worktree is removed by git, a
-/// session is small, and an item inside another chosen one goes with it.
+/// for `Permanent`. Only folders (inside the project too) and files go to the bin: a worktree is
+/// removed by git, a session is small, and an item inside another chosen one goes with it.
 pub fn recycle_shortfall(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode) -> Vec<(char, u64, u64)> {
     shortfall_with(scan, chosen, mode, xiox_cleaner::recycle_room)
 }
@@ -422,7 +501,7 @@ pub(crate) fn shortfall_with(
     let nested = nested_keys(&items);
     let mut per_volume: BTreeMap<char, u64> = BTreeMap::new();
     for i in items.iter().filter(|i| !nested.contains(&i.key)) {
-        if !matches!(i.target, Target::Dir { .. } | Target::File) {
+        if !matches!(i.target, Target::Dir { .. } | Target::Subtree { .. } | Target::File) {
             continue;
         }
         if let Some(letter) = i.path.as_deref().and_then(drive_letter) {
@@ -513,21 +592,21 @@ fn clean_impl(
     }
     match sessions {
         Sessions::Real => {
-            let cache = Some(xiox_app::cache_dir());
-            let (loaded, loader_warnings) = xiox_app::load_sessions(cache.clone());
-            let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache);
-            let health = crate::session_health(&loaded, &loader_warnings, &archived, &archived_warnings);
-            let env = Env {
-                sessions: &loaded,
-                archived: &archived,
-                health,
-                search_roots,
-                now_ms: xiox_app::now_ms(),
-                history: crate::history::HistoryInput::none(),
-            };
-            let cli = SystemCli::locate();
-            let io = Io { cli: &cli, trash: &SystemTrash, fresh: &xiox_app::fresh_archived };
-            clean_with(scan, chosen, mode, dry_run, &env, &io)
+            // The history is listed and read only when a chosen item depends on it.
+            let history = wants_history(scan, &chosen_items(scan, chosen));
+            crate::with_real_env(xiox_app::cache_dir(), history, |real| {
+                let env = Env {
+                    sessions: real.sessions,
+                    archived: real.archived,
+                    health: real.health,
+                    search_roots,
+                    now_ms: real.now_ms,
+                    history: real.history,
+                };
+                let cli = SystemCli::locate();
+                let io = Io { cli: &cli, trash: &SystemTrash, fresh: &xiox_app::fresh_archived };
+                clean_with(scan, chosen, mode, dry_run, &env, &io)
+            })
         }
         Sessions::None => {
             let env = Env {
@@ -546,6 +625,12 @@ fn clean_impl(
     }
 }
 
+/// The scan read the session history and a chosen item depends on it: it has provenance, or it
+/// is `danger`. A scan made without the history is checked without it, so its risks compare.
+pub(crate) fn wants_history(scan: &ProjectScan, old: &[&Item]) -> bool {
+    scan.history.is_some() && old.iter().any(|i| i.provenance.is_some() || i.level == Level::Danger)
+}
+
 pub(crate) fn clean_with(
     scan: &ProjectScan,
     chosen: &Chosen,
@@ -558,13 +643,15 @@ pub(crate) fn clean_with(
     let old = chosen_items(scan, chosen);
     let mut done: HashMap<String, Outcome> = HashMap::new();
 
-    // The search of copies and named folders is only worth repeating when one was chosen.
-    let wants_search = old.iter().any(|i| matches!(i.category, Category::Copies | Category::Named));
+    // The reach of the search (copies, named and session folders) is only worth repeating when
+    // one of them was chosen, and the history only when a chosen item depends on it.
+    let wants_search = old.iter().any(|i| matches!(i.category, Category::Copies | Category::Named | Category::Scratch));
+    let history = wants_history(scan, &old);
     let opts = Options {
         drives: wants_search && scan.search != SearchMode::ParentOnly,
         measure: false,
         admin: scan.search == SearchMode::MftIndex,
-        history: false,
+        history,
     };
     // A copy or named folder the session history alone found is out of the search's reach: the
     // check names it, and repeats the same identity checks as the analysis.
@@ -575,7 +662,17 @@ pub(crate) fn clean_with(
         .collect();
     match crate::analyze_known(&scan.project.root, &opts, env, &known) {
         Ok(fresh) => {
-            let run = Run { mode, dry_run, project: &fresh.project, items: &fresh.items, env, io };
+            let history_lost = history && fresh.history.as_ref().is_none_or(|h| h.not_read());
+            let run = Run {
+                mode,
+                dry_run,
+                project: &fresh.project,
+                items: &fresh.items,
+                confirmed: &chosen.confirmed,
+                history_lost,
+                env,
+                io,
+            };
             run.remove(&old, &fresh, &mut done);
         }
         Err(e) => {
@@ -595,7 +692,13 @@ pub(crate) fn clean_with(
                 recycled_bytes = recycled_bytes.saturating_add(*b);
             }
         }
-        items.push((o.key.clone(), o.path.clone(), o.category, out));
+        items.push(OutcomeItem {
+            key: o.key.clone(),
+            path: o.path.clone(),
+            category: o.category,
+            method: method_of(&o.target, mode),
+            outcome: out,
+        });
     }
     CleanOutcome {
         schema: SCHEMA,
@@ -635,12 +738,22 @@ struct Run<'a> {
     project: &'a Project,
     /// Everything the fresh analysis lists.
     items: &'a [Item],
+    /// The `danger` plans the user confirmed; the pending ones never count.
+    confirmed: &'a [Confirmation],
+    /// The history was wanted and the fresh analysis could not read it.
+    history_lost: bool,
     env: &'a Env<'a>,
     io: &'a Io<'a>,
 }
 
 /// Why a chosen item is not removed after the fresh analysis; `Ok` is the fresh item.
-pub(crate) fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Item, String> {
+/// `confirmation` is the plan the user confirmed for it, if any; `mode` is the removal's.
+pub(crate) fn recheck<'a>(
+    old: &Item,
+    fresh: Option<&'a Item>,
+    confirmation: Option<&Confirmation>,
+    mode: RemoveMode,
+) -> Result<&'a Item, String> {
     let Some(f) = fresh else {
         return Err(if old.path.is_none() { "no longer archived" } else { "no longer there" }.to_string());
     };
@@ -661,7 +774,21 @@ pub(crate) fn recheck<'a>(old: &Item, fresh: Option<&'a Item>) -> Result<&'a Ite
             }
         }
     }
-    if f.level == Level::Caution && old.level != Level::Caution {
+    let danger = f.level == Level::Danger;
+    match old.identity {
+        Some(id) if f.identity != Some(id) => {
+            return Err("it is not the folder that was analysed: it was replaced".to_string());
+        }
+        None if danger => return Err("its identity could not be checked".to_string()),
+        _ => {}
+    }
+    match confirmation {
+        None if danger => return Err(DANGER_TEXT.to_string()),
+        Some(c) if f.risks != c.risks => return Err(RISKS_CHANGED.to_string()),
+        Some(c) if method_of(&f.target, mode) != c.method => return Err(METHOD_CHANGED.to_string()),
+        _ => {}
+    }
+    if old.level != Level::Danger && f.level == Level::Caution && old.level != Level::Caution {
         return Err("now needs a manual review (it is no longer a recommended item)".to_string());
     }
     Ok(f)
@@ -676,12 +803,19 @@ impl Run<'_> {
             // A failed session read blinds the live-session block: what an agent may be working
             // in is left alone.
             if self.env.health.live_failed
-                && matches!(o.category, Category::Worktrees | Category::Copies | Category::Named)
+                && matches!(o.category, Category::Worktrees | Category::Copies | Category::Named | Category::Scratch)
             {
                 done.insert(o.key.clone(), skipped(SESSIONS_UNREAD));
                 continue;
             }
-            match recheck(o, by_key.get(o.key.as_str()).copied()) {
+            if self.history_lost && o.provenance.is_some() {
+                done.insert(o.key.clone(), skipped(HISTORY_UNREAD));
+                continue;
+            }
+            let confirmation = self.confirmed.iter().find(|c| c.key == o.key);
+            let checked = recheck(o, by_key.get(o.key.as_str()).copied(), confirmation, self.mode)
+                .and_then(|f| self.admitted(f).map(|()| f));
+            match checked {
                 Err(reason) => {
                     done.insert(o.key.clone(), skipped(reason));
                 }
@@ -691,6 +825,22 @@ impl Run<'_> {
         }
         self.remove_paths(&paths, done);
         self.remove_sessions(&sessions, done);
+    }
+
+    /// [`admit`] on the fresh item, and every `danger` item inside it confirmed as it is now.
+    fn admitted(&self, fresh: &Item) -> Result<(), String> {
+        let danger = admit(self.items, fresh, self.mode).map_err(refusal_reason)?;
+        for inner in danger.into_iter().filter(|d| d.key != fresh.key) {
+            let at = inner.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
+            match self.confirmed.iter().find(|c| c.key == inner.key) {
+                Some(c) if c.risks != inner.risks => {
+                    return Err(format!("it holds {at}, whose risks changed since it was confirmed"));
+                }
+                Some(c) if c.method == method_of(&inner.target, self.mode) => {}
+                _ => return Err(format!("it holds {at}, which needs an explicit confirmation")),
+            }
+        }
+        Ok(())
     }
 
     /// Folders, worktrees and files, outer items first: an item inside another chosen one is
@@ -732,7 +882,9 @@ impl Run<'_> {
 
     fn round(&self, todos: &[&Todo], done: &mut HashMap<String, Outcome>) {
         let (dirs, files): (Vec<&Todo>, Vec<&Todo>) =
-            todos.iter().partition(|t| matches!(t.fresh.target, Target::Dir { .. } | Target::Worktree { .. }));
+            todos.iter().partition(|t| {
+                matches!(t.fresh.target, Target::Dir { .. } | Target::Subtree { .. } | Target::Worktree { .. })
+            });
         self.remove_dirs(&dirs, done);
         self.remove_files(&files, done);
     }
@@ -942,9 +1094,13 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
     if !md.is_dir() {
         return Err("no longer a folder".to_string());
     }
+    if has_short_component(path) {
+        return Err("its path uses a short (8.3) name: not followed".to_string());
+    }
     // The folder itself is checked above, so a link found here is one of its ancestors.
     match unlinked_chain(path) {
         Err(Exclusion::Link) => return Err("now behind a link: not followed".to_string()),
+        Err(Exclusion::Unreadable) => return Err("cannot access one of the folders above it".to_string()),
         Err(_) => return Err("no longer there".to_string()),
         Ok(()) => {}
     }
@@ -955,6 +1111,22 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
                 return Err("it overlaps the project or one of its worktrees".to_string());
             }
             (*kind, PlanAction::RemoveDir)
+        }
+        Target::Subtree { repo } => {
+            let repo_key = path_key(repo);
+            let own: Vec<String> =
+                std::iter::once(&project.root).chain(project.worktrees.iter()).map(|p| path_key(p)).collect();
+            if !own.contains(&repo_key) {
+                return Err("its repository is no longer the project or one of its worktrees".to_string());
+            }
+            let holds_own = own.iter().any(|o| key_within(o, key));
+            if *key == repo_key || !key_within(key, &repo_key) || holds_own {
+                return Err("it overlaps the project or one of its worktrees".to_string());
+            }
+            if path.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+                return Err("it is inside the git folder".to_string());
+            }
+            (ArtifactKind::Other, PlanAction::RemoveDir)
         }
         Target::Worktree { .. } => {
             if holds_root(project, key) {
@@ -1011,9 +1183,14 @@ pub(crate) fn check_contents(fresh: &Item, project: &Project, listed: &[Item]) -
             return Err(format!("it holds {at}, which is listed separately"));
         }
     }
-    if is_project_folder {
+    if is_project_folder || matches!(fresh.target, Target::Subtree { .. }) {
         let repos =
-            nested_repos(path).map_err(|_| "it is too big to check for git repositories inside it".to_string())?;
+            nested_repos(path).map_err(|why| match why {
+                NotChecked::TooBig => "it is too big to check for git repositories inside it".to_string(),
+                NotChecked::Unreadable => {
+                    "a folder inside it cannot be read, so it cannot be checked for git repositories".to_string()
+                }
+            })?;
         for r in repos {
             let rk = path_key(&r);
             let vouched = listed.iter().any(|j| {

@@ -1,6 +1,6 @@
 use super::fixtures::*;
 use crate::*;
-use xiox_model::{Agent, ArtifactKind, Level, Loaded, SessionRecord, path_key};
+use xiox_model::{Agent, ArtifactKind, Loaded, SessionRecord, path_key};
 use xiox_mukade::ArchivedSession;
 use std::fs;
 
@@ -71,7 +71,7 @@ fn plain_folder_is_its_own_project_with_a_not_a_repository_note() {
 
     let scan = analyze_with(&dir, &Options::default(), &env()).unwrap();
     assert!(scan.notes.contains(&Note::NotARepository), "{:?}", scan.notes);
-    assert_eq!(scan.schema, 1);
+    assert_eq!(scan.schema, SCHEMA);
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         sessions: &sessions,
         archived: &[],
         search_roots: Some(Vec::new()),
-        now_ms: xiox_app::now_ms(),
+        now_ms: xiox_app::now_ms() + TWO_DAYS_MS,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     };
@@ -364,7 +364,7 @@ fn worktree_with_a_live_session_inside_it_is_blocked_live_session() {
         sessions: &sessions,
         archived: &[],
         search_roots: Some(Vec::new()),
-        now_ms: xiox_app::now_ms(),
+        now_ms: xiox_app::now_ms() + TWO_DAYS_MS,
         health: Default::default(),
         history: crate::history::HistoryInput::none(),
     };
@@ -421,7 +421,7 @@ fn build_of_an_unreachable_report_is_blocked_unreachable() {
             size: xiox_model::SizeInfo { logical_bytes: 10, allocated_bytes: Some(4096), file_count: 1 },
             verified: true,
             class: xiox_model::Class::Build,
-            level: Level::Recommended,
+            level: xiox_model::Level::Recommended,
             note: String::new(),
             ambiguous: false,
             preselected: false,
@@ -520,7 +520,7 @@ fn i5_a_folder_holding_several_repositories_is_a_container_and_says_so() {
     assert!(scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
     // `--builds`, `--worktrees`, `--logs`, `--sessions` are refused; naming a path still works.
     for c in [Category::Builds, Category::Worktrees, Category::Logs, Category::Sessions] {
-        let req = CleanRequest { categories: vec![c], include: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
+        let req = CleanRequest { categories: vec![c], include: Vec::new(), confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
         assert_eq!(select(&scan, &req).unwrap_err(), SelectError::ContainerRoot(holder.clone()), "{c}");
     }
     assert_eq!(
@@ -539,7 +539,7 @@ fn i5_one_project_in_a_plain_folder_is_not_a_container() {
     repo(&proj.join("only"));
     let scan = analyze_with(&proj, &Options { drives: false, ..Options::default() }, &env()).unwrap();
     assert!(!scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
-    let req = CleanRequest { categories: vec![Category::Builds], include: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
+    let req = CleanRequest { categories: vec![Category::Builds], include: Vec::new(), confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
     let chosen = select(&scan, &req).unwrap();
     assert_eq!(chosen.keys, vec![path_key(&target)]);
 }
@@ -553,7 +553,7 @@ fn i5_include_of_an_explicit_path_still_works_in_a_container() {
     let target = rust_build(&holder.join("alpha"), MB);
     let scan = analyze_with(&holder, &Options { drives: false, ..Options::default() }, &env()).unwrap();
     assert!(scan.notes.contains(&Note::ContainerRoot));
-    let req = CleanRequest { categories: Vec::new(), include: vec![target.clone()], mode: xiox_model::RemoveMode::Permanent };
+    let req = CleanRequest { categories: Vec::new(), include: vec![target.clone()], confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
     let chosen = select(&scan, &req).unwrap();
     assert_eq!(chosen.keys, vec![path_key(&target)]);
 }
