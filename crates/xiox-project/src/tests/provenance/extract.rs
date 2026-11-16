@@ -390,3 +390,38 @@ fn a_brace_word_left_unexpanded_is_unknown_and_counted() {
     let (_, resolved) = run(Shell::Bash, "mkdir /d/{a,b /d/{a} /d/b..c");
     assert_eq!(dsts(&resolved), vec![r"D:\{a,b", r"D:\{a}", r"D:\b..c"]);
 }
+
+#[test]
+fn impossible_characters_never_make_a_candidate() {
+    // D12: a message with a newline or a quote is not a path; it is counted, not written down.
+    let cases = [
+        (Shell::Bash, "mkdir \"a\nb\" /d/ok"),
+        (Shell::Bash, "mkdir 'say \"hi\"' /d/ok"),
+        (Shell::Bash, "mkdir 'a<b' /d/ok"),
+        (Shell::Bash, "mkdir 'a|b' /d/ok"),
+        (Shell::Bash, "mkdir ab:c /d/ok"),
+    ];
+    for (shell, cmd) in cases {
+        let (extraction, resolved) = run(shell, cmd);
+        assert_eq!(dsts(&resolved), vec![r"D:\ok"], "{cmd}");
+        assert_eq!(extraction.unresolved + resolved.unresolved, 1, "{cmd}");
+    }
+}
+
+#[test]
+fn powershell_here_strings_hide_their_text_from_the_path_rules() {
+    // D13: the text inside `@'...'@` is a value, not words; the real writes around it are kept.
+    let cases = [
+        ("Add-Content -NoNewline test/x.test.ts -Value @'\n\ntest(selection, () => {})\n'@", vec![r"D:\Projects\Phazly\test\x.test.ts"]),
+        (r#"$f="D:\a\up.ts"; Set-Content $f @'
+import a from 'b'
+'@"#, vec![r"D:\a\up.ts"]),
+        ("Set-Content D:/a/v.ts @\"\nmkdir D:/no\n\"@", vec![r"D:\a\v.ts"]),
+        ("Set-Content D:/a/w.ts @'\nmkdir D:/no", vec![r"D:\a\w.ts"]),
+    ];
+    for (cmd, expected) in cases {
+        let (extraction, resolved) = run(Shell::PowerShell, cmd);
+        assert_eq!(dsts(&resolved), expected, "{cmd:?}");
+        assert!(extraction.unresolved + resolved.unresolved <= 1, "{cmd:?}");
+    }
+}
