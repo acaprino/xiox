@@ -9,6 +9,10 @@ use super::budget::Budget;
 /// Words one word may expand to, the same bound as a loop's items.
 pub const MAX_WORDS: usize = Budget::MAX_LOOP_ITEMS;
 
+/// Brace pairs one word may hold. The expansion recurses once per pair, so this also bounds the depth;
+/// a real command has a handful, and past the limit the word stays literal.
+pub const MAX_GROUPS: usize = 32;
+
 /// A live `{`, `}` or `,` at a byte offset of the word.
 pub type Mark = (usize, char);
 
@@ -19,10 +23,14 @@ struct Group {
     commas: Vec<usize>,
 }
 
-/// The words `text` expands to, or `None` when it would give more than [`MAX_WORDS`].
+/// The words `text` expands to, or `None` when it would give more than [`MAX_WORDS`] or holds more than
+/// [`MAX_GROUPS`] brace pairs.
 /// A word with no expandable brace expression expands to itself.
 pub fn expand(text: &str, marks: &[Mark]) -> Option<Vec<String>> {
     let mut groups = groups(marks);
+    if groups.len() > MAX_GROUPS {
+        return None;
+    }
     groups.sort_by_key(|group| group.open);
     expand_range(text, &groups, 0, text.len())
 }

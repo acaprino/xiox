@@ -143,3 +143,19 @@ fn bash_brace_expansion_has_a_limit_and_never_panics() {
     assert_eq!(words(Shell::Bash, "echo {é,→}"), vec![w("echo"), w("é"), w("→")]);
     assert_eq!(words(Shell::Bash, "echo {-1..1}"), vec![w("echo"), w("-1"), w("0"), w("1")]);
 }
+
+#[test]
+fn deeply_braced_words_stay_literal_and_never_overflow_the_stack() {
+    // Mukade cuts a command at 4,000 characters: the largest word the lexer is given.
+    let cases = [
+        format!("echo {}{}", "{,".repeat(1333), "}".repeat(1333)),
+        format!("echo {}", "{a,b}".repeat(2000)),
+        format!("echo {}{}{}", "{a,".repeat(700), "x", "}".repeat(700)),
+        format!("echo {}", "{a,b}{1..3}".repeat(300)),
+    ];
+    for cmd in cases {
+        let tokens = words(Shell::Bash, &cmd);
+        assert_eq!(tokens.len(), 2, "{} characters", cmd.len());
+        assert_eq!(tokens[1], w(cmd.strip_prefix("echo ").unwrap()));
+    }
+}
