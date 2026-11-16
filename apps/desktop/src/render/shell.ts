@@ -67,18 +67,24 @@ function ellipsis(text: string, tag: 'span' | 'div' = 'span'): HTMLElement {
   return h(tag, { class: 'ellipsis', title: text }, text);
 }
 
-/** A disabled action says why: in its tooltip and, for a screen reader, in a hidden sentence its `aria-describedby` points at. */
-function actionButton(view: SectionView, action: ActionView, on: Handlers): HTMLButtonElement {
+/**
+ * A disabled action says why: in its tooltip and, for a screen reader, in a hidden sentence its `aria-describedby` points at.
+ * The sentence is a sibling of the button, not inside it: inside, it would become part of the button's name.
+ */
+function actionButton(view: SectionView, action: ActionView, on: Handlers): (HTMLElement | null)[] {
   const reason = disabledReason(view, action);
   const reasonId = `why-${action.id}`;
-  return button(
-    [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null, reason === null ? null : h('span', { class: 'sr-only', id: reasonId }, reason)],
-    {
-      class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
-      title: reason, 'aria-describedby': reason === null ? null : reasonId,
-      onClick: () => on.send(view.section, actionIntent(view.section, action.id)),
-    },
-  );
+  return [
+    button(
+      [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null],
+      {
+        class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
+        title: reason, 'aria-describedby': reason === null ? null : reasonId,
+        onClick: () => on.send(view.section, actionIntent(view.section, action.id)),
+      },
+    ),
+    reason === null ? null : h('span', { class: 'sr-only', id: reasonId }, reason),
+  ];
 }
 
 /**
@@ -144,7 +150,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
 
   // Top bar.
   byId('version').textContent = app.version;
-  fill(byId('actions'), ...view.actions.map((a) => actionButton(view, a, on)));
+  fill(byId('actions'), ...view.actions.flatMap((a) => actionButton(view, a, on)));
 
   // Status row.
   byId('badge').textContent = view.status.badge;
