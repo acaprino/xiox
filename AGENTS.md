@@ -26,6 +26,16 @@
   tool Bash, altri flag di output, `ForEach-Object`) si misura solo su un campione nuovo,
   etichettato alla cieca.
 - I comandi reali delle sessioni non entrano mai nel repository: restano in cartelle temporanee.
+- Stato del port in Rust (`crates/xiox-project/src/provenance`, in `main` dal 2026-11-16): le
+  divergenze volute dal prototipo sono D1–D11, documentate nei commenti del codice e nelle classi di
+  `bench/path-extractor/real.py parity`. Aperti:
+  - la parità sulla cronologia reale (Step 3 del piano
+    `docs/superpowers/plans/2026-11-15-shell-path-extractor.md`) non è ancora stata eseguita;
+  - prima di fidarsi dello Step 3, le classi D10 (`cd -` e opzioni di `cd`) e D11 (graffe Bash)
+    di `parity` vanno ristrette alla direzione della differenza che spiegano, come le altre;
+  - il piano di integrazione in `analyze` deve dare a `MukadeSessions::dump_calls` un timeout reale
+    e una sola copia del database di OpenCode per analisi, non una per sessione;
+  - D10 e D11 cambiano quante cartelle si trovano: si misurano su un campione nuovo.
 - Limiti di Mukade trovati il 2026-11-15:
   - `list pi` dà lo stesso id `session` a 50 sessioni;
   - 7 catene di subagent di Claude Code vengono rifiutate;
