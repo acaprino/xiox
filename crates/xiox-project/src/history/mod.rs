@@ -30,7 +30,7 @@ use crate::search::Own;
 use crate::{session_ledgers, Category, Coverage, Env, Item, Options, PathEnv, Project};
 
 pub use report::{
-    Activity, CallOutcome, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure,
+    Activity, CallOutcome, ConflictReport, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure,
     Risk, SessionEvidence, SourceReport,
 };
 

@@ -5,7 +5,7 @@
 use super::fixtures::*;
 use crate::clean::{Io, check_dir, english_error, strip_os_text, clean_with, overlaps_project, shortfall_with};
 use crate::*;
-use xiox_model::{Agent, ArtifactKind, Level, RemoveMode, path_key};
+use xiox_model::{Agent, ArtifactKind, RemoveMode, path_key};
 use xiox_mukade::ArchivedSession;
 use xiox_sessions::{HarnessCli, Trash};
 use std::fs;
@@ -275,7 +275,7 @@ fn clean_permanent_removes_the_build_folder_and_reports_its_bytes() {
         Outcome::Removed { bytes_freed } => assert!(*bytes_freed >= 2 * MB64, "{bytes_freed}"),
         o => panic!("{o:?}"),
     }
-    assert_eq!((out.schema, out.mode, out.dry_run), (1, RemoveMode::Permanent, false));
+    assert_eq!((out.schema, out.mode, out.dry_run), (SCHEMA, RemoveMode::Permanent, false));
     assert!(out.bytes_freed >= 2 * MB64);
     assert_eq!(out.recycled_bytes, 0);
     assert!(!out.partial());
@@ -690,6 +690,8 @@ fn check_dir_refuses_a_junction_a_file_a_missing_path_and_a_project_folder_aroun
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Recommended,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
@@ -838,6 +840,8 @@ fn recheck_skips_a_copy_whose_fresh_listing_says_it_has_own_work_even_if_unblock
         path: Some(PathBuf::from("X-a-b")),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked,
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -904,7 +908,7 @@ fn clean_with_nothing_chosen_returns_an_empty_outcome_at_once() {
     let scan = scan_of(&root);
     let out = clean(&scan, &Chosen::default(), RemoveMode::Recycle, false);
     assert!(out.items.is_empty() && !out.partial());
-    assert_eq!((out.schema, out.mode, out.bytes_freed, out.recycled_bytes), (1, RemoveMode::Recycle, 0, 0));
+    assert_eq!((out.schema, out.mode, out.bytes_freed, out.recycled_bytes), (SCHEMA, RemoveMode::Recycle, 0, 0));
 }
 
 #[test]
@@ -928,6 +932,8 @@ fn a_top_level_project_folder_is_refused_with_an_english_reason() {
         path: Some(top.clone()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -1148,6 +1154,8 @@ fn contents_item(path: &Path, kind: ArtifactKind, category: Category) -> Item {
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind },
@@ -1221,6 +1229,8 @@ fn m1_a_copy_whose_fresh_own_work_check_gives_no_answer_is_skipped() {
         path: Some(PathBuf::from("X-a-b")),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: own },
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -1304,6 +1314,8 @@ fn listed(category: Category, path: &Path, why: Why) -> Item {
         path: Some(path.to_path_buf()),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -1329,7 +1341,6 @@ fn session_folder() -> Why {
     Why::SessionFolder {
         strength: Strength::Created,
         from_script: false,
-        risks: vec![Risk::NoGit],
         activity: Activity::Unknown,
     }
 }
@@ -1383,6 +1394,8 @@ fn check_dir_refuses_a_target_under_a_linked_ancestor() {
         path: Some(through),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why: Why::NameOnly,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },

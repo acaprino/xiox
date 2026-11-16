@@ -84,7 +84,7 @@ fn analyze_json_stdout_is_one_json_object() {
     assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is exactly one JSON value");
     assert!(v.is_object());
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert_eq!(v["project"]["name"], "fakeproj");
     assert_eq!(v["items"][0]["category"], "builds");
     assert!(out.stdout.ends_with(b"}\n"), "one object and a newline");
@@ -318,7 +318,7 @@ fn clean_json_yes_stdout_is_one_object_with_scan_and_outcome() {
     let out = run_clean(&project, &["--builds", "--yes", "--permanent", "--json"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout is exactly one JSON value");
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert_eq!(v["scan"]["project"]["name"], "fakeproj");
     assert_eq!(v["scan"]["items"][0]["category"], "builds");
     assert_eq!(v["outcome"]["mode"], "permanent");
@@ -336,7 +336,7 @@ fn clean_json_with_nothing_named_prints_the_scan_and_a_null_outcome() {
     let out = run_clean(&project, &["--json"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", text(&out.stderr));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
     assert!(v["scan"].is_object() && v["outcome"].is_null());
     assert!(project.join("target").exists());
 }
@@ -560,7 +560,7 @@ fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added(
     let mut o = Observer::spawn(&project, &["--no-drives"]);
     let started = o.next(60);
     assert_eq!(started["event"], "started");
-    assert_eq!(started["schema"], 1);
+    assert_eq!(started["schema"], 2);
     assert_eq!(started["project"]["name"], "fakeproj");
     // The baseline has weights: the 3 MB build folder is counted at the start.
     assert!(started["totals"]["byCategory"]["builds"].as_u64().unwrap() >= 3 * 1024 * 1024, "{started}");
@@ -576,7 +576,7 @@ fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added(
     while category != "worktrees" {
         let line = o.next(60);
         assert_eq!(line["event"], "changed", "only changes until the worktree is listed: {line}");
-        assert_eq!(line["schema"], 1);
+        assert_eq!(line["schema"], 2);
         for added in line["added"].as_array().unwrap() {
             if added["path"].as_str().unwrap().ends_with("wt") {
                 assert_eq!(added["new"], true, "{line}");

@@ -731,7 +731,7 @@ mod tests {
         assert!(text.contains("Other items not listed here: 1"), "{text}");
         assert!(text.contains("structuredContent"), "{text}");
         let structured = report_of(reply);
-        assert_eq!(structured["schema"], 1);
+        assert_eq!(structured["schema"], 2);
         assert_eq!(structured["project"]["name"], "mukade");
         assert_eq!(structured["stale"], false);
         assert_eq!(structured["growthBytes"], 0);

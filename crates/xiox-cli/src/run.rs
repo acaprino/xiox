@@ -498,7 +498,7 @@ mod tests {
                 })
                 .collect();
             CleanOutcome {
-                schema: 1,
+                schema: xiox_project::SCHEMA,
                 mode,
                 dry_run,
                 items,

@@ -3,7 +3,7 @@
 
 use crate::Item;
 use std::path::{Component, Path};
-use xiox_model::Level;
+use crate::Level;
 
 /// True when the guard of the cleaner (`xiox_cleaner::guard`) refuses the folder for being
 /// directly under a drive root or share root: fewer than two folders below it.

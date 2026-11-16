@@ -2,7 +2,7 @@
 
 use super::fixtures::*;
 use crate::{Category, Item, Note, Options, ProjectScan, Target, Why, analyze_with, resolve_project};
-use xiox_model::Level;
+use crate::Level;
 use std::fs;
 use std::path::Path;
 

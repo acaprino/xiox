@@ -2,12 +2,12 @@
 
 use crate::resolve::resolve_full;
 use crate::{
-    Block, Category, Env, Error, Item, Note, Options, Project, ProjectScan, SCHEMA, StaleBranch, Target,
+    Block, Category, Env, Error, Item, Level, Note, Options, Project, ProjectScan, SCHEMA, StaleBranch, Target,
     Why,
 };
 use xiox_git::{GitCli, WorktreeEntry};
 use xiox_model::{
-    Agent, Artifact, ArtifactKind, Class, EngineConfig, GitProbe, Level, ProjectReport, ProjectStatus, ScanOptions,
+    Agent, Artifact, ArtifactKind, Class, EngineConfig, GitProbe, ProjectReport, ProjectStatus, ScanOptions,
     SessionSource, normalize_path, path_key,
 };
 use std::cmp::Reverse;
@@ -198,10 +198,10 @@ fn engine_reports(project: &Project, env: &Env, notes: &mut Vec<Note>) -> Vec<Pr
 /// is that recomputation; the unverified rule is re-applied here so a scanner placeholder can
 /// never come out stronger than the rules allow.
 fn build_level(a: &Artifact) -> Level {
-    if !a.verified || a.level == Level::Caution {
+    if !a.verified || a.level == xiox_model::Level::Caution {
         Level::Caution
     } else {
-        a.level
+        Level::from(a.level)
     }
 }
 
@@ -225,6 +225,8 @@ pub(crate) fn builds(project: &Project, reports: &[ProjectReport], opts: &Option
                 path: Some(normalize_path(&a.path)),
                 bytes: opts.measure.then(|| a.size.effective_bytes()),
                 level: build_level(a),
+                risks: Vec::new(),
+                identity: None,
                 blocked: blocked.clone(),
                 why: Why::CatalogFolder { label_en: label_en(a) },
                 target: Target::Dir { kind: a.kind },
@@ -280,6 +282,8 @@ fn worktrees(
             category: Category::Worktrees,
             bytes: opts.measure.then(|| xiox_cleaner::measure_dir(&path).effective_bytes()),
             level: if blocked.is_empty() { Level::Recommended } else { Level::Caution },
+            risks: Vec::new(),
+            identity: crate::identity::folder_id(&path),
             blocked,
             why: Why::LinkedWorktree { branch: e.branch.clone(), head: e.head.clone() },
             target: Target::Worktree { repo: project.root.clone() },
@@ -306,6 +310,8 @@ fn sessions(project: &Project, entries: &[WorktreeEntry], env: &Env) -> Vec<Item
             path: None,
             bytes: Some(s.bytes),
             level: Level::Optional,
+            risks: Vec::new(),
+            identity: None,
             blocked: if s.blocked.is_some() { vec![Block::SessionLocked] } else { Vec::new() },
             why: Why::ArchivedSession { agent: s.agent, title: s.title.clone() },
             target: Target::Session { agent: s.agent, id: s.id.clone() },

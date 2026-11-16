@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde_json::json;
-use xiox_model::{path_key, Agent, ArtifactKind, Level};
+use xiox_model::{path_key, Agent, ArtifactKind};
 use xiox_mukade::ToolCall;
 
 use super::fake::{bash, call, descriptor, input, listing, FakeCalls};

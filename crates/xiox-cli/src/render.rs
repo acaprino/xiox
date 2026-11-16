@@ -1,9 +1,9 @@
 //! Human output of `analyze` and `clean`. Every text is English and built from structured fields: the
 //! engine's own strings (`Artifact::note`, `ArchivedSession::blocked`, warnings) are never used.
 
-use xiox_model::{Agent, Level, RemoveMode};
+use xiox_model::{Agent, RemoveMode};
 use xiox_project::{
-    Block, Category, Chosen, CleanOutcome, HistoryReport, Item, Limit, Note, Outcome, Provenance, ProjectScan, Risk,
+    Block, Category, Chosen, CleanOutcome, HistoryReport, Item, Level, Limit, Note, Outcome, Provenance, ProjectScan, Risk,
     SearchMode, Strength, Target, Why, is_recommended, key_within, normalize_remote, too_shallow,
 };
 // Only the tests of this module name them (the listing uses `too_shallow`).
@@ -44,6 +44,7 @@ fn level_name(l: Level) -> &'static str {
         Level::Recommended => "recommended",
         Level::Optional => "optional",
         Level::Caution => "caution",
+        Level::Danger => "danger",
     }
 }
 
@@ -154,8 +155,8 @@ fn risk_name(r: Risk) -> &'static str {
 
 /// What the sessions add to the reason: for a session folder its count, last date, origin and risks;
 /// for a copy or a named folder only how many sessions saw it.
-fn provenance_text(why: &Why, p: &Provenance) -> String {
-    let Why::SessionFolder { from_script, risks, .. } = why else {
+fn provenance_text(why: &Why, risks: &[Risk], p: &Provenance) -> String {
+    let Why::SessionFolder { from_script, .. } = why else {
         return format!("; seen in {}", plural(p.sessions.len(), "session"));
     };
     let last = p
@@ -180,7 +181,7 @@ fn reason_text(item: &Item) -> String {
         item.blocked.iter().map(|b| block_reason(*b)).collect::<Vec<_>>().join(", ")
     };
     if let Some(p) = &item.provenance {
-        reason.push_str(&provenance_text(&item.why, p));
+        reason.push_str(&provenance_text(&item.why, &item.risks, p));
     }
     if too_shallow(item) {
         reason.push_str("; cannot be removed: top-level folder");
@@ -823,7 +824,7 @@ mod tests {
             .map(|(.., o)| if let Outcome::Removed { bytes_freed } = o { *bytes_freed } else { 0 })
             .sum();
         CleanOutcome {
-            schema: 1,
+            schema: xiox_project::SCHEMA,
             mode: RemoveMode::Permanent,
             dry_run,
             items,
@@ -925,17 +926,19 @@ mod tests {
             strength: None,
             last_activity_ms,
             sessions: (0..sessions).map(|i| evidence(&format!("s{i}"))).collect(),
+            other_projects: Vec::new(),
         }
     }
 
-    fn scratch(path: &str, why: Why, provenance: xiox_project::Provenance) -> Item {
+    fn scratch(path: &str, (why, risks): (Why, Vec<xiox_project::Risk>), provenance: xiox_project::Provenance) -> Item {
         let mut i = item(Category::Scratch, path, None, Level::Caution, vec![], why);
+        i.risks = risks;
         i.provenance = Some(provenance);
         i
     }
 
-    fn folder(strength: xiox_project::Strength, from_script: bool, risks: Vec<xiox_project::Risk>) -> Why {
-        Why::SessionFolder { strength, from_script, risks, activity: xiox_project::Activity::Unknown }
+    fn folder(strength: xiox_project::Strength, from_script: bool, risks: Vec<xiox_project::Risk>) -> (Why, Vec<xiox_project::Risk>) {
+        (Why::SessionFolder { strength, from_script, activity: xiox_project::Activity::Unknown }, risks)
     }
 
     fn source_report(failed: &[(xiox_project::ReadFailure, usize)]) -> xiox_project::SourceReport {
@@ -957,6 +960,7 @@ mod tests {
             shell: xiox_project::Coverage::default(),
             excluded: Default::default(),
             limits,
+            conflicts: Default::default(),
         }
     }
 

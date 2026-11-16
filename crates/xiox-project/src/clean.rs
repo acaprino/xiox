@@ -16,11 +16,11 @@ use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
-    Block, Category, Env, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
+    Block, Category, Env, Item, Level, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
     Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
-use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
+use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, PlanAction, PlanItem, RemoveMode, path_key};
 use xiox_mukade::ArchivedSession;
 use xiox_sessions::{HarnessCli, SessionOutcome, SystemCli, SystemTrash, Trash};
 use serde::Serialize;

@@ -1,6 +1,6 @@
 use super::fixtures::*;
 use crate::*;
-use xiox_model::{Agent, ArtifactKind, Level, Loaded, SessionRecord, path_key};
+use xiox_model::{Agent, ArtifactKind, Loaded, SessionRecord, path_key};
 use xiox_mukade::ArchivedSession;
 use std::fs;
 
@@ -71,7 +71,7 @@ fn plain_folder_is_its_own_project_with_a_not_a_repository_note() {
 
     let scan = analyze_with(&dir, &Options::default(), &env()).unwrap();
     assert!(scan.notes.contains(&Note::NotARepository), "{:?}", scan.notes);
-    assert_eq!(scan.schema, 1);
+    assert_eq!(scan.schema, SCHEMA);
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn build_of_an_unreachable_report_is_blocked_unreachable() {
             size: xiox_model::SizeInfo { logical_bytes: 10, allocated_bytes: Some(4096), file_count: 1 },
             verified: true,
             class: xiox_model::Class::Build,
-            level: Level::Recommended,
+            level: xiox_model::Level::Recommended,
             note: String::new(),
             ambiguous: false,
             preselected: false,

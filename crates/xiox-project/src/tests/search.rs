@@ -4,7 +4,9 @@ use super::fixtures::*;
 use crate::search::{mft_hits, name_matches_project, walk_candidates};
 use crate::{Block, Category, Env, Note, Options, ProjectScan, SearchMode, Target, Why, analyze_with, resolve_project};
 use xiox_disktree::{DiskIndex, Node};
-use xiox_model::{ArtifactKind, Level};
+use xiox_model::ArtifactKind;
+
+use crate::Level;
 use std::fs;
 use std::path::{Path, PathBuf};
 

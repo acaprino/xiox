@@ -4,7 +4,7 @@ use std::fs::{self, File, FileTimes, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use xiox_model::{Agent, Level, Loaded, SessionRecord};
+use xiox_model::{Agent, Loaded, SessionRecord};
 
 use super::scratch::{Do::*, Site};
 use crate::history::risk::{activity, risks, RECENT_MS};
@@ -34,7 +34,7 @@ fn evidence(gaps: bool) -> SessionEvidence {
 }
 
 fn provenance(strength: Strength, last: Option<i64>, gaps: bool) -> Provenance {
-    Provenance { strength: Some(strength), last_activity_ms: last, sessions: vec![evidence(gaps)] }
+    Provenance { strength: Some(strength), last_activity_ms: last, sessions: vec![evidence(gaps)], other_projects: Vec::new() }
 }
 
 fn set_mtime(dir: &Path, ms: i64) {
@@ -100,10 +100,12 @@ fn scratch_item(key: &str, last: Option<i64>) -> Item {
         path: None,
         bytes: Some(1),
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
-        why: Why::SessionFolder { strength: Strength::Created, from_script: false, risks: Vec::new(), activity: Activity::Unknown },
+        why: Why::SessionFolder { strength: Strength::Created, from_script: false, activity: Activity::Unknown },
         target: Target::File,
-        provenance: Some(Provenance { strength: Some(Strength::Created), last_activity_ms: last, sessions: Vec::new() }),
+        provenance: Some(Provenance { strength: Some(Strength::Created), last_activity_ms: last, sessions: Vec::new(), other_projects: Vec::new() }),
     }
 }
 
@@ -168,9 +170,9 @@ fn scratch_items_carry_their_risks() {
     let (items, _) = site.within_base(&[Mkdir("agent-runs/run1"), Write("agent-runs/run1/a.txt")]);
 
     // A folder made now, outside any repository: the folder date is only recency.
+    assert_eq!(items[0].risks, [Risk::NoGit, Risk::RecentActivity]);
     match &items[0].why {
-        Why::SessionFolder { risks, activity, .. } => {
-            assert_eq!(risks, &[Risk::NoGit, Risk::RecentActivity]);
+        Why::SessionFolder { activity, .. } => {
             assert_eq!(*activity, Activity::Unknown);
         }
         other => panic!("{other:?}"),

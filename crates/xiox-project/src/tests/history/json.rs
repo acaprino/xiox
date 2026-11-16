@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use xiox_model::{Agent, ArtifactKind, Level};
+use xiox_model::{Agent, ArtifactKind};
 
 use crate::*;
 
@@ -19,6 +19,8 @@ fn item(category: Category, why: Why, provenance: Option<Provenance>) -> Item {
         path: Some(PathBuf::from(r"D:\p\x")),
         bytes: None,
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
         blocked: Vec::new(),
         why,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },
@@ -70,18 +72,19 @@ fn scratch_item_serializes_with_its_provenance() {
         gaps: false,
     };
     let provenance =
-        Provenance { strength: Some(Strength::Created), last_activity_ms: Some(1_700_000_000_000), sessions: vec![session] };
+        Provenance { strength: Some(Strength::Created), last_activity_ms: Some(1_700_000_000_000), sessions: vec![session], other_projects: Vec::new() };
     let why = Why::SessionFolder {
         strength: Strength::Created,
         from_script: false,
-        risks: vec![Risk::NoGit, Risk::RecentActivity],
         activity: Activity::Unknown,
     };
-    let v = json_of(&item(Category::Scratch, why, Some(provenance)));
+    let risks = vec![Risk::NoGit, Risk::RecentActivity];
+    let v = json_of(&Item { risks, ..item(Category::Scratch, why, Some(provenance)) });
 
     assert_eq!(v["category"], "scratch");
     assert_eq!(v["why"]["type"], "session-folder");
-    assert_eq!(v["why"]["risks"], json!(["no-git", "recent-activity"]));
+    assert_eq!(v["risks"], json!(["no-git", "recent-activity"]));
+    assert!(v["why"].get("risks").is_none());
     assert_eq!(v["why"]["activity"], "unknown");
     let session = &v["provenance"]["sessions"][0];
     assert_eq!(session["operations"][0]["source"], json!({"type": "shell", "op": "create", "script": false}));
@@ -91,13 +94,13 @@ fn scratch_item_serializes_with_its_provenance() {
 }
 
 #[test]
-fn old_items_carry_null_provenance_and_scan_stays_schema_1() {
+fn old_items_carry_null_provenance_and_scan_is_schema_2() {
     let builds = item(Category::Builds, Why::CatalogFolder { label_en: "Rust build".into() }, None);
     assert_eq!(json_of(&builds)["provenance"], Value::Null);
 
     let v = json_of(&scan(vec![builds], None));
     assert_eq!(v["history"], Value::Null);
-    assert_eq!(v["schema"], 1);
+    assert_eq!(v["schema"], 2);
 }
 
 #[test]
@@ -116,6 +119,7 @@ fn history_report_serializes_counts_by_kind() {
         shell: Coverage { shell_calls: 7, ..Coverage::default() },
         excluded: BTreeMap::from([(Exclusion::OutsideScope, 2)]),
         limits: vec![Limit::Sessions { max: 250, left: 3 }],
+        conflicts: ConflictReport::default(),
     };
     let v = json_of(&report);
 
@@ -144,6 +148,7 @@ fn a_report_is_partial_only_for_a_cap_a_failed_listing_or_a_failed_read() {
         shell: Coverage::default(),
         excluded: BTreeMap::new(),
         limits,
+        conflicts: ConflictReport::default(),
     };
     let cases = [
         (report(vec![source(false, BTreeMap::new())], vec![]), false),
@@ -153,5 +158,54 @@ fn a_report_is_partial_only_for_a_cap_a_failed_listing_or_a_failed_read() {
     ];
     for (r, partial) in cases {
         assert_eq!(r.partial(), partial, "{r:?}");
+    }
+}
+
+fn scratch_item(risks: Vec<Risk>) -> Item {
+    let why = Why::SessionFolder { strength: Strength::Created, from_script: false, activity: Activity::Unknown };
+    Item { risks, ..item(Category::Scratch, why, None) }
+}
+
+#[test]
+fn schema_2_moves_risks_to_the_item() {
+    let v = json_of(&scan(vec![scratch_item(vec![Risk::NoGit])], None));
+    assert_eq!(v["schema"], json!(2));
+    assert_eq!(v["items"][0]["risks"], json!(["no-git"]));
+    assert!(v["items"][0]["why"].get("risks").is_none(), "{}", v["items"][0]["why"]);
+}
+
+#[test]
+fn danger_level_and_new_blocks_are_kebab_case() {
+    assert_eq!(json_of(&crate::Level::Danger), json!("danger"));
+    let blocks = [
+        (Block::OtherProjectWrites, "other-project-writes"),
+        (Block::HoldsRepositories, "holds-repositories"),
+        (Block::TrackedFiles, "tracked-files"),
+    ];
+    for (block, name) in blocks {
+        assert_eq!(json_of(&block), json!(name));
+    }
+    let target = json_of(&Target::Subtree { repo: PathBuf::from(r"D:\p") });
+    assert_eq!(target, json!({"type": "subtree", "repo": r"D:\p"}));
+}
+
+#[test]
+fn identity_never_reaches_the_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = crate::identity::folder_id(dir.path());
+    let v = json_of(&Item { identity: id, ..scratch_item(Vec::new()) });
+    assert!(v.get("identity").is_none(), "{v}");
+}
+
+#[test]
+fn risk_reasons_are_the_guide_texts() {
+    let cases = [
+        (Risk::NoGit, "not a git repository"),
+        (Risk::WeakEvidence, "the sessions wrote or worked here; no creation is recorded"),
+        (Risk::PartialCoverage, "the session history was read only in part"),
+        (Risk::RecentActivity, "used or changed in the last 24 hours"),
+    ];
+    for (risk, text) in cases {
+        assert_eq!(risk.reason(), text, "{risk:?}");
     }
 }

@@ -1,6 +1,6 @@
 use super::fixtures::{GB, MB, build, item, scan, scan_at, worktree};
 use crate::{AttentionKind, Event, Observer, PARTIAL_BACK_OFF_MS, Params};
-use xiox_model::Level;
+use xiox_project::Level;
 use xiox_project::{Block, Category, SCHEMA};
 
 const T0: i64 = 1_000;

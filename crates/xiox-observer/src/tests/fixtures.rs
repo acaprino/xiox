@@ -1,8 +1,8 @@
 //! Hand-built scans: no disk, no git.
 
 use std::path::PathBuf;
-use xiox_model::{ArtifactKind, Level};
-use xiox_project::{Block, Category, Item, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
+use xiox_model::ArtifactKind;
+use xiox_project::{Block, Category, Item, Level, Project, ProjectScan, SCHEMA, SearchMode, Target, Why};
 
 pub const MB: u64 = 1024 * 1024;
 pub const GB: u64 = 1024 * MB;
@@ -48,7 +48,7 @@ pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, bl
         Category::Logs => (Target::File, Why::LogFile { ignored: false }),
         _ => (Target::Dir { kind: ArtifactKind::Catalog }, Why::CatalogFolder { label_en: "Rust build".into() }),
     };
-    Item { key: xiox_model::path_key(&p), category, path: Some(p), bytes, level, blocked, why, target, provenance: None }
+    Item { key: xiox_model::path_key(&p), category, path: Some(p), bytes, level, risks: Vec::new(), identity: None, blocked, why, target, provenance: None }
 }
 
 /// A recommended, unblocked build folder two levels deep.

@@ -77,7 +77,7 @@ Flags:
   --permanent      clean: delete for good instead of moving to the Recycle Bin
   --yes            clean: do not ask for confirmation
   --dry-run        clean: do everything except deleting, and say what would be freed
-  --json           print a single JSON object (schema 1) on stdout; messages go to stderr
+  --json           print a single JSON object (schema 2) on stdout; messages go to stderr
   --no-drives      search only next to the project, not on every fixed drive
   --no-history     analyze, clean: do not read the agent session history (no `scratch` folders)
   --interval <s>   observe: seconds between checks (default 600, from 60 to 2592000)

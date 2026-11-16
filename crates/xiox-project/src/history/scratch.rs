@@ -65,10 +65,10 @@ pub(crate) fn scratch_items(
             let why = Why::SessionFolder {
                 strength: standing.strength,
                 from_script: standing.from_script,
-                risks: risks(&path, &provenance, partial, env.now_ms),
                 activity: activity(&path, env),
             };
-            Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
+            let risks = risks(&path, &provenance, partial, env.now_ms);
+            Item { risks, provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
         })
         .collect()
 }

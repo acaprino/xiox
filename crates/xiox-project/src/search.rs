@@ -9,10 +9,10 @@
 //! tested as a candidate but never descended into.
 
 use crate::owned::key_within;
-use crate::{Block, Category, Env, Item, Note, Options, Project, SearchMode, Target, Why};
+use crate::{Block, Category, Env, Item, Level, Note, Options, Project, SearchMode, Target, Why};
 use crate::nested::nested_repos;
 use crate::owned::live_session_in;
-use xiox_model::{ArtifactKind, DirIndex, Level, is_system_dir, normalize_path, path_key};
+use xiox_model::{ArtifactKind, DirIndex, is_system_dir, normalize_path, path_key};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -339,6 +339,8 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
         category,
         bytes: opts.measure.then(|| xiox_cleaner::measure_dir(dir).effective_bytes()),
         level: Level::Caution,
+        risks: Vec::new(),
+        identity: crate::identity::folder_id(dir),
         blocked,
         why,
         target: Target::Dir { kind: ArtifactKind::ProjectFolder },

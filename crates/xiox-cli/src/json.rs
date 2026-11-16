@@ -1,8 +1,8 @@
-//! `--json`: the scan (`analyze`) or the scan and the outcome (`clean`) as one JSON object (schema 1).
+//! `--json`: the scan (`analyze`) or the scan and the outcome (`clean`) as one JSON object (schema 2).
 
-use xiox_project::{CleanOutcome, ProjectScan};
+use xiox_project::{CleanOutcome, ProjectScan, SCHEMA};
 
-/// The `ProjectScan` serialization: `{"schema":1,"project":…,"items":[…],…}`. Field names are
+/// The `ProjectScan` serialization: `{"schema":2,"project":…,"items":[…],…}`. Field names are
 /// camelCase, enum values kebab-case; every text in it is English.
 ///
 /// `Err` when a path is not valid Unicode (JSON cannot carry it).
@@ -10,7 +10,7 @@ pub fn scan_json(scan: &ProjectScan) -> Result<serde_json::Value, serde_json::Er
     serde_json::to_value(scan)
 }
 
-/// The result of `clean --json`: `{"schema":1,"scan":<scan_json>,"outcome":<outcome>|null}`.
+/// The result of `clean --json`: `{"schema":2,"scan":<scan_json>,"outcome":<outcome>|null}`.
 /// `outcome` is `null` when nothing was run. Its items are objects
 /// (`{"key","path","category","outcome":{"type":"removed"|"skipped"|"failed",…}}`), not the
 /// tuples of `CleanOutcome`, so the shape is stable and readable by name.
@@ -43,7 +43,7 @@ pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Resul
         }
     };
     let mut m = Map::new();
-    m.insert("schema".into(), to_value(1)?);
+    m.insert("schema".into(), to_value(SCHEMA)?);
     m.insert("scan".into(), scan_json(scan)?);
     m.insert("outcome".into(), outcome);
     Ok(Value::Object(m))
@@ -53,13 +53,14 @@ pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Resul
 mod tests {
     use super::*;
     use crate::testdata::*;
-    use xiox_model::{Level, RemoveMode};
+    use xiox_model::RemoveMode;
+    use xiox_project::Level;
     use xiox_project::{Category, Outcome};
     use std::path::PathBuf;
 
     fn outcome_of_one(path: Option<PathBuf>, o: Outcome) -> CleanOutcome {
         CleanOutcome {
-            schema: 1,
+            schema: SCHEMA,
             mode: RemoveMode::Recycle,
             dry_run: false,
             items: vec![("k".into(), path, Category::Builds, o)],
@@ -74,8 +75,8 @@ mod tests {
         let scan = scan(vec![item(Category::Builds, "D:\\p\\target", Some(7), Level::Recommended, vec![], xiox_project::Why::NameOnly)]);
         let o = outcome_of_one(Some(PathBuf::from("D:\\p\\target")), Outcome::Removed { bytes_freed: 7 });
         let v = outcome_json(&scan, Some(&o)).unwrap();
-        assert_eq!(v["schema"], 1);
-        assert_eq!(v["scan"]["schema"], 1);
+        assert_eq!(v["schema"], 2);
+        assert_eq!(v["scan"]["schema"], 2);
         assert_eq!(v["outcome"]["mode"], "recycle");
         assert_eq!(v["outcome"]["dryRun"], false);
         assert_eq!(v["outcome"]["bytesFreed"], 7);
@@ -110,7 +111,7 @@ mod tests {
     #[test]
     fn outcome_json_is_null_when_nothing_was_run() {
         let v = outcome_json(&scan(vec![]), None).unwrap();
-        assert_eq!(v["schema"], 1);
+        assert_eq!(v["schema"], 2);
         assert!(v["outcome"].is_null());
         assert!(v["scan"].is_object());
     }
@@ -118,7 +119,7 @@ mod tests {
     #[test]
     fn json_has_schema_1_and_camel_case_kebab_case_fields() {
         let v = scan_json(&full_scan()).unwrap();
-        assert_eq!(v["schema"], 1);
+        assert_eq!(v["schema"], 2);
         assert_eq!(v["project"]["name"], "mukade");
         assert_eq!(v["project"]["isRepo"], true);
         assert_eq!(v["search"], "bounded-walk");
