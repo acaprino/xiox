@@ -90,6 +90,10 @@ shortened (`...\w` stands for `C:\Users\alice\AppData\Local\Temp\w`):
 | `...\w\sampleapp-feature` | a linked worktree (branch `feature`) that existed before the observer started |
 | `...\w\sampleapp-spike1`, `...\w\sampleapp-spike2` | two linked worktrees created while the observer was running |
 
+The examples are real runs from before the `danger` level, edited by hand to the current output:
+the project and `sampleapp-feature` are taken as made days ago, so only the two spike worktrees,
+made during the run, are recent activity (`danger`).
+
 On stderr, a person sees what the process is doing:
 
 ```text
@@ -145,7 +149,10 @@ items is shown), and an `attention` event for each threshold that is now exceede
       "category": "worktrees",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1",
       "bytes": 171,
-      "level": "recommended",
+      "level": "danger",
+      "risks": [
+        "recent-activity"
+      ],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -156,6 +163,7 @@ items is shown), and an `attention` event for each threshold that is now exceede
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": true,
       "firstSeenMs": 1794601822706,
       "measuredAtMs": 1794601822706,
@@ -168,9 +176,12 @@ items is shown), and an `attention` event for each threshold that is now exceede
 ```
 
 ```json
-{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"growth","value":2097494,"threshold":1048576,"cleanCommand":"xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike2\""}
-{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"worktrees","value":2,"threshold":1,"cleanCommand":"xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike2\""}
+{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"growth","value":2097494,"threshold":1048576,"cleanCommand":null}
+{"schema":2,"event":"attention","time":"2026-11-13T20:30:22.709Z","kind":"worktrees","value":2,"threshold":1,"cleanCommand":null}
 ```
+
+Both worktrees were made during the run, so they are `danger` (`recent-activity`) and
+`cleanCommand` is `null`: they need `xiox clean --include <path> --confirm-danger <path>`.
 
 A line that is not `report` or `stop` gets an `error` event, and the observer goes on:
 
@@ -312,6 +323,7 @@ existed at the start, both `new: false`, the third is new.
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\\target",
       "bytes": 3145772,
       "level": "recommended",
+      "risks": [],
       "blocked": [],
       "why": {
         "type": "catalog-folder",
@@ -321,6 +333,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "dir",
         "kind": "rust-target"
       },
+      "provenance": null,
       "new": false,
       "firstSeenMs": 1794601865194,
       "measuredAtMs": 1794601871137,
@@ -332,6 +345,7 @@ existed at the start, both `new: false`, the third is new.
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-feature",
       "bytes": 172,
       "level": "recommended",
+      "risks": [],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -342,6 +356,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": false,
       "firstSeenMs": 1794601865194,
       "measuredAtMs": 1794601865194,
@@ -352,7 +367,10 @@ existed at the start, both `new: false`, the third is new.
       "category": "worktrees",
       "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1",
       "bytes": 171,
-      "level": "recommended",
+      "level": "danger",
+      "risks": [
+        "recent-activity"
+      ],
       "blocked": [],
       "why": {
         "type": "linked-worktree",
@@ -363,6 +381,7 @@ existed at the start, both `new: false`, the third is new.
         "type": "worktree",
         "repo": "C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp"
       },
+      "provenance": null,
       "new": true,
       "firstSeenMs": 1794601871137,
       "measuredAtMs": 1794601871137,
@@ -400,7 +419,7 @@ existed at the start, both `new: false`, the third is new.
   "growthBytes": 171,
   "attention": [],
   "stale": false,
-  "cleanCommand": "xiox clean \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp\" --include \"C:\\Users\\alice\\AppData\\Local\\Temp\\w\\sampleapp-spike1\"",
+  "cleanCommand": null,
   "cleanCommandTruncated": false,
   "startedAtMs": 1794601865194,
   "checkedAtMs": 1794601871137
@@ -422,10 +441,11 @@ The `report` event is the same object with `"event"` and `"time"` after `"schema
 **`cleanCommand`** is a ready-made `xiox clean` command, or `null`. It is built from
 `--include <path>` entries, **one for each new item that `xiox clean` would accept as
 recommended** (level `recommended`, not blocked, with a folder, not directly under a drive
-root, not holding a blocked item), in the order of the report:
+root, not holding a blocked item), in the order of the report. For a new recommended build
+folder `dist` it reads:
 
 ```text
-xiox clean "C:\Users\alice\AppData\Local\Temp\w\sampleapp" --include "C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1"
+xiox clean "C:\Users\alice\AppData\Local\Temp\w\sampleapp" --include "C:\Users\alice\AppData\Local\Temp\w\sampleapp\dist"
 ```
 
 It uses `--include` and not `--worktrees` or `--builds` because the category flags would take
@@ -582,7 +602,7 @@ attention: none
 cleanCommand: none
 New items: 2
 - builds | caution | 2097152 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1\target
-- worktrees | caution | 2097298 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1 | blocked: uncommitted changes
+- worktrees | danger | 2097298 bytes | C:\Users\alice\AppData\Local\Temp\w\sampleapp-spike1 | blocked: uncommitted changes
 Other items not listed here: 1. The full listing of every item is in structuredContent.
 ```
 
