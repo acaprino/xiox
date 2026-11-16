@@ -5,6 +5,7 @@
 //! one, joined by `call_id`. The rows keep the field names of `bench/path-extractor/harvest.py`,
 //! so its `calls.jsonl` files and this reader's output are interchangeable.
 
+use crate::bounded::{run_bounded, BoundedError, Limits};
 use crate::MukadeSessions;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -12,6 +13,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use xiox_model::Agent;
 
 /// Longest string kept in a call's `input`; a longer one is cut and ends with [`CUT_MARK`].
@@ -239,12 +241,12 @@ fn exit_in(window: &str) -> Option<i64> {
 }
 
 impl MukadeSessions {
-    /// Every tool call of session `id`, from `mukade dump <harness> <id> --stream`. The store is
-    /// only read; an OpenCode database is read from a copy that lives until this returns.
-    pub fn dump_calls(&self, id: &str, session_cwd: Option<&str>) -> anyhow::Result<Vec<ToolCall>> {
+    /// A reader for the tool calls of many sessions of this store. An OpenCode database is copied
+    /// once, here, and the copy lives as long as the reader.
+    pub fn call_reader(&self) -> anyhow::Result<CallReader<'_>> {
         let store = self.store_root().ok_or_else(|| anyhow::anyhow!("no store configured"))?;
         self.opencode_exe()?;
-        let (_copy_dir, read_from) = match self.agent {
+        let (snapshot, read_from) = match self.agent {
             Agent::Opencode => {
                 let dir = tempfile::tempdir_in(snapshot_base(&std::env::temp_dir()))?;
                 let copy = opencode_snapshot(store, dir.path())?;
@@ -252,16 +254,12 @@ impl MukadeSessions {
             }
             _ => (None, store.to_path_buf()),
         };
-        let mut cmd = self.dump_command(id, &read_from)?;
-        let out = cmd
-            .output()
-            .map_err(|e| anyhow::anyhow!("{}: {e}", cmd.get_program().to_string_lossy()))?;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            anyhow::bail!("mukade dump {} {id}: {}", self.harness(), err.trim());
-        }
-        let stream = String::from_utf8_lossy(&out.stdout);
-        Ok(parse_stream(&stream, self.harness(), &store.to_string_lossy(), id, session_cwd))
+        Ok(CallReader { sessions: self, read_from, limits: Limits::default(), _snapshot: snapshot })
+    }
+
+    /// Every tool call of one session; a one-off [`CallReader::dump`].
+    pub fn dump_calls(&self, id: &str, session_cwd: Option<&str>) -> anyhow::Result<Vec<ToolCall>> {
+        self.call_reader()?.dump(id, session_cwd)
     }
 
     /// `mukade dump <harness> <id> --stream` reading `store`, which `dump` takes from the same
@@ -293,6 +291,49 @@ impl MukadeSessions {
                 "opencode.exe is not configured (set XIOX_OPENCODE_EXE): mukade needs the native binary to dump OpenCode"
             )
         })
+    }
+}
+
+/// Dumps the tool calls of many sessions of one store, each `mukade dump` under [`Limits`].
+pub struct CallReader<'a> {
+    sessions: &'a MukadeSessions,
+    /// The store Mukade reads: the original, or the OpenCode snapshot.
+    read_from: PathBuf,
+    limits: Limits,
+    /// Keeps the OpenCode snapshot on disk until the reader is dropped.
+    _snapshot: Option<tempfile::TempDir>,
+}
+
+impl CallReader<'_> {
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    pub fn with_timeout(self, timeout: Duration) -> Self {
+        let limits = Limits { timeout, ..self.limits };
+        self.with_limits(limits)
+    }
+
+    /// Every tool call of session `id`, from `mukade dump <harness> <id> --stream`. The child is
+    /// killed, and an error naming the harness and session returned, when it outlasts the timeout
+    /// or writes more than the stdout cap.
+    pub fn dump(&self, id: &str, session_cwd: Option<&str>) -> anyhow::Result<Vec<ToolCall>> {
+        let sessions = self.sessions;
+        let harness = sessions.harness();
+        let mut cmd = sessions.dump_command(id, &self.read_from)?;
+        let program = cmd.get_program().to_string_lossy().into_owned();
+        let out = run_bounded(&mut cmd, self.limits).map_err(|e| match e {
+            BoundedError::Io(e) => anyhow::anyhow!("{program}: {e}"),
+            e => anyhow::anyhow!("mukade dump {harness} {id}: {e}"),
+        })?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            anyhow::bail!("mukade dump {harness} {id}: {}", err.trim());
+        }
+        let store = sessions.store_root().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stream = String::from_utf8_lossy(&out.stdout);
+        Ok(parse_stream(&stream, harness, &store, id, session_cwd))
     }
 }
 
@@ -663,11 +704,62 @@ mod tests {
     }
 
     #[test]
+    fn one_reader_dumps_many_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("claude");
+        let ids = ["11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"];
+        for id in ids {
+            write_claude_store(&store, id);
+        }
+        let sessions = MukadeSessions::with_roots(
+            Agent::Claude,
+            StoreRoots { claude_config_dir: Some(store), ..Default::default() },
+        )
+        .with_cache_dir(Some(tmp.path().join("data")));
+        let reader = sessions.call_reader().unwrap().with_timeout(Duration::from_secs(60));
+        for id in ids {
+            let calls = reader.dump(id, Some(r"D:\proj")).unwrap();
+            assert_eq!((calls.len(), calls[0].session.as_str()), (1, id));
+        }
+    }
+
+    #[test]
+    fn the_opencode_snapshot_is_copied_once_per_reader() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("opencode.db");
+        std::fs::write(&db, b"main").unwrap();
+        let sessions = opencode_sessions(&db, Some(&tmp.path().join("opencode.exe")));
+        let reader = sessions.call_reader().unwrap();
+        let copy = reader.read_from.clone();
+        assert_ne!(copy, db);
+        assert_eq!(std::fs::read(&copy).unwrap(), b"main");
+        let pointed = |id| env_of(&sessions.dump_command(id, &reader.read_from).unwrap(), "OPENCODE_DB");
+        assert_eq!(pointed("ses_1"), pointed("ses_2"));
+        assert_eq!(Path::new(&pointed("ses_1").unwrap()), snapshot_base(&copy));
+        assert_eq!(reader.read_from, copy);
+        drop(reader);
+        assert!(!copy.exists(), "the snapshot outlives its reader");
+        assert!(db.exists());
+    }
+
+    #[test]
+    fn a_reader_of_another_harness_makes_no_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = MukadeSessions::with_roots(
+            Agent::Codex,
+            StoreRoots { codex_home: Some(tmp.path().to_path_buf()), ..Default::default() },
+        );
+        let reader = sessions.call_reader().unwrap();
+        assert!(reader._snapshot.is_none());
+        assert_eq!(reader.read_from, sessions.store_root().unwrap());
+    }
+
+    #[test]
     fn opencode_without_exe_is_an_error() {
         let tmp = tempfile::tempdir().unwrap();
         let db = tmp.path().join("opencode.db");
         std::fs::write(&db, b"main").unwrap();
-        let err = opencode_sessions(&db, None).dump_calls("ses_1", None).unwrap_err();
+        let err = opencode_sessions(&db, None).call_reader().err().unwrap();
         assert!(err.to_string().contains("opencode.exe"), "{err}");
     }
 
