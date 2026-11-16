@@ -154,7 +154,7 @@ FEWER, MORE, SAME = -1, 1, 0
 EXPLAINS = {"D2": ((MORE,), {"candidates", "flags", "unresolved"}),    # Python swallows the commands after `EOF\r`
             "D3": ((FEWER,), {"candidates", "flags", "unresolved"}),   # the cut text drops its last command
             "D4": ((FEWER,), {"candidates", "flags", "unresolved"}),   # the budget ran out
-            "D5/D6": ((FEWER,), {"candidates"}),                       # Python also finds callers inside strings
+            "D5/D6": ((FEWER,), {"candidates", "unresolved"}),         # Python also finds callers inside strings
             "D8": ((MORE,), {"candidates"}),                           # `bun init <dir>` creates the dir
             "D9": ((MORE,), {"candidates"}),                           # a nested shell reads the outer script
             "D10": ((FEWER, SAME), {"candidates", "unresolved"}),      # the option word was a directory
@@ -365,12 +365,17 @@ def explains(cls, diff):
         if cls == "D11":
             # what Rust lacks has a brace expression; what it adds is that expansion or, in a loop over
             # brace items, a path naming an item or a repeat of what the prototype also found
-            if len(brace_candidates(diff.py_only)) != len(diff.py_only):
+            # A call Rust cut loses the prototype's later candidates, so those are not brace ones. A brace
+            # word beside a glob gives the prototype one candidate with no source: Rust repeats it per item.
+            braced = brace_candidates(diff.py_only)
+            if len(braced) != len(diff.py_only) and not call["cut"]:
                 return False
-            expected = set().union(*map(brace_expansion, diff.py_only))
+            expected = set().union(*map(brace_expansion, braced))
             known = {tuple(c) for c in diff.py}
-            return (bool(diff.py_only) or (call["loop"] and bool(diff.rust_only))) and all(
-                tuple(c) in expected or (call["loop"] and (tuple(c) in known or names_an_item(c, call)))
+            no_source = {(k[0], k[2]) for k in known if k[1] is None}
+            return (bool(braced) or (bool(diff.rust_only) and (call["loop"] or bool(no_source)))) and all(
+                tuple(c) in expected or (c[0], c[2]) in no_source
+                or (call["loop"] and (tuple(c) in known or names_an_item(c, call)))
                 for c in diff.rust_only)
         if cls == "D12":   # what Rust lacks holds a character Windows forbids, and Rust adds nothing
             return bool(diff.py_only) and not diff.rust_only and all(impossible(c[2]) for c in diff.py_only)
@@ -407,7 +412,9 @@ def in_here_string(cand, call):
     """D13: whether a candidate the prototype made is built from here-string text."""
     rel = cand[2][len(call["cwd"]) + 1:] if cand[2].lower().startswith(call["cwd"].lower() + "\\") else cand[2]
     words = {w for body in call["here"] for w in body.split() if len(w) > 1}
-    return "@" in rel or any(w in rel or w.replace("/", "\\") in rel for w in words)
+    bare = lambda t: t.replace("'", "").replace('"', "")  # noqa: E731  the prototype drops the quotes it pairs
+    return "@" in rel or any(w in rel or w.replace("/", "\\") in rel for w in words) or any(
+        bare(rel) in bare(body) or bare(rel).replace("\\", "/") in bare(body) for body in call["here"])
 
 
 def written_outside(cand, call):
@@ -474,6 +481,7 @@ class Parity:
         self.diffs = collections.defaultdict(list)
         self.classes = {kind: collections.defaultdict(list) for kind in ("calls", "folders")}
         self.compared = collections.Counter()
+        self.expanded = set()   # calls D11 explained: a folder both sides have may count their repeated items differently
         self.loops = set()   # calls whose brace-item `for` loop D11 explained: Rust's folders from it are D11 too
 
     def total(self):
@@ -508,11 +516,11 @@ def compare_calls(py_rows, rust_rows, report):
         rust_flags = set(r["flags"])
         tail = crlf_tail(p["text"])
         scripts = written_scripts(p["text"])
-        loop = FOR_BRACE.search(p["text"]) if "looped" in p["flags"] and p["shell"] == "bash" else None
+        loops = FOR_BRACE.findall(p["text"].replace("\\\r\n", " ").replace("\\\n", " ")) if "looped" in p["flags"] and p["shell"] == "bash" else []
         rust_found = {tuple(c) for c in r["candidates"]}
         unexpanded = sum(not brace_expansion(c) <= rust_found for c in brace_candidates(p["candidates"]))
-        call = {"tail": tail, "unexpanded": unexpanded, "scripts": scripts, "cwd": p["cwd"], "text": p["text"], "loop": bool(loop),
-                "loop_items": loop[1] if loop else "", "cand_dir": direction(p["candidates"], r["candidates"]),
+        call = {"tail": tail, "unexpanded": unexpanded, "cut": bool(rust_flags & {"truncated", "exhausted"}), "scripts": scripts, "cwd": p["cwd"], "text": p["text"], "loop": bool(loops),
+                "loop_items": " ".join(loops), "cand_dir": direction(p["candidates"], r["candidates"]),
                 "here": here_strings(p["text"]) if p["shell"] == "powershell" else []}
         tail_info = tail_extraction(tail, p) if tail is not None else None
         active = {c for flag, c in (("truncated", "D3"), ("exhausted", "D4")) if flag in rust_flags}
@@ -543,9 +551,11 @@ def compare_calls(py_rows, rust_rows, report):
                 report.diffs[field].append(ident(k))
         for c in counted | explained:
             report.classes["calls"][c].append(ident(k))
-        claimed[k] = explained
-        if call["loop"] and "D11" in explained:
-            report.loops.add(k)
+        claimed[k] = explained | (counted & {"D3", "D4"})   # a cut call explains the folders it lost, too
+        if "D11" in explained:
+            report.expanded.add(k)
+            if call["loop"]:
+                report.loops.add(k)
     return claimed
 
 
@@ -564,7 +574,8 @@ def compare_folders(py_rows, rust_rows, claimed, report):
         if cls == "D11":   # Python's brace folder is missing; Rust's are its expansion or come from a brace-item loop
             if sign == FEWER:
                 return bool(p) and bool(BRACE_EXPR.search(p["folder"]))
-            return bool(r) and (r["folder"].lower() in expansions[k[:2]] or bool(refs & report.loops))
+            return bool(r) and (r["folder"].lower() in expansions[k[:2]] or bool(refs & report.loops)
+                                or bool(p) and bool(refs & report.expanded))
         return True
 
     for k in sorted(py.keys() | rs.keys(), key=str):
@@ -720,16 +731,17 @@ def parity_self_test():
             if got != (diffs or {}, classes or {}):
                 failures.append(f"case {name}: expected {(diffs or {}, classes or {})}, got {got}")
 
-        def fcase(name, command, cands, folders, unresolved=0, diffs=None, classes=None, shell="bash"):
+        def fcase(name, command, cands, folders, unresolved=0, diffs=None, classes=None, shell="bash", flags=(),
+                  error=False, failed=None):
             """One shell call and the folders Rust gave for it: the folder differences and classes it must give."""
             import evidence
             row = {"harness": "h", "store": "st", "session": "c", "entry": name, "call": name, "tool": "Bash",
-                   "canonical": shell, "cwd": r"D:\w", "input": {"command": command}}
+                   "canonical": shell, "cwd": r"D:\w", "input": {"command": command}, "error": error}
             path = tmp / "fcase.jsonl"
             path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-            rust_calls = [{"store": "st", "session": "c", "entry": name, "call": name, "candidates": cands, "flags": [],
+            rust_calls = [{"store": "st", "session": "c", "entry": name, "call": name, "candidates": cands, "flags": list(flags),
                            "unresolved": unresolved, "extract_unresolved": 0}]
-            rust_ledger = [{"store": "st", "session": "c", "folder": f, "strength": st, "failed": 0, "sources": [src],
+            rust_ledger = [{"store": "st", "session": "c", "folder": f, "strength": st, "failed": (failed or {}).get(f, 0), "sources": [src],
                             "refs": [[ref or name, ref or name]], "non_patch_strength": st, "non_patch_failed": 0}
                            for f, st, src, ref in folders]
             report = Parity()
@@ -827,6 +839,35 @@ def parity_self_test():
         case("d11-mixed-limit", "mkdir D:/x/{a,b} D:/x/{c,d}", [mk("a"), mk("b")], unresolved=1, classes={"D11": 1})
         case("d11-mixed-limit-more", "mkdir D:/x/{a,b} D:/x/{c,d}", [mk("a"), mk("b")], unresolved=2,
              diffs={"unresolved": 1}, classes={"D11": 1})
+        # D11 also covers a call Rust cut (the prototype's later candidates are not brace ones), a brace word
+        # beside a glob (one candidate without source in the prototype, one per item in Rust) and a loop
+        # whose items continue on the next line
+        case("d11-cut", "mkdir D:/x/{a,b}; mkdir D:/x/late", [mk("a"), mk("b")], ["truncated"], classes={"D3": 1, "D11": 1})
+        case("d11-cut-unrelated", "mkdir D:/x/{a,b}; mkdir D:/x/late", [mk("a"), mk("b"), mk("zzz")], ["truncated"],
+             diffs={"candidates": 1}, classes={"D3": 1})
+        case("d11-not-cut", "mkdir D:/x/{a,b}; mkdir D:/x/late", [mk("a"), mk("b")], diffs={"candidates": 1})
+        glob_cp = "cp D:/x/{a,b,c*}.txt D:/y"
+        cp = lambda s: ["copy", s, r"D:\y"]  # noqa: E731
+        case("d11-glob", glob_cp, [cp(r"D:\x\a.txt"), cp(r"D:\x\b.txt"), cp(None)], classes={"D11": 1})
+        case("d11-glob-other-dst", glob_cp, [cp(r"D:\x\a.txt"), ["copy", r"D:\x\b.txt", r"D:\z"], cp(None)],
+             diffs={"candidates": 1})
+        case("d11-glob-no-braces", "cp D:/x/c*.txt D:/y", [cp(r"D:\x\a.txt"), cp(None)], diffs={"candidates": 1})
+        continued = "for f in a/{x,y}.rs \\\n b/{z,w}.rs; do mkdir out/$f; done"
+        made = [["create", None, "D:\\w\\out\\" + f] for f in (r"a\x.rs", r"a\y.rs", r"b\z.rs", r"b\w.rs")]
+        case("d11-loop-continued", continued, made, classes={"D11": 1})
+        case("d11-loop-continued-unrelated", continued, made + [mk("zzz")], diffs={"candidates": 1}, classes={"D11": 1})
+        two = "for a in x/{p,q}.rs; do mkdir o/$a; done; for b in y/{r,s}.rs; do mkdir o/$b; done"
+        two_made = [["create", None, "D:\\w\\o\\" + f] for f in (r"x\p.rs", r"x\q.rs", r"y\r.rs", r"y\s.rs")]
+        case("d11-two-loops", two, two_made, classes={"D11": 1})
+        case("d11-two-loops-unrelated", two, two_made + [mk("zzz")], diffs={"candidates": 1}, classes={"D11": 1})
+        # D5/D6 also explains an unresolved path the prototype found in a caller inside a string
+        in_string = "python -c \"import os; os.makedirs('D:/x/a'); x='''\nos.makedirs('/work/out')\n'''\""
+        case("d5-unresolved", in_string, [mk("a")], ["script"], classes={"D5/D6": 1})
+        case("d5-unresolved-more", in_string, [mk("a")], ["script"], unresolved=2, diffs={"unresolved": 1})
+        # D13 reads the prototype's candidate from the here-string text when the text holds it inside a word
+        here_word = "@'\nit's a >out.txt;\n'@\n"
+        case("d13-word", here_word, [], classes={"D13": 1}, shell="power_shell")
+        case("d13-word-elsewhere", here_word.replace("out.txt", "other.txt") + "mkdir D:/x/a", [mk("a")], classes={"D13": 1}, shell="power_shell")
         # D13 also explains a flag the prototype set from here-string text holding the triggering word;
         # D14 explains a `looped` the prototype set from non-command text, and only that flag
         here_loop = "$body = @'\nit's a % thing\nforeach z\n'@\nmkdir D:/x/a"
@@ -861,6 +902,17 @@ def parity_self_test():
         fcase("f-d13", d13, [wz], [cwd, wf("D:\\a", 2, "shell:write")], shell="powershell", classes={"D13": 1})
         fcase("f-d14", apostrophe, [mk("a")], [cwd, wf(r"D:\x\a"), wf(r"D:\zz", ref="other")],
               diffs={"folder missing in python": 1}, shell="powershell")
+        # D3 also explains the folder of a cd into the text a cut left unfinished; D11 the `failed` count of a
+        # folder both sides have when the call it fails in repeats its brace items in Rust
+        cut_cd = 'mkdir D:/x/a; cd "D:/x/hor…'
+        fcase("f-d3-cd", cut_cd, [mk("a")], [cwd, wf(r"D:\x\a")], flags=["truncated"], classes={"D3": 1})
+        fcase("f-d3-cd-not-cut", cut_cd, [mk("a")], [cwd, wf(r"D:\x\a")], diffs={"folder missing in rust": 1})
+        cp_braces = "mkdir D:/x/o && cp D:/x/{a,b,c}.txt D:/x/o/"
+        cp_rust = [mk("o")] + [["copy", "D:\\x\\" + n + ".txt", r"D:\x\o"] for n in "abc"]
+        fcase("f-d11-failed", cp_braces, cp_rust, [cwd, wf(r"D:\x\o")], error=True, failed={r"D:\x\o": 3},
+              classes={"D11": 2})
+        fcase("f-d11-failed-unclaimed", "mkdir D:/x/o", [mk("o")], [cwd, wf(r"D:\x\o")], error=True, failed={r"D:\x\o": 3},
+              diffs={"strength": 1, "failed": 1})
         # D3/D4: a cut or exhausted call can only give fewer candidates
         case("d3", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["truncated"], classes={"D3": 1})
         case("d3-more", "mkdir D:/x/a", [mk("a"), mk("b")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
@@ -868,7 +920,7 @@ def parity_self_test():
         if failures:
             print("SELF-TEST FAILED:\n  " + "\n  ".join(failures))
             sys.exit(1)
-        print("self-test passed: exact output 0 differences, 9 altered copies, 76 class cases (D2-D14, positive and negative)")
+        print("self-test passed: exact output 0 differences, 9 altered copies, 97 class cases (D2-D14, positive and negative)")
 
 
 def cmd_parity(args):
