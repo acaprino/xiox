@@ -39,7 +39,20 @@
   rilette con sospetto, non prese per buone.
 - `MukadeSessions::call_reader()` è il lettore da usare in `analyze`: una copia del database di
   OpenCode per analisi, timeout reale (120 s) e tetto sull'output per ogni `dump`.
-- Aperto: D10–D13 cambiano quante cartelle si trovano; si misurano su un campione nuovo.
+- Misura di D10–D13, 2026-11-16, su un campione nuovo etichettato alla cieca: le 113 chiamate reali
+  in cui Rust e prototipo danno candidati diversi per D11, D12 o D13 (D10 non cambia mai i
+  candidati), esclusi i due campioni precedenti.
+  - Comandi interi (38): Rust trova 131/145 percorsi, il prototipo 30/145. Rust non inventa nulla:
+    i suoi 38 candidati fuori dalle etichette sono tutti `sed -i`, che le etichette non contavano
+    come scrittura. Il prototipo ne inventa 50 oltre a quelli.
+  - Comandi tagliati a 4.000 caratteri (58): Rust non inventa nulla, il prototipo 49; ma Rust ne
+    perde 50 contro 25, perché D3 scarta l'intero ultimo comando di primo livello.
+  - 17 chiamate del tool Bash scritte in sintassi PowerShell: stessi trovati, Rust inventa 9, il
+    prototipo 29. Il classificatore della shell le prende per Bash.
+- Aperti:
+  - D3 può tenere le scritture complete dell'ultimo comando tagliato (un heredoc chiuso, i comandi
+    interi prima del taglio) invece di scartarlo tutto: costa 25 percorsi sul campione;
+  - PowerShell eseguito dal tool Bash va riconosciuto dal classificatore della shell.
 - Limiti di Mukade trovati il 2026-11-15:
   - `list pi` dà lo stesso id `session` a 50 sessioni;
   - 7 catene di subagent di Claude Code vengono rifiutate;
