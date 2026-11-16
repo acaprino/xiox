@@ -188,5 +188,5 @@ fn an_at_sign_elsewhere_is_unchanged() {
     assert_eq!(words(Shell::PowerShell, "a@'b'"), vec![w("a@b")]);
     assert_eq!(words(Shell::PowerShell, "f @'x' g"), vec![w("f"), w("@x"), w("g")]);
     assert_eq!(words(Shell::PowerShell, "f @(1)"), vec![w("f"), w("@"), Token::Op("("), w("1"), Token::Op(")")]);
-    assert_eq!(words(Shell::Bash, "f @'\nx\n'@"), vec![w("f"), w("@x"), Token::Op(";"), w("@")]);
+    assert_eq!(words(Shell::Bash, "f @'\nx\n'@"), vec![w("f"), w("@\nx\n@")]);
 }
