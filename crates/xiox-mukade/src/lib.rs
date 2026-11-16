@@ -24,9 +24,13 @@
 
 mod bounded;
 mod calls;
+mod descriptors;
+#[cfg(test)]
+mod test_support;
 
 pub use bounded::{BoundedError, Limits};
-pub use calls::{cut_input, parse_stream, strip_verbatim, was_cut, CallReader, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
+pub use descriptors::{parse_time_ms, Descriptor};
+pub use calls::{cut_input, parse_stream, strip_verbatim, was_cut, CallReader, DumpError, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
 
 use xiox_model::*;
 use rusqlite::{Connection, OpenFlags};
@@ -156,7 +160,7 @@ impl MukadeSessions {
         self
     }
 
-    fn harness(&self) -> &'static str {
+    pub(crate) fn harness(&self) -> &'static str {
         match self.agent {
             Agent::Claude => "claude_code",
             Agent::Codex => "codex",
@@ -177,7 +181,7 @@ impl MukadeSessions {
 
     /// The store as configured (a folder, or OpenCode's database file). An agent that is not
     /// installed has none on disk.
-    fn store_root(&self) -> Option<&Path> {
+    pub(crate) fn store_root(&self) -> Option<&Path> {
         match self.agent {
             Agent::Claude => self.roots.claude_config_dir.as_deref(),
             Agent::Codex => self.roots.codex_home.as_deref(),
@@ -214,7 +218,7 @@ impl MukadeSessions {
 
     /// `mukade list <harness>`: the root sessions, or with `children` every session the store
     /// holds (forks and subagent sessions included).
-    fn run_list(&self, children: bool) -> anyhow::Result<Vec<SessionInfo>> {
+    pub(crate) fn run_list(&self, children: bool) -> anyhow::Result<Vec<SessionInfo>> {
         let store = self.store_root().ok_or_else(|| anyhow::anyhow!("no store configured"))?;
         let mut cmd = self.mukade_command(store)?;
         cmd.arg("list").arg(self.harness());
@@ -248,16 +252,7 @@ impl MukadeSessions {
     }
 }
 
-fn parse_ms(s: &str) -> Option<i64> {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt.timestamp_millis());
-    }
-    let n: i64 = s.trim().parse().ok()?;
-    // Heuristic: seconds vs milliseconds.
-    Some(if n < 100_000_000_000 { n * 1000 } else { n })
-}
-
-fn file_mtime_ms(path: &str) -> Option<i64> {
+pub(crate) fn file_mtime_ms(path: &str) -> Option<i64> {
     let m = std::fs::metadata(path).ok()?.modified().ok()?;
     let d = m.duration_since(std::time::UNIX_EPOCH).ok()?;
     i64::try_from(d.as_millis()).ok()
@@ -278,7 +273,7 @@ pub fn aggregate(
             continue;
         };
         // Pi records no update time in its listing: fall back to the session file's mtime.
-        let ms = i.updated.as_deref().and_then(parse_ms).or_else(|| file_mtime_ms(&i.path));
+        let ms = i.updated.as_deref().and_then(descriptors::parse_time_ms).or_else(|| file_mtime_ms(&i.path));
         let Some(ms) = ms else {
             no_time += 1;
             continue;
@@ -709,7 +704,7 @@ pub fn select_archived(
                 .iter()
                 .filter_map(|f| std::fs::metadata(f).ok())
                 .fold(0u64, |acc, m| acc.saturating_add(m.len()));
-            let updated_ms = i.updated.as_deref().and_then(parse_ms).or_else(|| {
+            let updated_ms = i.updated.as_deref().and_then(descriptors::parse_time_ms).or_else(|| {
                 file.as_ref().and_then(|f| file_mtime_ms(&f.to_string_lossy()))
             });
             // Every descendant counts, not only the children: the harness deletes the whole
@@ -842,6 +837,7 @@ mod tests {
 
     #[test]
     fn parse_ms_handles_rfc3339_seconds_and_millis() {
+        use descriptors::parse_time_ms as parse_ms;
         assert_eq!(parse_ms("2026-11-01T00:00:00Z"), Some(1_793_491_200_000));
         assert_eq!(parse_ms("1793491200"), Some(1_793_491_200_000));
         assert_eq!(parse_ms("1793491200000"), Some(1_793_491_200_000));
