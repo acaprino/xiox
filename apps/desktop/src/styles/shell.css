@@ -83,7 +83,7 @@ html, body { height: 100%; overflow: hidden; }
 /* Bar 2. The options may not all fit a short window: the bar scrolls, and its edges show a glow while there is more above
    or below (the first two layers cover the glow at the ends of the scroll, so it only shows where something is hidden). */
 .items {
-  overflow: auto; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  overflow: auto; min-height: 0;
   background:
     linear-gradient(var(--pane) 30%, transparent) 0 0 / 100% 22px no-repeat local,
     linear-gradient(transparent, var(--pane) 70%) 0 100% / 100% 22px no-repeat local,
@@ -110,7 +110,7 @@ html, body { height: 100%; overflow: hidden; }
 #main #list-head { flex: none; }
 #notices { flex: none; }
 #rows { flex: 1; min-height: 0; overflow: auto; }
-#detail { flex: none; max-height: 34%; overflow: auto; margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#detail { flex: none; max-height: 34%; overflow: auto; margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; }
 #detail:empty { display: none; }
 /* Two columns of boxes only while the pane is wide enough: at 200 % zoom they stack instead of squeezing the paths. */
 @container pane (max-width: 560px) { #detail { grid-template-columns: 1fr; } }

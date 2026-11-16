@@ -23,7 +23,8 @@
   --press: color-mix(in srgb, var(--sel) 60%, transparent); --scrim: #05020cc7;
 }
 
-* { box-sizing: border-box; }
+/* The scrollbar of every scroll container (grid, detail, menus, dialog lists, pickers) is set here once. */
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 
 /* A desktop window, not a web page: the chrome (buttons, menus, rows, titles) keeps the arrow cursor and cannot be
    selected or dragged. What a person may want to copy stays selectable: the detail panel (paths, reasons), the

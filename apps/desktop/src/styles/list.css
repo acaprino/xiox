@@ -65,7 +65,7 @@
 #rows .tools:empty { display: none; }
 .search { flex: 1; width: 100%; padding: 5px 8px; }
 .foldall { flex: none; }
-#rows .grid { position: relative; flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; column-gap: 8px; padding: 0 10px 0 0; grid-template-columns: var(--cols); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#rows .grid { position: relative; flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; column-gap: 8px; padding: 0 10px 0 0; grid-template-columns: var(--cols); }
 /* A list of categories ends in room to spare, so that even the last, shortest one can be scrolled up to the top by the menu. */
 #rows .grid.grouped::after { content: ""; grid-column: 1 / -1; height: 45vh; }
 .anchor { grid-column: 1 / -1; height: 0; }
