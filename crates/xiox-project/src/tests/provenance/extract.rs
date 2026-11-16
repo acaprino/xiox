@@ -159,7 +159,7 @@ fn every_prefix_of_every_fixture_extracts_without_panic() {
 
 #[test]
 fn truncated_prefixes_never_invent() {
-    // D3: the text may end inside a word, a quote or a heredoc, so its last command says nothing certain.
+    // D3: a command with a word at the cut is dropped, so the finer rule never invents.
     for sweep in sweeps() {
         for prefix in prefixes(&sweep.cmd).filter(|prefix| prefix.len() < sweep.cmd.len()) {
             let extraction = extract(prefix, sweep.shell, Completeness::Truncated);
@@ -184,6 +184,69 @@ fn a_truncated_destination_is_dropped_and_counted() {
     let resolved = resolve(&whole.ops, r"D:\w", &env());
     assert_eq!(kinds_and_dsts(&resolved), vec![(OpKind::Create, r"D:\keep"), (OpKind::Create, r"D:\runs\destin")]);
     assert!(!whole.flags.truncated);
+}
+
+/// D3: only the text that reaches the cut is uncertain. Each row is a cut command, what survives of it
+/// and how many commands were dropped.
+#[test]
+fn a_cut_command_keeps_what_is_complete() {
+    use OpKind::{Create, Write};
+    type Row = (&'static str, Shell, &'static str, Vec<(OpKind, &'static str)>, usize);
+    let cases: Vec<Row> = vec![
+        (
+            "cut inside a heredoc body keeps its target",
+            Shell::Bash,
+            "cat > /d/a.py <<'E'\nimport os\nos.makedirs('/d/zz",
+            vec![(Write, r"D:\a.py")],
+            0,
+        ),
+        (
+            "an interpreter scans the partial heredoc body",
+            Shell::Bash,
+            "python - <<'EOF'\nimport os\nos.makedirs('D:/ok')\nos.makedirs('D:/cu",
+            vec![(Create, r"D:\ok")],
+            0,
+        ),
+        (
+            "cut inside a for body keeps the complete body commands",
+            Shell::Bash,
+            "for i in 1 2; do mkdir /d/$i; mkdir /d/b$i; mkdir /d/cut",
+            vec![(Create, r"D:\1"), (Create, r"D:\b1"), (Create, r"D:\2"), (Create, r"D:\b2")],
+            2,
+        ),
+        (
+            "cut inside bash -c keeps the complete inner commands",
+            Shell::Bash,
+            r#"bash -c "mkdir /d/a; mkdir /d/b; mkdir /d/cu"#,
+            vec![(Create, r"D:\a"), (Create, r"D:\b")],
+            1,
+        ),
+        (
+            "cut inside powershell -Command keeps the complete inner commands",
+            Shell::Bash,
+            r#"powershell -Command "mkdir D:/a; mkdir D:/cu"#,
+            vec![(Create, r"D:\a")],
+            1,
+        ),
+        (
+            "cut inside python -c scans the complete calls",
+            Shell::Bash,
+            r#"python -c "import os; os.makedirs('D:/ok'); os.makedirs('D:/c"#,
+            vec![(Create, r"D:\ok")],
+            0,
+        ),
+        ("cut in the middle of the last path word", Shell::Bash, "mkdir /d/a; mkdir /d/long/pa", vec![(Create, r"D:\a")], 1),
+        ("cut after a space, before the next argument", Shell::Bash, "mkdir /d/a; cp /d/src ", vec![(Create, r"D:\a")], 1),
+        ("a complete command before a separator is kept", Shell::Bash, "mkdir /d/a; mkdir /d/b; ", vec![(Create, r"D:\a"), (Create, r"D:\b")], 0),
+        ("cut in a redirect target", Shell::Bash, "mkdir /d/a; echo x > /d/o.t", vec![(Create, r"D:\a")], 1),
+    ];
+    for (name, shell, cmd, want, dropped) in cases {
+        let extraction = extract(cmd, shell, Completeness::Truncated);
+        let resolved = resolve(&extraction.ops, PROJECT, &env());
+        assert_eq!(kinds_and_dsts(&resolved), want, "{name}");
+        assert_eq!(extraction.unresolved, dropped, "{name}: dropped commands");
+        assert_eq!(extraction.flags.truncated, dropped > 0, "{name}: truncated flag");
+    }
 }
 
 #[test]

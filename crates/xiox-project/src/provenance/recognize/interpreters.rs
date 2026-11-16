@@ -31,6 +31,14 @@ impl Recognizer for Interpreters {
             _ => run_source(inv, &words, &JAVASCRIPT_SOURCE, Lang::JavaScript, ctx),
         }
     }
+
+    /// D3: `python -c "…cut` scans the calls that close; a cut word that is not the source leaves the
+    /// command unknown.
+    fn reads_cut_script(&self, inv: &Invocation) -> bool {
+        let words = words(inv.args);
+        let inline = if matches!(inv.name.as_str(), "python" | "python3" | "py") { &PYTHON_SOURCE[..] } else { &JAVASCRIPT_SOURCE[..] };
+        words.iter().position(|word| inline.contains(word)).is_some_and(|at| at + 2 == words.len())
+    }
 }
 
 fn python(inv: &Invocation, words: &[&str], ctx: &mut Context) -> Vec<RawOp> {

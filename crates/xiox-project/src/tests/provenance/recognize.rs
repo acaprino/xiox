@@ -1,19 +1,19 @@
 use std::collections::HashSet;
 
 use crate::provenance::{
-    Context, Invocation, Node, OpKind, RawOp, Registry, Shell, lex, parse,
+    Completeness, Context, Invocation, Node, OpKind, RawOp, Registry, Shell, lex, parse,
 };
 
 /// The operations the registry reads from the first simple command of `cmd`.
 fn recognize(shell: Shell, cmd: &str) -> (Vec<RawOp>, Context) {
     let dialect = shell.dialect();
-    let nodes = parse(lex(cmd, dialect), dialect);
+    let nodes = parse(lex(cmd, dialect), dialect, Completeness::Whole);
     let Some(Node::Simple(simple)) = nodes.first() else { panic!("not a simple command: {cmd}") };
     let name = match &simple.words[0] {
         crate::provenance::Arg::Text(word) => word.to_lowercase(),
         crate::provenance::Arg::Comma => panic!("command starts with a comma"),
     };
-    let invocation = Invocation { name, args: &simple.words[1..], shell, heredoc: None };
+    let invocation = Invocation { name, args: &simple.words[1..], shell, heredoc: None, cut: false };
     let mut ctx = Context::default();
     let ops = Registry::standard().recognize(&invocation, &mut ctx);
     (ops, ctx)

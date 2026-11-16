@@ -1,8 +1,8 @@
-use crate::provenance::{Arg, Node, Shell, Simple, lex, parse};
+use crate::provenance::{Arg, Completeness, Node, Shell, Simple, lex, parse};
 
 fn nodes(shell: Shell, cmd: &str) -> Vec<Node> {
     let dialect = shell.dialect();
-    parse(lex(cmd, dialect), dialect)
+    parse(lex(cmd, dialect), dialect, Completeness::Whole)
 }
 
 fn text(words: &[&str]) -> Vec<Arg> {
@@ -10,7 +10,7 @@ fn text(words: &[&str]) -> Vec<Arg> {
 }
 
 fn simple(words: &[&str], redirects: &[&str]) -> Node {
-    Node::Simple(Simple { words: text(words), redirects: redirects.iter().map(|r| (*r).into()).collect(), heredoc: None })
+    Node::Simple(Simple { words: text(words), redirects: redirects.iter().map(|r| (*r).into()).collect(), ..Simple::default() })
 }
 
 fn assign(name: &str, value: &str) -> Node {
@@ -126,7 +126,7 @@ fn powershell_commas_are_kept_as_args() {
 fn heredoc_bodies_ride_on_their_command() {
     let parsed = nodes(Shell::Bash, "cat > x.py <<END\nhi\nEND");
     let expected =
-        Simple { words: text(&["cat"]), redirects: vec!["x.py".into()], heredoc: Some("hi\n".into()) };
+        Simple { words: text(&["cat"]), redirects: vec!["x.py".into()], heredoc: Some("hi\n".into()), ..Simple::default() };
     assert_eq!(parsed, vec![Node::Simple(expected)]);
 }
 
