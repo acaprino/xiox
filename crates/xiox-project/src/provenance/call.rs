@@ -43,12 +43,19 @@ pub fn shell_command(call: &ToolCall) -> Option<ShellCommand> {
     }
     Some(ShellCommand {
         shell: match dialect {
+            Dialect::Fixed(_) if is_opencode_shell(call) => hinted_shell(&call.input, Shell::PowerShell),
             Dialect::Fixed(shell) => shell,
-            Dialect::Hinted => hinted_shell(&call.input),
+            Dialect::Hinted => hinted_shell(&call.input, Shell::Bash),
         },
         text: text.to_string(),
         completeness: if cut { Completeness::Truncated } else { Completeness::Whole },
     })
+}
+
+/// D15: OpenCode's `shell` tool (Mukade canonical `bash`) runs PowerShell on Windows. Measured on the
+/// real history: of 4,724 such calls 3,520 are written in PowerShell syntax and only 50 in Bash-only syntax.
+fn is_opencode_shell(call: &ToolCall) -> bool {
+    call.harness == "opencode" && call.tool.as_deref().is_some_and(|tool| tool.eq_ignore_ascii_case("shell"))
 }
 
 /// The canonical name decides when it is a shell tool, the tool name otherwise.
@@ -78,15 +85,17 @@ fn command_text(command: &Value) -> Option<(String, bool)> {
     }
 }
 
-/// The shell a call names in `shell` or `shell_type`; Bash when it names none.
-fn hinted_shell(input: &Value) -> Shell {
+/// The shell a call names in `shell` or `shell_type`; `default` when it names none.
+fn hinted_shell(input: &Value, default: Shell) -> Shell {
     let hint = ["shell", "shell_type"]
         .iter()
         .filter_map(|key| input.get(key)?.as_str())
         .find(|s| !s.is_empty())
         .unwrap_or("")
         .to_lowercase();
-    if hint.contains("power") || hint.contains("pwsh") {
+    if hint.is_empty() {
+        default
+    } else if hint.contains("power") || hint.contains("pwsh") {
         Shell::PowerShell
     } else if hint == "cmd" {
         Shell::Cmd

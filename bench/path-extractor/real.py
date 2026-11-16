@@ -8,7 +8,7 @@
         labels.json: {event id: [[op, resolved dst], ...]}, written by hand from the sample
     python real.py parity --calls calls.jsonl --rust <dir> [--home <dir>]
         the Rust probe's output (crates/xiox-project/examples/shell_probe.rs) against this prototype,
-        field by field; declared divergences D2-D14 are counted apart. --self-test needs neither.
+        field by field; declared divergences D2-D15 are counted apart. --self-test needs neither.
 
 Strata: det-found (the deterministic extractor gives a candidate), det-unsure (it flags a loop or
 script, or a path it cannot resolve), det-empty (neither). Real commands stay in the scratch files."""
@@ -141,7 +141,7 @@ HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 BUN_INIT = re.compile(r"\bbun\s+init\b")
 NESTED_SHELL = re.compile(r"\b(?:ba|z|da)?sh\b[^\n]*\s-\w*c\b|\b(?:pwsh|powershell)(?:\.exe)?\b[^\n]*-Command", re.I)
 FILE_WRITES = re.compile(r"\bcat\s*>>?\s*(\S+)|\btee\s+(?:-a\s+)?(\S+)|<<[^\n]*?>\s*(\S+)")
-CLASS_ORDER = ("D2", "D3", "D4", "D5/D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14")
+CLASS_ORDER = ("D2", "D3", "D4", "D5/D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15")
 # `cd -`, `cd -P dir`, `cd -- dir`, PowerShell `cd -`: the prototype takes the option word as the directory.
 D10_CD = re.compile(r"(?i)(?:^|[;&|(\n])\s*(?:cd|chdir|pushd|push-location|set-location|sl)\s+(?:-[LPe@]*|--)(?=\s|$|[;&|)])")
 INVENTED_DIR = re.compile(r"\\-[^\\]*(?:\\|$)")   # a path component that is an option word
@@ -152,7 +152,7 @@ BRACE_EXPR = re.compile(r"\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}")
 # arguments counted in Rust only) touches no compared field: it is counted, never an explanation.
 FEWER, MORE, SAME = -1, 1, 0
 EXPLAINS = {"D2": ((MORE,), {"candidates", "flags", "unresolved"}),    # Python swallows the commands after `EOF\r`
-            "D3": ((FEWER,), {"candidates", "flags", "unresolved"}),   # the cut text drops its last command
+            "D3": ((FEWER,), {"candidates", "flags", "unresolved"}),   # the prototype keeps the shortened last word of a cut text
             "D4": ((FEWER,), {"candidates", "flags", "unresolved"}),   # the budget ran out
             "D5/D6": ((FEWER,), {"candidates", "unresolved"}),         # Python also finds callers inside strings
             "D8": ((MORE,), {"candidates"}),                           # `bun init <dir>` creates the dir
@@ -161,11 +161,13 @@ EXPLAINS = {"D2": ((MORE,), {"candidates", "flags", "unresolved"}),    # Python 
             "D11": ((FEWER, MORE, SAME), {"candidates", "flags", "unresolved"}),  # a brace expression was one literal path
             "D12": ((FEWER,), {"candidates", "unresolved"}),           # a path Windows cannot hold was a candidate
             "D13": ((FEWER, MORE, SAME), {"candidates", "flags", "unresolved"}),  # here-string text was words and paths
-            "D14": ((FEWER,), {"flags"})}                              # a loop word in text made the prototype flag a loop
+            "D14": ((FEWER,), {"flags"}),                              # a loop word in text made the prototype flag a loop
+            "D15": ((FEWER, MORE, SAME), {"candidates", "flags", "unresolved"})}  # an OpenCode `shell` call is PowerShell, read as Bash
 # The directions a class explains in the other fields and in the folders, when they are not those above.
 FIELD_WAYS = {("D10", "unresolved"): (MORE,), ("D11", "unresolved"): (MORE, FEWER), ("D11", "flags"): (FEWER,),
-              ("D12", "unresolved"): (MORE,), ("D13", "unresolved"): (FEWER,), ("D13", "flags"): (FEWER,)}
-FOLDER_WAYS = {"D10": (FEWER, MORE), "D11": (FEWER, MORE), "D12": (FEWER,), "D13": (FEWER, MORE), "D14": ()}
+              ("D12", "unresolved"): (MORE,), ("D13", "unresolved"): (FEWER,), ("D13", "flags"): (FEWER,),
+              ("D3", "unresolved"): (FEWER, MORE)}   # Rust counts each cut command it drops, once per loop pass
+FOLDER_WAYS = {"D10": (FEWER, MORE), "D11": (FEWER, MORE), "D12": (FEWER,), "D13": (FEWER, MORE), "D14": (), "D15": (FEWER, MORE)}
 # `for x in a b{1,2}`: the items hold a brace expression, which Rust expands and the prototype leaves unresolved.
 FOR_BRACE = re.compile(r"\bfor\s+\w+\s+in\s+([^;\n]*\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}[^;\n]*)")
 # `@'` or `@"` ending its line, at the start of a word: a PowerShell here-string.
@@ -349,6 +351,8 @@ def explains(cls, diff):
             return set(diff.rust_only) <= diff.tail_info["flags"]
         return diff.rust - diff.py <= diff.tail_info["unresolved"]
     if diff.field == "candidates":
+        if cls == "D3":   # what Rust lacks is spelled in the cut command: the prototype kept its shortened word
+            return bool(diff.py_only) and all(in_cut_command(c, call) for c in diff.py_only)
         if cls == "D8":   # only a create with no source
             return all(c[0] == "create" and c[1] is None for c in diff.rust_only)
         if cls == "D9":   # what Rust adds must be written in a script an earlier heredoc made
@@ -406,6 +410,17 @@ def names_an_item(cand, call):
     """D11: whether a path of the loop body holds one of the expanded `for` items as a component start."""
     items = {i.replace("/", "\\").lower() for w in call["loop_items"].split() for i in brace_expand(w)}
     return any("\\" + i in cand[2].lower() for i in items)
+
+
+CUT_COMMAND = re.compile(r"[^;&|\n(){}]*\Z")   # the text after the last separator: the command the cut ended in
+
+
+def in_cut_command(cand, call):
+    """D3: whether a candidate the prototype made is spelled in the command the cut ended in. Rust drops
+    only that command (and the cut passes of a loop over it), so the prototype's extra candidates come from it."""
+    tail = CUT_COMMAND.search(call["text"]).group().replace("/", "\\").lower()
+    names = {ntpath.basename(path.rstrip("\\/")).lower() for path in cand[1:3] if path}
+    return any(name and name in tail for name in names)
 
 
 def in_here_string(cand, call):
@@ -470,7 +485,8 @@ def python_calls(calls_path):
         rows.append({"store": c.get("store"), "session": c.get("session"), "entry": c.get("entry"), "call": c.get("call"),
                      "candidates": [[o["op"], o["src"], o["dst"]] for o in cands],
                      "flags": sorted(COMPARED_FLAGS[f] for f in flags if f in COMPARED_FLAGS),
-                     "unresolved": unresolved, "text": s[1], "shell": s[0], "cwd": cwd})
+                     "unresolved": unresolved, "text": s[1], "shell": s[0], "cwd": cwd,
+                     "opencode_shell": c.get("harness") == "opencode" and (c["tool"] or "").lower() == "shell"})
     return rows
 
 
@@ -533,7 +549,7 @@ def compare_calls(py_rows, rust_rows, report):
                         ("D10", bool(D10_CD.search(p["text"]))),
                         ("D11", p["shell"] == "bash" and bool(BRACE_EXPR.search(p["text"]))),
                         ("D12", any(impossible(c[2]) for c in p["candidates"])), ("D13", bool(call["here"])),
-                        ("D14", loop_word_in_text(p["text"]))):
+                        ("D14", loop_word_in_text(p["text"])), ("D15", p["opencode_shell"])):
             if on:
                 active.add(cls)
         explained = set()
@@ -717,9 +733,9 @@ def parity_self_test():
             if report.total() or len(report.classes["calls"][klass]) != 1:
                 failures.append(f"{flag}: expected one {klass} call and no difference, got {report.total()}")
         def case(name, command, cands, flags=(), unresolved=0, extract_unresolved=0, diffs=None, classes=None,
-                 shell="bash"):
+                 shell="bash", harness="h", tool="Bash"):
             """One shell call against hand-written Rust output: the differences and classes it must give."""
-            row = {"harness": "h", "store": "st", "session": "c", "entry": name, "call": name, "tool": "Bash",
+            row = {"harness": harness, "store": "st", "session": "c", "entry": name, "call": name, "tool": tool,
                    "canonical": shell, "cwd": r"D:\w", "input": {"command": command}}
             path = tmp / "case.jsonl"
             path.write_text(json.dumps(row) + "\n", encoding="utf-8")
@@ -732,10 +748,10 @@ def parity_self_test():
                 failures.append(f"case {name}: expected {(diffs or {}, classes or {})}, got {got}")
 
         def fcase(name, command, cands, folders, unresolved=0, diffs=None, classes=None, shell="bash", flags=(),
-                  error=False, failed=None):
+                  error=False, failed=None, harness="h", tool="Bash"):
             """One shell call and the folders Rust gave for it: the folder differences and classes it must give."""
             import evidence
-            row = {"harness": "h", "store": "st", "session": "c", "entry": name, "call": name, "tool": "Bash",
+            row = {"harness": harness, "store": "st", "session": "c", "entry": name, "call": name, "tool": tool,
                    "canonical": shell, "cwd": r"D:\w", "input": {"command": command}, "error": error}
             path = tmp / "fcase.jsonl"
             path.write_text(json.dumps(row) + "\n", encoding="utf-8")
@@ -917,10 +933,25 @@ def parity_self_test():
         case("d3", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["truncated"], classes={"D3": 1})
         case("d3-more", "mkdir D:/x/a", [mk("a"), mk("b")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
         case("d4", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["exhausted"], classes={"D4": 1})
+        # D3 explains only what the prototype made from the command the cut ended in
+        case("d3-elsewhere", "mkdir D:/x/a; mkdir D:/x/b; mkdir D:/x/c", [mk("c")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
+        case("d3-cut-after-separator", "mkdir D:/x/a; mkdir D:/x/b;", [mk("a")], ["truncated"], diffs={"candidates": 1}, classes={"D3": 1})
+        case("d3-copy-source", "mkdir D:/x/a; cp D:/x/s.txt D:/x/b", [mk("a")], ["truncated"], classes={"D3": 1})
+        # D3 also covers the cut commands Rust counts, once for each pass of a loop
+        case("d3-unresolved", "mkdir D:/x/a; mkdir D:/x/b", [mk("a")], ["truncated"], unresolved=2, classes={"D3": 1})
+        case("d3-unresolved-not-cut", "mkdir D:/x/a", [mk("a")], unresolved=2, diffs={"unresolved": 1})
+        # D15: an OpenCode `shell` call is PowerShell in Rust and Bash in the prototype
+        ps = r"New-Item -ItemType Directory -Path D:\x\a"
+        case("d15", ps, [mk("a")], classes={"D15": 1}, harness="opencode", tool="shell")
+        case("d15-other-harness", ps, [mk("a")], diffs={"candidates": 1, "unresolved": 1}, harness="h", tool="shell")
+        case("d15-other-tool", ps, [mk("a")], diffs={"candidates": 1, "unresolved": 1}, harness="opencode", tool="bash")
+        case("d15-same-output", "mkdir D:/x/a", [mk("a")], classes={}, harness="opencode", tool="shell")
+        fcase("f-d15", ps, [mk("a")], [cwd, wf(r"D:\x\a"), wf(r"D:\zz", ref="other")], diffs={"folder missing in python": 1},
+              classes={"D15": 1}, harness="opencode", tool="shell")
         if failures:
             print("SELF-TEST FAILED:\n  " + "\n  ".join(failures))
             sys.exit(1)
-        print("self-test passed: exact output 0 differences, 9 altered copies, 97 class cases (D2-D14, positive and negative)")
+        print("self-test passed: exact output 0 differences, 9 altered copies, 108 class cases (D2-D15, positive and negative)")
 
 
 def cmd_parity(args):

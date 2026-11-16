@@ -38,6 +38,8 @@ pub struct Invocation<'a> {
     pub args: &'a [Arg],
     pub shell: Shell,
     pub heredoc: Option<&'a str>,
+    /// The text was cut inside the arguments (D3): the command may have lost some.
+    pub cut: bool,
 }
 
 /// What recognizers record besides operations.
@@ -56,6 +58,11 @@ pub trait Recognizer: Sync {
     /// The command names this family owns, lowercase.
     fn names(&self) -> &'static [&'static str];
     fn recognize(&self, inv: &Invocation, ctx: &mut Context) -> Vec<RawOp>;
+    /// Whether the cut of `inv` left its meaning intact: true when the cut word is the script the
+    /// command runs, which is then read as far as it goes.
+    fn reads_cut_script(&self, _inv: &Invocation) -> bool {
+        false
+    }
 }
 
 /// Commands that repeat their body: the paths they touch are not literal.
@@ -89,6 +96,12 @@ impl Registry {
     /// The operations of `inv`: a loop only raises its flag; a command that yields nothing may
     /// still name an output directory through a tool flag.
     pub fn recognize(&self, inv: &Invocation, ctx: &mut Context) -> Vec<RawOp> {
+        let family = self.by_name.get(inv.name.as_str());
+        if inv.cut && !family.is_some_and(|family| family.reads_cut_script(inv)) {
+            ctx.flags.truncated = true;
+            ctx.unresolved += 1;
+            return Vec::new();
+        }
         if LOOPS.contains(&inv.name.as_str()) {
             ctx.flags.looped = true;
             return Vec::new();
@@ -97,7 +110,7 @@ impl Registry {
         if inv.heredoc.is_some() && interpreters::runs_scripts(&inv.name) {
             ctx.flags.script = true;
         }
-        let ops = match self.by_name.get(inv.name.as_str()) {
+        let ops = match family {
             Some(family) => family.recognize(inv, ctx),
             None => Vec::new(),
         };

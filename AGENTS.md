@@ -27,32 +27,32 @@
   etichettato alla cieca.
 - I comandi reali delle sessioni non entrano mai nel repository: restano in cartelle temporanee.
 - Stato del port in Rust (`crates/xiox-project/src/provenance`, in `main` dal 2026-11-16): le
-  divergenze volute dal prototipo sono D1–D14, documentate nei commenti del codice e nelle classi di
+  divergenze volute dal prototipo sono D1–D15, documentate nei commenti del codice e nelle classi di
   `bench/path-extractor/real.py parity` (D14 è solo dell'oracolo: il flag `loop` che il prototipo
-  legge nel testo).
+  legge nel testo). D3: il taglio a 4.000 caratteri è solo della copia salvata, il comando è stato
+  eseguito intero; si scarta solo il comando semplice con una parola al taglio. D15: il tool
+  `shell` di OpenCode su Windows esegue PowerShell.
 - Parità sulla cronologia reale (Step 3 del piano
   `docs/superpowers/plans/2026-11-15-shell-path-extractor.md`), 2026-11-16, sul `calls.jsonl` del
-  2026-11-15: 94.862 chiamate shell e 20.771 cartelle, 0 differenze fuori dalle classi. Le ultime
-  86 sono state controllate a mano: in nessuna Rust inventa dove il prototipo non inventa. Nessun
-  candidato Rust contiene caratteri impossibili in un percorso Windows (erano 48 prima di D12).
-  Le classi sono state allargate guardando questi stessi dati: su una cronologia nuova vanno
-  rilette con sospetto, non prese per buone.
+  2026-11-15: 94.862 chiamate shell e 20.818 cartelle, 0 differenze di chiamata fuori dalle classi;
+  restano 8 cartelle OpenCode in cui il prototipo, leggendo PowerShell come Bash, toglie le barre
+  rovesciate (Rust è giusto, D15 non le attribuisce ancora). Nessun candidato Rust contiene
+  caratteri impossibili in un percorso Windows (erano 48 prima di D12). Le classi sono state
+  allargate guardando questi stessi dati: su una cronologia nuova vanno rilette con sospetto.
 - `MukadeSessions::call_reader()` è il lettore da usare in `analyze`: una copia del database di
   OpenCode per analisi, timeout reale (120 s) e tetto sull'output per ogni `dump`.
-- Misura di D10–D13, 2026-11-16, su un campione nuovo etichettato alla cieca: le 113 chiamate reali
-  in cui Rust e prototipo danno candidati diversi per D11, D12 o D13 (D10 non cambia mai i
-  candidati), esclusi i due campioni precedenti.
-  - Comandi interi (38): Rust trova 131/145 percorsi, il prototipo 30/145. Rust non inventa nulla:
-    i suoi 38 candidati fuori dalle etichette sono tutti `sed -i`, che le etichette non contavano
-    come scrittura. Il prototipo ne inventa 50 oltre a quelli.
-  - Comandi tagliati a 4.000 caratteri (58): Rust non inventa nulla, il prototipo 49; ma Rust ne
-    perde 50 contro 25, perché D3 scarta l'intero ultimo comando di primo livello.
-  - 17 chiamate del tool Bash scritte in sintassi PowerShell: stessi trovati, Rust inventa 9, il
-    prototipo 29. Il classificatore della shell le prende per Bash.
-- Aperti:
-  - D3 può tenere le scritture complete dell'ultimo comando tagliato (un heredoc chiuso, i comandi
-    interi prima del taglio) invece di scartarlo tutto: costa 25 percorsi sul campione;
-  - PowerShell eseguito dal tool Bash va riconosciuto dal classificatore della shell.
+- Misura, 2026-11-16, su un campione nuovo etichettato alla cieca: le 113 chiamate reali in cui
+  Rust e prototipo danno candidati diversi per D11, D12 o D13 (D10 non cambia mai i candidati),
+  esclusi i due campioni precedenti. Rust con D3 fine e D15, contro il prototipo:
+  - comandi interi (38): 131/145 percorsi contro 30/145; Rust non inventa nulla (i suoi 38
+    candidati fuori dalle etichette sono tutti `sed -i`, che le etichette non contavano), il
+    prototipo ne inventa 50;
+  - comandi tagliati (58): 103/113 contro 88/113; Rust ha 9 candidati fuori dalle etichette, tutti
+    il bersaglio di `cat > f <<'E'` col corpo tagliato, che il comando reale ha scritto e le
+    etichette hanno lasciato vuoto; il prototipo ne inventa 49;
+  - tool `shell` di OpenCode (17): 22/22 contro 12/22; Rust 0 inventati, il prototipo 29.
+- Etichette: `sed -i` è una scrittura, e un heredoc col corpo tagliato scrive comunque il suo
+  bersaglio. Le prossime istruzioni agli etichettatori lo devono dire.
 - Limiti di Mukade trovati il 2026-11-15:
   - `list pi` dà lo stesso id `session` a 50 sessioni;
   - 7 catene di subagent di Claude Code vengono rifiutate;

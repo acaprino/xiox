@@ -28,6 +28,24 @@ fn cut(prefix: &str) -> String {
     format!("{prefix}{}{CUT_MARK}", "x".repeat(MAX_INPUT_CHARS - prefix.len()))
 }
 
+/// D15: OpenCode's `shell` tool runs PowerShell on Windows; a hint in the call still wins.
+#[test]
+fn opencode_shell_is_powershell_unless_hinted() {
+    let rows = [
+        ("opencode shell", "opencode", "shell", json!({"command": "ls"}), Some(PowerShell)),
+        ("opencode Shell, any case", "opencode", "Shell", json!({"command": "ls"}), Some(PowerShell)),
+        ("shell hint wins", "opencode", "shell", json!({"command": "ls", "shell": "bash"}), Some(Bash)),
+        ("shell_type hint wins", "opencode", "shell", json!({"command": "dir", "shell_type": "cmd"}), Some(Cmd)),
+        ("opencode bash tool stays Bash", "opencode", "bash", json!({"command": "ls"}), Some(Bash)),
+        ("another harness's shell tool stays Bash", "codex", "shell", json!({"command": "ls"}), Some(Bash)),
+    ];
+    for (name, harness, tool, input, want) in rows {
+        let mut c = call(Some("bash"), Some(tool), input);
+        c.harness = harness.into();
+        assert_eq!(shell_command(&c).map(|c| c.shell), want, "{name}");
+    }
+}
+
 #[test]
 fn shell_selection_table() {
     type Expected<'a> = Option<(Shell, &'a str, Completeness)>;

@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use super::dialect::{Dialect, Shell};
 use super::lex::Token;
+use super::op::Completeness;
 
 /// One argument of a simple command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,12 +24,24 @@ impl Arg {
     }
 }
 
+/// Where a truncated text ended in a command (D3): only the words that reach the end are uncertain.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cut {
+    #[default]
+    No,
+    /// In the last argument, or right after it: the command may have lost arguments.
+    Arg,
+    /// In the target of an output redirect, which the segment no longer holds.
+    Redirect,
+}
+
 /// A command with its arguments, the targets it redirects output to and its heredoc body.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Simple {
     pub words: Vec<Arg>,
     pub redirects: Vec<String>,
     pub heredoc: Option<String>,
+    pub cut: Cut,
 }
 
 /// A statement of the command, in the order it was written.
@@ -39,11 +52,14 @@ pub enum Node {
     Assign { name: String, value: String },
     /// A Bash `for`; `items` is `None` without an `in` list (including the arithmetic form).
     For { var: String, items: Option<Vec<String>>, body: Vec<Node>, done_redirects: Vec<String> },
+    /// A statement the cut made unknown (D3): an assignment, a loop header or a command with nothing left.
+    Cut,
 }
 
-/// The top-level nodes in order; the last one is the one that reaches the end of the text.
-pub fn parse(tokens: Vec<Token>, dialect: &dyn Dialect) -> Vec<Node> {
-    let segments = segments(tokens);
+/// The top-level nodes in order. When the text is `Truncated`, the last segment that reaches its end
+/// carries the [`Cut`].
+pub fn parse(tokens: Vec<Token>, dialect: &dyn Dialect, completeness: Completeness) -> Vec<Node> {
+    let segments = segments(tokens, completeness == Completeness::Truncated);
     build(&segments, &closers(&segments), 0..segments.len(), dialect.shell())
 }
 
@@ -57,17 +73,25 @@ const PREFIXES: [&str; 18] = [
 /// Keywords that open a loop closed by `done`.
 const LOOP_HEADS: [&str; 4] = ["for", "while", "until", "select"];
 
-/// The raw simple commands between separators; empty ones are dropped.
-fn segments(tokens: Vec<Token>) -> Vec<Simple> {
+/// The raw simple commands between separators; empty ones are dropped. A truncated text ends in the
+/// open segment: unless its last token closes it (a separator) or is a heredoc operator, whose command
+/// line is complete, that segment is cut.
+fn segments(tokens: Vec<Token>, truncated: bool) -> Vec<Simple> {
     let mut out = Vec::new();
     let mut current = Simple::default();
+    let mut last = Cut::No;
     let mut tokens = tokens.into_iter().peekable();
     while let Some(token) = tokens.next() {
+        last = Cut::Arg;
         match token {
-            Token::Op(op) if SEPARATORS.contains(&op) => out.push(std::mem::take(&mut current)),
+            Token::Op(op) if SEPARATORS.contains(&op) => {
+                out.push(std::mem::take(&mut current));
+                last = Cut::No;
+            }
             Token::Op(op) if REDIRECT_OUT.contains(&op) => {
                 if let Some(Token::Word(target)) = tokens.next_if(|next| matches!(next, Token::Word(_))) {
                     current.redirects.push(target);
+                    last = Cut::Redirect;
                 }
             }
             // Input and descriptor redirects write nothing: they only consume their word.
@@ -80,12 +104,19 @@ fn segments(tokens: Vec<Token>) -> Vec<Simple> {
                 if body.is_some() && current.heredoc.is_none() {
                     current.heredoc = body;
                 }
+                last = Cut::No;
             }
             Token::Word(text) => current.words.push(Arg::Text(text)),
         }
     }
+    if truncated {
+        current.cut = last;
+        if last == Cut::Redirect {
+            current.redirects.pop();
+        }
+    }
     out.push(current);
-    out.retain(|segment| !segment.words.is_empty() || !segment.redirects.is_empty());
+    out.retain(|segment| !segment.words.is_empty() || !segment.redirects.is_empty() || segment.cut != Cut::No);
     out
 }
 
@@ -94,7 +125,7 @@ fn build(segments: &[Simple], closers: &[Option<usize>], range: Range<usize>, sh
     let mut at = range.start;
     while at < range.end {
         let segment = &segments[at];
-        if shell == Shell::Bash {
+        if shell == Shell::Bash && segment.cut == Cut::No {
             if let Some((var, items)) = for_header(segment) {
                 // A loop whose `done` lies outside this range is unclosed: it takes the rest.
                 let done = closers[at].filter(|done| *done < range.end);
@@ -114,14 +145,15 @@ fn build(segments: &[Simple], closers: &[Option<usize>], range: Range<usize>, sh
 
 fn node(segment: &Simple, shell: Shell) -> Option<Node> {
     if let Some((name, value)) = assignment(&segment.words, shell) {
-        return Some(Node::Assign { name, value });
+        // A cut value may be shorter than the one that ran.
+        return Some(if segment.cut == Cut::No { Node::Assign { name, value } } else { Node::Cut });
     }
     let skipped = segment.words.iter().take_while(|word| is_prefix(word)).count();
     let words = segment.words[skipped..].to_vec();
     if words.is_empty() && segment.redirects.is_empty() {
-        return None;
+        return (segment.cut != Cut::No).then_some(Node::Cut);
     }
-    Some(Node::Simple(Simple { words, redirects: segment.redirects.clone(), heredoc: segment.heredoc.clone() }))
+    Some(Node::Simple(Simple { words, redirects: segment.redirects.clone(), heredoc: segment.heredoc.clone(), cut: segment.cut }))
 }
 
 fn is_prefix(word: &Arg) -> bool {

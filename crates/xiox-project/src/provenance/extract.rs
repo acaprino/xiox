@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use super::command::{Arg, Node, Simple, parse};
+use super::command::{Arg, Cut, Node, Simple, parse};
 use super::paths::is_unknown;
 use super::op::{Completeness, Extraction, OpKind, RawOp};
 use super::recognize::{Context, Invocation, Registry};
@@ -18,34 +18,42 @@ type Known = HashMap<String, String>;
 /// Reads the operations of `cmd`, written for `shell`.
 pub fn extract(cmd: &str, shell: Shell, completeness: Completeness) -> Extraction {
     let mut ctx = Context::default();
-    let mut nodes = read_nodes(cmd, shell);
-    // D3: a truncated text may end inside a word, a quote or a heredoc, so what remains of its last
-    // command says nothing certain. The prototype read it as if whole and could shorten a destination.
-    if completeness == Completeness::Truncated && nodes.pop().is_some() {
-        ctx.flags.truncated = true;
-        ctx.unresolved += 1;
-    }
     let mut ops = Vec::new();
-    walk(&nodes, shell, &mut Known::new(), &mut ctx, &mut ops);
+    // D3: the storage cut ends the text, the command ran in full. Only a simple command with a word
+    // that reaches the cut is dropped, since it may have lost arguments; the prototype read that word
+    // as it stood (so it could shorten a destination) and dropped no complete command.
+    walk(&read_nodes(cmd, shell, completeness), shell, &mut Known::new(), &mut ctx, &mut ops);
     Extraction { ops, flags: ctx.flags, unresolved: ctx.unresolved }
 }
 
 /// The operations of the command line a nested shell runs, as a scope of its own: variables do not
-/// cross the boundary. `None` when the nesting is too deep to read.
-pub(super) fn extract_nested(script: &str, shell: Shell, ctx: &mut Context) -> Option<Vec<RawOp>> {
+/// cross the boundary. `None` when the nesting is too deep to read. A script that is the cut word of
+/// the outer command is `Truncated` too.
+pub(super) fn extract_nested(
+    script: &str,
+    shell: Shell,
+    completeness: Completeness,
+    ctx: &mut Context,
+) -> Option<Vec<RawOp>> {
     if !ctx.budget.enter() {
         skip(ctx);
         return None;
     }
     let mut ops = Vec::new();
-    walk(&read_nodes(script, shell), shell, &mut Known::new(), ctx, &mut ops);
+    walk(&read_nodes(script, shell, completeness), shell, &mut Known::new(), ctx, &mut ops);
     ctx.budget.leave();
     Some(ops)
 }
 
-fn read_nodes(cmd: &str, shell: Shell) -> Vec<Node> {
+fn read_nodes(cmd: &str, shell: Shell, completeness: Completeness) -> Vec<Node> {
     let dialect = shell.dialect();
-    parse(lex(cmd, dialect), dialect)
+    parse(lex(cmd, dialect), dialect, completeness)
+}
+
+/// D3: a statement the cut made unknown is not read; it is counted, one for each.
+fn drop_cut(ctx: &mut Context) {
+    ctx.flags.truncated = true;
+    ctx.unresolved += 1;
 }
 
 /// D4: a statement the budget could not pay for is not read; it is counted, one for each.
@@ -68,6 +76,7 @@ fn walk(nodes: &[Node], shell: Shell, known: &mut Known, ctx: &mut Context, ops:
                 }
             }
             Node::Simple(simple) => simple_command(simple, shell, known, ctx, ops),
+            Node::Cut => drop_cut(ctx),
         }
     }
 }
@@ -123,10 +132,21 @@ fn is_literal_list(items: &[String]) -> bool {
 fn simple_command(simple: &Simple, shell: Shell, known: &Known, ctx: &mut Context, ops: &mut Vec<RawOp>) {
     let words: Vec<Arg> = simple.words.iter().map(|word| substitute_arg(word, shell, known)).collect();
     let redirects: Vec<String> = simple.redirects.iter().map(|target| substitute(target, shell, known)).collect();
-    if let Some(Arg::Text(head)) = words.first() {
-        remember_script(head, &words[1..], &redirects, simple.heredoc.as_deref(), ctx);
-        let invocation = Invocation { name: command_name(head), args: &words[1..], shell, heredoc: simple.heredoc.as_deref() };
-        ops.extend(Registry::standard().recognize(&invocation, ctx));
+    match (words.first(), simple.cut) {
+        (_, Cut::Redirect) => drop_cut(ctx),
+        (Some(Arg::Text(head)), cut) => {
+            remember_script(head, &words[1..], &redirects, simple.heredoc.as_deref(), ctx);
+            let invocation = Invocation {
+                name: command_name(head),
+                args: &words[1..],
+                shell,
+                heredoc: simple.heredoc.as_deref(),
+                cut: cut == Cut::Arg,
+            };
+            ops.extend(Registry::standard().recognize(&invocation, ctx));
+        }
+        (_, Cut::Arg) => drop_cut(ctx),
+        _ => {}
     }
     ops.extend(redirects.into_iter().map(write));
 }
