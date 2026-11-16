@@ -40,7 +40,8 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     let found = crate::search::search(&project, opts, env, &listed);
     items.extend(found.items);
     notes.extend(found.notes);
-    if let Some(h) = &history {
+    if let Some(h) = history.as_mut() {
+        h.read(&project, &mut items, &mut |dirs| crate::search::verify_dirs(&project, opts, env, dirs));
         h.attach(&mut items);
     }
     sort_items(&mut items);
@@ -53,6 +54,10 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     } else {
         Vec::new()
     };
+    let history = history.map(crate::history::History::into_report);
+    if history.as_ref().is_some_and(|h| h.partial()) {
+        notes.push(Note::HistoryPartial);
+    }
     Ok(ProjectScan {
         schema: SCHEMA,
         project,
@@ -62,7 +67,7 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         search: found.mode,
         scanned_at_ms: env.now_ms,
         elapsed_ms: started.elapsed().as_millis() as u64,
-        history: history.map(crate::history::History::into_report),
+        history,
     })
 }
 

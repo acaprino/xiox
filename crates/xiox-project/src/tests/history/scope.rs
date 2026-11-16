@@ -162,3 +162,60 @@ fn session_inside_the_project_counts_as_inside() {
     assert!(copies(&s).is_empty());
     assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::InsideProject), Some(&1));
 }
+
+#[test]
+fn repository_above_a_session_folder_outside_the_scope_is_dropped_and_counted() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    // The session folder lies inside the scope (the project's parent), the repository above it does not.
+    git(&base, &["init", "-q", "-b", "main"]);
+    commit(&base, "base.txt");
+    let tools = base.join("work").join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    let listings = [listing(
+        Agent::Claude,
+        vec![descriptor(Agent::Claude, "main", "s1", &cwd(&tools), "2026-11-10T10:00:00Z", None)],
+    )];
+    let opts = Options { drives: false, ..Options::default() };
+
+    let s = scan(&project, &opts, Vec::new(), &listings);
+
+    assert!(copies(&s).is_empty(), "{:?}", copies(&s));
+    assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::OutsideScope), Some(&1));
+}
+
+#[test]
+fn session_in_the_project_or_a_worktree_counts_as_inside() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let tree = worktree(&project, &base.join("work").join("tree"), "side");
+    let table = [project.clone(), tree.clone(), tree.join("src")];
+    for dir in table {
+        let listings = [listing(
+            Agent::Claude,
+            vec![descriptor(Agent::Claude, "main", "s1", &cwd(&dir), "2026-11-10T10:00:00Z", None)],
+        )];
+
+        let s = scan(&project, &Options::default(), Vec::new(), &listings);
+
+        assert!(copies(&s).is_empty(), "{dir:?}");
+        assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::InsideProject), Some(&1), "{dir:?}");
+    }
+}
+
+#[test]
+fn non_local_working_directories_are_counted_through_the_listing() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let listings = [listing(
+        Agent::Claude,
+        vec![
+            descriptor(Agent::Claude, "main", "s1", "/d/x", "2026-11-10T10:00:00Z", None),
+            descriptor(Agent::Claude, "main", "s2", r"\srv\share\x", "2026-11-10T10:00:00Z", None),
+        ],
+    )];
+
+    let s = scan(&project, &Options::default(), Vec::new(), &listings);
+
+    assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::NotLocal), Some(&2));
+}

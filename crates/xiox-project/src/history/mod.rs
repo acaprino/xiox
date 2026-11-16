@@ -2,20 +2,25 @@
 //! analysis reads. The logic that fills the shape lives in the modules of the later stages.
 
 mod folders;
+mod queue;
 mod report;
 pub(crate) mod scope;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::time::Instant;
 
-use xiox_model::{Agent, Loaded};
+use xiox_model::{path_key, Agent, Loaded};
 use xiox_mukade::{strip_verbatim, Descriptor, ToolCall};
 
-use folders::Folders;
+pub(crate) use folders::Folders;
+pub(crate) use queue::{Budget, BUDGET};
+use queue::Queue;
 use scope::{cwd_roots, local_dir, Scope};
 
-use crate::{Category, Coverage, Env, Item, Options, PathEnv, Project};
+use crate::search::Own;
+use crate::{session_ledgers, Category, Coverage, Env, Item, Options, PathEnv, Project};
 
 pub use report::{
     Activity, CallOutcome, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure,
@@ -73,6 +78,7 @@ pub(crate) struct History<'a> {
     scope: Scope,
     folders: Folders,
     report: HistoryReport,
+    budget: Budget,
 }
 
 impl<'a> History<'a> {
@@ -81,31 +87,35 @@ impl<'a> History<'a> {
         if !opts.history || env.history.listings.is_empty() {
             return None;
         }
+        let sources = env
+            .history
+            .listings
+            .iter()
+            .map(|(agent, listing)| SourceReport {
+                agent: *agent,
+                listing_failed: !listing.warnings.is_empty(),
+                listed: listing.items.len(),
+                related: 0,
+                read: 0,
+                failed: BTreeMap::new(),
+            })
+            .collect();
         let report = HistoryReport {
-            sources: Vec::new(),
+            sources,
             sessions_read: 0,
             calls: 0,
             shell: Coverage::default(),
             excluded: BTreeMap::new(),
             limits: Vec::new(),
         };
-        Some(History { input: env.history, scope: Scope::of(project, opts, env), folders: Folders::default(), report })
+        Some(History { input: env.history, scope: Scope::of(project, opts, env), folders: Folders::default(), report, budget: BUDGET })
     }
 
     /// The project roots the listed working directories lead to, to be verified with the folders
-    /// the search finds. Records each listing in `sources` and each folder it names.
+    /// the search finds. Records each folder a listing names.
     pub fn listed_roots(&mut self, project: &Project, _opts: &Options, _env: &Env) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
-        for (agent, listing) in self.input.listings {
-            self.report.sources.push(SourceReport {
-                agent: *agent,
-                listing_failed: !listing.warnings.is_empty(),
-                listed: listing.items.len(),
-                // shortcut: set by the stage that reads the related sessions' calls.
-                related: 0,
-                read: 0,
-                failed: BTreeMap::new(),
-            });
+        for (_, listing) in self.input.listings {
             for session in &listing.items {
                 let Some(cwd) = session.info.cwd.as_deref() else { continue };
                 match local_dir(cwd) {
@@ -121,6 +131,111 @@ impl<'a> History<'a> {
         cwd_roots(project, &dirs, &self.scope, home, &mut self.report.excluded)
     }
 
+    #[cfg(test)]
+    pub fn with_budget(mut self, budget: Budget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// Reads the calls of the project's sessions, newest first, within the budget, and folds
+    /// what they show into the folders. A copy a session made is verified and, once it is an
+    /// item, brings the sessions that worked in it into the queue.
+    pub fn read(&mut self, project: &Project, items: &mut Vec<Item>, verify: &mut dyn FnMut(&[PathBuf]) -> Vec<Item>) {
+        // No source, nothing to read: the report keeps what the listings said.
+        let Some(source) = self.input.calls else { return };
+        let roots: Vec<PathBuf> = std::iter::once(project.root.clone())
+            .chain(project.worktrees.iter().cloned())
+            .chain(items.iter().filter(|i| i.category == Category::Copies).filter_map(|i| i.path.clone()))
+            .collect();
+        let mut queue = Queue::new(self.input.listings, &roots);
+        let mut checked: HashSet<String> = items.iter().map(|i| i.key.clone()).collect();
+        let started = Instant::now();
+        let mut attempts = 0;
+        while queue.left() > 0 {
+            if let Some(limit) = self.limit_reached(attempts, started, queue.left()) {
+                self.report.limits.push(limit);
+                break;
+            }
+            let Some(session) = queue.next() else { break };
+            attempts += 1;
+            if self.read_session(source, session) {
+                for item in self.new_copies(project, &mut checked, items, verify) {
+                    if let (Category::Copies, Some(path)) = (item.category, &item.path) {
+                        queue.add_root(path);
+                    }
+                    items.push(item);
+                }
+            }
+        }
+        for session in queue.related() {
+            let row = self.row(session.agent);
+            self.report.sources[row].related += 1;
+        }
+    }
+
+    /// The first cap the reading has reached, with the related sessions it leaves.
+    fn limit_reached(&self, attempts: usize, started: Instant, left: usize) -> Option<Limit> {
+        let b = &self.budget;
+        if attempts >= b.max_sessions {
+            Some(Limit::Sessions { max: b.max_sessions, left })
+        } else if self.report.calls >= b.max_calls {
+            Some(Limit::Calls { max: b.max_calls })
+        } else if started.elapsed() >= b.max_duration {
+            Some(Limit::Duration { secs: b.max_duration.as_secs(), left })
+        } else {
+            None
+        }
+    }
+
+    /// Reads one session and folds its calls into the folders; `false` when it could not be
+    /// read. The calls are dropped before the next session is asked for.
+    fn read_session(&mut self, source: &dyn CallSource, session: &Descriptor) -> bool {
+        let row = self.row(session.agent);
+        let read = if session.info.unreadable.is_some() { Err(ReadFailure::Failed) } else { source.calls(session) };
+        let calls = match read {
+            Ok(calls) => calls,
+            Err(why) => {
+                *self.report.sources[row].failed.entry(why).or_default() += 1;
+                return false;
+            }
+        };
+        self.report.sources[row].read += 1;
+        self.report.sessions_read += 1;
+        self.report.calls += calls.len();
+        for ledger in session_ledgers(&calls, &self.input.user.path_env()).values() {
+            self.folders.add_ledger(session, ledger);
+            add_coverage(&mut self.report.shell, ledger.coverage());
+        }
+        true
+    }
+
+    /// The copies among the folders the last session named, outside the project and not looked
+    /// at before: the further context changes the sessions show.
+    fn new_copies(
+        &mut self,
+        project: &Project,
+        checked: &mut HashSet<String>,
+        items: &[Item],
+        verify: &mut dyn FnMut(&[PathBuf]) -> Vec<Item>,
+    ) -> Vec<Item> {
+        let own = Own::new(project);
+        let mut dirs = Vec::new();
+        for folder in self.folders.take_fresh().into_iter().filter(|f| !own.holds(&path_key(f))) {
+            match local_dir(&folder.to_string_lossy()) {
+                Ok(dir) => dirs.push(dir),
+                Err(why) => *self.report.excluded.entry(why).or_default() += 1,
+            }
+        }
+        let home = Some(self.input.user.home.as_path()).filter(|h| !h.as_os_str().is_empty());
+        let roots = cwd_roots(project, &dirs, &self.scope, home, &mut self.report.excluded);
+        let roots: Vec<PathBuf> = roots.into_iter().filter(|r| checked.insert(path_key(r))).collect();
+        verify(&roots).into_iter().filter(|i| !items.iter().any(|known| known.key == i.key)).collect()
+    }
+
+    fn row(&self, agent: Agent) -> usize {
+        self.report.sources.iter().position(|s| s.agent == agent).expect("every listed agent has a row")
+    }
+
     /// The provenance of the items the sessions can speak about.
     pub fn attach(&self, items: &mut [Item]) {
         for item in items.iter_mut().filter(|i| matches!(i.category, Category::Copies | Category::Named | Category::Scratch)) {
@@ -131,4 +246,14 @@ impl<'a> History<'a> {
     pub fn into_report(self) -> HistoryReport {
         self.report
     }
+}
+
+/// Adds the shell coverage of one session to the total.
+fn add_coverage(total: &mut Coverage, c: &Coverage) {
+    total.shell_calls += c.shell_calls;
+    total.unresolved += c.unresolved;
+    total.looped += c.looped;
+    total.script += c.script;
+    total.truncated += c.truncated;
+    total.exhausted += c.exhausted;
 }

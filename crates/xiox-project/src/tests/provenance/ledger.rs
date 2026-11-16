@@ -1,35 +1,13 @@
-use serde_json::{json, Value};
+use serde_json::json;
 use xiox_mukade::{Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
 
 use crate::provenance::{
     folder_of, session_ledgers, Env, EvidenceRef, Ledger, OpKind, PatchAction, SessionKey, Source, Strength,
 };
+use crate::tests::history::fake::{bash, call};
 
 fn env() -> Env {
     Env { home: r"C:\Users\me".into(), temp: r"C:\Temp".into() }
-}
-
-fn call(canonical: &str, tool: &str, input: Value, cwd: Option<&str>) -> ToolCall {
-    ToolCall {
-        harness: "test".into(),
-        store: "store".into(),
-        session: "s1".into(),
-        parent: None,
-        entry: Some("e1".into()),
-        call: Some("c1".into()),
-        tool: Some(tool.into()),
-        canonical: Some(canonical.into()),
-        input,
-        cwd: cwd.map(Into::into),
-        time: Some("2026-11-15T10:00:00Z".into()),
-        error: None,
-        exit: None,
-        result_head: Some("ok".into()),
-    }
-}
-
-fn bash(command: &str, cwd: &str) -> ToolCall {
-    call("bash", "Bash", json!({ "command": command }), Some(cwd))
 }
 
 /// `text` cut the way Mukade cuts long inputs: `MAX_INPUT_CHARS` characters and the cut mark.

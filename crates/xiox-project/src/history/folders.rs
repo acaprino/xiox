@@ -2,19 +2,24 @@
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use xiox_mukade::{parse_time_ms, Descriptor};
 use xiox_model::path_key;
 
-use super::{Provenance, SessionEvidence};
+use super::{Operation, Provenance, SessionEvidence};
 use crate::owned::key_within;
-use crate::Strength;
+use crate::{Coverage, FolderEvidence, Ledger, Strength};
+
+/// Operations kept per session and folder; the rest is only counted.
+pub(crate) const MAX_OPERATIONS_SHOWN: usize = 20;
 
 /// The evidence of every session, keyed by the `path_key` of the folder it names.
 #[derive(Default)]
 pub(crate) struct Folders {
     by_folder: BTreeMap<String, Vec<SessionEvidence>>,
+    /// Folders a ledger named first, not yet handed to `take_fresh`.
+    fresh: Vec<PathBuf>,
 }
 
 impl Folders {
@@ -35,6 +40,23 @@ impl Folders {
             gaps: false,
         };
         self.by_folder.entry(path_key(dir)).or_default().push(evidence);
+    }
+
+    /// What the session's ledger shows: one entry per folder, kept apart from the listed working directory.
+    pub fn add_ledger(&mut self, d: &Descriptor, ledger: &Ledger) {
+        let gaps = has_gaps(ledger.coverage());
+        for folder in ledger.folders() {
+            let key = path_key(Path::new(&folder.path));
+            if !self.by_folder.contains_key(&key) {
+                self.fresh.push(PathBuf::from(&folder.path));
+            }
+            self.by_folder.entry(key).or_default().push(session_evidence(d, folder, gaps));
+        }
+    }
+
+    /// The folders ledgers named since the last call that no listing had named before.
+    pub fn take_fresh(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.fresh)
     }
 
     /// The evidence of the folder `root_key` and of everything below it, one entry per session.
@@ -80,4 +102,26 @@ fn merge(into: &mut SessionEvidence, other: &SessionEvidence) {
 fn observed_activity(s: &SessionEvidence) -> Option<i64> {
     let ops = s.operations.iter().filter_map(|o| o.time.as_deref().and_then(parse_time_ms));
     ops.chain(s.last_activity_ms).max()
+}
+
+fn session_evidence(d: &Descriptor, folder: &FolderEvidence, gaps: bool) -> SessionEvidence {
+    SessionEvidence {
+        agent: d.agent,
+        harness: d.harness.clone(),
+        store: d.store.clone(),
+        id: d.info.id.clone(),
+        parent: d.info.parent.clone(),
+        last_activity_ms: d.updated_ms(),
+        strength: folder.strength,
+        listed_cwd: false,
+        operations: folder.refs.iter().take(MAX_OPERATIONS_SHOWN).map(Operation::from).collect(),
+        omitted: folder.refs.len().saturating_sub(MAX_OPERATIONS_SHOWN),
+        failed: folder.failed.len(),
+        gaps,
+    }
+}
+
+/// The session has shell calls the parsers could not fully read.
+fn has_gaps(c: &Coverage) -> bool {
+    c.unresolved + c.looped + c.script + c.truncated + c.exhausted > 0
 }
