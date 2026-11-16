@@ -16,7 +16,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use xiox_mukade::ToolCall;
 use xiox_project::{
-    extract, resolve, session_ledgers, shell_command, strip_verbatim, Ledger, PathEnv, SessionKey, ShellCommand,
+    effective_cwd, extract, resolve, session_ledgers, shell_command, Ledger, PathEnv, SessionKey, ShellCommand,
     Source,
 };
 
@@ -63,11 +63,6 @@ fn read_calls(path: &Path) -> Result<Vec<ToolCall>, Box<dyn Error>> {
     Ok(calls)
 }
 
-/// The call's working directory as the prototype reads it: no `\?\` prefix, backslashes only.
-fn effective_cwd(call: &ToolCall) -> Option<String> {
-    call.cwd.as_deref().map(|c| strip_verbatim(c).replace('/', r"\")).filter(|c| !c.is_empty())
-}
-
 fn call_row(call: &ToolCall, shell: ShellCommand, cwd: &str, env: &PathEnv) -> Value {
     let extraction = extract(&shell.text, shell.shell, shell.completeness);
     let resolved = resolve(&extraction.ops, cwd, env);
@@ -87,7 +82,7 @@ fn call_row(call: &ToolCall, shell: ShellCommand, cwd: &str, env: &PathEnv) -> V
 
 fn source_name(source: &Source) -> String {
     match source {
-        Source::Structured(tool) => format!("structured:{tool}"),
+        Source::Structured { tool, .. } => format!("structured:{tool}"),
         Source::Shell { kind, .. } => format!("shell:{}", kind.as_str()),
         Source::Patch(action) => format!("patch:{}", json!(action).as_str().unwrap_or_default()),
         Source::Cd => "cd".into(),

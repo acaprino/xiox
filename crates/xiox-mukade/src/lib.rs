@@ -24,7 +24,7 @@
 
 mod calls;
 
-pub use calls::{cut_input, parse_stream, was_cut, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
+pub use calls::{cut_input, parse_stream, strip_verbatim, was_cut, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
 
 use xiox_model::*;
 use rusqlite::{Connection, OpenFlags};

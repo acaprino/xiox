@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use super::command::{Arg, Node, Simple, parse};
+use super::paths::is_unknown;
 use super::op::{Completeness, Extraction, OpKind, RawOp};
 use super::recognize::{Context, Invocation, Registry};
 use super::{Budget, Shell, lex};
@@ -155,17 +156,6 @@ fn substitute_arg(arg: &Arg, shell: Shell, known: &Known) -> Arg {
         Arg::Text(text) => Arg::Text(substitute(text, shell, known)),
         Arg::Comma => Arg::Comma,
     }
-}
-
-/// Whether `text` still depends on something that is not literal: a variable, a substitution, a glob.
-fn is_unknown(text: &str) -> bool {
-    text.contains(['$', '`', '*', '?']) || has_percent_reference(text)
-}
-
-/// A `%name%` reference: a run of non-space characters between two percent signs.
-fn has_percent_reference(text: &str) -> bool {
-    let parts: Vec<&str> = text.split('%').collect();
-    parts.len() > 2 && parts[1..parts.len() - 1].iter().any(|part| !part.is_empty() && !part.contains(char::is_whitespace))
 }
 
 /// Replaces the references to known variables: `$x` and `${x}` in Bash, `$x` without regard to case in

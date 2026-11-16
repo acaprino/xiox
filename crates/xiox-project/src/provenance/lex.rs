@@ -2,6 +2,7 @@
 
 use std::str::CharIndices;
 
+use super::braces::{self, Mark};
 use super::dialect::{Dialect, Shell};
 
 /// A lexical unit of a command.
@@ -29,11 +30,15 @@ struct Lexer<'a> {
     in_word: bool,
     /// Heredocs whose body starts at the next newline: delimiter and index of their token.
     pending: Vec<(String, usize)>,
+    /// Bash brace expansion: the live `{`, `,` and `}` of the current word, by byte offset.
+    marks: Vec<Mark>,
+    /// Open `${` parameter expansions in the current word, whose braces are not live.
+    params: usize,
 }
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str, dialect: &'a dyn Dialect) -> Self {
-        Lexer { src, chars: src.char_indices(), dialect, tokens: Vec::new(), word: String::new(), in_word: false, pending: Vec::new() }
+        Lexer { src, chars: src.char_indices(), dialect, tokens: Vec::new(), word: String::new(), in_word: false, pending: Vec::new(), marks: Vec::new(), params: 0 }
     }
 
     fn run(mut self) -> Vec<Token> {
@@ -59,10 +64,31 @@ impl<'a> Lexer<'a> {
         self.in_word = true;
     }
 
+    /// A character outside quotes and escapes: in Bash a brace or a comma may be part of an expansion.
+    fn push_live(&mut self, c: char) {
+        if self.dialect.shell() == Shell::Bash && matches!(c, '{' | ',' | '}') {
+            let at = self.word.len();
+            match c {
+                '{' if self.word.ends_with('$') => self.params += 1,
+                '}' if self.params > 0 => self.params -= 1,
+                _ => self.marks.push((at, c)),
+            }
+        }
+        self.push(c);
+    }
+
     fn flush(&mut self) {
-        if self.in_word {
-            self.tokens.push(Token::Word(std::mem::take(&mut self.word)));
-            self.in_word = false;
+        if !self.in_word {
+            return;
+        }
+        self.in_word = false;
+        let word = std::mem::take(&mut self.word);
+        let marks = std::mem::take(&mut self.marks);
+        self.params = 0;
+        // Over the limit the word stays as written; the resolver then counts it as unknown.
+        match Some(&marks).filter(|marks| !marks.is_empty()).and_then(|marks| braces::expand(&word, marks)) {
+            Some(words) => self.tokens.extend(words.into_iter().map(Token::Word)),
+            None => self.tokens.push(Token::Word(word)),
         }
     }
 
@@ -86,7 +112,7 @@ impl<'a> Lexer<'a> {
             _ => match self.dialect.operators().iter().find(|op| rest.starts_with(**op)) {
                 Some(op) => self.operator(op, rest),
                 None => {
-                    self.push(c);
+                    self.push_live(c);
                     self.chars.next();
                 }
             },

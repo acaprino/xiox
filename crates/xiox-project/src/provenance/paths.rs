@@ -2,8 +2,6 @@
 //!
 //! Pure string work: components are normalised by hand and the disk is never touched.
 
-use std::borrow::Cow;
-
 use super::op::{Candidate, OpKind, RawOp};
 
 /// The user directories a command may name through `~` and `/tmp`.
@@ -34,18 +32,7 @@ pub struct Resolved {
     pub unresolved: usize,
 }
 
-const VERBATIM_PREFIX: &str = r"\\?\";
-const VERBATIM_UNC_PREFIX: &str = r"\\?\UNC\";
 const NULL_DEVICES: [&str; 5] = ["/dev/null", "nul", "nul:", "$null", "-"];
-
-/// Drops the `\\?\` prefix Windows APIs add to canonical paths; `\\?\UNC\server\share` is `\\server\share`.
-pub fn strip_verbatim(p: &str) -> Cow<'_, str> {
-    if let Some(unc) = p.strip_prefix(VERBATIM_UNC_PREFIX) {
-        Cow::Owned(format!(r"\\{unc}"))
-    } else {
-        Cow::Borrowed(p.strip_prefix(VERBATIM_PREFIX).unwrap_or(p))
-    }
-}
 
 pub fn is_null_device(p: &str) -> bool {
     let p = p.trim().to_lowercase();
@@ -170,9 +157,10 @@ fn repo_name(src: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-/// Variables, substitutions and globs: `$`, a backtick, `*`, `?` or `%NAME%`.
-fn is_unknown(p: &str) -> bool {
-    p.contains(['$', '`', '*', '?']) || has_percent_variable(p)
+/// Whether `p` still depends on something that is not literal: `$`, a backtick, `*`, `?`, `%NAME%`, or a
+/// brace expression (`{a,b}`, `{1..3}`) the lexer left unexpanded.
+pub(super) fn is_unknown(p: &str) -> bool {
+    p.contains(['$', '`', '*', '?']) || has_percent_variable(p) || has_brace_expression(p)
 }
 
 fn has_percent_variable(p: &str) -> bool {
@@ -181,6 +169,27 @@ fn has_percent_variable(p: &str) -> bool {
         let name = rest.split(|c: char| c == '%' || c.is_whitespace()).next().unwrap_or("");
         !name.is_empty() && rest[name.len()..].starts_with('%')
     })
+}
+
+/// A `{...}` holding a comma or `..`: the pairs the lexer expands, so one left over was too long to expand.
+fn has_brace_expression(p: &str) -> bool {
+    let (mut open, mut separated, mut previous) = (false, false, 'x');
+    for c in p.chars() {
+        match c {
+            '{' => open = true,
+            ',' => separated |= open,
+            '.' => separated |= open && previous == '.',
+            '}' if open => {
+                if separated {
+                    return true;
+                }
+                open = false;
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    false
 }
 
 /// `~`, `/c/...` and `/tmp/...` into Windows-rooted text; any other MSYS root is unsupported.

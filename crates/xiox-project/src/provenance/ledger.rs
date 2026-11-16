@@ -9,15 +9,16 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::Value;
-use xiox_mukade::{was_cut, Outcome, ToolCall};
+use xiox_mukade::{strip_verbatim, was_cut, Outcome, ToolCall};
 
 use super::{
-    extract, patch_ops, resolve, resolve_path, shell_command, strip_verbatim, Completeness, Env, OpKind,
+    extract, patch_ops, resolve, resolve_path, shell_command, Completeness, Env, OpKind,
     PatchAction, ShellCommand,
 };
 
 /// How much a piece of evidence says about a folder: `Used < Written < Created`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Strength {
     /// Read, searched, entered with `cd`, or the cwd of a call.
     Used = 1,
@@ -42,10 +43,11 @@ impl SessionKey {
 }
 
 /// Which part of a tool call produced the evidence.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Source {
-    /// A tool with a path field, by tool name.
-    Structured(String),
+    /// A tool with a path field: the harness's tool name, and the canonical name that sets the strength.
+    Structured { tool: String, canonical: String },
     /// An operation read from a shell command; `script` when it came from an inline script.
     Shell { kind: OpKind, script: bool },
     Patch(PatchAction),
@@ -56,7 +58,7 @@ pub enum Source {
 }
 
 /// Where a piece of evidence is in the session, and how its call ended.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct EvidenceRef {
     pub session: SessionKey,
     pub entry: Option<String>,
@@ -66,9 +68,11 @@ pub struct EvidenceRef {
     pub cwd: Option<String>,
     pub source: Source,
     pub outcome: Outcome,
+    /// What this reference alone shows; `None` for an operation that failed.
+    pub strength: Option<Strength>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FolderEvidence {
     /// The folder as first seen; the ledger matches folders without regard to case.
     pub path: String,
@@ -79,7 +83,7 @@ pub struct FolderEvidence {
 }
 
 /// What the shell parsers could not read, summed over the shell calls of a session.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Coverage {
     pub shell_calls: usize,
     /// Extractor and resolver combined.
@@ -91,8 +95,8 @@ pub struct Coverage {
 }
 
 /// The folder an operation speaks about.
-// shortcut: un ultimo segmento con estensione è trattato come file, così --out D:\runs\v1.2 conta come file;
-// da aggiornare quando il risultato del tool indica il tipo.
+// shortcut: a last segment with an extension is treated as a file, so `--out D:\runs\v1.2` counts as a file;
+// upgrade when the tool result says which kind it was.
 pub fn folder_of(kind: OpKind, path: &str) -> String {
     if matches!(kind, OpKind::Create | OpKind::Clone | OpKind::Worktree) {
         return path.to_owned();
@@ -145,9 +149,10 @@ impl Ledger {
 
     /// Evidence of an operation: a failed call keeps it under `failed`, without strength.
     fn add(&mut self, at: &Site, folder: &str, strength: Strength, source: Source) {
-        let reference = at.reference(source);
+        let failed = at.outcome == Outcome::Failed;
+        let reference = at.reference(source, (!failed).then_some(strength));
         let entry = self.entry(folder);
-        if at.outcome == Outcome::Failed {
+        if failed {
             entry.failed.push(reference);
         } else {
             entry.refs.push(reference);
@@ -157,7 +162,7 @@ impl Ledger {
 
     /// Evidence that the call ran in `folder` (its cwd, a `cd`): it holds even when the call failed.
     fn add_visit(&mut self, at: &Site, folder: &str, source: Source) {
-        let reference = at.reference(source);
+        let reference = at.reference(source, Some(Strength::Used));
         let entry = self.entry(folder);
         entry.refs.push(reference);
         entry.strength = entry.strength.max(Some(Strength::Used));
@@ -182,17 +187,19 @@ impl Ledger {
         else {
             return false;
         };
+        // Codex's `apply_patch` is canonically `edit` too: a patch in the keys a patch tool uses is a patch.
         if patch_text(&call.input).is_some() {
             return false;
         }
-        let tool = call.tool.clone().or_else(|| call.canonical.clone()).unwrap_or_default();
+        let canonical = call.canonical.clone().unwrap_or_default();
+        let tool = call.tool.clone().unwrap_or_else(|| canonical.clone());
         for field in PATH_FIELDS {
             let Some(value) = call.input.get(field).and_then(Value::as_str).filter(|v| !v.is_empty()) else {
                 continue;
             };
             let Ok(path) = resolve_path(value, at.cwd.as_deref(), env) else { continue };
             let folder = if searches_folder { path } else { parent_dir(&path) };
-            self.add(at, &folder, strength, Source::Structured(tool.clone()));
+            self.add(at, &folder, strength, Source::Structured { tool: tool.clone(), canonical: canonical.clone() });
         }
         true
     }
@@ -256,6 +263,7 @@ const STRUCTURED: [(&str, Strength, bool); 6] = [
     ("grep", Strength::Used, true),
 ];
 const PATH_FIELDS: [&str; 3] = ["file_path", "notebook_path", "path"];
+const PATCH_KEYS: [&str; 5] = ["_", "command", "cmd", "input", "patch"];
 const PATCH_MARKER: &str = "*** Begin Patch";
 
 fn strength_of(kind: OpKind) -> Strength {
@@ -265,9 +273,11 @@ fn strength_of(kind: OpKind) -> Strength {
     }
 }
 
-/// The patch a call carries: the first top-level string of its input that holds a patch header.
+/// The patch a call carries: the first of the input keys patch tools use that holds a patch header.
+/// Not `content`, `new_string` or `old_string`: a file that was written or edited may quote a patch.
 fn patch_text(input: &Value) -> Option<&str> {
-    input.as_object()?.values().filter_map(Value::as_str).find(|text| text.contains(PATCH_MARKER))
+    let input = input.as_object()?;
+    PATCH_KEYS.iter().filter_map(|key| input.get(*key)?.as_str()).find(|text| text.contains(PATCH_MARKER))
 }
 
 /// What every piece of evidence of one call shares.
@@ -287,16 +297,12 @@ impl Site {
             entry: call.entry.clone(),
             call: call.call.clone(),
             time: call.time.clone(),
-            cwd: call
-                .cwd
-                .as_deref()
-                .map(|cwd| strip_verbatim(cwd).replace('/', r"\"))
-                .filter(|cwd| !cwd.is_empty()),
+            cwd: effective_cwd(call),
             outcome: call.outcome(),
         }
     }
 
-    fn reference(&self, source: Source) -> EvidenceRef {
+    fn reference(&self, source: Source, strength: Option<Strength>) -> EvidenceRef {
         EvidenceRef {
             session: self.session.clone(),
             entry: self.entry.clone(),
@@ -305,8 +311,14 @@ impl Site {
             cwd: self.cwd.clone(),
             source,
             outcome: self.outcome,
+            strength,
         }
     }
+}
+
+/// The call's working directory as sessions record it: no `\\?\` prefix, backslashes only.
+pub fn effective_cwd(call: &ToolCall) -> Option<String> {
+    call.cwd.as_deref().map(|cwd| strip_verbatim(cwd).replace('/', r"\")).filter(|cwd| !cwd.is_empty())
 }
 
 /// One ledger per session, grouped by the full key.

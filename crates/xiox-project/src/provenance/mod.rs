@@ -2,6 +2,7 @@
 //! perform on disk. Deterministic parsers only; no model guesses paths.
 
 mod args;
+mod braces;
 mod budget;
 mod call;
 mod command;
@@ -15,16 +16,28 @@ mod paths;
 mod recognize;
 mod script;
 
-pub use args::{Posix, PsParams, posix, powershell};
+pub use args::posix;
 pub use budget::Budget;
-pub use call::{shell_command, ShellCommand};
-pub use command::{Arg, Node, Simple, parse};
+pub use command::Arg;
+pub use call::{ShellCommand, shell_command};
 pub use dialect::Shell;
 pub use extract::extract;
-pub use ledger::{Coverage, EvidenceRef, FolderEvidence, Ledger, SessionKey, Source, Strength, folder_of, session_ledgers};
-pub use lex::{Token, lex};
+pub use ledger::{
+    Coverage, EvidenceRef, FolderEvidence, Ledger, SessionKey, Source, Strength, effective_cwd, folder_of,
+    session_ledgers,
+};
+pub use lex::lex;
 pub use op::{Candidate, Completeness, Extraction, Flags, OpKind, RawOp};
 pub use patch::{PatchAction, patch_ops};
-pub use paths::{Env, PathError, Resolved, is_null_device, resolve, resolve_path, strip_verbatim};
-pub use recognize::{Context, Invocation, Registry};
-pub use script::{Lang, ScriptScan, scan_script};
+pub use paths::{Env, Resolved, resolve, resolve_path};
+pub use script::{Lang, scan_script};
+
+// Parser stages the unit tests reach into.
+#[cfg(test)]
+pub use {
+    args::powershell,
+    command::{Node, Simple, parse},
+    lex::Token,
+    paths::{PathError, is_null_device},
+    recognize::{Context, Invocation, Registry},
+};

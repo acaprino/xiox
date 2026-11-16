@@ -309,7 +309,7 @@ fn opencode_snapshot(db: &Path, into: &Path) -> std::io::Result<PathBuf> {
 
 /// `\\?\C:\x` becomes `C:\x` and `\\?\UNC\server\share\x` becomes `\\server\share\x`; any other
 /// path is kept.
-fn strip_verbatim(p: &str) -> Cow<'_, str> {
+pub fn strip_verbatim(p: &str) -> Cow<'_, str> {
     match p.strip_prefix(VERBATIM_PREFIX) {
         Some(unc) if unc.starts_with(r"UNC\") => Cow::Owned(format!(r"\\{}", &unc[4..])),
         Some(drive) if drive.as_bytes().get(1) == Some(&b':') => Cow::Borrowed(drive),

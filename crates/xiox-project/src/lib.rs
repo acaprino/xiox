@@ -29,11 +29,9 @@ pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};
 pub use owned::key_within;
 pub use provenance::{
-    Candidate, Completeness, Env as PathEnv, Extraction, Flags, OpKind, PathError, RawOp, Resolved, Shell, extract, is_null_device,
-    resolve, resolve_path,
-    strip_verbatim,
-    Coverage, EvidenceRef, FolderEvidence, Ledger, PatchAction, SessionKey, ShellCommand, Source, Strength, folder_of,
-    session_ledgers, shell_command,
+    Candidate, Completeness, Coverage, Env as PathEnv, EvidenceRef, Extraction, Flags, FolderEvidence, Ledger, OpKind,
+    PatchAction, RawOp, Resolved, SessionKey, Shell, ShellCommand, Source, Strength, effective_cwd, extract,
+    folder_of, resolve, session_ledgers, shell_command,
 };
 pub use resolve::{linked_worktree_count, resolve_project};
 

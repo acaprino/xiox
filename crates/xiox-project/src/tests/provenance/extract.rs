@@ -25,6 +25,9 @@ fn env() -> Env {
     .clone()
 }
 
+/// The working directory `run` resolves against.
+const PROJECT: &str = r"D:\Projects\Phazly";
+
 type Effect = (OpKind, String);
 
 fn effects(resolved: &Resolved) -> HashSet<Effect> {
@@ -43,7 +46,7 @@ fn read(fixture: &Fixture, completeness: Completeness) -> (Extraction, Resolved)
 
 fn run(shell: Shell, cmd: &str) -> (Extraction, Resolved) {
     let extraction = extract(cmd, shell, Completeness::Whole);
-    let resolved = resolve(&extraction.ops, r"D:\Projects\Phazly", &env());
+    let resolved = resolve(&extraction.ops, PROJECT, &env());
     (extraction, resolved)
 }
 
@@ -88,13 +91,67 @@ fn prefixes(cmd: &str) -> impl Iterator<Item = &str> {
     cmd.char_indices().map(|(at, _)| &cmd[..at]).chain(std::iter::once(cmd))
 }
 
+/// One command of the sweeps below, with the effects its whole text gives.
+struct Sweep {
+    id: String,
+    shell: Shell,
+    cmd: String,
+    cwd: String,
+    gold: HashSet<Effect>,
+}
+
+/// Synthetic non-ASCII commands, kept out of `shell-events.toml` so the benchmark numbers do not move:
+/// the characters sit inside a double quote, a single quote, a heredoc body, a script, a here-string
+/// and a `cd`. The gold is what the whole text gives.
+const NON_ASCII: [(Shell, &str, &[(OpKind, &str)]); 8] = [
+    (Shell::Bash, "mkdir \"/d/Zürich → 🙂\"", &[(OpKind::Create, r"D:\Zürich → 🙂")]),
+    (Shell::Bash, "echo 'è→🙂' && mkdir /d/ok", &[(OpKind::Create, r"D:\ok")]),
+    (
+        Shell::Bash,
+        "cat > /d/note.txt <<EOF\ncafé → 🙂\nEOF\nmkdir /d/after",
+        &[(OpKind::Write, r"D:\note.txt"), (OpKind::Create, r"D:\after")],
+    ),
+    (Shell::Bash, "python -c \"import os; os.makedirs('D:/naïve/→')\"", &[(OpKind::Create, r"D:\naïve\→")]),
+    (Shell::PowerShell, "$t = @\"\ncafé → 🙂\n\"@\nmkdir D:\\èx", &[(OpKind::Create, r"D:\èx")]),
+    (Shell::PowerShell, "cd \"D:\\Zürich\"; mkdir sub", &[(OpKind::Create, r"D:\Zürich\sub")]),
+    (Shell::Bash, "cd \"/d/Zürich\" && mkdir sub", &[(OpKind::Create, r"D:\Zürich\sub")]),
+    (Shell::Cmd, "mkdir D:\\café & echo →", &[(OpKind::Create, r"D:\café")]),
+];
+
+/// The fixtures and the non-ASCII commands.
+fn sweeps() -> Vec<Sweep> {
+    let fixtures = load_fixtures();
+    let from_fixtures = fixtures.events.iter().map(|f| Sweep {
+        id: f.id.clone(),
+        shell: shell_of(&f.shell),
+        cmd: f.cmd.clone(),
+        cwd: f.cwd.clone(),
+        gold: gold_effects(f),
+    });
+    let non_ascii = NON_ASCII.iter().enumerate().map(|(n, (shell, cmd, gold))| Sweep {
+        id: format!("non-ascii-{n}"),
+        shell: *shell,
+        cmd: (*cmd).to_owned(),
+        cwd: PROJECT.to_owned(),
+        gold: gold.iter().map(|(kind, dst)| (*kind, dst.to_lowercase())).collect(),
+    });
+    from_fixtures.chain(non_ascii).collect()
+}
+
+#[test]
+fn non_ascii_commands_give_their_gold() {
+    for (n, (shell, cmd, gold)) in NON_ASCII.iter().enumerate() {
+        let (_, resolved) = run(*shell, cmd);
+        assert_eq!(kinds_and_dsts(&resolved), *gold, "non-ascii-{n}: {cmd}");
+    }
+}
+
 #[test]
 fn every_prefix_of_every_fixture_extracts_without_panic() {
-    for fixture in &load_fixtures().events {
-        let shell = shell_of(&fixture.shell);
-        for prefix in prefixes(&fixture.cmd) {
+    for sweep in sweeps() {
+        for prefix in prefixes(&sweep.cmd) {
             for completeness in [Completeness::Whole, Completeness::Truncated] {
-                extract(prefix, shell, completeness);
+                extract(prefix, sweep.shell, completeness);
             }
         }
     }
@@ -103,14 +160,12 @@ fn every_prefix_of_every_fixture_extracts_without_panic() {
 #[test]
 fn truncated_prefixes_never_invent() {
     // D3: the text may end inside a word, a quote or a heredoc, so its last command says nothing certain.
-    for fixture in &load_fixtures().events {
-        let gold = gold_effects(fixture);
-        let shell = shell_of(&fixture.shell);
-        for prefix in prefixes(&fixture.cmd).filter(|prefix| prefix.len() < fixture.cmd.len()) {
-            let extraction = extract(prefix, shell, Completeness::Truncated);
-            let resolved = resolve(&extraction.ops, &fixture.cwd, &env());
-            let invented: Vec<_> = effects(&resolved).difference(&gold).cloned().collect();
-            assert!(invented.is_empty(), "{}: {prefix:?} invents {invented:?}", fixture.id);
+    for sweep in sweeps() {
+        for prefix in prefixes(&sweep.cmd).filter(|prefix| prefix.len() < sweep.cmd.len()) {
+            let extraction = extract(prefix, sweep.shell, Completeness::Truncated);
+            let resolved = resolve(&extraction.ops, &sweep.cwd, &env());
+            let invented: Vec<_> = effects(&resolved).difference(&sweep.gold).cloned().collect();
+            assert!(invented.is_empty(), "{}: {prefix:?} invents {invented:?}", sweep.id);
         }
     }
 }
@@ -283,4 +338,55 @@ fn nested_shells_run_in_a_scope_of_their_own() {
     }
     let (extraction, _) = run(Shell::Bash, "pwsh -File run.ps1");
     assert!(extraction.flags.script);
+}
+
+#[test]
+fn cd_option_words_are_not_directories() {
+    // D10: option words are skipped; `cd -` goes to a directory the extractor cannot name.
+    let cases = [
+        (Shell::Bash, "cd -P /d/a && mkdir out", vec![r"D:\a\out"], 0),
+        (Shell::Bash, "cd -L -e /d/a && mkdir out", vec![r"D:\a\out"], 0),
+        (Shell::Bash, "cd -- /d/a && mkdir out", vec![r"D:\a\out"], 0),
+        (Shell::Bash, "cd -- -odd && mkdir out", vec![r"D:\Projects\Phazly\-odd\out"], 0),
+        (Shell::Bash, "cd /d/a && cd - && mkdir out", vec![], 2),
+        (Shell::Bash, "cd - && mkdir /d/abs", vec![r"D:\abs"], 1),
+        (Shell::Bash, "cd -P && mkdir out", vec![r"C:\Users\dev\out"], 0),
+        (Shell::PowerShell, r"cd D:\a; cd -; mkdir out", vec![], 2),
+        (Shell::PowerShell, "Set-Location -; mkdir out", vec![], 2),
+    ];
+    for (shell, cmd, expected, unresolved) in cases {
+        let (extraction, resolved) = run(shell, cmd);
+        assert_eq!(dsts(&resolved), expected, "{cmd}");
+        assert!(!resolved.visits.iter().any(|v| v.ends_with('-')), "{cmd}: {:?}", resolved.visits);
+        assert_eq!(extraction.unresolved + resolved.unresolved, unresolved, "{cmd}");
+    }
+}
+
+#[test]
+fn bash_brace_expressions_expand_as_bash_does() {
+    // D11: a literal brace expression is several words, so several paths.
+    let cases = [
+        ("mkdir -p src/{api,ui}", vec![(OpKind::Create, r"D:\Projects\Phazly\src\api"), (OpKind::Create, r"D:\Projects\Phazly\src\ui")]),
+        ("mkdir /d/d{1..3}", vec![(OpKind::Create, r"D:\d1"), (OpKind::Create, r"D:\d2"), (OpKind::Create, r"D:\d3")]),
+        ("T=/d/{a,b}; mkdir $T/x", vec![]),
+        ("cd /d/{a,b} && mkdir out", vec![(OpKind::Create, r"D:\a\out")]),
+        ("cp f{,.bak} /d/x", vec![(OpKind::Copy, r"D:\x"), (OpKind::Copy, r"D:\x")]),
+    ];
+    for (cmd, expected) in cases {
+        let (_, resolved) = run(Shell::Bash, cmd);
+        assert_eq!(kinds_and_dsts(&resolved), expected, "{cmd}");
+    }
+}
+
+#[test]
+fn a_brace_word_left_unexpanded_is_unknown_and_counted() {
+    let many = (0..60).map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+    for cmd in [format!("mkdir /d/{{{many}}}"), "mkdir \"/d/{a,b}\"".to_owned(), "mkdir /d/x{1..60}".to_owned()] {
+        let (extraction, resolved) = run(Shell::Bash, &cmd);
+        assert!(resolved.candidates.is_empty(), "{cmd}: {:?}", resolved.candidates);
+        assert!(extraction.unresolved + resolved.unresolved > 0, "{cmd}: not counted");
+    }
+    // Unbalanced or single-name braces are ordinary text.
+    let (_, resolved) = run(Shell::Bash, "mkdir /d/{a,b /d/{a} /d/b..c");
+    assert_eq!(dsts(&resolved), vec![r"D:\{a,b", r"D:\{a}", r"D:\b..c"]);
 }

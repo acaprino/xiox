@@ -1,4 +1,5 @@
-use crate::provenance::{Env, OpKind, PathError, RawOp, is_null_device, resolve, resolve_path, strip_verbatim};
+use crate::provenance::{Env, OpKind, PathError, RawOp, is_null_device, resolve, resolve_path};
+use xiox_mukade::strip_verbatim;
 use crate::Candidate;
 
 fn env() -> Env {

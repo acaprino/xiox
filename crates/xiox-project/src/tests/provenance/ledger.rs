@@ -83,9 +83,9 @@ fn structured_and_shell_sources_are_distinguished() {
         bash("mkdir D:/m", r"D:\P"),
         bash(r#"python -c "os.makedirs('D:/s')""#, r"D:\P"),
     ]);
-    assert_eq!(sources(&ledger, r"D:\w"), [Source::Structured("Write".into())]);
+    assert_eq!(sources(&ledger, r"D:\w"), [Source::Structured { tool: "Write".into(), canonical: "write".into() }]);
     assert_eq!(strength(&ledger, r"D:\w"), Some(Strength::Written));
-    assert_eq!(sources(&ledger, r"D:\g"), [Source::Structured("Glob".into())]);
+    assert_eq!(sources(&ledger, r"D:\g"), [Source::Structured { tool: "Glob".into(), canonical: "glob".into() }]);
     assert_eq!(strength(&ledger, r"D:\g"), Some(Strength::Used));
     assert_eq!(sources(&ledger, r"D:\m"), [Source::Shell { kind: OpKind::Create, script: false }]);
     assert_eq!(sources(&ledger, r"D:\s"), [Source::Shell { kind: OpKind::Create, script: true }]);
@@ -114,7 +114,7 @@ fn patch_actions_keep_their_meaning() {
     assert_eq!(sources(&ledger, r"D:\m"), [Source::Patch(PatchAction::MoveFrom)]);
     assert_eq!(strength(&ledger, r"D:\k"), Some(Strength::Written));
     // R1: a patch call gives patch evidence and no structured evidence.
-    assert!(ledger.folders().all(|f| f.refs.iter().all(|r| !matches!(r.source, Source::Structured(_)))));
+    assert!(ledger.folders().all(|f| f.refs.iter().all(|r| !matches!(r.source, Source::Structured { .. }))));
 }
 
 #[test]
@@ -239,4 +239,69 @@ fn a_failed_call_still_ran_in_its_cwd() {
     assert_eq!(clone.strength, None);
     assert!(clone.refs.is_empty());
     assert_eq!(clone.failed.len(), 1);
+}
+
+const PATCH_EXAMPLE: &str = "# Notes\n*** Begin Patch\n*** Add File: D:\\x\\y\n+z\n*** End Patch\n";
+
+#[test]
+fn a_structured_call_holding_a_patch_example_keeps_its_own_evidence() {
+    // The text a Write or Edit stores is not a patch the session applied.
+    let ledger = ledger_of(&[
+        call("write", "Write", json!({ "file_path": r"D:\docs\a.md", "content": PATCH_EXAMPLE }), Some(r"D:\P")),
+        call(
+            "edit",
+            "Edit",
+            json!({ "file_path": r"D:\docs\b.md", "old_string": "a", "new_string": PATCH_EXAMPLE }),
+            Some(r"D:\P"),
+        ),
+    ]);
+    assert_eq!(strength(&ledger, r"D:\docs"), Some(Strength::Written));
+    assert!(ledger.get(r"D:\x").is_none());
+    assert!(ledger.folders().all(|f| f.refs.iter().all(|r| !matches!(r.source, Source::Patch(_)))));
+}
+
+#[test]
+fn patch_text_comes_only_from_the_keys_a_patch_tool_uses() {
+    for key in ["_", "command", "cmd", "input", "patch"] {
+        let ledger = ledger_of(&[call("edit", "apply_patch", json!({ key: PATCH_EXAMPLE }), Some(r"D:\P"))]);
+        assert_eq!(strength(&ledger, r"D:\x"), Some(Strength::Written), "{key}");
+    }
+    let ledger = ledger_of(&[call("edit", "other", json!({ "note": PATCH_EXAMPLE }), Some(r"D:\P"))]);
+    assert!(ledger.get(r"D:\x").is_none());
+}
+
+#[test]
+fn every_reference_carries_its_strength() {
+    let mut failed = bash("mkdir D:/f", r"D:\P");
+    failed.exit = Some(1);
+    let ledger = ledger_of(&[
+        call("write", "Write", json!({ "file_path": r"D:\w\f.txt" }), Some(r"D:\P")),
+        bash("mkdir D:/m && cd /d/c", r"D:\P"),
+        failed,
+    ]);
+    let strengths = |folder: &str| -> Vec<Option<Strength>> {
+        ledger.get(folder).unwrap().refs.iter().map(|r| r.strength).collect()
+    };
+    assert_eq!(strengths(r"D:\w"), [Some(Strength::Written)]);
+    assert_eq!(strengths(r"D:\m"), [Some(Strength::Created)]);
+    assert_eq!(strengths(r"D:\c"), [Some(Strength::Used)]);
+    assert_eq!(strengths(r"D:\P"), [Some(Strength::Used); 3]);
+    assert_eq!(ledger.get(r"D:\f").unwrap().failed[0].strength, None);
+    assert_eq!(
+        sources(&ledger, r"D:\w"),
+        [Source::Structured { tool: "Write".into(), canonical: "write".into() }]
+    );
+}
+
+#[test]
+fn ledger_types_serialize_for_the_probe() {
+    let ledger = ledger_of(&[call("write", "Write", json!({ "file_path": r"D:\w\f.txt" }), Some(r"D:\P"))]);
+    let value = serde_json::to_value(ledger.get(r"D:\w").unwrap()).unwrap();
+    assert_eq!(value["strength"], "written");
+    let reference = &value["refs"][0];
+    assert_eq!(reference["strength"], "written");
+    assert_eq!(reference["source"]["structured"]["canonical"], "write");
+    assert_eq!(reference["session"]["store"], "store");
+    let coverage = serde_json::to_value(ledger.coverage()).unwrap();
+    assert_eq!(coverage["shell_calls"], 0);
 }
