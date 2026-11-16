@@ -1,6 +1,7 @@
 //! What the session history says about folders: the shape of the result and the inputs the
 //! analysis reads. The logic that fills the shape lives in the modules of the later stages.
 
+mod conflicts;
 mod folders;
 mod mukade;
 mod queue;
@@ -28,7 +29,7 @@ use queue::Queue;
 use scope::{cwd_roots, local_dir, Scope};
 
 use crate::search::Own;
-use crate::{session_ledgers, Category, Coverage, Env, Item, Options, PathEnv, Project};
+use crate::{session_ledgers, Block, Category, Coverage, Env, Item, Options, PathEnv, Project, Strength};
 
 pub use report::{
     Activity, CallOutcome, ConflictReport, Exclusion, HistoryReport, Limit, Operation, OperationSource, Provenance, ReadFailure,
@@ -97,6 +98,13 @@ pub(crate) struct History<'a> {
     folders: Folders,
     report: HistoryReport,
     budget: Budget,
+    /// The sessions of the project the reading related, so the conflict check reads the others.
+    related: HashSet<conflicts::SessionId>,
+    /// Sessions asked for so far, and when the reading began: one budget for both readings.
+    attempts: usize,
+    started: Option<Instant>,
+    /// Candidates with a nearby session of another project that could not be read.
+    unchecked: HashSet<String>,
 }
 
 impl<'a> History<'a> {
@@ -119,7 +127,17 @@ impl<'a> History<'a> {
             })
             .collect();
         let report = HistoryReport::new(sources);
-        Some(History { input: env.history, scope: Scope::of(project, opts, env), folders: Folders::default(), report, budget: BUDGET })
+        Some(History {
+            input: env.history,
+            scope: Scope::of(project, opts, env),
+            folders: Folders::default(),
+            report,
+            budget: BUDGET,
+            related: HashSet::new(),
+            attempts: 0,
+            started: None,
+            unchecked: HashSet::new(),
+        })
     }
 
     /// The project roots the listed working directories lead to, to be verified with the folders
@@ -159,10 +177,9 @@ impl<'a> History<'a> {
             .collect();
         let mut queue = Queue::new(self.input.listings, &roots);
         let mut checked: HashSet<String> = items.iter().map(|i| i.key.clone()).collect();
-        let started = Instant::now();
-        let mut attempts = 0;
+        let started = *self.started.get_or_insert_with(Instant::now);
         while queue.left() > 0 {
-            if let Some(limit) = self.limit_reached(attempts, started, queue.left()) {
+            if let Some(limit) = self.limit_reached(self.attempts, started, queue.left()) {
                 self.report.limits.push(limit);
                 break;
             }
@@ -171,7 +188,7 @@ impl<'a> History<'a> {
                 self.count_failure(session, ReadFailure::AmbiguousId);
                 continue;
             }
-            attempts += 1;
+            self.attempts += 1;
             if self.read_session(source, session) {
                 for item in self.new_copies(project, &mut checked, items, verify) {
                     if let (Category::Copies, Some(path)) = (item.category, &item.path) {
@@ -184,7 +201,74 @@ impl<'a> History<'a> {
         for session in queue.related() {
             let row = self.row(session.agent);
             self.report.sources[row].related += 1;
+            self.related.insert(conflicts::session_id(session));
         }
+    }
+
+    /// Blocks the candidates where sessions of other projects wrote, reading those sessions
+    /// within what is left of the budget. The candidates are the `scratch` items and the
+    /// `named` folders the sessions speak about.
+    pub fn conflicts(&mut self, items: &mut [Item]) {
+        let Some(source) = self.input.calls else { return };
+        let candidates: Vec<(String, PathBuf)> = items
+            .iter()
+            .filter(|i| i.category == Category::Scratch || (i.category == Category::Named && i.provenance.is_some()))
+            .filter_map(|i| Some((i.key.clone(), i.path.clone()?)))
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let home = Some(self.input.user.home.as_path()).filter(|h| !h.as_os_str().is_empty());
+        let writers = conflicts::writers_near(self.input.listings, &self.related, &candidates, home);
+        let started = *self.started.get_or_insert_with(Instant::now);
+        for (n, (session, near)) in writers.iter().enumerate() {
+            if self.limit_reached(self.attempts, started, writers.len() - n).is_some() {
+                for (_, near) in &writers[n..] {
+                    self.leave_unchecked(&candidates, near);
+                }
+                break;
+            }
+            self.attempts += 1;
+            let read = if session.info.unreadable.is_some() { Err(ReadFailure::Failed) } else { source.calls(session) };
+            let calls = match read {
+                Ok(calls) => calls,
+                Err(why) => {
+                    self.count_failure(session, why);
+                    self.leave_unchecked(&candidates, near);
+                    continue;
+                }
+            };
+            self.report.calls += calls.len();
+            self.report.conflicts.read += 1;
+            let mut theirs = Folders::default();
+            for ledger in session_ledgers(&calls, &self.input.user.path_env()).values() {
+                theirs.add_ledger(session, ledger);
+            }
+            for &c in near {
+                let key = &candidates[c].0;
+                let Some(written) = theirs.provenance_within(key).filter(|p| p.strength >= Some(Strength::Written)) else {
+                    continue;
+                };
+                let Some(item) = items.iter_mut().find(|i| &i.key == key) else { continue };
+                if !item.blocked.contains(&Block::OtherProjectWrites) {
+                    item.blocked.push(Block::OtherProjectWrites);
+                }
+                if let Some(p) = item.provenance.as_mut() {
+                    p.other_projects.extend(written.sessions);
+                }
+            }
+        }
+    }
+
+    /// A nearby session of another project was not read: its candidates are not checked.
+    fn leave_unchecked(&mut self, candidates: &[(String, PathBuf)], near: &[usize]) {
+        self.report.conflicts.unread += 1;
+        self.unchecked.extend(near.iter().map(|&c| candidates[c].0.clone()));
+    }
+
+    /// The candidates a session of another project may have written in unseen.
+    pub fn unchecked(&self) -> &HashSet<String> {
+        &self.unchecked
     }
 
     /// The first cap the reading has reached, with the related sessions it leaves.

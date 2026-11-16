@@ -52,6 +52,7 @@ pub(crate) fn analyze_with(
         let scratch = h.scratch(&project, &items, env, opts);
         items.extend(scratch);
         h.attach(&mut items);
+        h.conflicts(&mut items);
     }
     sort_items(&mut items);
 
