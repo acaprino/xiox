@@ -390,3 +390,20 @@ fn a_brace_word_left_unexpanded_is_unknown_and_counted() {
     let (_, resolved) = run(Shell::Bash, "mkdir /d/{a,b /d/{a} /d/b..c");
     assert_eq!(dsts(&resolved), vec![r"D:\{a,b", r"D:\{a}", r"D:\b..c"]);
 }
+
+#[test]
+fn impossible_characters_never_make_a_candidate() {
+    // D12: a message with a newline or a quote is not a path; it is counted, not written down.
+    let cases = [
+        (Shell::Bash, "mkdir \"a\nb\" /d/ok"),
+        (Shell::Bash, "mkdir 'say \"hi\"' /d/ok"),
+        (Shell::Bash, "mkdir 'a<b' /d/ok"),
+        (Shell::Bash, "mkdir 'a|b' /d/ok"),
+        (Shell::Bash, "mkdir ab:c /d/ok"),
+    ];
+    for (shell, cmd) in cases {
+        let (extraction, resolved) = run(shell, cmd);
+        assert_eq!(dsts(&resolved), vec![r"D:\ok"], "{cmd}");
+        assert_eq!(extraction.unresolved + resolved.unresolved, 1, "{cmd}");
+    }
+}

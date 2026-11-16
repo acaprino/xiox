@@ -46,6 +46,9 @@ pub fn resolve_path(p: &str, cwd: Option<&str>, env: &Env) -> Result<String, Pat
         return Err(PathError::Unknown);
     }
     let p = expand_roots(p, env)?.replace('/', r"\");
+    if has_impossible_character(&p) {
+        return Err(PathError::Unsupported);
+    }
     if has_absolute_prefix(&p) {
         return Ok(normalize(&p));
     }
@@ -190,6 +193,15 @@ fn has_brace_expression(p: &str) -> bool {
         previous = c;
     }
     false
+}
+
+/// D12: control characters, `" < > |` and a `:` past the drive letter cannot be in a Windows path, so text
+/// holding them (a here-string body, a message, a quoted fragment) was never a path and is not a candidate.
+fn has_impossible_character(p: &str) -> bool {
+    let bytes = p.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let rest = if drive { &p[2..] } else { p };
+    p.contains(|c: char| c.is_control() || "\"<>|".contains(c)) || rest.contains(':')
 }
 
 /// `~`, `/c/...` and `/tmp/...` into Windows-rooted text; any other MSYS root is unsupported.

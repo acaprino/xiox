@@ -55,6 +55,18 @@ fn resolve_path_table() {
 }
 
 #[test]
+fn impossible_characters_are_unsupported() {
+    // D12: a Windows path cannot hold these, so the text was not a path.
+    let cwd = Some(r"D:\P");
+    for input in ["a\nb", "a\tb", "a\u{7f}b", "a\"b", "a<b", "a>b", "a|b", r"D:\x:y", "x:y", r"\\srv\s\a:b", "/d/a:b"] {
+        assert_eq!(resolve_path(input, cwd, &env()), Err(PathError::Unsupported), "{input:?}");
+    }
+    // A glob stays unknown; the drive colon and ordinary punctuation stay valid.
+    assert_eq!(resolve_path("a\n*", cwd, &env()), Err(PathError::Unknown));
+    assert_eq!(resolve_path(r"D:\a b(1)'x'!.txt", cwd, &env()), Ok(r"D:\a b(1)'x'!.txt".to_owned()));
+}
+
+#[test]
 fn strip_verbatim_and_null_devices() {
     let verbatim = [
         (r"\\?\D:\x", r"D:\x"),
