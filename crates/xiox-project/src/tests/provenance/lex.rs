@@ -159,3 +159,34 @@ fn deeply_braced_words_stay_literal_and_never_overflow_the_stack() {
         assert_eq!(tokens[1], w(cmd.strip_prefix("echo ").unwrap()));
     }
 }
+
+#[test]
+fn powershell_here_strings_are_one_word() {
+    // D13: the body is the text between the lines, whatever it holds.
+    let cases = [
+        ("Set-Content x.txt @'\nline one\nline two\n'@", vec![w("Set-Content"), w("x.txt"), w("line one\nline two")]),
+        ("Set-Content x.txt @\"\na b\n\"@; mkdir d", vec![w("Set-Content"), w("x.txt"), w("a b"), Token::Op(";"), w("mkdir"), w("d")]),
+        ("f @'\r\n'x'\r\n'@", vec![w("f"), w("'x'")]),
+        ("f @'\n\n'@ g", vec![w("f"), w(""), w("g")]),
+        ("f @'\nà é\n'@", vec![w("f"), w("à é")]),
+    ];
+    for (cmd, expected) in cases {
+        assert_eq!(words(Shell::PowerShell, cmd), expected, "{cmd:?}");
+    }
+}
+
+#[test]
+fn an_unterminated_here_string_takes_the_rest_and_never_panics() {
+    assert_eq!(words(Shell::PowerShell, "f @'\nmkdir x"), vec![w("f"), w("mkdir x")]);
+    assert_eq!(words(Shell::PowerShell, "f @'\n"), vec![w("f"), w("")]);
+    assert_eq!(words(Shell::PowerShell, "f @'"), vec![w("f"), w("@")]);
+    assert_eq!(words(Shell::PowerShell, "f @'\n'"), vec![w("f"), w("'")]);
+}
+
+#[test]
+fn an_at_sign_elsewhere_is_unchanged() {
+    assert_eq!(words(Shell::PowerShell, "a@'b'"), vec![w("a@b")]);
+    assert_eq!(words(Shell::PowerShell, "f @'x' g"), vec![w("f"), w("@x"), w("g")]);
+    assert_eq!(words(Shell::PowerShell, "f @(1)"), vec![w("f"), w("@"), Token::Op("("), w("1"), Token::Op(")")]);
+    assert_eq!(words(Shell::Bash, "f @'\nx\n'@"), vec![w("f"), w("@x"), Token::Op(";"), w("@")]);
+}

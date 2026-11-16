@@ -407,3 +407,21 @@ fn impossible_characters_never_make_a_candidate() {
         assert_eq!(extraction.unresolved + resolved.unresolved, 1, "{cmd}");
     }
 }
+
+#[test]
+fn powershell_here_strings_hide_their_text_from_the_path_rules() {
+    // D13: the text inside `@'...'@` is a value, not words; the real writes around it are kept.
+    let cases = [
+        ("Add-Content -NoNewline test/x.test.ts -Value @'\n\ntest(selection, () => {})\n'@", vec![r"D:\Projects\Phazly\test\x.test.ts"]),
+        (r#"$f="D:\a\up.ts"; Set-Content $f @'
+import a from 'b'
+'@"#, vec![r"D:\a\up.ts"]),
+        ("Set-Content D:/a/v.ts @\"\nmkdir D:/no\n\"@", vec![r"D:\a\v.ts"]),
+        ("Set-Content D:/a/w.ts @'\nmkdir D:/no", vec![r"D:\a\w.ts"]),
+    ];
+    for (cmd, expected) in cases {
+        let (extraction, resolved) = run(Shell::PowerShell, cmd);
+        assert_eq!(dsts(&resolved), expected, "{cmd:?}");
+        assert!(extraction.unresolved + resolved.unresolved <= 1, "{cmd:?}");
+    }
+}

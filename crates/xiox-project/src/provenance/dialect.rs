@@ -30,6 +30,10 @@ pub trait Dialect: Sync {
     /// The operators, longest first, so the first prefix match is the longest one.
     fn operators(&self) -> &'static [&'static str];
     fn shell(&self) -> Shell;
+    /// D13: whether `@'` or `@"` ending its line opens a here-string: one word up to a line starting `'@` or `"@`.
+    fn here_strings(&self) -> bool {
+        false
+    }
 }
 
 struct Bash;
@@ -69,6 +73,9 @@ impl Dialect for PowerShell {
     }
     fn shell(&self) -> Shell {
         Shell::PowerShell
+    }
+    fn here_strings(&self) -> bool {
+        true
     }
 }
 

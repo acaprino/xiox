@@ -103,6 +103,7 @@ impl<'a> Lexer<'a> {
             '\n' => self.newline(),
             _ if Some(c) == self.dialect.escape() && self.peek_second().is_some() => self.escaped(),
             '\'' if self.dialect.single_quotes() => self.single_quoted(),
+            '@' if !self.in_word && self.dialect.here_strings() && here_string_quote(rest).is_some() => self.here_string(rest),
             '"' => self.double_quoted(),
             '$' if rest.starts_with("$(") => self.substitution(),
             // `2>` and `*>` redirect like `>`: the descriptor prefix is dropped.
@@ -176,6 +177,16 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// D13: `@'`...`'@` and `@"`...`"@` are one word holding the text between the lines; unterminated, the rest.
+    fn here_string(&mut self, rest: &str) {
+        let quote = here_string_quote(rest).unwrap_or('\'');
+        let opening = rest.find('\n').map_or(rest.len(), |at| at + 1);
+        let (body, consumed) = here_string_body(&rest[opening..], quote);
+        self.word.push_str(body);
+        self.in_word = true;
+        self.skip(rest[..opening + consumed].chars().count());
+    }
+
     /// `$(...)` stays inside its word, nested parentheses included.
     fn substitution(&mut self) {
         let mut depth = 0i32;
@@ -207,6 +218,28 @@ impl<'a> Lexer<'a> {
             self.skip(after[..consumed].chars().count());
         }
     }
+}
+
+/// The quote of an opening `@'` or `@"` that ends its line.
+fn here_string_quote(text: &str) -> Option<char> {
+    let after = text.strip_prefix('@')?;
+    let quote = after.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+    let tail = &after[1..];
+    (tail.starts_with('\n') || tail.starts_with("\r\n")).then_some(quote)
+}
+
+/// The body up to the line starting `<quote>@`, without the newline before it, and the bytes consumed
+/// through that closing `<quote>@`; with no closing line the body is the rest of the text.
+fn here_string_body(text: &str, quote: char) -> (&str, usize) {
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if line.strip_prefix(quote).is_some_and(|tail| tail.starts_with('@')) {
+            let body = text[..offset].strip_suffix('\n').unwrap_or(&text[..offset]);
+            return (body.strip_suffix('\r').unwrap_or(body), offset + 2);
+        }
+        offset += line.len();
+    }
+    (text, text.len())
 }
 
 /// `\s*(['"]?)([\w.-]+)\1` at the start of `text`: the delimiter and the bytes the match spans.
