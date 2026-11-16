@@ -85,6 +85,8 @@ pub struct ToolCall {
     /// The call's input; a value that is not an object is kept as `{"_": value}`.
     pub input: Value,
     pub cwd: Option<String>,
+    /// Read like `parse_stream` reads it: a string or a number; OpenCode's object time is absent.
+    #[serde(default, deserialize_with = "scalar_or_none")]
     pub time: Option<String>,
     pub error: Option<bool>,
     pub exit: Option<i64>,
@@ -97,6 +99,10 @@ fn string_or_none<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<Stri
         Value::String(s) => Some(s),
         _ => None,
     })
+}
+
+fn scalar_or_none<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
+    Ok(scalar(Some(&Value::deserialize(de)?)))
 }
 
 impl ToolCall {
@@ -695,5 +701,21 @@ mod tests {
         let call: ToolCall =
             serde_json::from_value(json!({"harness": "h", "store": "s", "session": "x", "input": {}})).unwrap();
         assert_eq!(call.canonical, None);
+    }
+
+    #[test]
+    fn harvest_rows_read_back_whatever_shape_the_time_has() {
+        // OpenCode's raw `time` is an object; harvest.py copies it as it is.
+        let cases = [
+            (json!("2026-11-15T10:00:00Z"), Some("2026-11-15T10:00:00Z")),
+            (json!(1794474109950_i64), Some("1794474109950")),
+            (json!({"created": 1794474109950_i64, "completed": 1794474113169_i64}), None),
+            (json!(null), None),
+        ];
+        for (time, want) in cases {
+            let row = json!({"harness": "h", "store": "s", "session": "x", "input": {}, "time": time});
+            let call: ToolCall = serde_json::from_value(row).unwrap();
+            assert_eq!(call.time.as_deref(), want, "{time}");
+        }
     }
 }
