@@ -136,7 +136,6 @@ impl<'a> History<'a> {
         cwd_roots(project, &dirs, &self.scope, home, &mut self.report.excluded)
     }
 
-    #[cfg(test)]
     pub fn with_budget(mut self, budget: Budget) -> Self {
         self.budget = budget;
         self

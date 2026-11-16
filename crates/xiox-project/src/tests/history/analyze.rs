@@ -7,8 +7,8 @@ use xiox_model::Agent;
 use xiox_mukade::test_support::write_claude_session;
 use xiox_mukade::{MukadeSessions, StoreRoots};
 
-use super::fake::{descriptor, input, listing};
-use crate::history::{MukadeCalls, ReadFailure, UserDirs};
+use super::fake::{descriptor, input, listing, FakeCalls};
+use crate::history::{Budget, MukadeCalls, ReadFailure, UserDirs, BUDGET};
 use crate::tests::fixtures::*;
 use crate::*;
 
@@ -93,4 +93,28 @@ fn opencode_without_exe_counts_no_reader() {
     let history = scan.history.unwrap();
     assert_eq!(history.sources[0].failed.iter().collect::<Vec<_>>(), [(&ReadFailure::NoReader, &1)]);
     assert!(scan.notes.contains(&Note::HistoryPartial), "{:?}", scan.notes);
+}
+
+#[test]
+fn probe_runs_on_a_fake_project() {
+    let (_guard, base) = tmp();
+    let project = repo(&base.join("proj"));
+    let cwd = project.to_string_lossy().into_owned();
+    let listings = [listing(
+        Agent::Claude,
+        vec![
+            descriptor(Agent::Claude, "main", "new", &cwd, "2026-11-10T12:00:00Z", None),
+            descriptor(Agent::Claude, "main", "old", &cwd, "2026-11-10T10:00:00Z", None),
+        ],
+    )];
+    let calls = FakeCalls::default();
+    let user = UserDirs::default();
+    let env = Env { search_roots: Some(Vec::new()), history: input(&listings, Some(&calls), &user), ..env() };
+
+    let scan = probe_with(&project, Budget { max_sessions: 1, ..BUDGET }, &env).unwrap();
+
+    let history = scan.history.expect("the history was read");
+    assert_eq!(history.limits, [Limit::Sessions { max: 1, left: 1 }]);
+    assert_eq!(calls.asked(), ["new"]);
+    assert!(scan.items.iter().all(|i| i.bytes.is_none()), "{:?}", scan.items);
 }

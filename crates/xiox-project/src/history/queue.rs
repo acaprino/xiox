@@ -20,7 +20,7 @@ pub(crate) struct Budget {
     pub max_duration: Duration,
 }
 
-// shortcut: starting values, tuned with `session_probe` (Task 9).
+// shortcut: starting values, to be tuned with the `session_probe` example on real stores.
 pub(crate) const BUDGET: Budget =
     Budget { max_sessions: 250, max_calls: 250_000, max_duration: Duration::from_secs(240) };
 

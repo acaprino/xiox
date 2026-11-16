@@ -312,12 +312,35 @@ pub(crate) struct Env<'a> {
 /// unless `opts.history` is off. Writes nothing except the session listing cache the engine
 /// already writes (`xiox_app::cache_dir()`); an OpenCode database is read from a temporary copy.
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
-    let cache = Some(xiox_app::cache_dir());
+    with_real_env(xiox_app::cache_dir(), |env| analyze_with(path, opts, env))
+}
+
+/// [`analyze_project`] for the probe: no folder sizes, a session cache under the temporary
+/// folder instead of Xiox's own, and a history budget of `(sessions, calls, seconds)` (`None`:
+/// the one `analyze_project` uses, see [`history_budget`]).
+pub fn history_probe(path: &Path, budget: Option<(usize, usize, u64)>) -> Result<ProjectScan, Error> {
+    let budget = budget.map_or(history::BUDGET, |(max_sessions, max_calls, secs)| history::Budget {
+        max_sessions,
+        max_calls,
+        max_duration: std::time::Duration::from_secs(secs),
+    });
+    let cache = std::env::temp_dir().join("xiox-session-probe");
+    with_real_env(cache, |env| probe_with(path, budget, env))
+}
+
+/// The history budget `analyze_project` reads within, as `(sessions, calls, seconds)`.
+pub fn history_budget() -> (usize, usize, u64) {
+    let b = history::BUDGET;
+    (b.max_sessions, b.max_calls, b.max_duration.as_secs())
+}
+
+/// The real sessions and history sources of this PC, listed through the cache in `cache`.
+fn with_real_env<R>(cache: PathBuf, run: impl FnOnce(&Env) -> R) -> R {
+    let cache = Some(cache);
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
     let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());
     let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
-    // Without the history there is nothing to list: no listing, so no source is asked for.
-    let listings = if opts.history { xiox_app::load_descriptors(cache.clone()) } else { Vec::new() };
+    let listings = xiox_app::load_descriptors(cache.clone());
     let sources: Vec<xiox_mukade::MukadeSessions> = listings
         .iter()
         .map(|(agent, _)| xiox_mukade::MukadeSessions::from_env(*agent).with_cache_dir(cache.clone()))
@@ -332,7 +355,7 @@ pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error
         now_ms: xiox_app::now_ms(),
         history: history::HistoryInput { listings: &listings, calls: Some(&calls), user: &user },
     };
-    analyze_with(path, opts, &env)
+    run(&env)
 }
 
 /// [`analyze_project`] with `copies`/`named` searched only below `search_roots` (to depth 3)
@@ -388,5 +411,11 @@ pub fn is_elevated() -> bool {
 
 /// [`analyze_project`] with everything outside the project tree injected.
 pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error> {
-    owned::analyze_with(path, opts, env)
+    owned::analyze_with(path, opts, env, history::BUDGET)
+}
+
+/// The probe's analysis: light mode, history on, the given budget.
+pub(crate) fn probe_with(path: &Path, budget: history::Budget, env: &Env) -> Result<ProjectScan, Error> {
+    let opts = Options { measure: false, ..Options::default() };
+    owned::analyze_with(path, &opts, env, budget)
 }

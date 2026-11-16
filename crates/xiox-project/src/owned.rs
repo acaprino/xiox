@@ -14,7 +14,12 @@ use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error> {
+pub(crate) fn analyze_with(
+    path: &Path,
+    opts: &Options,
+    env: &Env,
+    budget: crate::history::Budget,
+) -> Result<ProjectScan, Error> {
     let started = Instant::now();
     let (project, entries) = resolve_full(path)?;
     let mut notes = Vec::new();
@@ -35,7 +40,7 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     items.extend(crate::logs::log_items(&project, &build_dirs, &mut notes));
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
-    let mut history = crate::history::History::start(&project, opts, env);
+    let mut history = crate::history::History::start(&project, opts, env).map(|h| h.with_budget(budget));
     let listed = history.as_mut().map(|h| h.listed_roots(&project, opts, env)).unwrap_or_default();
     let found = crate::search::search(&project, opts, env, &listed);
     items.extend(found.items);
