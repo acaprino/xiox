@@ -118,3 +118,14 @@ fn probe_runs_on_a_fake_project() {
     assert_eq!(calls.asked(), ["new"]);
     assert!(scan.items.iter().all(|i| i.bytes.is_none()), "{:?}", scan.items);
 }
+
+#[test]
+fn without_history_no_session_is_listed() {
+    let (_guard, base) = tmp();
+    let cache = base.join("data");
+
+    let listings = real_listings(false, Some(cache.clone()));
+
+    assert!(listings.is_empty());
+    assert!(!cache.exists(), "the listing cache was written");
+}

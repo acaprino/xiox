@@ -312,7 +312,7 @@ pub(crate) struct Env<'a> {
 /// unless `opts.history` is off. Writes nothing except the session listing cache the engine
 /// already writes (`xiox_app::cache_dir()`); an OpenCode database is read from a temporary copy.
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
-    with_real_env(xiox_app::cache_dir(), |env| analyze_with(path, opts, env))
+    with_real_env(xiox_app::cache_dir(), opts.history, |env| analyze_with(path, opts, env))
 }
 
 /// [`analyze_project`] for the probe: no folder sizes, a session cache under the temporary
@@ -325,7 +325,7 @@ pub fn history_probe(path: &Path, budget: Option<(usize, usize, u64)>) -> Result
         max_duration: std::time::Duration::from_secs(secs),
     });
     let cache = std::env::temp_dir().join("xiox-session-probe");
-    with_real_env(cache, |env| probe_with(path, budget, env))
+    with_real_env(cache, true, |env| probe_with(path, budget, env))
 }
 
 /// The history budget `analyze_project` reads within, as `(sessions, calls, seconds)`.
@@ -334,13 +334,19 @@ pub fn history_budget() -> (usize, usize, u64) {
     (b.max_sessions, b.max_calls, b.max_duration.as_secs())
 }
 
+/// The sessions listing of every harness; without the history there is nothing to list, so no
+/// store is asked and nothing is cached.
+fn real_listings(history: bool, cache: Option<PathBuf>) -> Vec<(Agent, xiox_model::Loaded<xiox_mukade::Descriptor>)> {
+    if history { xiox_app::load_descriptors(cache) } else { Vec::new() }
+}
+
 /// The real sessions and history sources of this PC, listed through the cache in `cache`.
-fn with_real_env<R>(cache: PathBuf, run: impl FnOnce(&Env) -> R) -> R {
+fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
     let cache = Some(cache);
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
     let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());
     let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
-    let listings = xiox_app::load_descriptors(cache.clone());
+    let listings = real_listings(history, cache.clone());
     let sources: Vec<xiox_mukade::MukadeSessions> = listings
         .iter()
         .map(|(agent, _)| xiox_mukade::MukadeSessions::from_env(*agent).with_cache_dir(cache.clone()))
