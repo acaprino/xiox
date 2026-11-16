@@ -654,3 +654,19 @@ fn a_partial_baseline_item_that_grows_beyond_what_was_walked_counts_what_was_see
     let events = o.update_measured(scan(vec![build("target", Some(3 * GB))]), T0 + 1, &partial_of(&["target"]));
     assert!(events.iter().any(|e| matches!(e, Event::Attention { kind: AttentionKind::Growth, .. })), "{events:?}");
 }
+
+#[test]
+fn clean_command_never_carries_danger() {
+    let mut o = Observer::new(scan(vec![]), quiet(), T0);
+    let dist = build("dist", Some(MB));
+    let wt = item(Category::Worktrees, r"D:\Projects\mukade-spike", Some(MB), Level::Recommended, vec![]);
+    o.update(scan(vec![dist.clone(), wt.clone()]), T0 + 1);
+    assert!(o.report(false).clean_command.unwrap().contains(&path_of(&wt)), "recommended, it is offered");
+
+    // Used again in the last day: danger, which only `--confirm-danger` takes.
+    let danger = xiox_project::Item { level: Level::Danger, risks: vec![xiox_project::Risk::RecentActivity], ..wt.clone() };
+    o.update(scan(vec![dist.clone(), danger]), T0 + 2);
+    let cmd = o.report(false).clean_command.unwrap();
+    assert!(cmd.contains(&path_of(&dist)), "{cmd}");
+    assert!(!cmd.contains(&path_of(&wt)), "{cmd}");
+}

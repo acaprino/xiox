@@ -36,7 +36,8 @@ folders, linked worktrees, copies of the repository, folders named like the proj
 agent sessions, each with its path, size, level and reason, and whether it is new since the start. Also \
 returns totals, the growth in bytes since the start, attention (thresholds exceeded), stale (true when the \
 fresh check failed and the last report is returned) and cleanCommand, a ready xiox clean command for the \
-new recommended items. Runs a fresh check on every call (the call that receives the first analysis reports it \
+new recommended items. Items at level danger are never in cleanCommand: they need xiox clean --include <path> \
+--confirm-danger <path>. Runs a fresh check on every call (the call that receives the first analysis reports it \
 as it is). The result has two parts: a compact text (totals, growth, attention, stale, cleanCommand and only the \
 NEW items, at most 50, one line each) and the full report with every item as structuredContent; a client that \
 forwards only the text to the model sees the compact view. Read-only: it only reports and never removes anything.";
@@ -584,6 +585,12 @@ mod tests {
     fn report_of(reply: &Value) -> &Value {
         assert_eq!(reply["result"]["isError"], false, "{reply}");
         &reply["result"]["structuredContent"]
+    }
+
+    #[test]
+    fn the_tool_description_names_confirm_danger() {
+        let rule = "Items at level danger are never in cleanCommand: they need xiox clean --include <path> --confirm-danger <path>.";
+        assert!(TOOL_DESCRIPTION.contains(rule), "{TOOL_DESCRIPTION}");
     }
 
     #[test]
