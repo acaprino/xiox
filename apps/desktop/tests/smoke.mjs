@@ -7,7 +7,6 @@ import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { summaryLines } from '../src/render/policy.ts';
 import { findItalian } from '../../../scripts/italian-check.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -286,7 +285,7 @@ async function checkCopy(page, label, section, view) {
   else {
     const d = view.dialog;
     want('dialog', found.dialog, {
-      modal: 'true', title: d.title, text: d.text, error: d.error, summary: summaryLines(view, d), rows: d.rows,
+      modal: 'true', title: d.title, text: d.text, error: d.error, summary: d.summary, rows: d.rows,
       rowsMax: d.rows.length ? '180px' : null, rowsOverflow: d.rows.length ? 'auto' : null,
       warnTitle: d.warningsTitle, warnings: d.warnings, cautionTitle: d.cautionTitle, cautions: d.cautions,
       ack: d.ack === null ? null : [String(d.ack), 'I have read the warnings', 'checkbox'],

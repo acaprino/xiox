@@ -427,6 +427,7 @@ impl RegistryState {
             title: "Save a registry backup?".into(),
             text: vec!["Recommended: before the changes a copy (.reg) is saved in the Documents\\Xiox folder.".into()],
             summary: Vec::new(),
+            permanent: false,
             rows: Vec::new(),
             warnings_title: None,
             warnings: Vec::new(),

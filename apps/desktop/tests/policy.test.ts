@@ -1,30 +1,28 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { disabledReason, emptyAction, permanentDelete, summaryLines } from '../src/render/policy.ts';
+import { readFileSync } from 'node:fs';
+import { disabledReason, emptyAction } from '../src/render/policy.ts';
 import type { ActionView, DialogView, SectionView } from '../src/types.ts';
 
 const action = (id: string, enabled: boolean, label = id): ActionView => ({ id, label, key: null, enabled, primary: false });
 const dialog = (extra: Partial<DialogView> = {}): DialogView => ({
-  id: 'confirm', title: 'Start cleaning?', text: [], summary: [], rows: [], warningsTitle: null, warnings: [], cautionTitle: null, cautions: [],
+  id: 'confirm', title: 'Start cleaning?', text: [], summary: [], permanent: false, rows: [], warningsTitle: null, warnings: [], cautionTitle: null, cautions: [],
   ack: null, error: null, buttons: [{ id: 'continue', label: 'Continue', enabled: true, primary: true }, { id: 'cancel', label: 'Cancel', enabled: true, primary: false }], ...extra,
 });
 const view = (extra: Partial<SectionView> = {}): SectionView => ({
   section: 'cleanup', actions: [], dialog: null, job: null, status: { badge: 'Analysis done', text: '13.48 GB to delete (46,999 files)' }, ...extra,
 }) as SectionView;
 
-test('a delete that says it is permanent starts on Cancel; a Recycle Bin one does not', () => {
-  assert.equal(permanentDelete(dialog({ text: ['The selected files will be deleted permanently.'] })), true);
-  assert.equal(permanentDelete(dialog({ warnings: ['Emptying the Recycle Bin cannot be undone.'] })), true);
-  assert.equal(permanentDelete(dialog({ buttons: [{ id: 'permanent', label: 'Permanently', enabled: true, primary: true }] })), true);
-  assert.equal(permanentDelete(dialog({ text: ['The selected items go to the Recycle Bin.'] })), false);
-  assert.equal(permanentDelete(dialog({ id: 'backup', text: ['permanently'] })), false);
-});
-
-test('the confirmation of Cleanup states the item count, the size and the file count', () => {
-  const v = view({ actions: [action('clean', false, 'Clean 8 items')] });
-  assert.deepEqual(summaryLines(v, dialog()), ['Clean 8 items', '13.48 GB to delete (46,999 files)']);
-  assert.deepEqual(summaryLines(v, dialog({ summary: ['2 folders · 6.80 GB'] })), ['2 folders · 6.80 GB']);
-  assert.deepEqual(summaryLines(view({ section: 'services' }), dialog()), []);
+test('the views say what a confirmation is: its numbers and whether it deletes for good (from data, not from its words)', () => {
+  const states = JSON.parse(readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8')).views as Record<string, Record<string, SectionView>>;
+  const confirm = (section: string, state: string): DialogView => (states[section]?.[state]?.dialog ?? assert.fail(`${section}:${state} has no dialog`));
+  const cleanup = confirm('cleanup', 'confirm');
+  assert.equal(cleanup.permanent, true);
+  assert.deepEqual(cleanup.summary, ['Clean 8 items', '13.48 GB to delete (46,999 files)']);
+  assert.equal(confirm('services', 'confirm').permanent, false);
+  assert.equal(confirm('registry', 'backup').permanent, false);
+  assert.equal(confirm('developers', 'confirm').permanent, false);
+  assert.equal(confirm('developers', 'shortfall').permanent, true);
 });
 
 test('a disabled action says why', () => {

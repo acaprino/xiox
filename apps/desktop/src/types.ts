@@ -34,7 +34,7 @@ export interface NoticeView { tone: Tone; text: string; more: string[] }
 export interface ActionView { id: string; label: string; key: string | null; enabled: boolean; primary: boolean }
 export interface ButtonView { id: string; label: string; enabled: boolean; primary: boolean }
 export interface DialogView {
-  id: string; title: string; text: string[]; summary: string[]; rows: [string, string][];
+  id: string; title: string; text: string[]; summary: string[]; permanent: boolean; rows: [string, string][];
   warningsTitle: string | null; warnings: string[]; cautionTitle: string | null; cautions: [string, string][];
   ack: boolean | null; error: string | null; buttons: ButtonView[];
 }

@@ -7,7 +7,6 @@ import { button, fill, h } from '../dom.ts';
 import { buttonIntent } from '../intents.ts';
 import { cycleFocus, dialogKeySwallowed } from '../keys.ts';
 import type { ButtonView, DialogView, SectionView } from '../types.ts';
-import { permanentDelete, summaryLines } from './policy.ts';
 import type { Handlers } from './shell.ts';
 
 const BACKGROUND = ['top', 'status', 'profile', 'job', 'body', 'foot'];
@@ -70,7 +69,7 @@ function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
   const body: (HTMLElement | null)[] = [
     ...d.text.map((line) => h('p', { class: 'dlg-text' }, line)),
     d.error === null ? null : h('p', { class: 'dlg-error', role: 'alert' }, d.error),
-    ...summaryLines(view, d).map((line) => h('p', { class: 'dlg-sum' }, line)),
+    ...d.summary.map((line) => h('p', { class: 'dlg-sum' }, line)),
     d.rows.length === 0 ? null : h('div', { class: 'dlg-rows', role: 'list', tabindex: 0, 'aria-label': 'Items', 'data-key': 'dlg:rows' },
       ...d.rows.map(([label, size]) => h('div', { class: 'dr', role: 'listitem' },
         h('span', { class: 'ellipsis', title: label }, label), h('span', { class: 'num dr-size' }, size)))),
@@ -85,7 +84,7 @@ function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
   return h('div', { class: 'dlg frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-title', tabindex: -1 },
     h('h2', { id: 'dlg-title', class: 'dlg-title' }, d.title),
     h('div', { class: 'dlg-body' }, ...body),
-    h('div', { class: 'dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, permanentDelete(d), on))));
+    h('div', { class: 'dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, d.permanent, on))));
 }
 
 /**
@@ -93,8 +92,8 @@ function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
  * else the primary button if it is enabled, else the ack box, else Cancel.
  */
 function firstFocus(root: HTMLElement, d: DialogView): HTMLElement | null {
-  const primary = permanentDelete(d) ? undefined : d.buttons.find((b) => b.primary && b.enabled);
-  const key = primary ? `dlg:${primary.id}` : permanentDelete(d) ? 'dlg:cancel' : d.ack !== null ? 'dlg:ack' : 'dlg:cancel';
+  const primary = d.permanent ? undefined : d.buttons.find((b) => b.primary && b.enabled);
+  const key = primary ? `dlg:${primary.id}` : d.permanent ? 'dlg:cancel' : d.ack !== null ? 'dlg:ack' : 'dlg:cancel';
   return root.querySelector<HTMLElement>(`[data-key="${key}"]`)
     ?? controls(root).find((n) => n.matches('.btn')) ?? root.querySelector<HTMLElement>('[role=dialog]');
 }

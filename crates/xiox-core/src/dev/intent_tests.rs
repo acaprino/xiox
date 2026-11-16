@@ -748,6 +748,7 @@ fn dev_view_dialog_shows_cautions_ack_and_shortfall() {
     assert_eq!(d.cautions.len(), 1);
     assert_eq!(d.ack, Some(false));
     assert_eq!(d.rows.len(), 2);
+    assert_eq!(d.permanent, st.settings.remove_mode == RemoveMode::Permanent, "the flag follows the mode the button acts in");
     assert_eq!(d.buttons.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["clean", "cancel"]);
     assert!(!button(d, "clean").enabled && button(d, "clean").primary);
     assert_eq!(button(d, "clean").label, clean_button(Section::Projects, 2));
@@ -778,6 +779,7 @@ fn dev_view_dialog_shows_cautions_ack_and_shortfall() {
     let d = v.dialog.as_ref().unwrap();
     assert_eq!(d.buttons.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["permanent", "cancel"]);
     assert_eq!(button(d, "permanent").label, "Permanently");
+    assert!(d.permanent, "the way out of a full Recycle Bin deletes for good");
     assert!(button(d, "permanent").enabled && button(d, "permanent").primary);
     assert!(d.text.last().unwrap().ends_with("Delete permanently this time?"));
     assert_eq!(d.text[0], confirm_text(Section::Projects, RemoveMode::Permanent), "the text describes what the button does");

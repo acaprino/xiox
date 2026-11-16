@@ -54,6 +54,16 @@ pub(super) fn eligible(r: &RowView) -> bool {
     r.kind == RowKind::Item && r.enabled && r.level != Some(LevelView::Caution)
 }
 
+/// The label of the clean action and the first line of its confirmation: «Clean 8 items».
+fn clean_label(items: usize) -> String {
+    format!("Clean {}", sys::plural(items, "item", "items"))
+}
+
+/// What the analysis found, as the status line and the confirmation say it: «13.48 GB to delete (46,999 files)».
+fn to_delete_text(bytes: u64, files: u64) -> String {
+    format!("{} to delete ({})", sys::fmt_size(bytes), sys::plural(files, "file", "files"))
+}
+
 fn level_text(l: LevelView) -> &'static str {
     match l {
         LevelView::Recommended => "recommended",
@@ -437,7 +447,7 @@ impl CleanupState {
             CleanView::Analyzed if busy => (if cancelling { "Cancelling" } else { "Analyzing" }.to_string(), String::new()),
             CleanView::Analyzed => {
                 let (bytes, files) = self.found_totals();
-                (analysis_title(false, self.clean_end).0.to_string(), format!("{} to delete ({})", sys::fmt_size(bytes), sys::plural(files, "file", "files")))
+                (analysis_title(false, self.clean_end).0.to_string(), to_delete_text(bytes, files))
             }
             CleanView::Cleaned if busy => {
                 (if cancelling { "Cancelling" } else { "Cleaning" }.to_string(), format!("{} freed", sys::fmt_size(self.freed_so_far())))
@@ -497,7 +507,7 @@ impl CleanupState {
         }
         let label = match self.clean_count() {
             0 => "Clean".to_string(),
-            n => format!("Clean {}", sys::plural(n, "item", "items")),
+            n => clean_label(n),
         };
         v.push(action("clean", label, "Enter", can && self.clean_view == CleanView::Analyzed, true));
         v
@@ -508,11 +518,13 @@ impl CleanupState {
             return None;
         }
         let button = |id: &str, label: &str, primary| ButtonView { id: id.into(), label: label.into(), enabled: true, primary };
+        let (bytes, files) = self.found_totals();
         Some(DialogView {
             id: "confirm".into(),
             title: "Start cleaning?".into(),
             text: vec!["The selected files will be deleted permanently. Files in use are left where they are.".into()],
-            summary: Vec::new(),
+            summary: vec![clean_label(self.clean_count()), to_delete_text(bytes, files)],
+            permanent: true,
             rows: Vec::new(),
             warnings_title: (!self.confirm_warnings.is_empty()).then(|| "Warnings for the chosen options".to_string()),
             warnings: self.confirm_warnings.clone(),
