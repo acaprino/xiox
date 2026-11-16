@@ -25,8 +25,8 @@ mod search;
 mod tests;
 
 pub use clean::{
-    CleanOutcome, CleanRequest, Chosen, Outcome, SelectError, clean, clean_in, clean_without_sessions, recycle_shortfall,
-    select,
+    CleanOutcome, CleanRequest, Chosen, Confirmation, Method, Outcome, SelectError, clean, clean_in,
+    clean_without_sessions, method_of, recycle_shortfall, select,
 };
 pub use xiox_git::normalize_remote;
 pub use hint::{is_recommended, is_top_level, too_shallow};

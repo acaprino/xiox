@@ -734,6 +734,7 @@ mod tests {
                 .filter(|i| matches!(i.target, Target::Worktree { .. }))
                 .map(|i| i.key.clone())
                 .collect(),
+            ..Chosen::default()
         }
     }
 

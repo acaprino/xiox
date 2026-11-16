@@ -520,7 +520,7 @@ fn i5_a_folder_holding_several_repositories_is_a_container_and_says_so() {
     assert!(scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
     // `--builds`, `--worktrees`, `--logs`, `--sessions` are refused; naming a path still works.
     for c in [Category::Builds, Category::Worktrees, Category::Logs, Category::Sessions] {
-        let req = CleanRequest { categories: vec![c], include: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
+        let req = CleanRequest { categories: vec![c], include: Vec::new(), confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
         assert_eq!(select(&scan, &req).unwrap_err(), SelectError::ContainerRoot(holder.clone()), "{c}");
     }
     assert_eq!(
@@ -539,7 +539,7 @@ fn i5_one_project_in_a_plain_folder_is_not_a_container() {
     repo(&proj.join("only"));
     let scan = analyze_with(&proj, &Options { drives: false, ..Options::default() }, &env()).unwrap();
     assert!(!scan.notes.contains(&Note::ContainerRoot), "{:?}", scan.notes);
-    let req = CleanRequest { categories: vec![Category::Builds], include: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
+    let req = CleanRequest { categories: vec![Category::Builds], include: Vec::new(), confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
     let chosen = select(&scan, &req).unwrap();
     assert_eq!(chosen.keys, vec![path_key(&target)]);
 }
@@ -553,7 +553,7 @@ fn i5_include_of_an_explicit_path_still_works_in_a_container() {
     let target = rust_build(&holder.join("alpha"), MB);
     let scan = analyze_with(&holder, &Options { drives: false, ..Options::default() }, &env()).unwrap();
     assert!(scan.notes.contains(&Note::ContainerRoot));
-    let req = CleanRequest { categories: Vec::new(), include: vec![target.clone()], mode: xiox_model::RemoveMode::Permanent };
+    let req = CleanRequest { categories: Vec::new(), include: vec![target.clone()], confirm_danger: Vec::new(), mode: xiox_model::RemoveMode::Permanent };
     let chosen = select(&scan, &req).unwrap();
     assert_eq!(chosen.keys, vec![path_key(&target)]);
 }

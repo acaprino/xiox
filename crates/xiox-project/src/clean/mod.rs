@@ -1,6 +1,7 @@
 //! Selection, re-validation and removal: the only code of the targeted cleanup that deletes.
 //!
-//! [`select`] turns the flags into the keys of a [`ProjectScan`]; [`clean`] never trusts that
+//! [`select`] turns the flags into the keys of a [`ProjectScan`], each through one admission rule
+//! (`admit`: blocks, the `danger` items to confirm, `--permanent`); [`clean`] never trusts that
 //! scan. Right before removing anything it runs the (light) analysis of the project again and
 //! keeps only the chosen keys that are still listed, in the same category, unblocked and not
 //! more suspect than before; the item that is removed is the *fresh* one. Folders and worktrees
@@ -11,13 +12,19 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
+mod admit;
+mod method;
+
+pub use method::{Method, method_of};
+
+use admit::{Refusal, admit, blocked_inside};
 use crate::history::scope::{has_short_component, unlinked_chain};
 use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
-    Block, Category, Env, Item, Level, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
-    Why, Exclusion,
+    Block, Category, Env, Item, Level, Note, Options, Project, ProjectScan, Risk, SCHEMA, SearchMode, SessionHealth,
+    Target, Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, PlanAction, PlanItem, RemoveMode, path_key};
@@ -50,12 +57,14 @@ pub struct CleanRequest {
     pub categories: Vec<Category>,
     /// `--include <path>`, any number.
     pub include: Vec<PathBuf>,
+    /// `--confirm-danger <path>`, any number: `danger` items the user confirms removing.
+    pub confirm_danger: Vec<PathBuf>,
     pub mode: RemoveMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SelectError {
-    /// `--include` of a path the analysis did not produce.
+    /// `--include` or `--confirm-danger` of a path the analysis did not produce.
     NotInAnalysis(PathBuf),
     /// `--include` of an item that cannot be removed at all.
     Blocked { path: PathBuf, why: Vec<Block> },
@@ -66,9 +75,12 @@ pub enum SelectError {
     ContainsBlocked { path: PathBuf, inner: PathBuf, why: Vec<Block> },
     /// A category flag on a drive root, the user profile or a folder that holds several projects.
     ContainerRoot(PathBuf),
-    /// `--include` of a `scratch` item, or of a folder that holds one: folders found in the session
-    /// history are listed for review only.
-    ReviewOnly { path: PathBuf, inner: Option<PathBuf> },
+    /// `--confirm-danger` of a `danger` item that no `--include` takes.
+    ConfirmNotIncluded(PathBuf),
+    /// `--confirm-danger` of an item that is not `danger`.
+    ConfirmNotDanger(PathBuf),
+    /// `--permanent` with a `danger` folder, or a folder that holds one (`inner`).
+    DangerPermanent { path: PathBuf, inner: Option<PathBuf> },
 }
 
 impl fmt::Display for SelectError {
@@ -88,25 +100,40 @@ impl fmt::Display for SelectError {
                 join_blocks(why),
                 path.display()
             ),
-            SelectError::ReviewOnly { path, inner: None } => write!(
-                f,
-                "listed for review only: folders found in session history cannot be removed yet: {}",
-                path.display()
-            ),
-            SelectError::ReviewOnly { path, inner: Some(inner) } => write!(
-                f,
-                "cannot be removed: it holds {}, found in session history: {}",
-                inner.display(),
-                path.display()
-            ),
             SelectError::ContainerRoot(root) => {
                 write!(f, "refusing to clean everything under {}: run it on one project", root.display())
             }
+            SelectError::ConfirmNotIncluded(p) => write!(
+                f,
+                "--confirm-danger needs that folder, or a folder that holds it, with --include: {}",
+                p.display()
+            ),
+            SelectError::ConfirmNotDanger(p) => {
+                write!(f, "--confirm-danger is only for danger items, and this one is not: {}", p.display())
+            }
+            SelectError::DangerPermanent { path, inner: None } => {
+                write!(f, "refusing --permanent: danger folders go to the Recycle Bin only: {}", path.display())
+            }
+            SelectError::DangerPermanent { path, inner: Some(inner) } => write!(
+                f,
+                "refusing --permanent: it holds {}, a danger folder that goes to the Recycle Bin only: {}",
+                inner.display(),
+                path.display()
+            ),
         }
     }
 }
 
 impl std::error::Error for SelectError {}
+
+/// The plan of a `danger` item, as the user confirms it: what makes it risky and how it goes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Confirmation {
+    pub key: String,
+    pub risks: Vec<Risk>,
+    pub method: Method,
+}
 
 /// What was chosen: the keys of [`ProjectScan::items`], in the order of the listing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -118,12 +145,27 @@ pub struct Chosen {
     pub bytes: u64,
     /// The chosen worktrees: they are removed by git for good, also in Recycle Bin mode.
     pub permanent_anyway: Vec<String>,
+    /// The `danger` items the removal takes that the user confirmed, in the order of the listing.
+    pub confirmed: Vec<Confirmation>,
+    /// The `danger` items the removal takes that still wait for a confirmation.
+    pub pending: Vec<Confirmation>,
 }
 
-/// Category flags take the `Recommended`, unblocked items (for `Sessions`: every unblocked one).
-/// `include` adds any unblocked item of any level except sessions, by path; a folder that holds a
-/// blocked item is refused (it would take the blocked item with it). Category flags are refused
-/// on a container root. Nothing is chosen when the request is refused.
+impl Chosen {
+    /// Moves `key` from `pending` to the end of `confirmed`; `false` when it is not pending.
+    pub fn confirm(&mut self, key: &str) -> bool {
+        let Some(at) = self.pending.iter().position(|c| c.key == key) else { return false };
+        let confirmation = self.pending.remove(at);
+        self.confirmed.push(confirmation);
+        true
+    }
+}
+
+/// Category flags take the `Recommended`, unblocked items (for `Sessions`: every unblocked one)
+/// that are not `danger` and hold nothing `danger` or blocked. `include` adds any item of any
+/// level except sessions, by path, when [`admit`] lets it in; the `danger` items it takes wait
+/// for a `confirm_danger` that names them. Category flags are refused on a container root.
+/// Nothing is chosen when the request is refused.
 pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectError> {
     if let Some(c) = req.categories.iter().find(|c| matches!(c, Category::Copies | Category::Named)) {
         return Err(SelectError::CategoryNeedsInclude(*c));
@@ -133,37 +175,38 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
     }
     let mut keys: HashSet<&str> = HashSet::new();
     for c in &req.categories {
-        for i in scan.items.iter().filter(|i| i.category == *c && i.blocked.is_empty()) {
-            if *c == Category::Sessions || i.level == Level::Recommended {
+        for i in scan.items.iter().filter(|i| i.category == *c) {
+            let level_ok = *c == Category::Sessions || i.level == Level::Recommended;
+            if level_ok && admit(&scan.items, i, req.mode).is_ok_and(|danger| danger.is_empty()) {
                 keys.insert(&i.key);
             }
         }
     }
+    let mut asked: HashSet<&str> = HashSet::new();
     for given in &req.include {
-        let abs = std::path::absolute(given).unwrap_or_else(|_| given.clone());
-        let key = path_key(&abs);
-        let Some(i) = scan.items.iter().find(|i| i.path.is_some() && i.key == key) else {
-            return Err(SelectError::NotInAnalysis(given.clone()));
-        };
-        if !i.blocked.is_empty() {
-            return Err(SelectError::Blocked { path: given.clone(), why: i.blocked.clone() });
-        }
-        if i.category == Category::Scratch {
-            return Err(SelectError::ReviewOnly { path: given.clone(), inner: None });
-        }
-        if let Some(inner) = scratch_inside(&scan.items, i) {
-            return Err(SelectError::ReviewOnly { path: given.clone(), inner: inner.path.clone() });
-        }
-        if let Some(inner) = blocked_inside(&scan.items, i) {
-            return Err(SelectError::ContainsBlocked {
-                path: given.clone(),
-                inner: inner.path.clone().unwrap_or_default(),
-                why: inner.blocked.clone(),
-            });
-        }
+        let i = listed_at(scan, given)?;
+        let danger = admit(&scan.items, i, req.mode).map_err(|r| refused(given, r))?;
+        asked.extend(danger.iter().map(|d| d.key.as_str()));
         keys.insert(&i.key);
     }
+    let mut confirmed: HashSet<&str> = HashSet::new();
+    for given in &req.confirm_danger {
+        let i = listed_at(scan, given)?;
+        if i.level != Level::Danger {
+            return Err(SelectError::ConfirmNotDanger(given.clone()));
+        }
+        if !asked.contains(i.key.as_str()) {
+            return Err(SelectError::ConfirmNotIncluded(given.clone()));
+        }
+        confirmed.insert(&i.key);
+    }
 
+    let (confirmed, pending) = scan
+        .items
+        .iter()
+        .filter(|i| asked.contains(i.key.as_str()))
+        .map(|i| Confirmation { key: i.key.clone(), risks: i.risks.clone(), method: method_of(&i.target, req.mode) })
+        .partition(|c| confirmed.contains(c.key.as_str()));
     let chosen: Vec<&Item> = scan.items.iter().filter(|i| keys.contains(i.key.as_str())).collect();
     let nested = nested_keys(&chosen);
     Ok(Chosen {
@@ -177,21 +220,26 @@ pub fn select(scan: &ProjectScan, req: &CleanRequest) -> Result<Chosen, SelectEr
             .map(|i| i.key.clone())
             .collect(),
         keys: chosen.iter().map(|i| i.key.clone()).collect(),
+        confirmed,
+        pending,
     })
 }
 
-/// The first item of `items` that sits inside `outer` (not `outer` itself) and is blocked.
-fn blocked_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
-    items
-        .iter()
-        .find(|j| j.path.is_some() && j.key != outer.key && !j.blocked.is_empty() && key_within(&j.key, &outer.key))
+/// The folder item `given` names, resolved as the shell would.
+fn listed_at<'a>(scan: &'a ProjectScan, given: &Path) -> Result<&'a Item, SelectError> {
+    let abs = std::path::absolute(given).unwrap_or_else(|_| given.to_path_buf());
+    let key = path_key(&abs);
+    scan.items.iter().find(|i| i.path.is_some() && i.key == key).ok_or_else(|| SelectError::NotInAnalysis(given.to_path_buf()))
 }
 
-/// The first `scratch` item of `items` that sits inside `outer`.
-fn scratch_inside<'a>(items: &'a [Item], outer: &Item) -> Option<&'a Item> {
-    items
-        .iter()
-        .find(|j| j.category == Category::Scratch && j.path.is_some() && j.key != outer.key && key_within(&j.key, &outer.key))
+/// The error of an `--include` that [`admit`] refuses.
+fn refused(given: &Path, refusal: Refusal) -> SelectError {
+    let path = given.to_path_buf();
+    match refusal {
+        Refusal::Blocked(why) => SelectError::Blocked { path, why },
+        Refusal::ContainsBlocked { inner, why } => SelectError::ContainsBlocked { path, inner, why },
+        Refusal::DangerPermanent { inner } => SelectError::DangerPermanent { path, inner },
+    }
 }
 
 /// Keys of the items that sit inside another item of `items` (removing the outer one removes them).

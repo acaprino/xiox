@@ -281,14 +281,40 @@ fn clean_include_of_an_unknown_path_exits_2() {
 fn clean_include_removes_a_name_matched_folder() {
     let (_t, project) = fake_project();
     let named = project.parent().unwrap().join("fakeproj-old");
-    std::fs::create_dir_all(&named).unwrap();
-    std::fs::write(named.join("a.txt"), "x").unwrap();
+    old_clean_clone(&named);
     let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent"]);
     let stdout = text(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "stderr: {}\nstdout: {stdout}", text(&out.stderr));
     assert!(!named.exists());
     assert!(project.join("target").exists(), "no category was named");
     assert!(stdout.contains("matched by name only"), "an --include is listed prominently: {stdout}");
+}
+
+#[test]
+fn clean_permanent_refuses_a_danger_folder_and_it_survives() {
+    let (_t, project) = fake_project();
+    let named = project.parent().unwrap().join("fakeproj-old");
+    std::fs::create_dir_all(&named).unwrap();
+    std::fs::write(named.join("a.txt"), "x").unwrap();
+    let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent"]);
+    assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
+    let err = text(&out.stderr);
+    assert!(err.contains("refusing --permanent: danger folders go to the Recycle Bin only"), "{err}");
+    assert!(named.join("a.txt").exists());
+}
+
+/// `dir` as a clean clone of a new, unrelated repository, dated three days back: git vouches for
+/// it and it is not recent, so it is not `danger`.
+fn old_clean_clone(dir: &Path) {
+    let parent = dir.parent().unwrap();
+    let upstream = parent.join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    git(&upstream, &["init", "-q", "-b", "main"]);
+    std::fs::write(upstream.join("a.txt"), "x").unwrap();
+    git(&upstream, &["add", "-A"]);
+    git(&upstream, &["commit", "-q", "-m", "first"]);
+    git(parent, &["clone", "-q", &upstream.to_string_lossy(), &dir.to_string_lossy()]);
+    age(dir);
 }
 
 /// Moves the modified date of `dir` three days back: the folder is no longer recent activity.
@@ -416,11 +442,10 @@ fn c1_include_of_a_named_folder_that_holds_a_copy_with_work_exits_2_and_the_copy
 #[test]
 fn c1_with_no_drives_the_copy_is_not_listed_but_the_folder_is_still_not_removed() {
     let (_t, project, named, copy) = project_with_a_named_folder_holding_a_copy_with_work();
+    // Without git the folder is danger: --permanent is refused before anything is checked.
     let out = run_clean(&project, &["--include", &named.to_string_lossy(), "--yes", "--permanent", "--no-drives"]);
-    let stdout = text(&out.stdout);
-    assert_eq!(out.status.code(), Some(3), "stdout: {stdout}\nstderr: {}", text(&out.stderr));
-    assert!(stdout.contains("skipped"), "{stdout}");
-    assert!(stdout.contains("git repository"), "{stdout}");
+    assert_eq!(out.status.code(), Some(2), "stdout: {}\nstderr: {}", text(&out.stdout), text(&out.stderr));
+    assert!(text(&out.stderr).contains("refusing --permanent"), "{}", text(&out.stderr));
     assert!(copy.join("private.txt").exists(), "the copy with its private commit was removed");
 }
 

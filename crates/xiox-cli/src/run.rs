@@ -304,7 +304,8 @@ fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -
 
     // 2. Select. A refusal removes nothing.
     let mode = if f.permanent { RemoveMode::Permanent } else { RemoveMode::Recycle };
-    let request = CleanRequest { categories: f.categories.clone(), include: f.include.clone(), mode };
+    let request =
+        CleanRequest { categories: f.categories.clone(), include: f.include.clone(), confirm_danger: Vec::new(), mode };
     let chosen = match xiox_project::select(&scan, &request) {
         Ok(c) => c,
         Err(e) => {
@@ -383,7 +384,7 @@ mod tests {
     }
 
     fn chosen(n: usize, bytes: u64) -> Chosen {
-        Chosen { keys: (0..n).map(|i| format!("k{i}")).collect(), bytes, permanent_anyway: Vec::new() }
+        Chosen { keys: (0..n).map(|i| format!("k{i}")).collect(), bytes, ..Chosen::default() }
     }
 
     #[test]
