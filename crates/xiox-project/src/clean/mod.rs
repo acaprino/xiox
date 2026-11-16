@@ -591,7 +591,7 @@ fn clean_impl(
     match sessions {
         Sessions::Real => {
             // The history is listed and read only when a chosen item depends on it.
-            let history = wants_history(&chosen_items(scan, chosen));
+            let history = wants_history(scan, &chosen_items(scan, chosen));
             crate::with_real_env(xiox_app::cache_dir(), history, |real| {
                 let env = Env {
                     sessions: real.sessions,
@@ -623,9 +623,10 @@ fn clean_impl(
     }
 }
 
-/// A chosen item depends on the session history: it has provenance, or it is `danger`.
-pub(crate) fn wants_history(old: &[&Item]) -> bool {
-    old.iter().any(|i| i.provenance.is_some() || i.level == Level::Danger)
+/// The scan read the session history and a chosen item depends on it: it has provenance, or it
+/// is `danger`. A scan made without the history is checked without it, so its risks compare.
+pub(crate) fn wants_history(scan: &ProjectScan, old: &[&Item]) -> bool {
+    scan.history.is_some() && old.iter().any(|i| i.provenance.is_some() || i.level == Level::Danger)
 }
 
 pub(crate) fn clean_with(
@@ -643,7 +644,7 @@ pub(crate) fn clean_with(
     // The reach of the search (copies, named and session folders) is only worth repeating when
     // one of them was chosen, and the history only when a chosen item depends on it.
     let wants_search = old.iter().any(|i| matches!(i.category, Category::Copies | Category::Named | Category::Scratch));
-    let history = wants_history(&old);
+    let history = wants_history(scan, &old);
     let opts = Options {
         drives: wants_search && scan.search != SearchMode::ParentOnly,
         measure: false,

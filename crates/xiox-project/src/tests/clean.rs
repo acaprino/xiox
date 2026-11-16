@@ -2000,3 +2000,23 @@ fn a_failed_session_read_leaves_session_folders_alone_too() {
     let expected = "the sessions of this PC could not be read, so a live agent session cannot be ruled out";
     assert_eq!(outcome_of(&out, &lab.bench()), &skipped_with(expected));
 }
+
+#[test]
+fn a_scan_made_without_the_history_is_checked_without_it() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let named = lab.base.join("work").join("proj-old");
+    fs::create_dir_all(&named).unwrap();
+    let cwd = lab.project.to_string_lossy().into_owned();
+    let wrote = bash(&format!("echo x > {}/n.txt", Lab::slash(&named)), &cwd);
+    let stores = Stores::of(vec![("s1", lab.project.clone(), now - 3 * DAY, vec![wrote])]);
+    let env = lab.env(&stores, now);
+    // `--no-history`: the folder is danger for its missing git alone, and no session is read.
+    let scan = analyze_with(&lab.project, &Options { history: false, ..Options::default() }, &env).unwrap();
+    assert_eq!(scan_item(&scan, &named).risks, vec![Risk::NoGit]);
+    let chosen = select(&scan, &asked(&[&named], &[&named], RemoveMode::Recycle)).unwrap();
+
+    let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("bin")));
+    assert!(matches!(outcome_of(&out, &named), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert!(stores.calls.asked().is_empty(), "the history was read: {:?}", stores.calls.asked());
+}
