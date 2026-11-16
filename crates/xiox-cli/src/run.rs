@@ -495,7 +495,13 @@ mod tests {
                     } else {
                         Outcome::Removed { bytes_freed: it.bytes.unwrap_or(0) }
                     };
-                    (k.clone(), it.path.clone(), it.category, o)
+                    xiox_project::OutcomeItem {
+                        key: k.clone(),
+                        path: it.path.clone(),
+                        category: it.category,
+                        method: xiox_project::method_of(&it.target, RemoveMode::Permanent),
+                        outcome: o,
+                    }
                 })
                 .collect();
             CleanOutcome {

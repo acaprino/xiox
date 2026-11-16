@@ -13,7 +13,7 @@ pub fn scan_json(scan: &ProjectScan) -> Result<serde_json::Value, serde_json::Er
 /// The result of `clean --json`: `{"schema":2,"scan":<scan_json>,"outcome":<outcome>|null}`.
 /// `outcome` is `null` when nothing was run. Its items are objects
 /// (`{"key","path","category","outcome":{"type":"removed"|"skipped"|"failed",…}}`), not the
-/// tuples of `CleanOutcome`, so the shape is stable and readable by name.
+/// `OutcomeItem`s of `CleanOutcome`, so the shape is stable and readable by name.
 ///
 /// `Err` when a path is not valid Unicode (JSON cannot carry it).
 pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Result<serde_json::Value, serde_json::Error> {
@@ -23,12 +23,12 @@ pub fn outcome_json(scan: &ProjectScan, outcome: Option<&CleanOutcome>) -> Resul
         None => Value::Null,
         Some(o) => {
             let mut items = Vec::with_capacity(o.items.len());
-            for (key, path, category, result) in &o.items {
+            for i in &o.items {
                 let mut item = Map::new();
-                item.insert("key".into(), to_value(key)?);
-                item.insert("path".into(), to_value(path)?);
-                item.insert("category".into(), to_value(category)?);
-                item.insert("outcome".into(), to_value(result)?);
+                item.insert("key".into(), to_value(&i.key)?);
+                item.insert("path".into(), to_value(&i.path)?);
+                item.insert("category".into(), to_value(i.category)?);
+                item.insert("outcome".into(), to_value(&i.outcome)?);
                 items.push(Value::Object(item));
             }
             let mut m = Map::new();
@@ -63,7 +63,13 @@ mod tests {
             schema: SCHEMA,
             mode: RemoveMode::Recycle,
             dry_run: false,
-            items: vec![("k".into(), path, Category::Builds, o)],
+            items: vec![xiox_project::OutcomeItem {
+                key: "k".into(),
+                path,
+                category: Category::Builds,
+                method: xiox_project::Method::RecycleBin,
+                outcome: o,
+            }],
             bytes_freed: 7,
             recycled_bytes: 7,
             elapsed_ms: 3,

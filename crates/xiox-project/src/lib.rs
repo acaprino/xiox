@@ -25,7 +25,7 @@ mod search;
 mod tests;
 
 pub use clean::{
-    CleanOutcome, CleanRequest, Chosen, Confirmation, Method, Outcome, SelectError, clean, clean_in,
+    CleanOutcome, CleanRequest, Chosen, Confirmation, Method, Outcome, OutcomeItem, SelectError, clean, clean_in,
     clean_without_sessions, method_of, recycle_shortfall, select,
 };
 pub use xiox_git::normalize_remote;
@@ -363,7 +363,7 @@ fn real_listings(history: bool, cache: Option<PathBuf>) -> Vec<(Agent, xiox_mode
 }
 
 /// The real sessions and history sources of this PC, listed through the cache in `cache`.
-fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
+pub(crate) fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&Env) -> R) -> R {
     let cache = Some(cache);
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
     let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());

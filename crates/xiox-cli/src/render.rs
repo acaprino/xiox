@@ -477,9 +477,9 @@ const STATUS_W: usize = 12;
 /// `xiox_project` already in English).
 pub fn render_outcome(o: &CleanOutcome) -> String {
     let mut out = String::new();
-    for (key, path, _category, outcome) in &o.items {
-        let label = label_of(key, path);
-        let line = match outcome {
+    for i in &o.items {
+        let label = label_of(&i.key, &i.path);
+        let line = match &i.outcome {
             Outcome::Removed { bytes_freed } => {
                 let status = if o.dry_run { "would remove" } else { "removed" };
                 format!("  {status:<STATUS_W$}  {:>SIZE_W$}  {label}", fmt_size(*bytes_freed))
@@ -819,10 +819,10 @@ mod tests {
         );
     }
 
-    fn outcome(dry_run: bool, items: Vec<(String, Option<std::path::PathBuf>, Category, Outcome)>) -> CleanOutcome {
+    fn outcome(dry_run: bool, items: Vec<xiox_project::OutcomeItem>) -> CleanOutcome {
         let freed = items
             .iter()
-            .map(|(.., o)| if let Outcome::Removed { bytes_freed } = o { *bytes_freed } else { 0 })
+            .map(|i| if let Outcome::Removed { bytes_freed } = i.outcome { bytes_freed } else { 0 })
             .sum();
         CleanOutcome {
             schema: xiox_project::SCHEMA,
@@ -835,8 +835,14 @@ mod tests {
         }
     }
 
-    fn entry(path: &str, category: Category, o: Outcome) -> (String, Option<std::path::PathBuf>, Category, Outcome) {
-        (xiox_model::path_key(std::path::Path::new(path)), Some(std::path::PathBuf::from(path)), category, o)
+    fn entry(path: &str, category: Category, o: Outcome) -> xiox_project::OutcomeItem {
+        xiox_project::OutcomeItem {
+            key: xiox_model::path_key(std::path::Path::new(path)),
+            path: Some(std::path::PathBuf::from(path)),
+            category,
+            method: xiox_project::Method::Permanent,
+            outcome: o,
+        }
     }
 
     #[test]
@@ -847,12 +853,13 @@ mod tests {
                 entry("D:\\p\\target", Category::Builds, Outcome::Removed { bytes_freed: 3 * MB }),
                 entry("D:\\p\\wt", Category::Worktrees, Outcome::Skipped { reason: "now blocked: uncommitted changes".into() }),
                 entry("D:\\p\\old", Category::Named, Outcome::Failed { error: "access denied (os error 5)".into() }),
-                (
-                    "session:claude:abc-123".into(),
-                    None,
-                    Category::Sessions,
-                    Outcome::Skipped { reason: "no longer archived, or in use now".into() },
-                ),
+                xiox_project::OutcomeItem {
+                    key: "session:claude:abc-123".into(),
+                    path: None,
+                    category: Category::Sessions,
+                    method: xiox_project::Method::HarnessSession,
+                    outcome: Outcome::Skipped { reason: "no longer archived, or in use now".into() },
+                },
             ],
         );
         let out = render_outcome(&o);
