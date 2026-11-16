@@ -218,14 +218,13 @@ fn the_folders_inside_a_candidate_give_it_all_their_operations() {
 #[test]
 fn broad_and_protected_folders_are_never_scratch() {
     // (name, what the session did, the folder it points at, why it is left out; `None`: allowed)
-    let table: [(&str, Vec<Do>, &str, Option<Exclusion>); 9] = [
+    let table: [(&str, Vec<Do>, &str, Option<Exclusion>); 8] = [
         ("the home", vec![Write("~/notes.txt")], "~", Some(Exclusion::Protected)),
         ("a folder of the home", vec![Write("~/Desktop/a.txt")], "~/Desktop", Some(Exclusion::Protected)),
         ("a drive root", vec![Write("/out.txt")], "/", Some(Exclusion::Protected)),
         ("%TEMP% itself", vec![Write("%TEMP%/a.txt")], "%TEMP%", Some(Exclusion::Protected)),
         ("the parent of the project", vec![Write("work/a.txt")], "work", Some(Exclusion::Protected)),
         ("the folder around a worktree", vec![Write("wt-box/a.txt")], "wt-box", Some(Exclusion::Protected)),
-        ("inside the project", vec![Write("work/proj/tmp/a.txt")], "work/proj/tmp", Some(Exclusion::InsideProject)),
         ("a new folder of the home", vec![Mkdir("~/x")], "~/x", None),
         ("a folder inside %TEMP%", vec![Write("%TEMP%/run1/a.txt")], "%TEMP%/run1", None),
     ];

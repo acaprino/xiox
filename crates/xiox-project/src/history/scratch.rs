@@ -5,7 +5,7 @@
 use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 
-use xiox_model::{is_system_dir, path_key};
+use xiox_model::{is_system_dir, path_key, ArtifactKind};
 use xiox_cleaner::guard::in_system_area;
 use xiox_scanner::{is_broad_dir, is_cloud_dir};
 
@@ -15,7 +15,8 @@ use super::scope::{has_short_component, local_dir, unlinked_chain, FixedDrives, 
 use super::{Exclusion, HistoryReport, Limit};
 use crate::owned::key_within;
 use crate::search::{inside_other_repo, item_for, Own};
-use crate::{Category, Env, Item, Options, Project, Why};
+use super::subtree::tracked_blocks;
+use crate::{Category, Env, Item, Options, Project, Target, Why};
 
 /// The session folders examined as `scratch` candidates, most recently active first.
 pub(crate) const MAX_SCRATCH: usize = 200;
@@ -34,27 +35,27 @@ pub(crate) fn scratch_items(
     let policy = Policy::new(project, opts, env);
     // Parents come before the folders inside them, so a folder is merged into the outermost
     // candidate that holds it and never climbs above a folder with evidence of its own.
-    let mut accepted: Vec<(PathBuf, String, Standing)> = Vec::new();
+    let mut accepted: Vec<(PathBuf, String, Standing, Target)> = Vec::new();
     for marked in folders.marked() {
         if listed.iter().any(|i| key_within(marked.key, &i.key)) {
             continue;
         }
-        if let Some((_, _, standing)) = accepted.iter_mut().find(|(_, key, _)| key_within(marked.key, key)) {
+        if let Some((_, _, standing, _)) = accepted.iter_mut().find(|(_, key, ..)| key_within(marked.key, key)) {
             *standing = standing.merge(marked.standing);
             continue;
         }
         match policy.admit(marked.path) {
-            Ok(path) => accepted.push((path, marked.key.to_string(), marked.standing)),
+            Ok((path, target)) => accepted.push((path, marked.key.to_string(), marked.standing, target)),
             Err(why) => *report.excluded.entry(why).or_default() += 1,
         }
     }
     // Sizing and git status are the costly part: only the most recently active folders get them.
     let mut candidates: Vec<_> = accepted
         .into_iter()
-        .filter_map(|(path, key, standing)| Some((path, standing, folders.provenance_within(&key)?)))
+        .filter_map(|(path, key, standing, target)| Some((path, standing, folders.provenance_within(&key)?, target)))
         .collect();
     if candidates.len() > MAX_SCRATCH {
-        candidates.sort_by_key(|(_, _, p)| (p.last_activity_ms.is_none(), Reverse(p.last_activity_ms)));
+        candidates.sort_by_key(|(_, _, p, _)| (p.last_activity_ms.is_none(), Reverse(p.last_activity_ms)));
         report.limits.push(Limit::Scratch { max: MAX_SCRATCH, left: candidates.len() - MAX_SCRATCH });
         candidates.truncate(MAX_SCRATCH);
         candidates.sort_by_key(|(path, ..)| path_key(path));
@@ -62,14 +63,20 @@ pub(crate) fn scratch_items(
     let partial = report.partial();
     candidates
         .into_iter()
-        .map(|(path, standing, provenance)| {
+        .map(|(path, standing, provenance, target)| {
             let why = Why::SessionFolder {
                 strength: standing.strength,
                 from_script: standing.from_script,
                 activity: activity(&path, env),
             };
             let risks = risks(&path, &provenance, partial, env.now_ms);
-            Item { risks, provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
+            let mut item = item_for(opts, env, &path, Category::Scratch, why);
+            if let Target::Subtree { repo } = &target {
+                let mut blocked = tracked_blocks(repo, &path);
+                blocked.extend(item.blocked.drain(..).filter(|b| !blocked.contains(b)).collect::<Vec<_>>());
+                item.blocked = blocked;
+            }
+            Item { risks, target, provenance: Some(provenance), ..item }
         })
         .collect()
 }
@@ -77,6 +84,8 @@ pub(crate) fn scratch_items(
 /// Where a session folder may be proposed: the rules that need no disk, then the ones that do.
 struct Policy {
     own: Own,
+    /// The project and its worktrees, for the repository a folder inside one of them belongs to.
+    roots: Vec<PathBuf>,
     scope: Scope,
     home: Option<PathBuf>,
     temp_key: String,
@@ -115,6 +124,7 @@ impl Policy {
             .collect();
         Policy {
             own: Own::new(project),
+            roots: std::iter::once(&project.root).chain(project.worktrees.iter()).cloned().collect(),
             scope: Scope::of(project, opts, env),
             home,
             temp_key,
@@ -126,7 +136,7 @@ impl Policy {
     }
 
     /// The folder as a clean local path, or why it is left out.
-    fn admit(&self, raw: &Path) -> Result<PathBuf, Exclusion> {
+    fn admit(&self, raw: &Path) -> Result<(PathBuf, Target), Exclusion> {
         if has_short_component(raw) {
             return Err(Exclusion::ShortName);
         }
@@ -138,6 +148,19 @@ impl Policy {
         if !self.scope.contains(&key) {
             return Err(Exclusion::OutsideScope);
         }
+        if let Some(repo) = self.repo_holding(&key) {
+            // Inside the project or a worktree: the subtree policy, never the outside rules.
+            let in_git = path.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git"));
+            if in_git || self.own.inside(&key) {
+                return Err(Exclusion::Protected);
+            }
+            if !self.fixed_drives.holds(&path) {
+                return Err(Exclusion::NotLocal);
+            }
+            unlinked_chain(&path)?;
+            present_dir(&path)?;
+            return Ok((path, Target::Subtree { repo }));
+        }
         if self.own.holds(&key) {
             return Err(Exclusion::InsideProject);
         }
@@ -148,7 +171,17 @@ impl Policy {
             return Err(Exclusion::NotLocal);
         }
         self.on_disk(&path)?;
-        Ok(path)
+        Ok((path, Target::Dir { kind: ArtifactKind::ProjectFolder }))
+    }
+
+    /// The innermost of the project and its worktrees that strictly holds `key`.
+    fn repo_holding(&self, key: &str) -> Option<PathBuf> {
+        self.roots
+            .iter()
+            .map(|r| (path_key(r), r))
+            .filter(|(rk, _)| rk.as_str() != key && key_within(key, rk))
+            .max_by_key(|(rk, _)| rk.len())
+            .map(|(_, r)| r.clone())
     }
 
     /// A drive root, the home or a folder that holds it, `%TEMP%` itself, a folder that holds a
@@ -179,15 +212,20 @@ impl Policy {
         if is_cloud_dir(path) {
             return Err(Exclusion::Protected);
         }
-        match path.symlink_metadata() {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => return Err(Exclusion::Missing),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Exclusion::Missing),
-            Err(_) => return Err(Exclusion::Unreadable),
-        }
+        present_dir(path)?;
         if inside_other_repo(path) {
             return Err(Exclusion::OtherRepository);
         }
         Ok(())
+    }
+}
+
+/// The folder is there and is a folder; an access error is not taken for its absence.
+fn present_dir(path: &Path) -> Result<(), Exclusion> {
+    match path.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(Exclusion::Missing),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(Exclusion::Missing),
+        Err(_) => Err(Exclusion::Unreadable),
     }
 }

@@ -220,6 +220,13 @@ pub fn working_tree_dirty(dir: &Path) -> Option<bool> {
     Some(o.stdout.iter().any(|b| !b.is_ascii_whitespace()))
 }
 
+/// Whether git tracks any file under `dir` in the index of `repo`. `None` when git cannot answer.
+pub fn tracked_under(repo: &Path, dir: &Path) -> Option<bool> {
+    let spec = dir.strip_prefix(repo).unwrap_or(dir).to_string_lossy().replace('\\', "/");
+    let o = git(repo, &["ls-files", "-z", "--cached", "--", &spec]).filter(|o| o.ok)?;
+    Some(!o.stdout.is_empty())
+}
+
 /// The commits of `repo` that would be lost with it: HEAD, every local branch, every tag and
 /// every stash entry, sorted, without duplicates. `Some(empty)` for a repository without a commit,
 /// `None` when git cannot list them.

@@ -8,6 +8,7 @@ mod report;
 pub(crate) mod risk;
 mod scratch;
 pub(crate) mod scope;
+mod subtree;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;

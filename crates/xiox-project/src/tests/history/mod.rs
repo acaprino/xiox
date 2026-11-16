@@ -6,3 +6,4 @@ mod queue;
 mod risk;
 mod scratch;
 mod scope;
+mod subtree;

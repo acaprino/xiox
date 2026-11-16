@@ -960,6 +960,22 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
             }
             (*kind, PlanAction::RemoveDir)
         }
+        Target::Subtree { repo } => {
+            let repo_key = path_key(repo);
+            let own: Vec<String> =
+                std::iter::once(&project.root).chain(project.worktrees.iter()).map(|p| path_key(p)).collect();
+            if !own.contains(&repo_key) {
+                return Err("its repository is no longer the project or one of its worktrees".to_string());
+            }
+            let holds_own = own.iter().any(|o| key_within(o, key));
+            if *key == repo_key || !key_within(key, &repo_key) || holds_own {
+                return Err("it overlaps the project or one of its worktrees".to_string());
+            }
+            if path.components().any(|c| c.as_os_str().eq_ignore_ascii_case(".git")) {
+                return Err("it is inside the git folder".to_string());
+            }
+            (ArtifactKind::Other, PlanAction::RemoveDir)
+        }
         Target::Worktree { .. } => {
             if holds_root(project, key) {
                 return Err("it is, or contains, the project's main folder".to_string());
@@ -1015,7 +1031,7 @@ pub(crate) fn check_contents(fresh: &Item, project: &Project, listed: &[Item]) -
             return Err(format!("it holds {at}, which is listed separately"));
         }
     }
-    if is_project_folder {
+    if is_project_folder || matches!(fresh.target, Target::Subtree { .. }) {
         let repos =
             nested_repos(path).map_err(|_| "it is too big to check for git repositories inside it".to_string())?;
         for r in repos {

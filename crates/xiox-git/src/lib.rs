@@ -349,6 +349,19 @@ mod tests {
     }
 
     #[test]
+    fn tracked_under_reads_the_index() {
+        let t = Tmp::new();
+        let repo = t.sub("repo");
+        init(&repo);
+        commit_file(&repo, "bench/a.txt", "a");
+        write(&repo, "loose/b.txt", "b");
+        assert_eq!(tracked_under(&repo, &repo.join("bench")), Some(true));
+        assert_eq!(tracked_under(&repo, &repo.join("loose")), Some(false));
+        let plain = t.sub("plain");
+        assert_eq!(tracked_under(&plain, &plain.join("x")), None);
+    }
+
+    #[test]
     fn the_test_git_never_inherits_a_repository_selection() {
         let c = git_cmd(Path::new("."), &["status"], &[]);
         for var in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"] {

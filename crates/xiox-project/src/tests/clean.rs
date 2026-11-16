@@ -1434,3 +1434,43 @@ fn a_copy_only_the_session_history_found_is_chosen_and_checked_again() {
     assert!(matches!(outcome_of(&out, &deep), Outcome::Removed { .. }), "{:#?}", out.items);
     assert!(deep.join("README.md").exists());
 }
+
+#[test]
+fn check_dir_keeps_subtrees_inside_their_repo() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let other = repo(&base.join("other"));
+    let project = resolve_project(&root).unwrap();
+    let make = |path: &Path, target: Target| Item {
+        key: path_key(path),
+        category: Category::Scratch,
+        path: Some(path.to_path_buf()),
+        bytes: None,
+        level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target,
+        provenance: None,
+    };
+    let run1 = root.join("tmp").join("run1");
+    fs::create_dir_all(&run1).unwrap();
+    let outside = base.join("loose");
+    fs::create_dir_all(&outside).unwrap();
+    let in_git = root.join(".git").join("x");
+    fs::create_dir_all(&in_git).unwrap();
+    let subtree = |repo: &Path| Target::Subtree { repo: repo.to_path_buf() };
+    let refused = [
+        (make(&other.join("x"), subtree(&other)), "its repository is no longer the project or one of its worktrees"),
+        (make(&outside, subtree(&root)), "it overlaps the project or one of its worktrees"),
+        (make(&in_git, subtree(&root)), "it is inside the git folder"),
+        (make(&run1, Target::Dir { kind: ArtifactKind::ProjectFolder }), "it overlaps the project or one of its worktrees"),
+    ];
+    fs::create_dir_all(other.join("x")).unwrap();
+    for (item, why) in refused {
+        assert_eq!(check_dir(&item, 1, &project).unwrap_err(), why, "{:?}", item.path);
+    }
+    let plan = check_dir(&make(&run1, subtree(&root)), 1, &project).unwrap();
+    assert_eq!((plan.kind, plan.action), (ArtifactKind::Other, xiox_model::PlanAction::RemoveDir));
+}
