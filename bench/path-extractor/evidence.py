@@ -99,7 +99,7 @@ def failed(call: dict) -> bool:
 def evidence_of(call: dict):
     """Every piece of folder evidence one tool call gives."""
     cwd = (call.get("cwd") or "").removeprefix("\\\\?\\").replace("/", "\\") or None
-    ref = lambda source: Ref(call["session"], call.get("entry"), call.get("call"), source)  # noqa: E731
+    ref = lambda source: Ref(call.get("session"), call.get("entry"), call.get("call"), source)  # noqa: E731
     bad = failed(call)
     if cwd:
         yield Evidence(cwd, Strength.USED, ref("cwd"))
@@ -136,6 +136,27 @@ def ledgers(calls_path: str, sessions: set[str] | None = None) -> dict[str, Ledg
                 for ev in evidence_of(call):
                     out[call["session"]].add(ev)
     return out
+
+
+def ledger_rows(calls_path: str) -> list[dict]:
+    """One row per folder of each (store, session), in the shape of the Rust probe's ledger.jsonl:
+    {store, session, folder, strength (int or None), failed (count), sources, refs ([entry, call])}.
+    The parity check of `real.py parity` compares the two."""
+    books: dict[tuple, Ledger] = defaultdict(Ledger)
+    with open(calls_path, encoding="utf-8") as f:
+        for line in f:
+            call = json.loads(line)
+            for ev in evidence_of(call):
+                books[(call.get("store"), call.get("session"))].add(ev)
+    rows = []
+    for (store, session), book in books.items():
+        for fe in book:
+            refs = fe.refs + fe.failed
+            rows.append({"store": store, "session": session, "folder": fe.path,
+                         "strength": int(fe.strength) if fe.strength else None, "failed": len(fe.failed),
+                         "sources": sorted({r.source for r in refs}),
+                         "refs": sorted({(r.entry, r.call) for r in refs}, key=str)})
+    return rows
 
 
 # ---- evaluation against labels
