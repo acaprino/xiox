@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[features]
+# The synthetic store writer of `test_support`, for dev-dependents.
+test-support = []
+
 [dependencies]
 xiox-model = { path = "../xiox-model" }
 # mukade (MIT, same author) is used as a prebuilt executable, vendor/mukade/mukade.exe: no source.

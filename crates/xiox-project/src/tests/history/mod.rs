@@ -1,4 +1,5 @@
 pub mod fake;
+mod analyze;
 mod folders;
 mod json;
 mod queue;

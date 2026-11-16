@@ -21,13 +21,15 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
         Ok(Command::Help) => code_of(write_result(out, err, &format!("{}\n", args::help()))),
         Ok(Command::Version) => code_of(write_result(out, err, &format!("xiox {}\n", env!("CARGO_PKG_VERSION")))),
-        Ok(Command::Analyze { project, json, no_drives }) => analyze(project, json, no_drives, out, err),
+        Ok(Command::Analyze { project, json, no_drives, no_history }) => {
+            analyze(project, json, no_drives, no_history, out, err)
+        },
         Ok(Command::Observe { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp }) => {
             let cmd = observe::ObserveArgs { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp };
             observe::run_observe(cmd, out, err)
         }
-        Ok(Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives }) => {
-            let flags = CleanFlags { project, categories, include, permanent, yes, dry_run, json, no_drives };
+        Ok(Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history }) => {
+            let flags = CleanFlags { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history };
             clean(&flags, out, err)
         }
     }
@@ -84,9 +86,14 @@ fn clean_project(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode, dry_run:
 }
 
 /// Analyze the project (the current folder by default), telling the person on `err`.
-fn analyze_path(project: Option<PathBuf>, no_drives: bool, err: &mut dyn Write) -> Result<ProjectScan, i32> {
+fn analyze_path(
+    project: Option<PathBuf>,
+    no_drives: bool,
+    no_history: bool,
+    err: &mut dyn Write,
+) -> Result<ProjectScan, i32> {
     let path = project.unwrap_or_else(|| PathBuf::from("."));
-    let opts = Options { drives: !no_drives, measure: true, admin: xiox_project::is_elevated(), history: true };
+    let opts = Options { drives: !no_drives, measure: true, admin: xiox_project::is_elevated(), history: !no_history };
     let _ = writeln!(err, "Analyzing {} ...", path.display());
     scan_project(&path, &opts).map_err(|e| {
         let _ = writeln!(err, "error: {e}");
@@ -94,8 +101,15 @@ fn analyze_path(project: Option<PathBuf>, no_drives: bool, err: &mut dyn Write) 
     })
 }
 
-fn analyze(project: Option<PathBuf>, json: bool, no_drives: bool, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let scan = match analyze_path(project, no_drives, err) {
+fn analyze(
+    project: Option<PathBuf>,
+    json: bool,
+    no_drives: bool,
+    no_history: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let scan = match analyze_path(project, no_drives, no_history, err) {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -145,6 +159,7 @@ struct CleanFlags {
     dry_run: bool,
     json: bool,
     no_drives: bool,
+    no_history: bool,
 }
 
 const NOTHING_SELECTED: &str =
@@ -244,7 +259,7 @@ struct Deps<'a> {
 }
 
 fn clean(f: &CleanFlags, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let scan = match analyze_path(f.project.clone(), f.no_drives, err) {
+    let scan = match analyze_path(f.project.clone(), f.no_drives, f.no_history, err) {
         Ok(scan) => scan,
         Err(code) => return code,
     };
@@ -440,6 +455,7 @@ mod tests {
             dry_run,
             json,
             no_drives: true,
+            no_history: false,
         }
     }
 

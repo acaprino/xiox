@@ -25,8 +25,10 @@
 mod bounded;
 mod calls;
 mod descriptors;
-#[cfg(test)]
-mod test_support;
+/// A synthetic Claude Code store, for the tests of this crate and, with the `test-support`
+/// feature, of the crates that read it through Mukade.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use bounded::{BoundedError, Limits};
 pub use descriptors::{parse_time_ms, Descriptor};

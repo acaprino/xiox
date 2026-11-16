@@ -308,27 +308,36 @@ pub(crate) struct Env<'a> {
     pub history: history::HistoryInput<'a>,
 }
 
-/// Analyze the project that holds `path` with the real sessions of this PC. Writes nothing
-/// except the session listing cache the engine already writes (`xiox_app::cache_dir()`).
+/// Analyze the project that holds `path` with the real sessions of this PC, history included
+/// unless `opts.history` is off. Writes nothing except the session listing cache the engine
+/// already writes (`xiox_app::cache_dir()`); an OpenCode database is read from a temporary copy.
 pub fn analyze_project(path: &Path, opts: &Options) -> Result<ProjectScan, Error> {
     let cache = Some(xiox_app::cache_dir());
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
-    let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache);
+    let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache.clone());
     let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
+    // Without the history there is nothing to list: no listing, so no source is asked for.
+    let listings = if opts.history { xiox_app::load_descriptors(cache.clone()) } else { Vec::new() };
+    let sources: Vec<xiox_mukade::MukadeSessions> = listings
+        .iter()
+        .map(|(agent, _)| xiox_mukade::MukadeSessions::from_env(*agent).with_cache_dir(cache.clone()))
+        .collect();
+    let calls = history::MukadeCalls::new(&sources);
+    let user = history::UserDirs::from_env();
     let env = Env {
         sessions: &sessions,
         archived: &archived,
         health,
         search_roots: None,
         now_ms: xiox_app::now_ms(),
-        history: history::HistoryInput::none(),
+        history: history::HistoryInput { listings: &listings, calls: Some(&calls), user: &user },
     };
     analyze_with(path, opts, &env)
 }
 
 /// [`analyze_project`] with `copies`/`named` searched only below `search_roots` (to depth 3)
 /// instead of the fixed drives and the home folder. Used by tests and by debug builds of `xiox`.
-/// Still reads the real sessions of this PC.
+/// Still reads the real sessions of this PC, but not their history: no `scratch` items.
 pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf]) -> Result<ProjectScan, Error> {
     let cache = Some(xiox_app::cache_dir());
     let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
@@ -346,7 +355,7 @@ pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf])
 }
 
 /// [`analyze_project_in`] without reading any session of this PC (no `sessions` items, no live
-/// session blocks, nothing written to the cache). For tests that run on fake trees.
+/// session blocks, no history, nothing written to the cache). For tests that run on fake trees.
 pub fn analyze_project_without_sessions(
     path: &Path,
     opts: &Options,

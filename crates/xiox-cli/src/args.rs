@@ -10,6 +10,7 @@ pub enum Command {
         project: Option<PathBuf>,
         json: bool,
         no_drives: bool,
+        no_history: bool,
     },
     Clean {
         project: Option<PathBuf>,
@@ -20,6 +21,7 @@ pub enum Command {
         dry_run: bool,
         json: bool,
         no_drives: bool,
+        no_history: bool,
     },
     Observe {
         project: Option<PathBuf>,
@@ -35,9 +37,10 @@ pub enum Command {
 
 pub const USAGE: &str = "\
 Usage:
-  xiox analyze [<project>] [--json] [--no-drives]
+  xiox analyze [<project>] [--json] [--no-drives] [--no-history]
   xiox clean   [<project>] [--builds] [--worktrees] [--logs] [--sessions]
                [--include <path>]... [--permanent] [--yes] [--dry-run] [--json] [--no-drives]
+               [--no-history]
   xiox observe [<project>] [--interval <seconds>] [--grow-threshold <size>]
                [--worktree-threshold <n>] [--no-drives] [--mcp]
   xiox --help | --version";
@@ -76,6 +79,7 @@ Flags:
   --dry-run        clean: do everything except deleting, and say what would be freed
   --json           print a single JSON object (schema 1) on stdout; messages go to stderr
   --no-drives      search only next to the project, not on every fixed drive
+  --no-history     analyze, clean: do not read the agent session history (no `scratch` folders)
   --interval <s>   observe: seconds between checks (default 600, from 60 to 2592000)
   --grow-threshold <size>
                    observe: growth since the start that raises `attention`
@@ -156,6 +160,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let mut categories: Vec<Category> = Vec::new();
     let mut include: Vec<PathBuf> = Vec::new();
     let (mut permanent, mut yes, mut dry_run, mut json, mut no_drives) = (false, false, false, false, false);
+    let mut no_history = false;
     let mut interval_secs = DEFAULT_INTERVAL_SECS;
     let mut grow_threshold = DEFAULT_GROW_THRESHOLD;
     let mut worktree_threshold = DEFAULT_WORKTREE_THRESHOLD;
@@ -199,6 +204,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 json = true;
             }
             "--no-drives" => no_drives = true,
+            "--no-history" => {
+                if matches!(which, Which::Observe) {
+                    return Err("--no-history is only valid for analyze and clean".to_string());
+                }
+                no_history = true;
+            }
             "--mcp" => {
                 only_observe(flag)?;
                 mcp = true;
@@ -283,8 +294,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
 
     Ok(match which {
         Which::Observe => Command::Observe { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp },
-        Which::Analyze => Command::Analyze { project, json, no_drives },
-        Which::Clean => Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives },
+        Which::Analyze => Command::Analyze { project, json, no_drives, no_history },
+        Which::Clean => Command::Clean { project, categories, include, permanent, yes, dry_run, json, no_drives, no_history },
     })
 }
 
@@ -298,11 +309,32 @@ mod tests {
 
     #[test]
     fn analyze_defaults() {
-        assert_eq!(p(&["analyze"]), Ok(Command::Analyze { project: None, json: false, no_drives: false }));
+        assert_eq!(p(&["analyze"]), Ok(Command::Analyze { project: None, json: false, no_drives: false, no_history: false }));
         assert_eq!(
             p(&["analyze", "D:\\x", "--json", "--no-drives"]),
-            Ok(Command::Analyze { project: Some(PathBuf::from("D:\\x")), json: true, no_drives: true })
+            Ok(Command::Analyze { project: Some(PathBuf::from("D:\\x")), json: true, no_drives: true, no_history: false })
         );
+    }
+
+    #[test]
+    fn analyze_no_history() {
+        assert_eq!(
+            p(&["analyze", "--no-history"]),
+            Ok(Command::Analyze { project: None, json: false, no_drives: false, no_history: true })
+        );
+    }
+
+    #[test]
+    fn clean_no_history() {
+        let Ok(Command::Clean { no_history, .. }) = p(&["clean", "--builds", "--no-history"]) else {
+            panic!("a clean command")
+        };
+        assert!(no_history);
+    }
+
+    #[test]
+    fn observe_has_no_history_flag() {
+        assert_eq!(p(&["observe", "--no-history"]), Err("--no-history is only valid for analyze and clean".to_string()));
     }
 
     #[test]
@@ -334,6 +366,7 @@ mod tests {
                 dry_run: true,
                 json: true,
                 no_drives: true,
+                no_history: false,
             })
         );
         // Flags may come before the project; a repeated category flag counts once.
@@ -349,6 +382,7 @@ mod tests {
                 dry_run: false,
                 json: false,
                 no_drives: false,
+                no_history: false,
             })
         );
     }

@@ -2,6 +2,7 @@
 //! analysis reads. The logic that fills the shape lives in the modules of the later stages.
 
 mod folders;
+mod mukade;
 mod queue;
 mod report;
 pub(crate) mod risk;
@@ -17,6 +18,7 @@ use xiox_model::{path_key, Agent, Loaded};
 use xiox_mukade::{strip_verbatim, Descriptor, ToolCall};
 
 pub(crate) use folders::Folders;
+pub(crate) use mukade::MukadeCalls;
 pub(crate) use scratch::scratch_items;
 pub(crate) use queue::{Budget, BUDGET};
 use queue::Queue;
