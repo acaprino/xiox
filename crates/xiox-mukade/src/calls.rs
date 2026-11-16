@@ -78,7 +78,9 @@ pub struct ToolCall {
     pub entry: Option<String>,
     pub call: Option<String>,
     pub tool: Option<String>,
-    /// Mukade's harness-independent tool name, when it is a string.
+    /// Mukade's harness-independent tool name, when it is a string. A row an older `harvest.py`
+    /// wrote may hold an object here: it reads as `None`.
+    #[serde(default, deserialize_with = "string_or_none")]
     pub canonical: Option<String>,
     /// The call's input; a value that is not an object is kept as `{"_": value}`.
     pub input: Value,
@@ -88,6 +90,13 @@ pub struct ToolCall {
     pub exit: Option<i64>,
     /// The first characters of the result text; `None` when no result was paired.
     pub result_head: Option<String>,
+}
+
+fn string_or_none<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(de)? {
+        Value::String(s) => Some(s),
+        _ => None,
+    })
 }
 
 impl ToolCall {
@@ -666,5 +675,25 @@ mod tests {
         let cmd = sessions.dump_command("id", tmp.path()).unwrap();
         assert_eq!(arg_after(&cmd, "--opencode-exe"), None);
         assert_eq!(env_of(&cmd, "CODEX_HOME").as_deref(), tmp.path().to_str());
+    }
+
+    #[test]
+    fn harvest_rows_read_back_with_object_canonical_and_missing_fields() {
+        let cases = [
+            (json!("bash"), Some("bash")),
+            (json!({"kind": "other"}), None),
+            (json!(null), None),
+        ];
+        for (canonical, want) in cases {
+            let row = json!({
+                "harness": "h", "store": "s", "session": "x", "canonical": canonical, "input": {},
+            });
+            let call: ToolCall = serde_json::from_value(row).unwrap();
+            assert_eq!(call.canonical.as_deref(), want, "{canonical}");
+            assert_eq!((call.parent, call.entry, call.result_head), (None, None, None));
+        }
+        let call: ToolCall =
+            serde_json::from_value(json!({"harness": "h", "store": "s", "session": "x", "input": {}})).unwrap();
+        assert_eq!(call.canonical, None);
     }
 }
