@@ -22,7 +22,7 @@ pub(crate) struct Budget {
 
 // shortcut: starting values, to be tuned with the `session_probe` example on real stores.
 pub(crate) const BUDGET: Budget =
-    Budget { max_sessions: 250, max_calls: 250_000, max_duration: Duration::from_secs(240) };
+    Budget { max_sessions: 600, max_calls: 250_000, max_duration: Duration::from_secs(240) };
 
 /// A session is told apart by its store and harness as well as its id.
 type Key<'a> = (&'a str, &'a str, &'a str);

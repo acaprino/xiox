@@ -43,10 +43,13 @@
   OpenCode per analisi, timeout reale (120 s) e tetto sull'output per ogni `dump`.
 - Cronologia in `xiox analyze` (piano `docs/superpowers/plans/2026-11-16-history-analysis.md`,
   `crates/xiox-project/src/history`): `analyze` legge le sessioni del progetto, dei worktree e
-  delle copie, ordinate per attività, dentro un budget (`BUDGET` in `history/queue.rs`: 250
-  sessioni, 250.000 chiamate, 240 s). I valori sono iniziali e vanno tarati con
-  `cargo run -j 1 -p xiox-project --example session_probe -- <progetto> [--sample N]` su store reali,
-  solo su richiesta esplicita dell'utente (nessuna misura è stata fatta). `--no-history` la
+  delle copie, ordinate per attività, dentro un budget (`BUDGET` in `history/queue.rs`: 600
+  sessioni, 250.000 chiamate, 240 s). Tarato il 2026-11-16 con
+  `cargo run -j 1 -p xiox-project --example session_probe -- <progetto>` sugli store reali di
+  `C:\Users\alfio`: su un progetto con 2.271 sessioni collegate il tetto di 250 scattava a 241
+  sessioni lette in circa 60 s (0,25 s a sessione, 28.704 chiamate); con 600 si resta sotto i
+  240 s, che restano la vera protezione. Il primo avvio paga circa 35 s per la cache vuota
+  dell'elenco di Mukade. Nuove misure solo su richiesta esplicita dell'utente. `--no-history` la
   disattiva. La categoria `scratch` è solo da rivedere: non si rimuove fino al passo 4 (conferme,
   `--yes`, contenitori, worktree `danger`, sorgente riscritta, cartella condivisa).
 - Misura, 2026-11-16, su un campione nuovo etichettato alla cieca: le 113 chiamate reali in cui

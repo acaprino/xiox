@@ -266,7 +266,7 @@ Reading the output (see the example above):
   the cap, a store without a reader) and with `; stopped at the session limit`, `tool call limit`
   or `time limit` for every cap that was reached, and `scratch folder limit` when more than
   **200** session folders were candidates and only the most recently active were examined. The
-  reading is bounded: at most **250 sessions**, **250,000 tool calls** and **240 seconds** in all
+  reading is bounded: at most **600 sessions**, **250,000 tool calls** and **240 seconds** in all
   (no session is started after those 240 seconds; one already running is bounded by its own
   **120 seconds**). A session is read, its folders are taken and it is released; one that fails is
   counted and the others are still read.
