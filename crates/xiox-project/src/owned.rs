@@ -42,6 +42,8 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     notes.extend(found.notes);
     if let Some(h) = history.as_mut() {
         h.read(&project, &mut items, &mut |dirs| crate::search::verify_dirs(&project, opts, env, dirs));
+        let scratch = h.scratch(&project, &items, env, opts);
+        items.extend(scratch);
         h.attach(&mut items);
     }
     sort_items(&mut items);

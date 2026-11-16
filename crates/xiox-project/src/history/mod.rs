@@ -4,6 +4,7 @@
 mod folders;
 mod queue;
 mod report;
+mod scratch;
 pub(crate) mod scope;
 
 use std::collections::{BTreeMap, HashSet};
@@ -15,6 +16,7 @@ use xiox_model::{path_key, Agent, Loaded};
 use xiox_mukade::{strip_verbatim, Descriptor, ToolCall};
 
 pub(crate) use folders::Folders;
+pub(crate) use scratch::scratch_items;
 pub(crate) use queue::{Budget, BUDGET};
 use queue::Queue;
 use scope::{cwd_roots, local_dir, Scope};
@@ -234,6 +236,12 @@ impl<'a> History<'a> {
 
     fn row(&self, agent: Agent) -> usize {
         self.report.sources.iter().position(|s| s.agent == agent).expect("every listed agent has a row")
+    }
+
+    /// The folders the sessions created or wrote in, as review candidates. `items` are what the
+    /// analysis lists otherwise.
+    pub fn scratch(&mut self, project: &Project, items: &[Item], env: &Env, opts: &Options) -> Vec<Item> {
+        scratch_items(project, &self.folders, items, env, opts, &mut self.report.excluded)
     }
 
     /// The provenance of the items the sessions can speak about.

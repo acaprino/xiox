@@ -218,7 +218,7 @@ impl Own {
     }
 
     /// `key` contains the project or a worktree (removing it would remove them).
-    fn inside(&self, key: &str) -> bool {
+    pub(crate) fn inside(&self, key: &str) -> bool {
         self.all.iter().any(|o| key_within(o, key))
     }
 }
@@ -247,7 +247,7 @@ pub(crate) fn is_git_repo(dir: &Path) -> bool {
 
 /// Some ancestor of `path` (not `path` itself) is a git repository. Like git, the folders in
 /// `GIT_CEILING_DIRECTORIES` and above them are not looked at.
-fn inside_other_repo(path: &Path) -> bool {
+pub(crate) fn inside_other_repo(path: &Path) -> bool {
     let ceilings: Vec<String> = std::env::var_os("GIT_CEILING_DIRECTORIES")
         .map(|v| std::env::split_paths(&v).map(|p| path_key(&p)).collect())
         .unwrap_or_default();
@@ -319,13 +319,13 @@ pub(crate) fn verify_dirs(project: &Project, opts: &Options, env: &Env, dirs: &[
         .collect()
 }
 
-fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category, why: Why) -> Item {
+pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category, why: Why) -> Item {
     // What cannot be removed at all: a copy with work the project lacks (or whose work cannot be
     // checked), a repository git cannot read, a live agent session inside.
     let mut blocked = match &why {
         Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
         Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
-        Why::NameOnly => named_blocks(dir),
+        Why::NameOnly | Why::SessionFolder { .. } => named_blocks(dir),
         _ => Vec::new(),
     };
     if live_session_in(dir, env) {

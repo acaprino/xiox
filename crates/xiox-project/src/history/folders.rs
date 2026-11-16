@@ -9,15 +9,59 @@ use xiox_model::path_key;
 
 use super::{Operation, Provenance, SessionEvidence};
 use crate::owned::key_within;
-use crate::{Coverage, FolderEvidence, Ledger, Strength};
+use crate::{Coverage, FolderEvidence, Ledger, Source, Strength};
 
 /// Operations kept per session and folder; the rest is only counted.
 pub(crate) const MAX_OPERATIONS_SHOWN: usize = 20;
 
+/// How firmly the sessions tie a folder to their own work, and whether scripts alone show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Standing {
+    pub strength: Strength,
+    /// Every operation that gives `strength` comes from a script.
+    pub from_script: bool,
+}
+
+impl Standing {
+    /// The stronger of the two; at equal strength it is script-only only if both are.
+    pub fn merge(self, other: Standing) -> Standing {
+        use std::cmp::Ordering::*;
+        match self.strength.cmp(&other.strength) {
+            Greater => self,
+            Less => other,
+            Equal => Standing { from_script: self.from_script && other.from_script, ..self },
+        }
+    }
+
+    fn of(folder: &FolderEvidence) -> Option<Standing> {
+        let strength = folder.strength?;
+        let from_script = folder
+            .refs
+            .iter()
+            .filter(|r| r.strength == Some(strength))
+            .all(|r| matches!(r.source, Source::Shell { script: true, .. }));
+        Some(Standing { strength, from_script })
+    }
+}
+
+/// A folder a session wrote in or created.
+pub(crate) struct Marked<'a> {
+    pub key: &'a str,
+    pub path: &'a Path,
+    pub standing: Standing,
+}
+
+/// What is known of one folder: how it was first spelled and what each session showed of it.
+struct Entry {
+    path: PathBuf,
+    standing: Option<Standing>,
+    sessions: Vec<SessionEvidence>,
+}
+
 /// The evidence of every session, keyed by the `path_key` of the folder it names.
 #[derive(Default)]
 pub(crate) struct Folders {
-    by_folder: BTreeMap<String, Vec<SessionEvidence>>,
+    by_folder: BTreeMap<String, Entry>,
     /// Folders a ledger named first, not yet handed to `take_fresh`.
     fresh: Vec<PathBuf>,
 }
@@ -39,19 +83,38 @@ impl Folders {
             failed: 0,
             gaps: false,
         };
-        self.by_folder.entry(path_key(dir)).or_default().push(evidence);
+        self.entry(dir).sessions.push(evidence);
     }
 
     /// What the session's ledger shows: one entry per folder, kept apart from the listed working directory.
     pub fn add_ledger(&mut self, d: &Descriptor, ledger: &Ledger) {
         let gaps = has_gaps(ledger.coverage());
         for folder in ledger.folders() {
-            let key = path_key(Path::new(&folder.path));
-            if !self.by_folder.contains_key(&key) {
-                self.fresh.push(PathBuf::from(&folder.path));
+            let path = Path::new(&folder.path);
+            if !self.by_folder.contains_key(&path_key(path)) {
+                self.fresh.push(path.to_path_buf());
             }
-            self.by_folder.entry(key).or_default().push(session_evidence(d, folder, gaps));
+            let entry = self.entry(path);
+            entry.standing = match (entry.standing, Standing::of(folder)) {
+                (Some(a), Some(b)) => Some(a.merge(b)),
+                (a, b) => a.or(b),
+            };
+            entry.sessions.push(session_evidence(d, folder, gaps));
         }
+    }
+
+    fn entry(&mut self, dir: &Path) -> &mut Entry {
+        self.by_folder
+            .entry(path_key(dir))
+            .or_insert_with(|| Entry { path: dir.to_path_buf(), standing: None, sessions: Vec::new() })
+    }
+
+    /// The folders some session wrote in or created, parents before the folders inside them.
+    pub fn marked(&self) -> impl Iterator<Item = Marked<'_>> {
+        self.by_folder.iter().filter_map(|(key, e)| {
+            let standing = e.standing.filter(|s| s.strength >= Strength::Written)?;
+            Some(Marked { key, path: &e.path, standing })
+        })
     }
 
     /// The folders ledgers named since the last call that no listing had named before.
@@ -62,7 +125,7 @@ impl Folders {
     /// The evidence of the folder `root_key` and of everything below it, one entry per session.
     pub fn provenance_within(&self, root_key: &str) -> Option<Provenance> {
         let mut merged: BTreeMap<(&str, &str, &str), SessionEvidence> = BTreeMap::new();
-        let below = self.by_folder.iter().filter(|(k, _)| key_within(k, root_key)).flat_map(|(_, v)| v);
+        let below = self.by_folder.iter().filter(|(k, _)| key_within(k, root_key)).flat_map(|(_, e)| &e.sessions);
         for e in below {
             match merged.get_mut(&(e.store.as_str(), e.harness.as_str(), e.id.as_str())) {
                 Some(m) => merge(m, e),

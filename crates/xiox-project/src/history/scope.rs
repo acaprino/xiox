@@ -33,7 +33,7 @@ impl Scope {
         Scope::Within(keys)
     }
 
-    fn contains(&self, key: &str) -> bool {
+    pub fn contains(&self, key: &str) -> bool {
         match self {
             Scope::Everywhere => true,
             Scope::Within(roots) => roots.iter().any(|r| key_within(key, r)),
