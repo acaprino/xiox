@@ -39,15 +39,25 @@ pub use report::{
 pub(crate) struct UserDirs {
     pub home: PathBuf,
     pub temp: PathBuf,
+    /// Both folders are in their long form. `false`: no key comparison with them can be trusted,
+    /// so every session folder is protected.
+    pub resolved: bool,
 }
 
 impl UserDirs {
     /// The profile folder and the temp folder of this process, without a `\\?\` prefix.
     pub fn from_env() -> UserDirs {
+        UserDirs::from_dirs(std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default(), std::env::temp_dir())
+    }
+
+    /// `home` and `temp` in their long form; `resolved` is `false` when either stays short.
+    pub(crate) fn from_dirs(home: PathBuf, temp: PathBuf) -> UserDirs {
         let plain = |p: PathBuf| PathBuf::from(strip_verbatim(&p.to_string_lossy()).into_owned());
-        UserDirs {
-            home: plain(std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default()),
-            temp: plain(std::env::temp_dir()),
+        let (home, temp) = (plain(home), plain(temp));
+        let long = |p: &PathBuf| if p.as_os_str().is_empty() { Some(PathBuf::new()) } else { scope::long_path(p) };
+        match (long(&home), long(&temp)) {
+            (Some(home), Some(temp)) => UserDirs { home, temp, resolved: true },
+            _ => UserDirs { home, temp, resolved: false },
         }
     }
 

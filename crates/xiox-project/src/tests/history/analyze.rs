@@ -33,7 +33,7 @@ impl World {
         write_claude_session(&store, "11111111-2222-3333-4444-555555555555", &project.to_string_lossy(), &command);
         let roots = StoreRoots { claude_config_dir: Some(store), ..Default::default() };
         let sessions = MukadeSessions::with_roots(Agent::Claude, roots).with_cache_dir(Some(base.join("data")));
-        let user = UserDirs { home: base.join("home"), temp: base.join("home").join("Temp") };
+        let user = UserDirs { home: base.join("home"), temp: base.join("home").join("Temp"), resolved: true };
         World { _guard: guard, base, project, sessions, user }
     }
 

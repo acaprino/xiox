@@ -11,7 +11,7 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
-use crate::history::scope::unlinked_chain;
+use crate::history::scope::{has_short_component, unlinked_chain};
 use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
@@ -942,9 +942,13 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
     if !md.is_dir() {
         return Err("no longer a folder".to_string());
     }
+    if has_short_component(path) {
+        return Err("its path uses a short (8.3) name: not followed".to_string());
+    }
     // The folder itself is checked above, so a link found here is one of its ancestors.
     match unlinked_chain(path) {
         Err(Exclusion::Link) => return Err("now behind a link: not followed".to_string()),
+        Err(Exclusion::Unreadable) => return Err("cannot access one of the folders above it".to_string()),
         Err(_) => return Err("no longer there".to_string()),
         Ok(()) => {}
     }

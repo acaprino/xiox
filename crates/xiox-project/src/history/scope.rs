@@ -75,10 +75,57 @@ pub(crate) fn unlinked_chain(path: &Path) -> Result<(), Exclusion> {
         match dir.symlink_metadata() {
             Ok(meta) if is_link(&meta) => return Err(Exclusion::Link),
             Ok(_) => {}
-            Err(_) => return Err(Exclusion::Missing),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Exclusion::Missing),
+            Err(_) => return Err(Exclusion::Unreadable),
         }
     }
     Ok(())
+}
+
+/// A component shaped like an 8.3 alias (`ALFIOC~1`, `LONGNA~12.TXT`): one or more characters,
+/// `~`, one or more digits, then the end of the name or a `.`. Such a name can stand for a
+/// protected folder under another spelling, so no key comparison can be trusted with it.
+pub(crate) fn has_short_component(path: &Path) -> bool {
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        let stem = name.split('.').next().unwrap_or_default();
+        stem.rsplit_once('~').is_some_and(|(head, digits)| {
+            !head.is_empty() && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+    })
+}
+
+/// The long form of `path`, or `None` when it cannot be resolved or still has a short component.
+/// Only for the user's own folders read from the environment, never for paths of the history.
+pub(crate) fn long_path(path: &Path) -> Option<PathBuf> {
+    let long = sys::long_path(path)?;
+    (!has_short_component(&long)).then_some(long)
+}
+
+#[cfg(windows)]
+mod sys {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    pub(super) fn long_path(path: &Path) -> Option<PathBuf> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut buf = vec![0u16; 1024];
+        // SAFETY: `wide` is NUL-terminated; `buf` has `buf.len()` writable u16s.
+        let n = unsafe { GetLongPathNameW(wide.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        (n > 0 && n < buf.len()).then(|| PathBuf::from(OsString::from_wide(&buf[..n])))
+    }
+}
+
+#[cfg(not(windows))]
+mod sys {
+    use std::path::{Path, PathBuf};
+
+    pub(super) fn long_path(path: &Path) -> Option<PathBuf> {
+        Some(path.to_path_buf())
+    }
 }
 
 /// The project roots the session directories `dirs` lead to, other than the project itself.

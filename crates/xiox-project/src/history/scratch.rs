@@ -6,11 +6,12 @@ use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 
 use xiox_model::{is_system_dir, path_key};
+use xiox_cleaner::guard::in_system_area;
 use xiox_scanner::{is_broad_dir, is_cloud_dir};
 
 use super::folders::{Folders, Standing};
 use super::risk::{activity, risks};
-use super::scope::{local_dir, unlinked_chain, FixedDrives, Scope};
+use super::scope::{has_short_component, local_dir, unlinked_chain, FixedDrives, Scope};
 use super::{Exclusion, HistoryReport, Limit};
 use crate::owned::key_within;
 use crate::search::{inside_other_repo, item_for, Own};
@@ -84,6 +85,8 @@ struct Policy {
     /// The keys no folder may hold: the home, and a `%TEMP%` that is not inside `AppData`.
     keep_whole: Vec<String>,
     fixed_drives: FixedDrives,
+    /// The home and the temp are in their long form; otherwise nothing is admitted.
+    resolved: bool,
 }
 
 impl Policy {
@@ -94,15 +97,18 @@ impl Policy {
         let temp = non_empty(&user.temp);
         let temp_key = temp.as_deref().map(path_key).unwrap_or_default();
         let home_key = home.as_deref().map(path_key).unwrap_or_default();
-        // Every folder under the home's `AppData` is broad, and that is where the usual `%TEMP%`
-        // lies, so its holders are already protected. Any other temp must be kept whole here.
-        let in_home_app_data = temp.as_deref().zip(home.as_deref()).is_some_and(|(_, h)| {
-            key_within(&temp_key, &path_key(&h.join("AppData")))
+        let app_data = home.as_deref().map(|h| path_key(&h.join("AppData")));
+        let under_app_data = app_data.as_deref().is_some_and(|a| key_within(&temp_key, a));
+        // A `%TEMP%` exempts its own children from the broad-folder rule only when it is the
+        // usual `<home>\AppData\Local\Temp`, or a plain folder outside `AppData`.
+        let usual = home.as_deref().is_some_and(|h| temp_key == path_key(&h.join("AppData").join("Local").join("Temp")));
+        let plain = temp.as_deref().is_some_and(|t| {
+            !under_app_data && t.parent().is_some() && temp_key != home_key && !is_broad_dir(t, home.as_deref())
         });
-        let temp_is_broad = temp.as_deref().is_some_and(|t| {
-            t.parent().is_none() || temp_key == home_key || (!in_home_app_data && is_broad_dir(t, home.as_deref()))
-        });
-        let keep_whole = [Some(home_key), (!in_home_app_data).then(|| temp_key.clone())]
+        let temp_is_broad = !(usual || plain);
+        // Every folder under the home's `AppData` is broad, so the holders of a temp there are
+        // already protected; any other temp must be kept whole here.
+        let keep_whole = [Some(home_key), (!under_app_data).then(|| temp_key.clone())]
             .into_iter()
             .flatten()
             .filter(|k| !k.is_empty())
@@ -115,12 +121,19 @@ impl Policy {
             temp_is_broad,
             keep_whole,
             fixed_drives: FixedDrives::default(),
+            resolved: user.resolved,
         }
     }
 
     /// The folder as a clean local path, or why it is left out.
     fn admit(&self, raw: &Path) -> Result<PathBuf, Exclusion> {
+        if has_short_component(raw) {
+            return Err(Exclusion::ShortName);
+        }
         let path = local_dir(&raw.to_string_lossy())?;
+        if !self.resolved || in_system_area(&path) || self.other_profile(&path) {
+            return Err(Exclusion::Protected);
+        }
         let key = path_key(&path);
         if !self.scope.contains(&key) {
             return Err(Exclusion::OutsideScope);
@@ -150,14 +163,27 @@ impl Policy {
         path.parent().is_none() || key == self.temp_key || holds_a_root || (broad && !under_plain_temp)
     }
 
+    /// `<drive>:\Users\<name>\…` of a profile other than the home (also `Public` and `Default`).
+    fn other_profile(&self, path: &Path) -> bool {
+        let mut names = path.components().filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            _ => None,
+        });
+        let own = self.home.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().to_lowercase());
+        names.next().as_deref() == Some("users") && names.next().is_some_and(|name| Some(name) != own)
+    }
+
     /// The rules that look at the disk, never entering a link.
     fn on_disk(&self, path: &Path) -> Result<(), Exclusion> {
         unlinked_chain(path)?;
         if is_cloud_dir(path) {
             return Err(Exclusion::Protected);
         }
-        if !path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
-            return Err(Exclusion::Missing);
+        match path.symlink_metadata() {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => return Err(Exclusion::Missing),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Exclusion::Missing),
+            Err(_) => return Err(Exclusion::Unreadable),
         }
         if inside_other_repo(path) {
             return Err(Exclusion::OtherRepository);

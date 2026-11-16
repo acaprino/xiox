@@ -178,7 +178,10 @@ fn independent_verdict(dir: &Path) -> Verdict {
 /// being a repository with work of its own blocks it; a repository git cannot read, in it or
 /// below it, blocks it (nothing can show it has no unsaved work). What is below a folder and
 /// is not listed is checked again when the folder is removed (`clean::check_contents`).
-pub(crate) fn named_blocks(dir: &Path) -> Vec<Block> {
+/// With `repos_block`, any git repository inside the folder blocks it too: a session folder is
+/// nobody's copy, so what it holds cannot be vouched for (a named folder's nested copies are
+/// checked one by one at removal instead).
+pub(crate) fn named_blocks(dir: &Path, repos_block: bool) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut unknown = false;
     if is_git_repo(dir) {
@@ -189,7 +192,12 @@ pub(crate) fn named_blocks(dir: &Path) -> Vec<Block> {
         }
     }
     match nested_repos(dir) {
-        Ok(repos) => unknown |= repos.iter().any(|r| xiox_git::working_tree_dirty(r).is_none()),
+        Ok(repos) => {
+            unknown |= repos.iter().any(|r| xiox_git::working_tree_dirty(r).is_none());
+            if repos_block && !repos.is_empty() {
+                blocks.push(Block::HoldsRepositories);
+            }
+        }
         Err(_) => unknown = true,
     }
     if unknown {
@@ -328,7 +336,8 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
     let mut blocked = match &why {
         Why::SameRepository { has_own_work: Some(true), .. } => vec![Block::UnsavedWork],
         Why::SameRepository { has_own_work: None, .. } => vec![Block::UnsavedWorkUnknown],
-        Why::NameOnly | Why::SessionFolder { .. } => named_blocks(dir),
+        Why::NameOnly => named_blocks(dir, false),
+        Why::SessionFolder { .. } => named_blocks(dir, true),
         _ => Vec::new(),
     };
     if live_session_in(dir, env) {
