@@ -76,3 +76,62 @@ test('the ratio helper matches known values', () => {
   assert.equal(ratio([0, 0, 0], [255, 255, 255]).toFixed(1), '21.0');
   assert.equal(ratio([119, 119, 119], [255, 255, 255]).toFixed(2), '4.48');
 });
+
+/** A tint of tokens.css: `--name: color-mix(in srgb, var(--a) N%, var(--b))`, computed the way the browser mixes it. */
+function derived(name: string): Rgb {
+  const match = new RegExp(String.raw`--${name}:\s*color-mix\(in srgb,\s*var\(--([a-z-]+)\)\s*(\d+)%,\s*var\(--([a-z-]+)\)\)`).exec(tokens);
+  assert.ok(match, `--${name} is a color-mix of two tokens in tokens.css`);
+  return mix(rgb(token(match[1] as string)), rgb(token(match[3] as string)), Number(match[2]) / 100);
+}
+const solidSel = rgb(token('sel'));
+const box = mix(rgb(token('surface')), pane, alpha(token('box')));
+const shell = css('shell.css');
+
+test('on the solid --sel (the active section and the active category) the texts that sit there keep 4.5:1', () => {
+  for (const name of ['text-hi']) {
+    const r = ratio(rgb(token(name)), solidSel);
+    assert.ok(r >= 4.5, `--${name} on --sel is ${r.toFixed(2)}:1`);
+  }
+  // The pairs that fail there are never used on it: --muted (2.97), --text-2 (3.73), --warn (2.82), --ice (4.45).
+  assert.match(shell, /\.nv\.on kbd\s*\{\s*color:\s*var\(--text-hi\)/, 'the key of the active section is --text-hi');
+  assert.match(shell, /\.it\.on small,\s*\.it\.on b\s*\{\s*color:\s*var\(--text-hi\)/, 'the note and the size of the active category are --text-hi');
+});
+
+test('the muted notes keep 4.5:1 on every ground they sit on', () => {
+  const grounds: Record<string, Rgb> = {
+    box, band: rgb(token('band')), 'band-hi': rgb(token('band-hi')), 'selected row': selected,
+    hover: mix(rgb(token('sel')), pane, alpha(token('hover'))),
+  };
+  for (const [name, ground] of Object.entries(grounds)) {
+    const r = ratio(rgb(token('muted')), ground);
+    assert.ok(r >= 4.5, `--muted on ${name} is ${r.toFixed(2)}:1`);
+  }
+  // On the selected category header (--band-sel) --muted is 3.49:1, so its note is --ice there.
+  assert.ok(ratio(rgb(token('ice')), rgb(token('band-sel'))) >= 4.5, '--ice on --band-sel');
+  assert.match(list, /\.r\.grp\.sel \.nm-text \.s\s*\{\s*color:\s*var\(--ice\)/);
+});
+
+test('buttons keep 4.5:1 in their hover and pressed states, the danger variant included', () => {
+  const pairs: [string, string, Rgb][] = [
+    ['text', 'hover-btn', rgb(token('text'))], ['text', 'press-btn', rgb(token('text'))],
+    ['text-hi', 'hover-primary', rgb(token('text-hi'))], ['text-hi', 'press-primary', rgb(token('text-hi'))],
+    ['text-hi', 'danger-bg', rgb(token('text-hi'))], ['text-hi', 'danger-hover', rgb(token('text-hi'))], ['text-hi', 'danger-press', rgb(token('text-hi'))],
+  ];
+  for (const [fg, bg, color] of pairs) {
+    const r = ratio(color, derived(bg));
+    assert.ok(r >= 4.5, `--${fg} on --${bg} is ${r.toFixed(2)}:1`);
+  }
+});
+
+test('the error colour and the hover row text keep 4.5:1 where fields and rows use them', () => {
+  assert.ok(ratio(rgb(token('err')), box) >= 4.5, '--err on a field');
+  const hover = mix(rgb(token('sel')), pane, alpha(token('hover')));
+  for (const name of ['text', 'text-2', 'text-hi', 'ice']) assert.ok(ratio(rgb(token(name)), hover) >= 4.5, `--${name} on the hovered row`);
+});
+
+test('the secondary text is 12 px at the least: no font size below the scale is left in the styles', () => {
+  for (const name of ['shell.css', 'list.css', 'dialog.css', 'frame.css', 'tokens.css']) {
+    const small = [...css(name).matchAll(/font(?:-size)?:[^;}]*?\b(\d+(?:\.\d+)?)px/g)].filter((m) => Number(m[1]) < 12);
+    assert.deepEqual(small.map((m) => m[0]), [], `${name} sets a font below 12px`);
+  }
+});
