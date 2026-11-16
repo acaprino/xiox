@@ -118,7 +118,7 @@ impl<'a> History<'a> {
 
     /// The project roots the listed working directories lead to, to be verified with the folders
     /// the search finds. Records each folder a listing names.
-    pub fn listed_roots(&mut self, project: &Project, _opts: &Options, _env: &Env) -> Vec<PathBuf> {
+    pub fn listed_roots(&mut self, project: &Project) -> Vec<PathBuf> {
         let mut dirs = Vec::new();
         for (_, listing) in self.input.listings {
             for session in &listing.items {

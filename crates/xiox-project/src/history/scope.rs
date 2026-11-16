@@ -1,6 +1,7 @@
 //! Which session folders the project may look at, and which project roots they lead to. Every
 //! step before the last one is lexical: a folder outside the scope is counted, never opened.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -10,7 +11,7 @@ use xiox_scanner::{project_roots_from_sessions, Skip};
 
 use super::Exclusion;
 use crate::owned::key_within;
-use crate::search::Own;
+use crate::search::{is_link, Own};
 use crate::{Env, Options, Project};
 
 /// Where `--no-drives` and the search roots let the analysis reach, as `path_key`s.
@@ -53,6 +54,33 @@ pub(crate) fn local_dir(raw: &str) -> Result<PathBuf, Exclusion> {
     Ok(normalize_path(Path::new(&plain)))
 }
 
+/// The drives that are fixed local disks, asked of the system once and only when needed.
+#[derive(Default)]
+pub(crate) struct FixedDrives(OnceCell<Vec<char>>);
+
+impl FixedDrives {
+    pub fn holds(&self, path: &Path) -> bool {
+        let letter = path.to_string_lossy().chars().next().map(|c| c.to_ascii_uppercase());
+        let drives = self.0.get_or_init(|| xiox_disktree::fixed_drives().iter().map(|d| d.letter).collect());
+        letter.is_some_and(|l| drives.contains(&l))
+    }
+}
+
+/// Looks at the folder and every ancestor from the top down without following a link: the first
+/// link, or the first one that cannot be read, is why the folder is left out.
+pub(crate) fn unlinked_chain(path: &Path) -> Result<(), Exclusion> {
+    let mut chain: Vec<&Path> = path.ancestors().filter(|a| a.parent().is_some()).collect();
+    chain.reverse();
+    for dir in chain {
+        match dir.symlink_metadata() {
+            Ok(meta) if is_link(&meta) => return Err(Exclusion::Link),
+            Ok(_) => {}
+            Err(_) => return Err(Exclusion::Missing),
+        }
+    }
+    Ok(())
+}
+
 /// The project roots the session directories `dirs` lead to, other than the project itself.
 /// Each directory is counted once in `excluded` when it, or the root it leads to, is left out.
 pub(crate) fn cwd_roots(
@@ -64,6 +92,7 @@ pub(crate) fn cwd_roots(
 ) -> Vec<PathBuf> {
     let own = Own::new(project);
     let mut count = |why: Exclusion| *excluded.entry(why).or_default() += 1;
+    let drives = FixedDrives::default();
     let mut seen = HashSet::new();
     let mut candidates = Vec::new();
     for dir in dirs.iter().filter(|d| seen.insert(path_key(d))) {
@@ -72,6 +101,10 @@ pub(crate) fn cwd_roots(
             count(Exclusion::OutsideScope);
         } else if own.holds(&key) {
             count(Exclusion::InsideProject);
+        } else if !drives.holds(dir) {
+            count(Exclusion::NotLocal);
+        } else if let Err(why) = unlinked_chain(dir) {
+            count(why);
         } else {
             candidates.push(dir.clone());
         }

@@ -1363,3 +1363,61 @@ fn select_refuses_a_folder_that_holds_a_scratch_item() {
         format!("cannot be removed: it holds {}, found in session history: {}", scratch.display(), named.display())
     );
 }
+
+#[test]
+fn check_dir_refuses_a_target_under_a_linked_ancestor() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let project = resolve_project(&root).unwrap();
+    let real = base.join("real");
+    fill(&real.join("copy"), 1, 1024);
+    let link = base.join("linked");
+    if !link_dir(&link, &real) {
+        eprintln!("skipped: cannot create a junction here");
+        return;
+    }
+    let through = link.join("copy");
+    let item = Item {
+        key: path_key(&through),
+        category: Category::Copies,
+        path: Some(through),
+        bytes: None,
+        level: Level::Caution,
+        blocked: Vec::new(),
+        why: Why::NameOnly,
+        target: Target::Dir { kind: ArtifactKind::ProjectFolder },
+        provenance: None,
+    };
+
+    assert_eq!(check_dir(&item, 7, &project).unwrap_err(), "now behind a link: not followed");
+    assert!(real.join("copy").exists());
+    let _ = fs::remove_dir(&link);
+}
+
+#[test]
+fn a_copy_only_the_session_history_found_is_chosen_and_checked_again() {
+    use crate::history::UserDirs;
+    use crate::tests::history::fake::{descriptor, input, listing};
+    let (_t, base) = tmp();
+    let root = repo(&base.join("work").join("proj"));
+    // Five levels down: out of the walk's reach, found only through a session's working directory.
+    let deep = clone(&root, &base.join("a").join("b").join("c").join("d").join("e"));
+    let listings = [listing(
+        Agent::Claude,
+        vec![descriptor(Agent::Claude, "main", "s1", &deep.to_string_lossy(), "2026-11-10T10:00:00Z", None)],
+    )];
+    let user = UserDirs::default();
+    let with_history = Env { search_roots: Some(vec![base.clone()]), history: input(&listings, None, &user), ..env() };
+    let scan = scan_in(&root, &with_history);
+    let item = scan.items.iter().find(|i| i.key == path_key(&deep)).expect("the copy is listed");
+    assert_eq!(item.category, Category::Copies);
+    let chosen = select(&scan, &req(&[], &[&deep])).unwrap();
+
+    // The clean checks again without the history.
+    let without = Env { search_roots: Some(vec![base.clone()]), ..env() };
+    let bin = FakeBin::new(PathBuf::from("unused"));
+    let out = run_with(&scan, &chosen, RemoveMode::Permanent, true, &without, &bin, &|_| Vec::new());
+
+    assert!(matches!(outcome_of(&out, &deep), Outcome::Removed { .. }), "{:#?}", out.items);
+    assert!(deep.join("README.md").exists());
+}

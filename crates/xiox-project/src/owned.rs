@@ -19,6 +19,7 @@ pub(crate) fn analyze_with(
     opts: &Options,
     env: &Env,
     budget: crate::history::Budget,
+    known: &[PathBuf],
 ) -> Result<ProjectScan, Error> {
     let started = Instant::now();
     let (project, entries) = resolve_full(path)?;
@@ -41,7 +42,8 @@ pub(crate) fn analyze_with(
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
     let mut history = crate::history::History::start(&project, opts, env).map(|h| h.with_budget(budget));
-    let listed = history.as_mut().map(|h| h.listed_roots(&project, opts, env)).unwrap_or_default();
+    let mut listed = history.as_mut().map(|h| h.listed_roots(&project)).unwrap_or_default();
+    listed.extend(known.iter().cloned());
     let found = crate::search::search(&project, opts, env, &listed);
     items.extend(found.items);
     notes.extend(found.notes);

@@ -417,11 +417,16 @@ pub fn is_elevated() -> bool {
 
 /// [`analyze_project`] with everything outside the project tree injected.
 pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<ProjectScan, Error> {
-    owned::analyze_with(path, opts, env, history::BUDGET)
+    owned::analyze_with(path, opts, env, history::BUDGET, &[])
+}
+
+/// [`analyze_with`] that also verifies `known`, folders found some other way than the search.
+pub(crate) fn analyze_known(path: &Path, opts: &Options, env: &Env, known: &[PathBuf]) -> Result<ProjectScan, Error> {
+    owned::analyze_with(path, opts, env, history::BUDGET, known)
 }
 
 /// The probe's analysis: light mode, history on, the given budget.
 pub(crate) fn probe_with(path: &Path, budget: history::Budget, env: &Env) -> Result<ProjectScan, Error> {
     let opts = Options { measure: false, ..Options::default() };
-    owned::analyze_with(path, &opts, env, budget)
+    owned::analyze_with(path, &opts, env, budget, &[])
 }

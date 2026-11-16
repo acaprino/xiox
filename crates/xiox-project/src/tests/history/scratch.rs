@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::json;
 use xiox_model::{path_key, Agent, ArtifactKind, Level};
@@ -248,20 +248,6 @@ fn broad_and_protected_folders_are_never_scratch() {
             }
         }
     }
-}
-
-/// A junction (or symlink) at `link` leading to `target`; `false` when this machine cannot make one.
-fn link_dir(link: &Path, target: &Path) -> bool {
-    #[cfg(windows)]
-    let made = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .output()
-        .is_ok_and(|o| o.status.success());
-    #[cfg(not(windows))]
-    let made = std::os::unix::fs::symlink(target, link).is_ok();
-    made
 }
 
 #[test]

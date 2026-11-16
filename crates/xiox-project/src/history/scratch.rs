@@ -2,7 +2,6 @@
 //! project. The first rules are lexical and run before any access to the disk; a folder that
 //! fails one is only counted.
 
-use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -11,10 +10,10 @@ use xiox_scanner::{is_broad_dir, is_cloud_dir};
 
 use super::folders::{Folders, Standing};
 use super::risk::{activity, risks};
-use super::scope::{local_dir, Scope};
+use super::scope::{local_dir, unlinked_chain, FixedDrives, Scope};
 use super::Exclusion;
 use crate::owned::key_within;
-use crate::search::{inside_other_repo, is_link, item_for, Own};
+use crate::search::{inside_other_repo, item_for, Own};
 use crate::{Category, Env, Item, Options, Project, Why};
 
 /// The review candidates the sessions' own work gives, in key order. `listed` are the items
@@ -71,7 +70,7 @@ struct Policy {
     temp_is_broad: bool,
     /// The keys no folder may hold: the home, and a `%TEMP%` that is not inside `AppData`.
     keep_whole: Vec<String>,
-    fixed_drives: OnceCell<Vec<char>>,
+    fixed_drives: FixedDrives,
 }
 
 impl Policy {
@@ -102,7 +101,7 @@ impl Policy {
             temp_key,
             temp_is_broad,
             keep_whole,
-            fixed_drives: OnceCell::new(),
+            fixed_drives: FixedDrives::default(),
         }
     }
 
@@ -119,7 +118,7 @@ impl Policy {
         if self.own.inside(&key) || self.protected(&path, &key) {
             return Err(Exclusion::Protected);
         }
-        if !self.on_fixed_drive(&path) {
+        if !self.fixed_drives.holds(&path) {
             return Err(Exclusion::NotLocal);
         }
         self.on_disk(&path)?;
@@ -138,23 +137,9 @@ impl Policy {
         path.parent().is_none() || key == self.temp_key || holds_a_root || (broad && !under_plain_temp)
     }
 
-    fn on_fixed_drive(&self, path: &Path) -> bool {
-        let letter = path.to_string_lossy().chars().next().map(|c| c.to_ascii_uppercase());
-        let drives = self.fixed_drives.get_or_init(|| xiox_disktree::fixed_drives().iter().map(|d| d.letter).collect());
-        letter.is_some_and(|l| drives.contains(&l))
-    }
-
     /// The rules that look at the disk, never entering a link.
     fn on_disk(&self, path: &Path) -> Result<(), Exclusion> {
-        let mut chain: Vec<&Path> = path.ancestors().filter(|a| a.parent().is_some()).collect();
-        chain.reverse();
-        for dir in chain {
-            match dir.symlink_metadata() {
-                Ok(meta) if is_link(&meta) => return Err(Exclusion::Link),
-                Ok(_) => {}
-                Err(_) => return Err(Exclusion::Missing),
-            }
-        }
+        unlinked_chain(path)?;
         if is_cloud_dir(path) {
             return Err(Exclusion::Protected);
         }

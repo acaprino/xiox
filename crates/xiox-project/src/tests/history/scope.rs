@@ -219,3 +219,46 @@ fn non_local_working_directories_are_counted_through_the_listing() {
 
     assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::NotLocal), Some(&2));
 }
+
+#[test]
+fn a_cwd_behind_a_junction_is_counted_as_a_link_and_never_listed() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    // The copy lies out of the walk's reach: only the junction leads to it.
+    let real = base.join("r1").join("r2").join("r3").join("r4");
+    clone(&project, &real.join("copy"));
+    let link = base.join("work").join("linked");
+    if !link_dir(&link, &real) {
+        eprintln!("skipped: cannot create a junction or symlink here");
+        return;
+    }
+    let listings = [listing(
+        Agent::Claude,
+        vec![descriptor(Agent::Claude, "main", "s1", &cwd(&link.join("copy")), "2026-11-10T10:00:00Z", None)],
+    )];
+
+    let s = scan(&project, &Options::default(), vec![base.clone()], &listings);
+
+    assert!(copies(&s).is_empty(), "{:?}", copies(&s));
+    assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::Link), Some(&1));
+    let _ = fs::remove_dir(&link);
+}
+
+#[test]
+fn a_cwd_on_a_drive_that_is_not_fixed_is_not_local() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let fixed: Vec<char> = xiox_disktree::fixed_drives().iter().map(|d| d.letter).collect();
+    let Some(letter) = ('D'..='Z').rev().find(|l| !fixed.contains(l)) else { return };
+    let drive = PathBuf::from(format!("{letter}:\\"));
+    let listings = [listing(
+        Agent::Claude,
+        vec![descriptor(Agent::Claude, "main", "s1", &cwd(&drive.join("w").join("copy")), "2026-11-10T10:00:00Z", None)],
+    )];
+
+    // The drive is within the search roots, so only the drive type can leave the folder out.
+    let s = scan(&project, &Options::default(), vec![drive], &listings);
+
+    assert!(copies(&s).is_empty());
+    assert_eq!(s.history.as_ref().unwrap().excluded.get(&Exclusion::NotLocal), Some(&1));
+}

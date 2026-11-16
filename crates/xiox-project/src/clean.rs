@@ -11,12 +11,13 @@
 //! Every string in the outcome is English. The engine's Italian reasons are never copied, and
 //! the operating system's own error descriptions (localized) are reduced to `os error N`.
 
+use crate::history::scope::unlinked_chain;
 use crate::nested::nested_repos;
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
     Block, Category, Env, Item, Note, Options, Project, ProjectScan, SCHEMA, SearchMode, SessionHealth, Target,
-    Why, analyze_with,
+    Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, Level, PlanAction, PlanItem, RemoveMode, path_key};
@@ -565,7 +566,14 @@ pub(crate) fn clean_with(
         admin: scan.search == SearchMode::MftIndex,
         history: false,
     };
-    match analyze_with(&scan.project.root, &opts, env) {
+    // A copy or named folder the session history alone found is out of the search's reach: the
+    // check names it, and repeats the same identity checks as the analysis.
+    let known: Vec<PathBuf> = old
+        .iter()
+        .filter(|i| matches!(i.category, Category::Copies | Category::Named))
+        .filter_map(|i| i.path.clone())
+        .collect();
+    match crate::analyze_known(&scan.project.root, &opts, env, &known) {
         Ok(fresh) => {
             let run = Run { mode, dry_run, project: &fresh.project, items: &fresh.items, env, io };
             run.remove(&old, &fresh, &mut done);
@@ -933,6 +941,12 @@ pub(crate) fn check_dir(fresh: &Item, expected_bytes: u64, project: &Project) ->
     }
     if !md.is_dir() {
         return Err("no longer a folder".to_string());
+    }
+    // The folder itself is checked above, so a link found here is one of its ancestors.
+    match unlinked_chain(path) {
+        Err(Exclusion::Link) => return Err("now behind a link: not followed".to_string()),
+        Err(_) => return Err("no longer there".to_string()),
+        Ok(()) => {}
     }
     let key = &fresh.key;
     let (kind, action) = match &fresh.target {
