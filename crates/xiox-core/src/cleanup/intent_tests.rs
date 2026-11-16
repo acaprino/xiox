@@ -490,7 +490,12 @@ fn cleanup_view_confirm_lists_the_warnings_of_the_open_dialog() {
     assert_eq!(d.warnings, st.confirm_warnings);
     assert!(d.warnings.iter().any(|w| w.starts_with("Toolchain – History: ")), "{:?}", d.warnings);
     assert!(d.warnings.iter().any(|w| w.starts_with(st.natives[1].label)), "{:?}", d.warnings);
-    assert!(d.summary.is_empty() && d.rows.is_empty() && d.cautions.is_empty() && d.caution_title.is_none() && d.ack.is_none() && d.error.is_none());
+    // The confirmation carries its own numbers (the page decides nothing from the action label) and says it deletes for good.
+    let clean = v.actions.iter().find(|a| a.id == "clean").expect("the clean action");
+    assert_eq!(d.summary, [clean.label.clone(), v.status.text.clone()]);
+    assert!(d.summary[0].starts_with("Clean ") && d.summary[1].contains(" to delete ("), "{:?}", d.summary);
+    assert!(d.permanent);
+    assert!(d.rows.is_empty() && d.cautions.is_empty() && d.caution_title.is_none() && d.ack.is_none() && d.error.is_none());
     // Primary first, as the old window's dialog had them.
     assert_eq!(d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary, b.enabled)).collect::<Vec<_>>(), [
         ("continue", "Continue", true, true),

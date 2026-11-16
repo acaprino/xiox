@@ -5,10 +5,11 @@
 
 import { fill, h } from '../dom.ts';
 import { formatBytes } from '../format.ts';
-import { bulkIntent, searchIntent } from '../intents.ts';
-import { gridTemplate, rowParents } from '../rows.ts';
+import { actionIntent, bulkIntent, searchIntent } from '../intents.ts';
+import { gridVars, rowParents } from '../rows.ts';
 import { bulkCheck, bulkLocked, currentFocus, foldedGroups, searching, shownRows, type UiState } from '../state.ts';
 import type { Check, RowView, SectionView } from '../types.ts';
+import { emptyAction } from './policy.ts';
 import type { Handlers } from './shell.ts';
 
 const SEARCH_DELAY_MS = 150;
@@ -23,16 +24,16 @@ const ariaChecked = (check: Check): string => (check === 'on' ? 'true' : check =
  * The check cell: the whole 34 px cell is the button (a 14 px box is a hard target) and the box is drawn inside it. A job
  * running freezes the list: Rust refuses a tick then (and never greys a row for it), so the page does not offer one.
  */
-function checkCell(attrs: { label: string; check: Check; disabled: boolean; title: string | null; key: string }, click: () => void): HTMLElement {
-  return h('button', {
+function checkCell(attrs: { label: string; check: Check; disabled: boolean; title: string | null; key: string }, click: () => void, cell: 'gridcell' | 'columnheader' = 'gridcell'): HTMLElement {
+  return h('div', { class: 'ckcell', role: cell }, h('button', {
     type: 'button', class: 'ckc', role: 'checkbox', tabindex: -1, 'aria-checked': ariaChecked(attrs.check),
     'aria-label': attrs.label, disabled: attrs.disabled, title: attrs.title, 'data-key': attrs.key,
     onClick: (event: Event) => { event.stopPropagation(); click(); },
-  }, h('i', { class: 'box' }));
+  }, h('i', { class: 'ckbox' })));
 }
 
 function checkbox(row: RowView, on: Handlers, section: SectionView['section'], busy: boolean): HTMLElement {
-  if (row.check === 'none') return h('span');
+  if (row.check === 'none') return h('span', { role: 'gridcell' });
   const group = row.kind === 'group';
   return checkCell({
     label: group ? `${row.name}: tick or clear every item that can be ticked` : row.name,
@@ -46,7 +47,7 @@ function masterCheck(view: SectionView, on: Handlers): HTMLElement {
   return checkCell({
     label: 'Tick or clear everything that can be ticked', check, disabled: check === 'none' || bulkLocked(view),
     title: check === 'on' ? 'Clear everything' : 'Tick everything that can be ticked (items marked caution stay as they are)', key: 'bulk:master',
-  }, () => on.send(view.section, bulkIntent(view.section, check !== 'on')));
+  }, () => on.send(view.section, bulkIntent(view.section, check !== 'on')), 'columnheader');
 }
 
 /** The line under the name: the path or reason, or, for a blocked row (muted and disabled), why it cannot be chosen. */
@@ -55,13 +56,16 @@ function subLine(row: RowView): HTMLElement | null {
   return row.sub ? ellipsis(row.sub, 's') : null;
 }
 
+/** The id of a row's element: what the grid's `aria-activedescendant` names. */
+const rowDomId = (id: string): string => `row-${encodeURIComponent(id)}`;
+
 function sizeText(row: RowView): string {
   if (row.bytes !== null) return formatBytes(row.bytes);
   return row.sizeText ?? '—';
 }
 
 function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, parents: ReadonlySet<string>, anyParent: boolean, folded: ReadonlySet<string>, focused: boolean, on: Handlers): HTMLElement {
-  if (row.kind === 'header') return h('div', { class: 'r sec', 'data-row': row.id }, ellipsis(row.name, 't'));
+  if (row.kind === 'header') return h('div', { class: 'r sec', role: 'row', 'data-row': row.id }, h('div', { role: 'gridcell' }, ellipsis(row.name, 't')));
   const group = row.kind === 'group';
   const cells = [...row.cells];
   const parts: HTMLElement[] = [];
@@ -83,20 +87,26 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
         caret = h('span', { class: 'caret-gap' });
       }
       const note = group ? [view.nav.find((n) => n.id === row.id)?.note, row.why].filter(Boolean).join(' · ') : null;
-      parts.push(h('div', { class: 'nm' }, caret,
+      parts.push(h('div', { class: 'nm', role: 'gridcell' }, caret,
         h('div', { class: 'nm-text' }, ellipsis(row.name, 't'), note ? ellipsis(note, 's') : subLine(row))));
     } else if (column.kind === 'cell') {
       const text = cells.shift() ?? '';
-      parts.push(h('div', { class: 'cell num ellipsis', title: text }, text));
+      parts.push(h('div', { class: 'cell num ellipsis', role: 'gridcell', title: text }, text));
     } else if (column.kind === 'level') {
-      parts.push(row.level && !group ? h('div', { class: `lv ${row.level}`, 'data-fit': '' }, row.level) : h('div'));
+      parts.push(row.level && !group ? h('div', { class: `lv ${row.level}`, role: 'gridcell', 'data-fit': '' }, row.level) : h('div', { class: 'lv', role: 'gridcell' }));
     } else {
-      parts.push(h('div', { class: 'sz num', 'data-fit': '' }, group && row.bytes === null ? '' : sizeText(row)));
+      parts.push(h('div', { class: 'sz num', role: 'gridcell', 'data-fit': '' }, group && row.bytes === null ? '' : sizeText(row)));
     }
   }
   const cls = ['r', group ? 'grp' : '', row.kind === 'child' ? 'child' : '', row.muted ? 'muted' : '', focused ? 'sel' : ''].filter(Boolean).join(' ');
+  // Tree grid: the row is expanded or collapsed when it has rows to show, selected when it has the focus, and sits at its depth.
+  const expandable = group || parents.has(row.id);
+  const expanded = group ? !folded.has(row.id) : ui.expanded.has(row.id);
+  const grouped = view.rows.some((r) => r.kind === 'group');
+  const level = group ? 1 : (grouped ? 1 : 0) + (row.kind === 'child' ? 2 : 1);
   return h('div', {
-    class: cls, 'data-row': row.id, 'aria-current': focused ? 'true' : null,
+    class: cls, id: rowDomId(row.id), role: 'row', 'data-row': row.id, 'aria-selected': String(focused), 'aria-level': level,
+    'aria-expanded': expandable ? String(expanded) : null,
     // A category header folds its rows (its check box, in the first cell, ticks them); any other row takes the focus, which
     // is what the detail panel follows. The tick is the check cell's business: a 34 px target, not a 14 px box.
     onClick: () => { if (group) on.toggleFold(row.id); else on.focusRow(row.id); },
@@ -162,24 +172,38 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   // focus goes back to when a dialog closes.
   grid.tabIndex = 0;
   grid.setAttribute('aria-label', view.title);
-  if (view.rows.length === 0 || view.empty !== null) {
-    grid.style.gridTemplateColumns = '';
+  grid.setAttribute('role', 'treegrid');
+  grid.setAttribute('aria-busy', String(view.job !== null));
+  const empty = view.rows.length === 0 || view.empty !== null;
+  grid.classList.toggle('is-empty', empty);
+  if (empty) {
+    // Nothing for the arrows to move over: the grid is no Tab stop (so no pane-wide focus ring); the action it offers is.
+    grid.tabIndex = -1;
+    grid.removeAttribute('aria-activedescendant');
+    for (const name of ['--cols', '--cols-l', '--cols-ls']) grid.style.removeProperty(name);
     grid.classList.remove('grouped');
-    fill(grid, h('div', { class: 'empty' },
+    const start = emptyAction(view);
+    fill(grid, h('div', { class: view.job !== null ? 'empty busy' : 'empty' },
       view.empty ? h('b', { class: 'empty-title' }, view.empty.title) : null,
-      view.empty ? h('span', {}, view.empty.text) : null));
+      view.empty ? h('span', {}, view.empty.text) : null,
+      start === null ? null : h('button', {
+        type: 'button', class: 'btn primary', 'data-key': `empty:${start.id}`, onClick: () => on.send(view.section, actionIntent(view.section, start.id)),
+      }, h('span', { 'data-fit': '' }, start.label))));
     return;
   }
   const checks = view.rows.some((r) => r.check !== 'none');
   const parents = rowParents(view.rows);
   const folded = foldedGroups(ui, view);
   const focus = currentFocus(ui, view);
-  grid.style.gridTemplateColumns = gridTemplate(view.columns, checks);
+  for (const [name, value] of Object.entries(gridVars(view.columns, checks))) grid.style.setProperty(name, value);
+  // The focused row is announced by its id: the focus itself stays on the grid (one Tab stop).
+  const current = rows.find((r) => r.id === focus && r.kind !== 'header');
+  if (current) grid.setAttribute('aria-activedescendant', rowDomId(current.id)); else grid.removeAttribute('aria-activedescendant');
   grid.classList.toggle('grouped', view.rows.some((r) => r.kind === 'group'));
   const master = view.bulk && view.report === null && bulkIntent(view.section, true) !== null;
-  const head = h('div', { class: 'r h' },
-    checks ? (master ? masterCheck(view, on) : h('span')) : null,
-    ...view.columns.map((c) => h('span', { class: `col-${c.kind}`, 'data-fit': '' }, c.title)));
+  const head = h('div', { class: 'r h', role: 'row' },
+    checks ? (master ? masterCheck(view, on) : h('span', { role: 'columnheader' })) : null,
+    ...view.columns.map((c) => h('span', { class: `col-${c.kind}`, role: 'columnheader', 'data-fit': '' }, c.title)));
   fill(grid, head, ...rows.flatMap((row) => {
     const node = rowNode(row, view, ui, checks, parents, parents.size > 0, folded, row.id === focus, on);
     // An empty marker before a category header: it does not stick, so the page can tell where the category really starts.

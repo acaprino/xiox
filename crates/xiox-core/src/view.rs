@@ -217,6 +217,8 @@ pub struct DialogView {
     pub title: String,
     pub text: Vec<String>,
     pub summary: Vec<String>,
+    /// The primary button deletes for good: the page makes it the danger variant and starts the focus on Cancel.
+    pub permanent: bool,
     pub rows: Vec<(String, String)>,
     #[serde(deserialize_with = "required")]
     pub warnings_title: Option<String>,
@@ -562,6 +564,7 @@ mod tests {
                 title: "Clean?".into(),
                 text: vec!["t".into()],
                 summary: vec!["s".into()],
+                permanent: true,
                 rows: vec![("a".into(), "1 KB".into())],
                 warnings_title: Some("Warnings".into()),
                 warnings: vec!["w".into()],

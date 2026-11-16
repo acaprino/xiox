@@ -47,6 +47,7 @@ export async function answer(command: string, args?: Args): Promise<unknown> {
     case 'developers_add_root': return model.view('developers');
     case 'save_report': return model.saveReport(section(args));
     case 'window_ready': return null;
+    case 'window_chrome': return null;
     default: throw { kind: 'failed', message: `unknown command ${command}` };
   }
 }

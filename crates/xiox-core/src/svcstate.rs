@@ -450,6 +450,7 @@ impl ServicesState {
             title,
             text: vec![text.into()],
             summary: Vec::new(),
+            permanent: false,
             rows,
             warnings_title: None,
             warnings: Vec::new(),

@@ -6,8 +6,10 @@
 //! the desktop policy every webview gets (`desktop`: navigation, browser keys, context menu, recovery).
 
 mod backend;
+mod chrome;
 mod commands;
 mod desktop;
+mod dropped;
 mod error;
 #[cfg(debug_assertions)]
 mod fake;
@@ -26,7 +28,7 @@ use xiox_core::pump::{pump_channel, spawn_pump, ViewSink};
 use xiox_core::view::SectionView;
 
 /// The event the page listens to (`apps/desktop/src/api.ts`).
-const VIEW_EVENT: &str = "xiox:view";
+pub(crate) const VIEW_EVENT: &str = "xiox:view";
 
 /// Views reach the page as the `xiox:view` event. (A newtype: `ViewSink` and `AppHandle` are both
 /// foreign to this crate.)
@@ -112,19 +114,44 @@ fn monitor_rects(window: &WebviewWindow) -> Vec<(i32, i32, u32, u32)> {
     monitors.iter().map(|m| (m.position().x, m.position().y, m.size().width, m.size().height)).collect()
 }
 
-/// Puts the window where it was last closed when that still fits the screens, else in the centre.
+/// The monitors' work areas (the screen without the taskbar) as `(x, y, width, height)` in physical pixels.
+fn work_areas(window: &WebviewWindow) -> Vec<window_state::Rect> {
+    let monitors = window.available_monitors().unwrap_or_default();
+    monitors.iter().map(|m| (m.work_area().position.x, m.work_area().position.y, m.work_area().size.width, m.work_area().size.height)).collect()
+}
+
+/// The title bar and borders around the page: the window's outer size minus its inner size.
+fn frame_of(window: &WebviewWindow) -> (u32, u32) {
+    match (window.outer_size(), window.inner_size()) {
+        (Ok(outer), Ok(inner)) => (outer.width.saturating_sub(inner.width), outer.height.saturating_sub(inner.height)),
+        _ => (0, 0),
+    }
+}
+
+/// The first launch (and a run that remembers nothing): the configured size may be larger than the screen it opens on, so
+/// it is brought inside that monitor's work area before the window is shown, and then centred.
+fn place_first(window: &WebviewWindow) {
+    if let (Some(monitor), Some(g)) = (window.current_monitor().ok().flatten(), measure(window)) {
+        let area = monitor.work_area();
+        let g = window_state::clamp(g, frame_of(window), &[(area.position.x, area.position.y, area.size.width, area.size.height)]);
+        let _ = window.set_size(PhysicalSize::new(g.width, g.height));
+    }
+    let _ = window.center();
+}
+
+/// Puts the window where it was last closed when that still fits the screens, else in the centre. Either way the
+/// window is inside the work area it opens on: a saved size from a bigger screen is brought down to this one.
 fn restore_window(window: &WebviewWindow) {
     match window_state::load(&window_state::path()) {
         Some(g) if window_state::fits(&g, &monitor_rects(window)) => {
+            let g = window_state::clamp(g, frame_of(window), &work_areas(window));
             let _ = window.set_size(PhysicalSize::new(g.width, g.height));
             let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
             if g.maximized {
                 let _ = window.maximize();
             }
         }
-        _ => {
-            let _ = window.center();
-        }
+        _ => place_first(window),
     }
 }
 
@@ -161,7 +188,7 @@ fn main() {
     }
     // One window at a time (the fixtures window has its own name, so it can run beside a real one).
     let Some(_instance) = single_instance::acquire(if fake { r"Local\XioxUiFake" } else { r"Local\XioxUi" }) else {
-        single_instance::focus_existing("Xiox");
+        single_instance::focus_existing(chrome::APP_NAME);
         return;
     };
     // The last normal (neither maximized nor minimized) geometry, kept as the window moves.
@@ -171,6 +198,12 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(desktop::plugin())
         .on_window_event(move |window, event| {
+            if let WindowEvent::DragDrop(drag) = event {
+                if let Some(window) = window.app_handle().get_webview_window(window.label()) {
+                    dropped::on_event(&window, drag);
+                }
+                return;
+            }
             if !remember {
                 return;
             }
@@ -205,7 +238,7 @@ fn main() {
                     restore_window(&window);
                 } else if !fake {
                     // `--only-root`: not even the saved place is read (that would reach the real profile).
-                    let _ = window.center();
+                    place_first(&window);
                 }
                 // Hidden until the page has drawn (`desktop::window_ready`), so the first frame is the page.
                 desktop::show_when_drawn(&window);
@@ -224,6 +257,7 @@ fn main() {
             commands::developers_add_root,
             commands::save_report,
             desktop::window_ready,
+            chrome::window_chrome,
         ])
         .run(tauri::generate_context!())
         .expect("the Xiox window failed to start");

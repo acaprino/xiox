@@ -7,6 +7,7 @@ import { button, fill, h, kbd } from '../dom.ts';
 import { ramText } from '../format.ts';
 import { actionIntent } from '../intents.ts';
 import { footerHint } from '../keys.ts';
+import { disabledReason } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
 import { ABOUT_KEY } from './about.ts';
@@ -66,14 +67,30 @@ function ellipsis(text: string, tag: 'span' | 'div' = 'span'): HTMLElement {
   return h(tag, { class: 'ellipsis', title: text }, text);
 }
 
-function actionButton(section: SectionId, action: ActionView, on: Handlers): HTMLButtonElement {
+/** A disabled action says why: in its tooltip and, for a screen reader, in a hidden sentence its `aria-describedby` points at. */
+function actionButton(view: SectionView, action: ActionView, on: Handlers): HTMLButtonElement {
+  const reason = disabledReason(view, action);
+  const reasonId = `why-${action.id}`;
   return button(
-    [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null],
+    [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null, reason === null ? null : h('span', { class: 'sr-only', id: reasonId }, reason)],
     {
       class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
-      onClick: () => on.send(section, actionIntent(section, action.id)),
+      title: reason, 'aria-describedby': reason === null ? null : reasonId,
+      onClick: () => on.send(view.section, actionIntent(view.section, action.id)),
     },
   );
+}
+
+/**
+ * The status row is one live region (index.html: role=status, atomic): the badge is read in front of the sentence, and the
+ * region is rewritten only when the phrase changes, so a redraw that says the same thing is not announced again.
+ */
+function setStatus(badge: string, text: string): void {
+  const node = byId('status-text');
+  const phrase = `${badge}: ${text}`;
+  if (node.dataset.phrase === phrase) return;
+  node.dataset.phrase = phrase;
+  fill(node, h('span', { class: 'sr-only' }, `${badge}: `), ellipsis(text));
 }
 
 /** What a notice needs to open its extra lines: which are open, and how to flip one (the click goes to the page, which redraws). */
@@ -118,7 +135,7 @@ function renderJob(root: HTMLElement, view: SectionView): void {
 /** The window when nothing can be drawn (the first command failed): the message, in the notice area. */
 export function renderFailure(message: string): void {
   byId('badge').textContent = 'Error';
-  fill(byId('status-text'), ellipsis(message));
+  setStatus('Error', message);
   fill(byId('notices'), noticeNode({ tone: 'error', text: message, more: [] }));
 }
 
@@ -127,11 +144,11 @@ export function renderShell(screen: Screen, on: Handlers): void {
 
   // Top bar.
   byId('version').textContent = app.version;
-  fill(byId('actions'), ...view.actions.map((a) => actionButton(view.section, a, on)));
+  fill(byId('actions'), ...view.actions.map((a) => actionButton(view, a, on)));
 
   // Status row.
   byId('badge').textContent = view.status.badge;
-  fill(byId('status-text'), ellipsis(view.status.text));
+  setStatus(view.status.badge, view.status.text);
   byId('status-right').textContent = `${app.admin ? 'administrator' : 'standard user'} · ${ramText(app.ramTotalBytes)}`;
   const profile = byId('profile');
   profile.hidden = app.profileMismatch === null;
@@ -143,7 +160,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
 
   // Sections bar.
   fill(byId('sections'),
-    h('div', { class: 'hd' }, h('span', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
+    h('div', { class: 'hd' }, h('h2', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
     ...SECTION_ORDER.map((id, index) => h('button', {
       type: 'button', class: id === view.section ? 'nv on' : 'nv', 'data-section': id, 'data-key': `section:${id}`,
       'aria-current': id === view.section ? 'page' : null, onClick: () => on.openSection(id),
@@ -155,7 +172,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
 
   // List header: title and subtitle (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
-    h('span', { class: 'hd-title', 'data-fit': '' }, view.title),
+    h('h1', { class: 'hd-title', 'data-fit': '' }, view.title),
     h('span', { class: 'hd-right' }, h('span', { class: 'sub' }, ellipsis(view.subtitle))));
 
   // Notices, then the list and the detail of the focused row.

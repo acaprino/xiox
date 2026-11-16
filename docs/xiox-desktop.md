@@ -145,6 +145,19 @@ in some sections, a line about the selection (`Selected in Projects: 6.80 GB · 
 While a job runs the lists are frozen: you cannot tick or untick anything, because the
 selection is what the job is working on.
 
+**Windows and the taskbar.** The window title names the open section (`Cleanup - Xiox`), so Alt+Tab
+and the taskbar tell the sections apart. While a job runs the taskbar button shows its progress, and
+when it ends while Xiox is behind other windows the button flashes once. The window never opens
+larger than the work area of the screen it opens on (the saved size included), and the smallest size
+(960 x 560) fits a 1366 x 768 laptop at 125 % scaling. A folder dragged onto the window is offered to
+Developers: a message asks `Add "<folder>" to the folders Developers analyzes?` and nothing is added
+until you answer `Add`; anything that is not a folder only gets a message saying so.
+
+**Theme.** The look is dark only, with a fixed accent: a deliberate choice, not a gap. The palette
+is part of the product's identity and its contrasts are tested (`tests/contrast.test.ts`), so the
+window does not follow the system's light theme or accent colour. What follows the system is what
+accessibility needs: the high-contrast (forced colours) themes, reduced motion and the text size.
+
 ## Cleanup
 
 Temporary files, caches, browser data, logs and the other things Windows and your programs

@@ -96,7 +96,7 @@ test('a stale failure is dropped too and a current one is reported', async () =>
 
 test('services refresh only while shown, visible and without a dialog', () => {
   const dialog: DialogView = {
-    id: 'confirm', title: 'Disable 3 services?', text: [], summary: [], rows: [], warningsTitle: null, warnings: [], cautionTitle: null,
+    id: 'confirm', title: 'Disable 3 services?', text: [], summary: [], permanent: false, rows: [], warningsTitle: null, warnings: [], cautionTitle: null,
     cautions: [], ack: null, error: null, buttons: [],
   };
   const ui = createUi();

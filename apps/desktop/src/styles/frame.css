@@ -7,14 +7,22 @@
 }
 
 .btn {
-  display: inline-flex; align-items: center; gap: 7px; padding: 4px 12px;
+  display: inline-flex; align-items: center; gap: 7px; min-height: var(--hit); padding: 4px 12px;
   border: 2px solid var(--line); background: var(--button); color: var(--text);
-  font: 700 13px var(--font-display); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+  font: 700 var(--fs-md) var(--font-display); letter-spacing: var(--ls-caps); text-transform: uppercase; white-space: nowrap;
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 .btn.primary { background: var(--button-primary); border-color: var(--line-strong); color: var(--text-hi); }
+/* A button that cannot be undone: the primary look, tinted from --warn. It keeps its place as the one primary action. */
+.btn.danger { background: var(--danger-bg); border-color: var(--warn); color: var(--text-hi); }
 .btn kbd { color: inherit; }
-.btn:disabled { opacity: .45; cursor: default; }
+.btn:hover:not(:disabled) { background: var(--hover-btn); border-color: var(--live); }
+.btn:active:not(:disabled) { background: var(--press-btn); }
+.btn.primary:hover:not(:disabled) { background: var(--hover-primary); }
+.btn.primary:active:not(:disabled) { background: var(--press-primary); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-hover); border-color: var(--warn); }
+.btn.danger:active:not(:disabled) { background: var(--danger-press); }
+.btn:disabled { opacity: var(--op-disabled); cursor: default; }
 
 /* The grid behind everything. */
 #app::before {

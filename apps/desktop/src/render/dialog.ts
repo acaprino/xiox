@@ -49,9 +49,10 @@ function wire(): void {
   });
 }
 
-function dialogButton(view: SectionView, b: ButtonView, on: Handlers): HTMLButtonElement {
+/** The primary button of a permanent delete is the danger variant of the primary look (frame.css): still the one primary action. */
+function dialogButton(view: SectionView, b: ButtonView, danger: boolean, on: Handlers): HTMLButtonElement {
   return button(h('span', { 'data-fit': '' }, b.label), {
-    class: b.primary ? 'btn primary' : 'btn', 'data-button': b.id, 'data-key': `dlg:${b.id}`, disabled: !b.enabled,
+    class: b.primary ? (danger ? 'btn primary danger' : 'btn primary') : 'btn', 'data-button': b.id, 'data-key': `dlg:${b.id}`, disabled: !b.enabled,
     onClick: () => on.send(view.section, buttonIntent(view.section, b.id)),
   });
 }
@@ -61,7 +62,7 @@ function ackBox(view: SectionView, dialog: DialogView, on: Handlers): HTMLElemen
   return h('button', {
     type: 'button', class: 'ack', role: 'checkbox', 'aria-checked': String(checked), 'data-key': 'dlg:ack',
     onClick: () => on.send(view.section, { kind: 'setAck', on: !checked }),
-  }, h('span', { class: 'ckbox', 'aria-hidden': 'true' }), h('span', {}, 'I have read the warnings'));
+  }, h('i', { class: 'ckbox', 'aria-hidden': 'true' }), h('span', {}, 'I have read the warnings'));
 }
 
 function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
@@ -83,13 +84,16 @@ function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
   return h('div', { class: 'dlg frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-title', tabindex: -1 },
     h('h2', { id: 'dlg-title', class: 'dlg-title' }, d.title),
     h('div', { class: 'dlg-body' }, ...body),
-    h('div', { class: 'dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, on))));
+    h('div', { class: 'dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, d.permanent, on))));
 }
 
-/** The control that gets the focus when a dialog opens: the primary button if it is enabled, else the ack box, else Cancel. */
+/**
+ * The control that gets the focus when a dialog opens: Cancel for a permanent delete (a second Enter then never approves it),
+ * else the primary button if it is enabled, else the ack box, else Cancel.
+ */
 function firstFocus(root: HTMLElement, d: DialogView): HTMLElement | null {
-  const primary = d.buttons.find((b) => b.primary && b.enabled);
-  const key = primary ? `dlg:${primary.id}` : d.ack !== null ? 'dlg:ack' : 'dlg:cancel';
+  const primary = d.permanent ? undefined : d.buttons.find((b) => b.primary && b.enabled);
+  const key = primary ? `dlg:${primary.id}` : d.permanent ? 'dlg:cancel' : d.ack !== null ? 'dlg:ack' : 'dlg:cancel';
   return root.querySelector<HTMLElement>(`[data-key="${key}"]`)
     ?? controls(root).find((n) => n.matches('.btn')) ?? root.querySelector<HTMLElement>('[role=dialog]');
 }

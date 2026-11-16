@@ -12,6 +12,8 @@ import type { Handlers } from './shell.ts';
 
 type OptionOf<K extends OptionView['kind']> = Extract<OptionView, { kind: K }>;
 
+const PIP_WORDS: Record<string, string> = { on: 'all ticked', mixed: 'some ticked', off: 'none ticked', none: 'nothing to tick' };
+
 /** The menu of a list of categories: one entry per `group` row, the entry of the category the list is at is marked. */
 function menuRow(item: NavItem, view: SectionView, spy: string | null, on: Handlers): HTMLElement {
   const group = view.rows.find((r) => r.kind === 'group' && r.id === item.id);
@@ -21,7 +23,8 @@ function menuRow(item: NavItem, view: SectionView, spy: string | null, on: Handl
     disabled: group === undefined, title: group === undefined ? 'Nothing in this category matches the search' : `Go to ${item.name}`,
     onClick: () => on.goToGroup(item.id),
   },
-  h('i', { class: `pip ${group?.check ?? 'none'}`, 'aria-hidden': 'true' }),
+  // The pip is a picture of how much of the category is ticked: it says so in words too.
+  h('i', { class: `pip ${group?.check ?? 'none'}`, role: 'img', 'aria-label': PIP_WORDS[group?.check ?? 'none'] }),
   h('span', { class: 'it-name', 'data-fit': '' }, item.name),
   item.bytes === null ? null : h('b', { class: 'num', 'data-fit': '' }, formatBytes(item.bytes)),
   item.note ? h('small', { 'data-fit': '' }, item.note) : null);
@@ -42,7 +45,7 @@ function toggleControl(s: SectionId, o: OptionOf<'toggle'>, on: Handlers): HTMLE
     type: 'button', class: 'ck', role: 'checkbox', 'aria-checked': String(o.on), 'aria-label': o.label,
     disabled: !o.enabled, 'data-key': `opt:${o.id}`,
     onClick: () => on.send(s, optionIntent(s, o, !o.on)),
-  });
+  }, h('i', { class: 'ckbox', 'aria-hidden': 'true' }));
   return h('label', { class: 'ctl ctl-toggle', title: o.hint }, box, h('span', { class: 'ctl-label' }, o.label));
 }
 
@@ -51,12 +54,21 @@ function numberControl(s: SectionId, o: OptionOf<'number'>, on: Handlers): HTMLE
     type: 'number', class: 'field num-in', min: o.min, max: o.max, step: 1, value: o.value,
     disabled: !o.enabled, 'aria-label': o.label, 'data-key': `opt:${o.id}`,
   });
+  // A value outside the range is marked while it is typed (red border, a sentence under the box, aria-invalid).
+  const hint = h('span', { class: 'field-hint', id: `hint-${o.id}`, hidden: true }, `Use a whole number from ${o.min} to ${o.max}.`);
+  const mark = (): void => {
+    const bad = !input.checkValidity() || Number.isNaN(input.valueAsNumber);
+    input.setAttribute('aria-invalid', String(bad));
+    if (bad) input.setAttribute('aria-describedby', hint.id); else input.removeAttribute('aria-describedby');
+    hint.hidden = !bad;
+  };
+  input.addEventListener('input', mark);
   // Sent when the box is left or Enter is pressed; a value the box itself refuses is put back.
   input.addEventListener('change', () => {
-    if (!input.checkValidity() || Number.isNaN(input.valueAsNumber)) { input.value = String(o.value); return; }
+    if (!input.checkValidity() || Number.isNaN(input.valueAsNumber)) { input.value = String(o.value); mark(); return; }
     on.send(s, optionIntent(s, o, input.valueAsNumber));
   });
-  return h('label', { class: 'ctl ctl-number' }, h('span', { class: 'ctl-label' }, o.label), input);
+  return h('label', { class: 'ctl ctl-number' }, h('span', { class: 'ctl-label' }, o.label), input, hint);
 }
 
 function choiceControl(s: SectionId, o: OptionOf<'choice'>, on: Handlers): HTMLElement {
@@ -122,7 +134,7 @@ function optionControl(s: SectionId, o: OptionView, on: Handlers): HTMLElement {
 }
 
 function heading(title: string, count: number): HTMLElement {
-  return h('div', { class: 'hd' }, h('span', { class: 'hd-title', 'data-fit': '' }, title), h('span', { class: 'count' }, count));
+  return h('div', { class: 'hd' }, h('h2', { class: 'hd-title', 'data-fit': '' }, title), h('span', { class: 'count' }, count));
 }
 
 export function renderBar2(root: HTMLElement, view: SectionView, ui: UiState, on: Handlers): void {
@@ -132,7 +144,7 @@ export function renderBar2(root: HTMLElement, view: SectionView, ui: UiState, on
     const menu = view.rows.some((r) => r.kind === 'group');
     const spy = ui.spy[s] ?? view.rows.find((r) => r.kind === 'group')?.id ?? null;
     parts.push(h('div', { class: 'cats' }, ...view.nav.map((item) => (menu ? menuRow(item, view, spy, on) : navRow(s, item, on)))));
-    if (view.options.length > 0) parts.push(h('div', { class: 'hd hd-sub' }, h('span', { class: 'hd-title', 'data-fit': '' }, 'Options')));
+    if (view.options.length > 0) parts.push(h('div', { class: 'hd hd-sub' }, h('h2', { class: 'hd-title', 'data-fit': '' }, 'Options')));
   }
   parts.push(h('div', { class: 'opts' }, ...view.options.map((o) => optionControl(s, o, on))));
   const scroll = h('div', { class: 'items' }, ...parts);

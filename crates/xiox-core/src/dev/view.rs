@@ -450,6 +450,7 @@ impl DevState {
             title: confirm_title(c.section).into(),
             text,
             summary: c.summary.clone(),
+            permanent: shown_mode(c) == RemoveMode::Permanent || c.section == Section::Worktrees,
             rows: c.rows.clone(),
             warnings_title: None,
             warnings: Vec::new(),

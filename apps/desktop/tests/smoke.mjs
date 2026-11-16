@@ -110,7 +110,7 @@ export async function checkFit(page, label) {
     }
     // Inside a row: name, cells, level and size each keep their own column.
     for (const row of document.querySelectorAll('#rows .r:not(.h):not(.sec)')) {
-      overlaps([...row.querySelectorAll(':scope > .nm, :scope > .cell, :scope > .lv, :scope > .sz, :scope > .ckc')]);
+      overlaps([...row.querySelectorAll(':scope > .nm, :scope > .cell, :scope > .lv, :scope > .sz, :scope > .ckcell')]);
     }
     // The list never runs under the detail panel.
     const grid = document.querySelector('#rows .grid');
@@ -189,7 +189,7 @@ async function checkSelection(page, label) {
   const selected = await page.locator('#rows .r.sel').count();
   if (selected !== 1) failures.push(`${label}: ${selected} selected rows, expected 1`);
   if (await page.locator('#detail .kv').count() === 0) failures.push(`${label}: the detail panel is empty`);
-  if (await page.locator('#rows .r.sel[aria-current="true"]').count() !== 1) failures.push(`${label}: the selected row has no aria-current`);
+  if (await page.locator('#rows .r.sel[aria-selected="true"]').count() !== 1) failures.push(`${label}: the selected row has no aria-selected`);
   return failures;
 }
 
@@ -361,13 +361,16 @@ async function keyboardFlows(page, size, expect, shot) {
   }
   await blur(page);
 
-  // Enter opens the confirmation (never a clean); the primary button has the focus and its ring.
+  // Enter opens the confirmation (never a clean); Cancel has the focus and its ring.
   await goTo(page, 'cleanup', 'analyzed');
   await page.keyboard.press('Enter');
   await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter did not open the confirmation`));
   check(await badgeOf(page) !== 'Cleaning', 'Enter went straight to a clean');
   check(await focusIn(page, '[role=dialog]'), 'the focus is not inside the dialog after it opened');
-  check(await focusKey(page) === 'dlg:continue', `focus on open is ${await focusKey(page)}, expected the enabled primary button`);
+  // A permanent delete starts on Cancel (a second Enter never approves it); Shift+Tab reaches the primary button.
+  check(await focusKey(page) === 'dlg:cancel', `focus on open is ${await focusKey(page)}, expected Cancel for a permanent delete`);
+  await page.keyboard.press('Shift+Tab');
+  check(await focusKey(page) === 'dlg:continue', `Shift+Tab from Cancel is ${await focusKey(page)}, expected the primary button`);
   check(await ringOf(page) !== 'none', 'the focused button of the dialog has no visible ring');
   await page.screenshot({ path: `${shot}cleanup-confirm-keyboard-${size}.png` });
 
@@ -428,6 +431,7 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.waitForTimeout(60);
   check(await page.locator('[role=dialog]').count() === 1 && await badgeOf(page) !== 'Cleaning', 'Enter under 300 ms after the dialog opened activated its primary button');
   await page.waitForTimeout(400);
+  await page.locator('[data-key="dlg:continue"]').focus(); // the dialog opened on Cancel: the primary button is one Shift+Tab away
   await page.keyboard.down('Enter'); // a fresh press: the dialog is armed
   await page.keyboard.down('Enter'); // the second keydown of a held key carries repeat: true
   await page.keyboard.up('Enter');

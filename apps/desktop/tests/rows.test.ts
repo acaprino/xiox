@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gridTemplate, groupSizes, rowParents, sortRows, visibleRows } from '../src/rows.ts';
+import { gridTemplate, gridVars, groupSizes, rowParents, sortRows, visibleRows } from '../src/rows.ts';
 import type { ColumnView, RowView } from '../src/types.ts';
 
 function row(id: string, bytes: number | null, extra: Partial<RowView> = {}): RowView {
@@ -49,10 +49,20 @@ test('gridTemplate adds the check column only when rows have checks', () => {
   const columns: ColumnView[] = [
     { title: 'Item', kind: 'name' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
   ];
-  assert.equal(gridTemplate(columns, true), '34px minmax(0,1fr) 96px minmax(74px,max-content)');
-  assert.equal(gridTemplate(columns, false), 'minmax(0,1fr) 96px minmax(74px,max-content)');
+  assert.equal(gridTemplate(columns, true), '34px minmax(12ch,1fr) 96px minmax(74px,max-content)');
+  assert.equal(gridTemplate(columns, false), 'minmax(12ch,1fr) 96px minmax(74px,max-content)');
   const cells: ColumnView[] = [{ title: 'Service', kind: 'name' }, { title: 'Startup', kind: 'cell' }, { title: 'State', kind: 'cell' }];
-  assert.equal(gridTemplate(cells, false), 'minmax(0,1fr) fit-content(260px) fit-content(260px)');
+  assert.equal(gridTemplate(cells, false), 'minmax(12ch,1fr) fit-content(260px) fit-content(260px)');
+});
+
+test('gridVars drops the level first, then the cells, and never the name or the size', () => {
+  const columns: ColumnView[] = [
+    { title: 'Item', kind: 'name' }, { title: 'Files', kind: 'cell' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
+  ];
+  const vars = gridVars(columns, true);
+  assert.equal(vars['--cols'], '34px minmax(12ch,1fr) fit-content(260px) 96px minmax(74px,max-content)');
+  assert.equal(vars['--cols-l'], '34px minmax(12ch,1fr) fit-content(260px) minmax(74px,max-content)');
+  assert.equal(vars['--cols-ls'], '34px minmax(12ch,1fr) minmax(74px,max-content)');
 });
 
 test('children of a collapsed parent are not visible', () => {

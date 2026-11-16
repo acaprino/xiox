@@ -15724,7 +15724,11 @@
           "text": [
             "The selected files will be deleted permanently. Files in use are left where they are."
           ],
-          "summary": [],
+          "summary": [
+            "Clean 8 items",
+            "13.48 GB to delete (46,999 files)"
+          ],
+          "permanent": true,
           "rows": [],
           "warningsTitle": "Warnings for the chosen options",
           "warnings": [
@@ -25357,6 +25361,7 @@
             "Recommended: before the changes a copy (.reg) is saved in the Documents\\Xiox folder."
           ],
           "summary": [],
+          "permanent": false,
           "rows": [],
           "warningsTitle": null,
           "warnings": [],
@@ -30561,6 +30566,7 @@
             "The services stop now and will not start again. You can always use “Restore originals”."
           ],
           "summary": [],
+          "permanent": false,
           "rows": [
             [
               "Fax",
@@ -33072,6 +33078,7 @@
           "summary": [
             "2 folders · 6.80 GB"
           ],
+          "permanent": false,
           "rows": [
             [
               "acme-api · target",
@@ -33589,6 +33596,7 @@
           "summary": [
             "2 folders · 6.80 GB"
           ],
+          "permanent": true,
           "rows": [
             [
               "acme-api · target",
