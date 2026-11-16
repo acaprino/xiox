@@ -114,10 +114,16 @@ fn monitor_rects(window: &WebviewWindow) -> Vec<(i32, i32, u32, u32)> {
     monitors.iter().map(|m| (m.position().x, m.position().y, m.size().width, m.size().height)).collect()
 }
 
-/// The monitors' work areas (the screen without the taskbar) as `(x, y, width, height)` in physical pixels.
-fn work_areas(window: &WebviewWindow) -> Vec<window_state::Rect> {
+/// The monitors with their work areas (the screen without the taskbar), `(x, y, width, height)` in physical pixels.
+fn screens(window: &WebviewWindow) -> Vec<window_state::Screen> {
     let monitors = window.available_monitors().unwrap_or_default();
-    monitors.iter().map(|m| (m.work_area().position.x, m.work_area().position.y, m.work_area().size.width, m.work_area().size.height)).collect()
+    monitors.iter().map(screen_of).collect()
+}
+
+fn screen_of(monitor: &tauri::Monitor) -> window_state::Screen {
+    let area = monitor.work_area();
+    let work = (area.position.x, area.position.y, area.size.width, area.size.height);
+    (work, (monitor.position().x, monitor.position().y, monitor.size().width, monitor.size().height))
 }
 
 /// The title bar and borders around the page: the window's outer size minus its inner size.
@@ -132,8 +138,7 @@ fn frame_of(window: &WebviewWindow) -> (u32, u32) {
 /// it is brought inside that monitor's work area before the window is shown, and then centred.
 fn place_first(window: &WebviewWindow) {
     if let (Some(monitor), Some(g)) = (window.current_monitor().ok().flatten(), measure(window)) {
-        let area = monitor.work_area();
-        let g = window_state::clamp(g, frame_of(window), &[(area.position.x, area.position.y, area.size.width, area.size.height)]);
+        let g = window_state::clamp(g, frame_of(window), &[screen_of(&monitor)]);
         let _ = window.set_size(PhysicalSize::new(g.width, g.height));
     }
     let _ = window.center();
@@ -144,7 +149,7 @@ fn place_first(window: &WebviewWindow) {
 fn restore_window(window: &WebviewWindow) {
     match window_state::load(&window_state::path()) {
         Some(g) if window_state::fits(&g, &monitor_rects(window)) => {
-            let g = window_state::clamp(g, frame_of(window), &work_areas(window));
+            let g = window_state::clamp(g, frame_of(window), &screens(window));
             let _ = window.set_size(PhysicalSize::new(g.width, g.height));
             let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
             if g.maximized {

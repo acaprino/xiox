@@ -383,9 +383,10 @@ window.addEventListener('focus', () => {
 /**
  * The window opens hidden and Rust shows it on this signal. The page is already in the DOM: once its first frame is on
  * screen (two animation frames: the second starts after the first was painted) the window can be seen. A hidden window may
- * run no animation frame at all, so a timer races them and the first to fire signals, once. A failure to ask is not shown:
+ * run no animation frame at all, so a timer of 250 ms races them and the first to fire signals, once. A failure to ask is not shown:
  * Rust shows the window anyway after a few seconds.
  */
+const READY_FALLBACK_MS = 250;
 function signalReady(): void {
   let sent = false;
   const send = (): void => {
@@ -394,14 +395,14 @@ function signalReady(): void {
     void api.ready().catch(() => undefined);
   };
   requestAnimationFrame(() => requestAnimationFrame(send));
-  setTimeout(send, 0);
+  setTimeout(send, READY_FALLBACK_MS);
 }
 
 /** What the window says outside the page (title, taskbar): the last thing sent, so that only a change is sent. */
 let chromeSent = '';
 function syncChrome(): void {
   const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
-  const next = { section: ui.section, job: job === null ? null : Math.round(job.fraction * 100) };
+  const next = { section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))) };
   const key = JSON.stringify(next);
   if (key === chromeSent) return;
   chromeSent = key;

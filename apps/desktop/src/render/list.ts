@@ -75,12 +75,12 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
       let caret: HTMLElement | null = null;
       if (group) {
         caret = h('button', {
-          type: 'button', class: 'caret', tabindex: -1, 'aria-expanded': String(!folded.has(row.id)), 'aria-label': `${row.name}: show or hide the items`,
+          type: 'button', class: 'caret', tabindex: -1, 'aria-hidden': 'true', 'aria-label': `${row.name}: show or hide the items`,
           'data-key': `fold:${row.id}`, onClick: (event: Event) => { event.stopPropagation(); on.toggleFold(row.id); },
         });
       } else if (parents.has(row.id)) {
         caret = h('button', {
-          type: 'button', class: 'caret', tabindex: -1, 'aria-expanded': String(ui.expanded.has(row.id)), 'aria-label': `${row.name}: show or hide the items inside`,
+          type: 'button', class: 'caret', tabindex: -1, 'aria-hidden': 'true', 'aria-label': `${row.name}: show or hide the items inside`,
           'data-key': `caret:${row.id}`, onClick: (event: Event) => { event.stopPropagation(); on.toggleExpanded(row.id); },
         });
       } else if (anyParent) {
@@ -172,10 +172,11 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   // focus goes back to when a dialog closes.
   grid.tabIndex = 0;
   grid.setAttribute('aria-label', view.title);
-  grid.setAttribute('role', 'treegrid');
   grid.setAttribute('aria-busy', String(view.job !== null));
   const empty = view.rows.length === 0 || view.empty !== null;
   grid.classList.toggle('is-empty', empty);
+  // An empty list is no grid: a treegrid with no rows would be announced as one.
+  if (empty) grid.removeAttribute('role'); else grid.setAttribute('role', 'treegrid');
   if (empty) {
     // Nothing for the arrows to move over: the grid is no Tab stop (so no pane-wide focus ring); the action it offers is.
     grid.tabIndex = -1;
@@ -207,6 +208,6 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   fill(grid, head, ...rows.flatMap((row) => {
     const node = rowNode(row, view, ui, checks, parents, parents.size > 0, folded, row.id === focus, on);
     // An empty marker before a category header: it does not stick, so the page can tell where the category really starts.
-    return row.kind === 'group' ? [h('div', { class: 'anchor', 'data-anchor': row.id }), node] : [node];
+    return row.kind === 'group' ? [h('div', { class: 'anchor', role: 'presentation', 'data-anchor': row.id }), node] : [node];
   }));
 }

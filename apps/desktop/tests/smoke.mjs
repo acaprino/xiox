@@ -657,7 +657,8 @@ async function sectionFlows(page, size, shot) {
   check(await page.locator('#rows [data-row="p:3"] [role=checkbox]').isDisabled(), 'the checkbox of the project in use is not disabled');
   const setOpen = async (id, open) => {
     const caret = page.locator(`#rows [data-row="${id}"] .caret`);
-    if ((await caret.getAttribute('aria-expanded')) !== String(open)) await caret.click();
+    // The state is the row's (aria-expanded), the caret is only the mouse's handle.
+    if ((await page.locator(`#rows [data-row="${id}"]`).getAttribute('aria-expanded')) !== String(open)) await caret.click();
   };
   await setOpen('p:1', false);
   check(await page.locator('#rows [data-row="a:3"]').count() === 0, 'a collapsed parent shows its caution child');
@@ -698,7 +699,7 @@ async function sectionFlows(page, size, shot) {
   // ---- Cleanup: every category in one list (group rows, the menu scrolls, folding), Applications (search box, headers, blocked row, long lines), Browser (keep list, native lines), the partial analysis.
   await goTo(page, 'cleanup', 'analyzed');
   check(await page.locator('#rows .r.grp').count() === 7, 'the Cleanup list does not hold its seven categories');
-  check(await page.locator('#rows .r.grp[data-row="winapp2"] .caret[aria-expanded="false"]').count() === 1, 'the long Applications category does not start folded');
+  check(await page.locator('#rows .r.grp[data-row="winapp2"][aria-expanded="false"]').count() === 1, 'the long Applications category does not start folded');
   check(await page.locator('#rows [data-row="opera/cache"]').count() === 0, 'a folded category still draws its rows');
   check(await page.locator('#rows [data-row="cat:0"]').count() === 1 && await page.locator('#rows [data-row="npm/cache"]').count() === 1, 'the short categories are not open');
   // The menu scrolls to a category and marks the one the list is at.

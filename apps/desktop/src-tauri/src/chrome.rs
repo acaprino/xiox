@@ -48,7 +48,7 @@ pub fn taskbar(was_running: bool, job: Option<u8>, focused: bool) -> Taskbar {
     }
 }
 
-/// A job was running at the last report.
+/// A job was running at the last report. Process-wide on purpose: the app has one window.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// The page's report: the open section and the percent of the running job, if any.

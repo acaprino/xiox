@@ -94,8 +94,8 @@ test('the window is clamped to the work area of its monitor, and its minimum fit
   const config = JSON.parse(file('src-tauri/tauri.conf.json')) as { app: { windows: { minWidth: number; minHeight: number }[] } };
   const main0 = config.app.windows[0];
   assert.ok(main0);
-  // 1366x768 at 125 %: 1093 logical wide and, less the taskbar, about 582 high.
-  assert.ok(main0.minWidth <= 1093 && main0.minHeight <= 582, `${main0.minWidth}x${main0.minHeight}`);
+  // 1366x768 at 125 %: 1093 logical wide and, less the 48 px taskbar, 574 high, of which the title bar and borders take about 31.
+  assert.ok(main0.minWidth <= 1093 - 14 && main0.minHeight + 31 <= 574, `${main0.minWidth}x${main0.minHeight}`);
   const state = file('src-tauri/src/window_state.rs');
   assert.equal(Number(/const MIN_WIDTH: u32 = (\d+)/.exec(state)?.[1]), main0.minWidth, 'window_state MIN_WIDTH follows tauri.conf.json');
   assert.equal(Number(/const MIN_HEIGHT: u32 = (\d+)/.exec(state)?.[1]), main0.minHeight, 'window_state MIN_HEIGHT follows tauri.conf.json');
@@ -105,7 +105,9 @@ test('the ready signal does not depend on requestAnimationFrame alone (a hidden 
   const main = file('src/main.ts');
   const signal = /function signalReady[\s\S]*?\n\}/.exec(main)?.[0] ?? '';
   assert.match(signal, /requestAnimationFrame/, 'the double frame is still there: the first frame is drawn');
-  assert.match(signal, /setTimeout\(/, 'a timer races the frames');
+  assert.match(signal, /setTimeout\(send, READY_FALLBACK_MS\)/, 'a timer races the frames');
+  assert.ok(Number(/const READY_FALLBACK_MS = (\d+)/.exec(main)?.[1]) >= 100, 'a fallback, not a zero timer that would always win and make the paint wait dead code');
+  assert.match(main, /Math\.min\(100, Math\.max\(0,/, 'the percent sent to the taskbar is clamped to 0-100');
   assert.match(signal, /let sent|if \(sent\)|sent = true/, 'whichever comes first, the signal goes once');
 });
 
@@ -165,4 +167,28 @@ test('every scroll container gets the thin themed scrollbar from one rule', () =
   const rules = styles.flatMap(([name, text]) => [...text.matchAll(/scrollbar-width:\s*thin/g)].map(() => name));
   assert.deepEqual(rules, ['tokens.css'], 'one rule sets scrollbar-width: thin, not one per container');
   assert.match(tokens, /\n\* \{[^}]*scrollbar-width: thin; scrollbar-color: var\(--line\)/, 'on *, with scrollbar-color');
+});
+
+test('the reason an action is disabled is read as its description, never as part of its name', () => {
+  const shell = file('src/render/shell.ts');
+  const body = /function actionButton[\s\S]*?\n\}/.exec(shell)?.[0] ?? '';
+  const start = body.indexOf('button(');
+  assert.ok(start > 0, 'actionButton builds a button');
+  const call = callAt(body, start + 'button'.length);
+  assert.doesNotMatch(call, /sr-only/, 'the hidden reason is not a child of the button');
+  assert.match(body, /h\('span', \{ class: 'sr-only', id: reasonId \}/, 'it is a sibling');
+  assert.match(call, /'aria-describedby': reason === null \? null : reasonId/);
+});
+
+test('the list is announced as a grid only when it has rows, and its helpers are out of the accessibility tree', () => {
+  const list = file('src/render/list.ts');
+  assert.match(list, /role: 'presentation', 'data-anchor'/, 'the empty anchor between rows has no role');
+  assert.match(list, /if \(empty\) grid\.removeAttribute\('role'\); else grid\.setAttribute\('role', 'treegrid'\)/, 'an empty grid drops treegrid');
+  const carets = [...list.matchAll(/class: 'caret'[^\n]*/g)].map((m) => m[0]);
+  assert.ok(carets.length >= 2);
+  for (const caret of carets) {
+    assert.match(caret, /'aria-hidden': 'true'/, 'a caret is the mouse\'s: the row carries the state');
+    assert.doesNotMatch(caret, /aria-expanded/, 'aria-expanded is on the row only');
+  }
+  assert.match(list, /'aria-expanded': expandable \? String\(expanded\) : null/, 'the row has it');
 });
