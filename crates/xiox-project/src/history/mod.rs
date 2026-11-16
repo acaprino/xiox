@@ -4,6 +4,7 @@
 mod folders;
 mod queue;
 mod report;
+pub(crate) mod risk;
 mod scratch;
 pub(crate) mod scope;
 
@@ -241,7 +242,7 @@ impl<'a> History<'a> {
     /// The folders the sessions created or wrote in, as review candidates. `items` are what the
     /// analysis lists otherwise.
     pub fn scratch(&mut self, project: &Project, items: &[Item], env: &Env, opts: &Options) -> Vec<Item> {
-        scratch_items(project, &self.folders, items, env, opts, &mut self.report.excluded)
+        scratch_items(project, &self.folders, items, self.report.partial(), env, opts, &mut self.report.excluded)
     }
 
     /// The provenance of the items the sessions can speak about.

@@ -73,10 +73,19 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     })
 }
 
-/// Category order, then bytes descending (unmeasured last), then key.
+/// Category order; then bytes descending (unmeasured last) and key, except `scratch`, which goes
+/// by observed activity, most recent first and the undated last, and key.
 pub(crate) fn sort_items(items: &mut [Item]) {
+    let observed = |i: &Item| {
+        let at = i.provenance.as_ref().and_then(|p| p.last_activity_ms);
+        (at.is_none(), Reverse(at))
+    };
     items.sort_by(|a, b| {
-        (a.category, Reverse(a.bytes), &a.key).cmp(&(b.category, Reverse(b.bytes), &b.key))
+        a.category.cmp(&b.category).then_with(|| match a.category {
+            Category::Scratch => observed(a).cmp(&observed(b)),
+            _ => Reverse(a.bytes).cmp(&Reverse(b.bytes)),
+        })
+        .then_with(|| a.key.cmp(&b.key))
     });
 }
 

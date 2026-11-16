@@ -10,11 +10,12 @@ use xiox_model::{is_system_dir, path_key};
 use xiox_scanner::{is_broad_dir, is_cloud_dir};
 
 use super::folders::{Folders, Standing};
+use super::risk::{activity, risks};
 use super::scope::{local_dir, Scope};
 use super::Exclusion;
 use crate::owned::key_within;
 use crate::search::{inside_other_repo, is_link, item_for, Own};
-use crate::{Activity, Category, Env, Item, Options, Project, Why};
+use crate::{Category, Env, Item, Options, Project, Why};
 
 /// The review candidates the sessions' own work gives, in key order. `listed` are the items
 /// found otherwise: a folder inside one of them is already covered, its provenance comes from
@@ -23,6 +24,7 @@ pub(crate) fn scratch_items(
     project: &Project,
     folders: &Folders,
     listed: &[Item],
+    report_partial: bool,
     env: &Env,
     opts: &Options,
     excluded: &mut BTreeMap<Exclusion, usize>,
@@ -46,14 +48,15 @@ pub(crate) fn scratch_items(
     }
     accepted
         .into_iter()
-        .map(|(path, _, standing)| {
+        .map(|(path, key, standing)| {
+            let provenance = folders.provenance_within(&key).expect("a marked folder has session evidence");
             let why = Why::SessionFolder {
                 strength: standing.strength,
                 from_script: standing.from_script,
-                risks: Vec::new(),
-                activity: Activity::Unknown,
+                risks: risks(&path, &provenance, report_partial, env.now_ms),
+                activity: activity(&path, env),
             };
-            item_for(opts, env, &path, Category::Scratch, why)
+            Item { provenance: Some(provenance), ..item_for(opts, env, &path, Category::Scratch, why) }
         })
         .collect()
 }
@@ -64,6 +67,10 @@ struct Policy {
     scope: Scope,
     home: Option<PathBuf>,
     temp_key: String,
+    /// The `%TEMP%` is a drive root, the home or a broad folder: nothing inside it is exempt.
+    temp_is_broad: bool,
+    /// The keys no folder may hold: the home, and a `%TEMP%` that is not inside `AppData`.
+    keep_whole: Vec<String>,
     fixed_drives: OnceCell<Vec<char>>,
 }
 
@@ -71,11 +78,28 @@ impl Policy {
     fn new(project: &Project, opts: &Options, env: &Env) -> Policy {
         let user = env.history.user;
         let non_empty = |p: &Path| Some(p.to_path_buf()).filter(|p| !p.as_os_str().is_empty());
+        let home = non_empty(&user.home);
+        let temp = non_empty(&user.temp);
+        let temp_key = temp.as_deref().map(path_key).unwrap_or_default();
+        let home_key = home.as_deref().map(path_key).unwrap_or_default();
+        let in_app_data = temp.as_deref().is_some_and(|t| {
+            t.components().any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("AppData"))
+        });
+        // Everything under `AppData` is a broad folder, and that is where the usual `%TEMP%` lies.
+        let temp_is_broad = temp.as_deref().is_some_and(|t| {
+            t.parent().is_none() || temp_key == home_key || (!in_app_data && is_broad_dir(t, home.as_deref()))
+        });
+        let keep_whole = [home_key, if in_app_data { String::new() } else { temp_key.clone() }]
+            .into_iter()
+            .filter(|k| !k.is_empty())
+            .collect();
         Policy {
             own: Own::new(project),
             scope: Scope::of(project, opts, env),
-            home: non_empty(&user.home),
-            temp_key: non_empty(&user.temp).map(|t| path_key(&t)).unwrap_or_default(),
+            home,
+            temp_key,
+            temp_is_broad,
+            keep_whole,
             fixed_drives: OnceCell::new(),
         }
     }
@@ -100,18 +124,16 @@ impl Policy {
         Ok(path)
     }
 
-    /// A drive root, the home, `%TEMP%` itself, or a broad or system folder. What lies strictly
-    /// inside `%TEMP%` is where agents leave their work, so it stays allowed.
+    /// A drive root, the home or a folder that holds it, `%TEMP%` itself, a folder that holds a
+    /// `%TEMP%` outside `AppData`, or a broad or system folder. What lies strictly inside a
+    /// `%TEMP%` that is not broad is where agents leave their work, so it stays allowed.
     fn protected(&self, path: &Path, key: &str) -> bool {
-        let under_temp = !self.temp_key.is_empty() && key != self.temp_key && key_within(key, &self.temp_key);
         let parent_is_root = path.parent().and_then(Path::parent).is_none();
         let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-        let wide = path.parent().is_none()
-            || key == self.temp_key
-            || self.home.as_deref().is_some_and(|h| path_key(h) == key)
-            || is_broad_dir(path, self.home.as_deref())
-            || is_system_dir(&name, parent_is_root);
-        wide && !under_temp
+        let holds_a_root = self.keep_whole.iter().any(|kept| key_within(kept, key));
+        let broad = is_broad_dir(path, self.home.as_deref()) || is_system_dir(&name, parent_is_root);
+        let under_plain_temp = !self.temp_is_broad && key != self.temp_key && key_within(key, &self.temp_key);
+        path.parent().is_none() || key == self.temp_key || holds_a_root || (broad && !under_plain_temp)
     }
 
     fn on_fixed_drive(&self, path: &Path) -> bool {

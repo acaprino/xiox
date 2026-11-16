@@ -16,7 +16,7 @@ use crate::*;
 
 /// What a session did. Folders are relative to the test base; `~` is the home, `%TEMP%` the
 /// temp folder and `/` the root of the base's drive.
-enum Do {
+pub(super) enum Do {
     Mkdir(&'static str),
     FailedMkdir(&'static str),
     Write(&'static str),
@@ -24,18 +24,18 @@ enum Do {
     Glob(&'static str),
     Cd(&'static str),
 }
-use Do::*;
+pub(super) use Do::*;
 
 /// A project with a worktree in `wt-box/wt`, and a home with a temp folder, under a temp base.
-struct Site {
+pub(super) struct Site {
     _guard: tempfile::TempDir,
-    base: PathBuf,
-    project: Project,
-    user: UserDirs,
+    pub(super) base: PathBuf,
+    pub(super) project: Project,
+    pub(super) user: UserDirs,
 }
 
 impl Site {
-    fn new() -> Site {
+    pub(super) fn new() -> Site {
         let (guard, base) = tmp();
         let root = repo(&base.join("work").join("proj"));
         worktree(&root, &base.join("wt-box").join("wt"), "wt");
@@ -43,7 +43,7 @@ impl Site {
         Site { _guard: guard, base, project: resolve_project(&root).unwrap(), user }
     }
 
-    fn at(&self, rel: &str) -> PathBuf {
+    pub(super) fn at(&self, rel: &str) -> PathBuf {
         match rel {
             "~" => self.user.home.clone(),
             "%TEMP%" => self.user.temp.clone(),
@@ -87,14 +87,25 @@ impl Site {
     }
 
     /// The policy over what `session` did. `reach` are the search roots; `None` is every drive.
-    fn scratch(&self, session: &[Do], reach: Option<Vec<PathBuf>>) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
-        let env = Env { search_roots: reach, history: input(&[], None, &self.user), ..env() };
+    pub(super) fn scratch(&self, session: &[Do], reach: Option<Vec<PathBuf>>) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
+        self.scratch_with(session, reach, &[])
+    }
+
+    /// The same, with `sessions` the live listing the engine knows.
+    pub(super) fn scratch_with(
+        &self,
+        session: &[Do],
+        reach: Option<Vec<PathBuf>>,
+        sessions: &[xiox_app::Preloaded],
+    ) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
+        let env = Env { sessions, search_roots: reach, history: input(&[], None, &self.user), ..env() };
         let mut excluded = BTreeMap::new();
-        let items = scratch_items(&self.project, &self.folders(session), &[], &env, &Options::default(), &mut excluded);
+        let items =
+            scratch_items(&self.project, &self.folders(session), &[], false, &env, &Options::default(), &mut excluded);
         (items, excluded)
     }
 
-    fn within_base(&self, session: &[Do]) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
+    pub(super) fn within_base(&self, session: &[Do]) -> (Vec<Item>, BTreeMap<Exclusion, usize>) {
         self.scratch(session, Some(vec![self.base.clone()]))
     }
 }
@@ -181,7 +192,6 @@ fn a_folder_made_by_a_shell_command_is_not_script_only() {
     fs::create_dir_all(site.at("runs/made")).unwrap();
     let (items, _) = site.within_base(&[Mkdir("runs/made")]);
     assert_eq!(why(&items[0]), (Strength::Created, false));
-    assert!(matches!(&items[0].why, Why::SessionFolder { risks, .. } if risks.is_empty()), "{:?}", items[0].why);
 }
 
 #[test]
@@ -329,4 +339,37 @@ fn analyze_lists_scratch_once_and_leaves_listed_folders_to_their_category() {
     assert_eq!(scratch[0].key, path_key(&site.at("agent-runs/run1")));
     assert_eq!(scratch[0].provenance.as_ref().map(|p| p.sessions.len()), Some(1));
     assert!(scan.items.iter().any(|i| i.category == Category::Named && i.key == path_key(&named)));
+}
+
+#[test]
+fn folders_around_the_home_or_a_plain_temp_are_protected() {
+    // (name, home, temp, what the session did, the folder it points at, why it is left out)
+    let table: [(&str, &str, &str, Vec<Do>, &str, Option<Exclusion>); 6] = [
+        ("a folder that holds the home", "Profiles/alfio", "Profiles/alfio/Temp", vec![Write("Profiles/x.txt")], "Profiles", Some(Exclusion::Protected)),
+        ("a folder that holds a plain temp", "h/alfio", "Temp/inner", vec![Write("Temp/x.txt")], "Temp", Some(Exclusion::Protected)),
+        ("a plain temp itself", "h/alfio", "Temp", vec![Write("Temp/x.txt")], "Temp", Some(Exclusion::Protected)),
+        ("a folder inside a plain temp", "h/alfio", "Temp", vec![Write("Temp/run1/x.txt")], "Temp/run1", None),
+        ("a broad folder of a temp that is the home", "h/alfio", "h/alfio", vec![Write("h/alfio/Desktop/x.txt")], "h/alfio/Desktop", Some(Exclusion::Protected)),
+        ("a new folder of a temp that is the home", "h/alfio", "h/alfio", vec![Mkdir("h/alfio/x")], "h/alfio/x", None),
+    ];
+    for (name, home, temp, session, folder, expected) in table {
+        let mut site = Site::new();
+        site.user = UserDirs { home: site.base.join(home), temp: site.base.join(temp) };
+        fs::create_dir_all(&site.user.home).unwrap();
+        fs::create_dir_all(&site.user.temp).unwrap();
+        fs::create_dir_all(site.at(folder)).unwrap();
+
+        let (items, excluded) = site.scratch(&session, None);
+
+        match expected {
+            Some(why) => {
+                assert!(items.is_empty(), "{name}: {items:?}");
+                assert_eq!(excluded, BTreeMap::from([(why, 1)]), "{name}");
+            }
+            None => {
+                let keys: Vec<&String> = items.iter().map(|i| &i.key).collect();
+                assert_eq!(keys, vec![&path_key(&site.at(folder))], "{name}: {excluded:?}");
+            }
+        }
+    }
 }
