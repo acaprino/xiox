@@ -35,9 +35,14 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
     items.extend(crate::logs::log_items(&project, &build_dirs, &mut notes));
     items.extend(worktrees(&project, &entries, &reports, env, opts, &mut notes));
     items.extend(sessions(&project, &entries, env));
-    let found = crate::search::search(&project, opts, env);
+    let mut history = crate::history::History::start(&project, opts, env);
+    let listed = history.as_mut().map(|h| h.listed_roots(&project, opts, env)).unwrap_or_default();
+    let found = crate::search::search(&project, opts, env, &listed);
     items.extend(found.items);
     notes.extend(found.notes);
+    if let Some(h) = &history {
+        h.attach(&mut items);
+    }
     sort_items(&mut items);
 
     let branches = if project.is_repo {
@@ -57,7 +62,7 @@ pub(crate) fn analyze_with(path: &Path, opts: &Options, env: &Env) -> Result<Pro
         search: found.mode,
         scanned_at_ms: env.now_ms,
         elapsed_ms: started.elapsed().as_millis() as u64,
-        history: None,
+        history: history.map(crate::history::History::into_report),
     })
 }
 

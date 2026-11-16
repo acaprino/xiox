@@ -47,13 +47,6 @@ fn found(scan: &ProjectScan) -> Vec<PathBuf> {
     v
 }
 
-/// `git clone` of `src` into `dest` (not checked out with line-ending conversion).
-fn clone(src: &Path, dest: &Path) -> PathBuf {
-    fs::create_dir_all(dest.parent().unwrap()).unwrap();
-    git(src, &["clone", "-q", "-c", "core.autocrlf=false", &src.to_string_lossy(), &dest.to_string_lossy()]);
-    canon(dest)
-}
-
 #[test]
 fn sibling_folder_with_the_project_name_is_named_caution() {
     let (_t, base) = tmp();

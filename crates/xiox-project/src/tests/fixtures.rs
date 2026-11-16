@@ -124,3 +124,10 @@ pub fn env() -> Env<'static> {
 }
 
 pub const MB: usize = 1 << 20;
+
+/// `git clone` of `src` into `dest` (not checked out with line-ending conversion).
+pub fn clone(src: &Path, dest: &Path) -> PathBuf {
+    fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    git(src, &["clone", "-q", "-c", "core.autocrlf=false", &src.to_string_lossy(), &dest.to_string_lossy()]);
+    canon(dest)
+}

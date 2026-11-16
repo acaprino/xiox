@@ -17,7 +17,9 @@ mod fsutil;
 mod markers;
 pub mod sessions;
 
-pub use sessions::{MAX_WORKSPACE_CHILDREN, SessionRoots, Skip, project_roots_from_sessions};
+pub use sessions::{
+    MAX_WORKSPACE_CHILDREN, SessionRoots, Skip, is_broad_dir, is_cloud_dir, project_roots_from_sessions,
+};
 
 use xiox_model::*;
 use fsutil::*;
