@@ -22,9 +22,11 @@
 //! Agent-managed git worktrees (Codex `~/.codex/worktrees`, OpenCode's `worktree` table and
 //! `project.sandboxes`) are not a mukade concern: they are discovered here, read-only.
 
+mod bounded;
 mod calls;
 
-pub use calls::{cut_input, parse_stream, strip_verbatim, was_cut, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
+pub use bounded::{BoundedError, Limits};
+pub use calls::{cut_input, parse_stream, strip_verbatim, was_cut, CallReader, Outcome, ToolCall, CUT_MARK, MAX_INPUT_CHARS};
 
 use xiox_model::*;
 use rusqlite::{Connection, OpenFlags};
