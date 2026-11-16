@@ -16,7 +16,7 @@ use std::time::Instant;
 use serde_json::{json, Value};
 use xiox_mukade::ToolCall;
 use xiox_project::{
-    effective_cwd, extract, resolve, session_ledgers, shell_command, Ledger, PathEnv, SessionKey, ShellCommand,
+    effective_cwd, extract, resolve, session_ledgers, shell_command, EvidenceRef, Ledger, PathEnv, SessionKey, ShellCommand,
     Source,
 };
 
@@ -95,9 +95,13 @@ fn folder_rows(key: &SessionKey, ledger: &Ledger) -> impl Iterator<Item = Value>
         let all = || folder.refs.iter().chain(&folder.failed);
         let sources: BTreeSet<String> = all().map(|r| source_name(&r.source)).collect();
         let refs: BTreeSet<(&Option<String>, &Option<String>)> = all().map(|r| (&r.entry, &r.call)).collect();
+        // The prototype ignores patches: what the other sources show is compared apart.
+        let plain = |r: &&EvidenceRef| !matches!(r.source, Source::Patch(_));
         json!({
             "store": key.store, "session": key.session, "folder": folder.path,
             "strength": folder.strength.map(|s| s as u8), "failed": folder.failed.len(),
+            "non_patch_strength": folder.refs.iter().filter(plain).filter_map(|r| r.strength).max().map(|s| s as u8),
+            "non_patch_failed": folder.failed.iter().filter(plain).count(),
             "sources": sources, "refs": refs,
         })
     })
