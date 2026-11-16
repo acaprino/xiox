@@ -512,3 +512,30 @@ fn a_scratch_folder_under_an_unreadable_parent_is_unreadable() {
     assert_eq!(excluded.get(&Exclusion::Unreadable), Some(&1), "{excluded:?}");
     assert_eq!(excluded.get(&Exclusion::Missing), None, "{excluded:?}");
 }
+
+#[test]
+fn a_scratch_folder_with_an_unreadable_folder_inside_is_blocked_as_unknown() {
+    let site = Site::new();
+    let run = site.at("agent-runs/run1");
+    let inner = run.join("inner");
+    fs::create_dir_all(&inner).unwrap();
+    let icacls = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("icacls").arg(dir).args(args).output().map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !icacls(&inner, &["/deny", "*S-1-1-0:(RX)"]) {
+        println!("skipped: icacls could not deny");
+        return;
+    }
+    let denied = fs::read_dir(&inner).is_err();
+    let walked = crate::nested::nested_repos(&run);
+    let (items, excluded) = site.within_base(&[Mkdir("agent-runs/run1")]);
+    icacls(&inner, &["/remove:d", "*S-1-1-0"]);
+    if !denied {
+        println!("skipped: the deny did not take (administrator)");
+        return;
+    }
+    // A folder that cannot be listed may hold a repository: never "verified empty".
+    assert_eq!(walked, Err(crate::nested::NotChecked::Unreadable));
+    assert_eq!(items.len(), 1, "{excluded:?}");
+    assert!(items[0].blocked.contains(&Block::UnsavedWorkUnknown), "{:?}", items[0].blocked);
+}

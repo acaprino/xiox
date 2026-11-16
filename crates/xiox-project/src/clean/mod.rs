@@ -21,7 +21,7 @@ pub use method::{Method, method_of};
 
 use admit::{Refusal, admit, blocked_inside};
 use crate::history::scope::{has_short_component, unlinked_chain};
-use crate::nested::nested_repos;
+use crate::nested::{NotChecked, nested_repos};
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
@@ -473,14 +473,16 @@ fn expected_bytes(item: &Item) -> u64 {
     }
     match (&item.target, &item.path) {
         (Target::File, Some(p)) => fs::symlink_metadata(p).map_or(0, |m| m.len()),
-        (Target::Dir { .. } | Target::Worktree { .. }, Some(p)) => xiox_cleaner::measure_dir(p).effective_bytes(),
+        (Target::Dir { .. } | Target::Subtree { .. } | Target::Worktree { .. }, Some(p)) => {
+            xiox_cleaner::measure_dir(p).effective_bytes()
+        }
         _ => 0,
     }
 }
 
 /// Volumes whose Recycle Bin cannot take the chosen items: `(drive, bytes moved, room)`. Empty
-/// for `Permanent`. Only folders and files go to the bin: a worktree is removed by git, a
-/// session is small, and an item inside another chosen one goes with it.
+/// for `Permanent`. Only folders (inside the project too) and files go to the bin: a worktree is
+/// removed by git, a session is small, and an item inside another chosen one goes with it.
 pub fn recycle_shortfall(scan: &ProjectScan, chosen: &Chosen, mode: RemoveMode) -> Vec<(char, u64, u64)> {
     shortfall_with(scan, chosen, mode, xiox_cleaner::recycle_room)
 }
@@ -499,7 +501,7 @@ pub(crate) fn shortfall_with(
     let nested = nested_keys(&items);
     let mut per_volume: BTreeMap<char, u64> = BTreeMap::new();
     for i in items.iter().filter(|i| !nested.contains(&i.key)) {
-        if !matches!(i.target, Target::Dir { .. } | Target::File) {
+        if !matches!(i.target, Target::Dir { .. } | Target::Subtree { .. } | Target::File) {
             continue;
         }
         if let Some(letter) = i.path.as_deref().and_then(drive_letter) {
@@ -1183,7 +1185,12 @@ pub(crate) fn check_contents(fresh: &Item, project: &Project, listed: &[Item]) -
     }
     if is_project_folder || matches!(fresh.target, Target::Subtree { .. }) {
         let repos =
-            nested_repos(path).map_err(|_| "it is too big to check for git repositories inside it".to_string())?;
+            nested_repos(path).map_err(|why| match why {
+                NotChecked::TooBig => "it is too big to check for git repositories inside it".to_string(),
+                NotChecked::Unreadable => {
+                    "a folder inside it cannot be read, so it cannot be checked for git repositories".to_string()
+                }
+            })?;
         for r in repos {
             let rk = path_key(&r);
             let vouched = listed.iter().any(|j| {

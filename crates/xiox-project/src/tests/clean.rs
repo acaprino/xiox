@@ -2020,3 +2020,18 @@ fn a_scan_made_without_the_history_is_checked_without_it() {
     assert!(matches!(outcome_of(&out, &named), Outcome::Removed { .. }), "{:#?}", out.items);
     assert!(stores.calls.asked().is_empty(), "the history was read: {:?}", stores.calls.asked());
 }
+
+#[test]
+fn a_folder_inside_the_project_counts_for_the_recycle_bin() {
+    let (_t, base) = tmp();
+    let runs = base.join("proj").join("runs");
+    fill(&runs, 1, MB);
+    let scratch = at_risk(listed(Category::Scratch, &runs, session_folder()), &[Risk::NoGit]);
+    let scan = scratch_scan(&base, vec![Item { target: Target::Subtree { repo: base.join("proj") }, ..scratch }]);
+    let chosen = Chosen { keys: vec![path_key(&runs)], ..Chosen::default() };
+
+    // It goes to the bin like any folder; unmeasured in the scan, it is measured now.
+    let short = shortfall_with(&scan, &chosen, RemoveMode::Recycle, |_| Some(1));
+    assert_eq!(short.len(), 1, "{short:?}");
+    assert!(short[0].1 >= MB64, "{short:?}");
+}
