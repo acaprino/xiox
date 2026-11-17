@@ -72,6 +72,18 @@
   della cartella, rischi e metodo devono restare quelli confermati. Le cartelle `danger` vanno
   solo nel Cestino, i worktree solo con `git worktree remove`. Il desktop non mostra voci della
   cronologia.
+- Passo 5, verifica integrata (piano `docs/superpowers/plans/2026-11-17-step5-integrated-verification.md`,
+  in fondo la mappa dei 15 casi di accettazione e dei test che li provano). Due cose da sapere:
+  - `crates/xiox-cli/tests/sessions.rs` fa girare il vero `xiox` con il vero `mukade` su una
+    home finta: `SessionWorld` imposta `USERPROFILE`, `LOCALAPPDATA` e `TEMP` propri e toglie le
+    variabili degli store. Sta in un binario di test a parte perché, in parallelo ai test di
+    `observe` e MCP, ne spinge la prima analisi oltre i 30 s di attesa.
+  - `analyze_project_in` (build di debug con `XIOX_SEARCH_ROOTS`) legge la cronologia come
+    `analyze_project`.
+  `gitref.rs`: git non viene interrogato su un repository candidato il cui `.git`, `commondir`,
+  `alternates` o file inclusi escono dai dischi locali fissi, passano per un link o finiscono in
+  una cartella cloud. L'osservatore resta senza cronologia. Le misure sugli store reali del
+  passo 5 non sono state fatte: solo su richiesta esplicita.
 - Test della pulizia: nessun test raggiunge il Cestino reale (le cartelle in modalità Cestino
   passano dal `ParallelRemover`, non dalla `Trash` finta), salvo `recycle_mode_moves_tree_to_bin`
   di `xiox-cleaner` e `a_confirmed_danger_folder_goes_to_the_real_recycle_bin` della CLI, che

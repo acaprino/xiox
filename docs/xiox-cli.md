@@ -1070,6 +1070,9 @@ desktop app does not list them.
 - **Two projects in one folder are seen only through their sessions.** The conflict check reads
   only the sessions of other projects that worked in or around the folder; a project that wrote
   there from a session working somewhere else is not seen.
+- **Pages of one session are not told apart.** The evidence of a folder names the session, the
+  entry and the tool call, not the page of the transcript they came from: the store reader does
+  not give pages for Claude Code transcripts.
 - `--include` cannot name a session: sessions are taken together with `--sessions`.
 
 ## Troubleshooting
