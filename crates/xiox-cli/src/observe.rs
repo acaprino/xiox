@@ -1489,12 +1489,14 @@ stop
     }
 
     #[test]
-    fn the_analysis_of_the_observer_never_uses_the_admin_search() {
-        // From an elevated terminal the MFT of every NTFS drive would be read at each check.
+    fn the_analysis_of_the_observer_never_uses_the_admin_search_or_the_history() {
+        // From an elevated terminal the MFT of every NTFS drive would be read at each check; the
+        // session history can take minutes, and the observer never says which session made what.
         let mut a = args();
         a.no_drives = false;
         let o = observe_options(&a);
         assert!(!o.admin, "{o:?}");
+        assert!(!o.history, "{o:?}");
         assert!(o.drives && !o.measure, "{o:?}");
         a.no_drives = true;
         assert!(!observe_options(&a).drives);

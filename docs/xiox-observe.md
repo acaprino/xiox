@@ -747,7 +747,8 @@ and nothing else on stdout.
   worktree by the next.)
 - **No attribution.** The observer says what appeared since it started. It does not say which
   agent, session or harness created it, and it does not read sessions for that. Two agents
-  working in the same project are seen together.
+  working in the same project are seen together. It never reads the session history either: no
+  `scratch` items, and `provenance` is always `null`. `xiox analyze` shows them.
 - **One analysis at a time.** A `report` line or a tool call that arrives while a check is
   running is answered when that check ends. In default mode the reader of stdin queues at most
   16 lines (a program that writes faster than the observer answers waits on its pipe), and

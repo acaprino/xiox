@@ -584,6 +584,37 @@ fn repo_project() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
+fn observe_shows_worktrees_made_during_the_run_as_danger() {
+    let (_t, project) = repo_project();
+    let mut o = Observer::spawn(&project, &["--no-drives", "--worktree-threshold", "1"]);
+    assert_eq!(o.next(60)["event"], "started");
+    for name in ["spike1", "spike2"] {
+        let wt = project.parent().unwrap().join(name);
+        git(&project, &["worktree", "add", "-q", "-b", name, &wt.to_string_lossy()]);
+    }
+    // Every worktree added on the way to the worktrees attention is danger, without provenance:
+    // the observer never reads the session history.
+    let (mut worktrees, mut seen) = (0, Vec::new());
+    let attention = loop {
+        let line = o.next(60);
+        if line["event"] == "attention" && line["kind"] == "worktrees" {
+            break line;
+        }
+        for added in line["added"].as_array().into_iter().flatten().filter(|a| a["category"] == "worktrees") {
+            let shown = (&added["level"], &added["risks"], &added["provenance"]);
+            assert_eq!(shown, (&"danger".into(), &serde_json::json!(["recent-activity"]), &serde_json::Value::Null), "{added:#}");
+            worktrees += 1;
+        }
+        seen.push(line);
+        assert!(seen.len() <= 20, "no worktrees attention: {seen:?}");
+    };
+    assert_eq!(worktrees, 2, "{seen:?}");
+    assert_eq!(attention["cleanCommand"], serde_json::Value::Null, "{attention}");
+    drop(o.stdin.take());
+    assert_eq!(o.exit_code(30), Some(0));
+}
+
+#[test]
 fn observe_binary_prints_started_then_a_changed_event_after_a_worktree_is_added() {
     let (_t, project) = repo_project();
     let mut o = Observer::spawn(&project, &["--no-drives"]);
