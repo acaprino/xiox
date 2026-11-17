@@ -600,6 +600,10 @@ mod tests {
             Block::SessionLocked,
             Block::UnsavedWork,
             Block::UnsavedWorkUnknown,
+            Block::OtherProjectWrites,
+            Block::HoldsRepositories,
+            Block::TrackedFiles,
+            Block::WorktreeLocked,
             Block::Unknown,
         ];
         let reasons: std::collections::HashSet<_> = all.iter().map(|b| block_reason(*b)).collect();

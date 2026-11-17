@@ -2023,7 +2023,7 @@ fn permanent_never_reaches_a_danger_folder() {
 }
 
 #[test]
-fn danger_worktree_is_removed_by_git_and_a_git_refusal_stands() {
+fn danger_worktree_is_removed_by_git_and_a_locked_one_is_left() {
     let lab = Lab::new();
     // Worktrees made now are recent activity: danger.
     let now = xiox_app::now_ms();
@@ -2035,7 +2035,7 @@ fn danger_worktree_is_removed_by_git_and_a_git_refusal_stands() {
     assert_eq!((scan_item(&scan, &one).level, &scan_item(&scan, &one).risks), (Level::Danger, &vec![Risk::RecentActivity]));
     let chosen = select(&scan, &asked(&[&one, &two], &[&one, &two], RemoveMode::Recycle)).unwrap();
     assert!(chosen.confirmed.iter().all(|c| c.method == Method::GitWorktreeRemove), "{:?}", chosen.confirmed);
-    // Locked after the choice: the analysis still lists it, and only git refuses it.
+    // Locked after the choice: the fresh analysis blocks it before git is asked.
     git(&lab.project, &["worktree", "lock", &two.to_string_lossy()]);
 
     let out = clean_in_recycle(&scan, &chosen, false, &env, &FakeBin::new(lab.base.join("bin")));
@@ -2043,10 +2043,7 @@ fn danger_worktree_is_removed_by_git_and_a_git_refusal_stands() {
     assert!(matches!(removed.outcome, Outcome::Removed { .. }), "{removed:?}");
     assert_eq!(removed.method, Method::GitWorktreeRemove);
     assert!(!one.exists());
-    match outcome_of(&out, &two) {
-        Outcome::Failed { error } => assert!(error.starts_with("git refused to remove the worktree (not forced"), "{error}"),
-        other => panic!("git did not refuse the locked worktree: {other:?}"),
-    }
+    assert_eq!(outcome_of(&out, &two), &skipped_with("now blocked: locked with git worktree lock"));
     assert!(two.exists());
 }
 

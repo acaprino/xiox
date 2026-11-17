@@ -21,6 +21,8 @@ pub struct WorktreeEntry {
     pub is_main: bool,
     /// Git marks it prunable, or the folder does not exist.
     pub prunable: bool,
+    /// `git worktree lock` was run on it, with or without a reason.
+    pub locked: bool,
 }
 
 /// A local branch that looks stale.
@@ -88,6 +90,7 @@ fn parse_worktrees(fields: &[String]) -> Vec<WorktreeEntry> {
                     branch: None,
                     is_main: false,
                     prunable: false,
+                    locked: false,
                 });
             }
             "HEAD" => {
@@ -104,6 +107,11 @@ fn parse_worktrees(fields: &[String]) -> Vec<WorktreeEntry> {
             "prunable" => {
                 if let Some(e) = cur.as_mut() {
                     e.prunable = true;
+                }
+            }
+            "locked" => {
+                if let Some(e) = cur.as_mut() {
+                    e.locked = true;
                 }
             }
             _ => {}
@@ -362,6 +370,25 @@ mod tests {
             let r = repo_main_root(p).unwrap_or_else(|| panic!("no root for {p:?}"));
             assert_eq!(path_key(&r), path_key(&main), "from {p:?}");
         }
+    }
+
+    #[test]
+    fn locked_worktrees_are_marked_with_or_without_a_reason() {
+        let t = Tmp::new();
+        let main = t.sub("main");
+        init(&main);
+        commit_file(&main, "a.txt", "a");
+        let (held, bare, free) = (t.0.join("held-wt"), t.0.join("bare-wt"), t.0.join("free-wt"));
+        for wt in [&held, &bare, &free] {
+            g(&main, &["worktree", "add", "-q", "--detach", &wt.to_string_lossy()]);
+        }
+        g(&main, &["worktree", "lock", "--reason", "on a removable disk", &held.to_string_lossy()]);
+        g(&main, &["worktree", "lock", &bare.to_string_lossy()]);
+
+        let list = list_worktrees(&main).expect("list");
+        let locked = |p: &Path| list.iter().find(|e| path_key(&e.path) == path_key(p)).expect("listed").locked;
+        assert!(locked(&held) && locked(&bare), "{list:?}");
+        assert!(!locked(&free) && !locked(&main), "{list:?}");
     }
 
     #[test]

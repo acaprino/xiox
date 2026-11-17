@@ -166,6 +166,10 @@ pub fn every_variant_scan() -> ProjectScan {
         Block::SessionLocked,
         Block::UnsavedWork,
         Block::UnsavedWorkUnknown,
+        Block::OtherProjectWrites,
+        Block::HoldsRepositories,
+        Block::TrackedFiles,
+        Block::WorktreeLocked,
         Block::Unknown,
     ];
     let mut s = scan(vec![

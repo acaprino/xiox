@@ -184,6 +184,20 @@ fn dirty_worktree_is_blocked_dirty_git() {
 }
 
 #[test]
+fn locked_worktree_is_blocked_worktree_locked() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let wt = worktree(&root, &base.join("proj-wt"), "feature");
+    git(&root, &["worktree", "lock", "--reason", "kept on purpose", &wt.to_string_lossy()]);
+
+    let scan = analyze_with(&root, &Options::default(), &env()).unwrap();
+    let w = item(&scan, &wt);
+    assert_eq!(w.blocked, vec![Block::WorktreeLocked]);
+    assert_eq!(w.level, Level::Caution);
+    assert_eq!(Block::WorktreeLocked.reason(), "locked with git worktree lock");
+}
+
+#[test]
 fn worktree_with_a_commit_nobody_else_has_is_blocked_unpushed_commits() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));
