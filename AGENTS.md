@@ -86,4 +86,7 @@
 
 ## Git
 
-- Il ramo principale è `main`, l'unico (non c'è `master`): i rami partono da `main` e tornano in `main`.
+- I rami sono due, e solo due: `main` (ciò che si rilascia) e `develop` (dove si integra).
+- Il lavoro si fa su `develop`, o su un ramo breve che parte da `develop` e torna in `develop`,
+  poi si cancella. In `main` entra solo `develop`, con un merge, quando si rilascia.
+- Non lasciare altri rami, né locali né su GitHub.
