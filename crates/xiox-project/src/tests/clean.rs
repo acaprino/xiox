@@ -47,12 +47,12 @@ impl HarnessCli for NoCli {
 }
 
 /// A "Recycle Bin" that moves into a folder of the test and remembers what it was given.
-struct FakeBin {
+pub(super) struct FakeBin {
     dir: PathBuf,
     taken: Mutex<Vec<PathBuf>>,
 }
 impl FakeBin {
-    fn new(dir: PathBuf) -> FakeBin {
+    pub(super) fn new(dir: PathBuf) -> FakeBin {
         FakeBin { dir, taken: Mutex::new(Vec::new()) }
     }
 }
@@ -67,7 +67,7 @@ impl Trash for FakeBin {
     }
 }
 
-fn run_with(
+pub(super) fn run_with(
     scan: &ProjectScan,
     chosen: &Chosen,
     mode: RemoveMode,
