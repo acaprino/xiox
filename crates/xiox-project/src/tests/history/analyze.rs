@@ -157,6 +157,34 @@ fn file_dates_neither_attribute_nor_cancel() {
 }
 
 #[test]
+fn a_forbidden_gitdir_is_never_followed() {
+    // The session's folder points its `.git` at a repository with a commit no remote has: git,
+    // reading it, finds unsaved work. Through a junction the reference is never followed.
+    for through_a_link in [false, true] {
+        let world = World::new();
+        let real = repo(&world.base.join("real"));
+        let target = if through_a_link {
+            let link = world.base.join("link");
+            if !link_dir(&link, &real) {
+                println!("skipped: this machine cannot make a junction");
+                continue;
+            }
+            link.join(".git")
+        } else {
+            real.join(".git")
+        };
+        let bench = world.base.join("runs").join("bench-1");
+        fs::write(bench.join(".git"), format!("gitdir: {}\n", target.display())).unwrap();
+
+        let scan = world.scan(&Options::default());
+        let item = scan.items.iter().find(|i| i.path.as_deref() == Some(bench.as_path())).expect("bench-1 is listed");
+        let followed = item.blocked.contains(&Block::UnsavedWork);
+        let unknown = item.blocked.contains(&Block::UnsavedWorkUnknown);
+        assert_eq!((followed, unknown), (!through_a_link, through_a_link), "through a link: {through_a_link}: {:?}", item.blocked);
+    }
+}
+
+#[test]
 fn without_history_the_scan_is_the_old_one() {
     let world = World::new();
     let opts = Options { history: false, ..Options::default() };

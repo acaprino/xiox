@@ -10,6 +10,7 @@
 
 mod clean;
 mod container;
+mod gitref;
 mod hint;
 mod history;
 mod identity;

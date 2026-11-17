@@ -10,6 +10,7 @@
 
 use crate::owned::key_within;
 use crate::{Block, Category, Env, Item, Level, Note, Options, Project, SearchMode, Target, Why};
+use crate::gitref::git_may_read;
 use crate::nested::nested_repos;
 use crate::owned::live_session_in;
 use xiox_model::{ArtifactKind, DirIndex, is_system_dir, normalize_path, path_key};
@@ -115,7 +116,8 @@ pub(crate) fn classify(
     if !fs::symlink_metadata(candidate).is_ok_and(|m| m.is_dir() && !is_link(&m)) {
         return None;
     }
-    if is_git_repo(candidate) {
+    // A repository whose `.git` points somewhere git must not go is no copy: git is not asked.
+    if is_git_repo(candidate) && git_may_read(candidate, home_dir().as_deref()) {
         let shared_root_commit = {
             let roots = xiox_git::root_commits(candidate);
             roots.iter().any(|r| project_roots.contains(r))
@@ -184,8 +186,11 @@ fn independent_verdict(dir: &Path) -> Verdict {
 pub(crate) fn named_blocks(dir: &Path, repos_block: bool) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut unknown = false;
+    let home = home_dir();
+    // A repository git must not be asked about cannot be vouched for.
+    let askable = |repo: &Path| git_may_read(repo, home.as_deref());
     if is_git_repo(dir) {
-        match independent_verdict(dir) {
+        match if askable(dir) { independent_verdict(dir) } else { Verdict::Unreadable } {
             Verdict::Safe => {}
             Verdict::Work => blocks.push(Block::UnsavedWork),
             Verdict::Unreadable => unknown = true,
@@ -193,7 +198,7 @@ pub(crate) fn named_blocks(dir: &Path, repos_block: bool) -> Vec<Block> {
     }
     match nested_repos(dir) {
         Ok(repos) => {
-            unknown |= repos.iter().any(|r| xiox_git::working_tree_dirty(r).is_none());
+            unknown |= repos.iter().any(|r| !askable(r) || xiox_git::working_tree_dirty(r).is_none());
             if repos_block && !repos.is_empty() {
                 blocks.push(Block::HoldsRepositories);
             }
