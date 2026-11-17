@@ -173,7 +173,7 @@ cargo build --release --locked -p xiox-cli
 
 Binaries land in `target\release\`: `xiox-ui.exe` (desktop app, built by Tauri without an installer) and `xiox.exe` (command line). On a small machine build with `CARGO_BUILD_JOBS=1`: the Tauri build is long and memory-hungry.
 
-`build-target.bat` does all of the above for a production build (`npm ci`, both release builds with `--locked`, 4 parallel jobs by default) and packages `xiox-ui.exe`, `xiox.exe` and `mukade.exe` into `target\dist\Xiox\` and `target\dist\xiox-<version>-windows-x64.zip`. Options: `--no-ci` (keep `node_modules`), `--jobs N`.
+`build-release.bat` does all of the above for a production build (both release builds with `--locked`, 4 parallel jobs by default), assembles `xiox-ui.exe`, `xiox.exe` and `mukade.exe` in `release\`, installs them into `D:\Software\Xiox` (waiting while Xiox runs from there) and removes what the build staged; cargo's `target\` stays as the build cache. Options: `--no-install` (stop at `release\`), `--target <folder>` (another install folder), `--ci` (`npm ci` even when `node_modules` is there), `--jobs N`. Shinatama, Mukade and Muro have the same script with the same steps and options.
 
 Tests:
 

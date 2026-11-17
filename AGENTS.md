@@ -83,3 +83,7 @@
   - 7 catene di subagent di Claude Code vengono rifiutate;
   - `dump opencode` richiede l'`opencode.exe` nativo (`--opencode-exe`) e `USERPROFILE`/`TEMP`
     senza prefisso `\\?\`. Il database di OpenCode si legge da una copia, mai dall'originale.
+
+## Git
+
+- Il ramo principale è `main`, l'unico (non c'è `master`): i rami partono da `main` e tornano in `main`.
