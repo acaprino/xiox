@@ -4780,6 +4780,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "xiox-model",
+ "xiox-mukade",
  "xiox-observer",
  "xiox-project",
 ]
