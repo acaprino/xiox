@@ -70,6 +70,23 @@ fn permanent_deletes_tree_including_readonly_file() {
 }
 
 #[test]
+fn permanent_removes_a_tree_deeper_than_max_path() {
+    let tmp = TempDir::new().unwrap();
+    let t = make_target(tmp.path());
+    let deep = (0..6).fold(t.clone(), |p, i| p.join(format!("{i}{}", "x".repeat(49))));
+    let file = deep.join("deep.bin");
+    assert!(file.as_os_str().len() > 300, "{}", file.display());
+    // std refuses a path past MAX_PATH without the verbatim prefix.
+    let long = |p: &Path| PathBuf::from(format!(r"\\?\{}", p.display()));
+    fs::create_dir_all(long(&deep)).unwrap();
+    fs::write(long(&file), vec![b'x'; 1000]).unwrap();
+
+    let (o, _) = run(RemoveMode::Permanent, item(&t, ArtifactKind::RustTarget), false);
+    assert!(matches!(o, ItemOutcome::Removed { bytes_freed } if bytes_freed >= 31_000), "{o:?}");
+    assert!(!t.exists());
+}
+
+#[test]
 fn bytes_freed_is_measured_not_expected() {
     let tmp = TempDir::new().unwrap();
     let t = make_target(tmp.path());

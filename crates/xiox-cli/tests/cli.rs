@@ -870,6 +870,26 @@ fn clean_takes_a_scratch_item_only_with_its_confirmation_end_to_end() {
 }
 
 #[test]
+fn a_confirmed_danger_folder_goes_to_the_real_recycle_bin() {
+    let (w, bench) = world_with_a_bench();
+    let (project, b) = (w.project.to_string_lossy().into_owned(), bench.to_string_lossy().into_owned());
+    let out = w.run(&["clean", &project, "--include", &b, "--confirm-danger", &b, "--yes", "--json"]);
+    // The real Recycle Bin: the test empties its own entry before any check, so a failing assert
+    // never leaves it there.
+    let want = b.to_lowercase();
+    let mine: Vec<_> = trash::os_limited::list()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.original_path().to_string_lossy().to_lowercase() == want)
+        .collect();
+    trash::os_limited::purge_all(&mine).unwrap();
+    let v = json_of(&out);
+    assert_eq!(mine.len(), 1, "the folder is not in the Recycle Bin: {:#}", v["outcome"]);
+    assert!(!bench.exists());
+    assert!(v["outcome"]["recycledBytes"].as_u64().unwrap() > 0, "{:#}", v["outcome"]);
+}
+
+#[test]
 fn a_folder_two_projects_wrote_in_is_shown_blocked_end_to_end() {
     let w = SessionWorld::new();
     let shared = w.base.join("shared");

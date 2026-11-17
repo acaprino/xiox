@@ -74,9 +74,10 @@
   cronologia.
 - Test della pulizia: nessun test raggiunge il Cestino reale (le cartelle in modalità Cestino
   passano dal `ParallelRemover`, non dalla `Trash` finta), salvo `recycle_mode_moves_tree_to_bin`
-  di `xiox-cleaner`, che svuota dal Cestino la voce che ha creato prima di ogni controllo. Una cartella `danger` si prova con
-  `dry_run: true`; una rimozione vera si prova solo su una cartella che non è `danger` (per una
-  `named`, un clone pulito di un repository estraneo). La fixture `env()` ha l'orologio due giorni
+  di `xiox-cleaner` e `a_confirmed_danger_folder_goes_to_the_real_recycle_bin` della CLI, che
+  svuotano dal Cestino la voce che hanno creato prima di ogni controllo. Una cartella `danger` si
+  prova con `dry_run: true`, salvo quel test controllato; una rimozione vera si prova solo su una
+  cartella che non è `danger` (per una `named`, un clone pulito di un repository estraneo). La fixture `env()` ha l'orologio due giorni
   avanti: ciò che il test crea non è attività recente, salvo un orologio proprio.
 - Limiti di Mukade trovati il 2026-11-15:
   - `list pi` dà lo stesso id `session` a 50 sessioni;
