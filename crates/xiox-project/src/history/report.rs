@@ -23,7 +23,7 @@ impl Risk {
     /// The English reason, in the one wording used by the listing and the guide.
     pub fn reason(self) -> &'static str {
         match self {
-            Risk::NoGit => "not a git repository",
+            Risk::NoGit => "no git repository of its own",
             Risk::WeakEvidence => "the sessions wrote or worked here; no creation is recorded",
             Risk::PartialCoverage => "the session history was read only in part",
             Risk::RecentActivity => "used or changed in the last 24 hours",

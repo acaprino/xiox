@@ -88,7 +88,7 @@ COPIES                                                                        2 
 
 NAMED                                                                         1 MB
   danger            1 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench       matched by name only
-                          danger: explicit confirmation required: not a git repository
+                          danger: explicit confirmation required: no git repository of its own
 
 LOGS                                                                          2 MB
   recommended       2 MB  C:\Users\alice\AppData\Local\Temp\w\sampleapp\debug.log   log file, ignored by git
@@ -243,7 +243,7 @@ risks count:
 
 | JSON value | Text (listing, questions, errors) | Holds when |
 |---|---|---|
-| `no-git` | not a git repository | the folder has no `.git` of its own |
+| `no-git` | no git repository of its own | the folder has no `.git` of its own; a folder inside the project is proposed only when git tracks none of its files, so this holds for it too |
 | `weak-evidence` | the sessions wrote or worked here; no creation is recorded | no session is recorded making the folder |
 | `partial-coverage` | the session history was read only in part | a cap was reached, a session could not be read, a session has calls the parsers could not fully read, or a nearby session of another project could not be read |
 | `recent-activity` | used or changed in the last 24 hours | a session's last activity there, or the folder's own date, is within the last 24 hours; activity inside a folder counts for every listed folder that holds it |
@@ -430,13 +430,14 @@ confirms it, item by item:
    produce (`not found in the analysis of this project`), for an item that is not `danger`
    (`--confirm-danger is only for danger items, and this one is not: <path>`) and for a `danger`
    item that no `--include` takes (`--confirm-danger needs that folder, or a folder that holds it,
-   with --include: <path>`). It never names an arbitrary path.
+   with --include: <path>`); a command with `--confirm-danger` and no `--include` at all is refused
+   with the same message before any analysis (exit code 2). It never names an arbitrary path.
 3. Without the confirmation, `--yes`, `--json` and a stdin that is not a terminal remove nothing:
    every item that is still waiting gets one line on stderr and the exit code is 2.
 
 ```text
 > xiox clean C:\Users\alice\AppData\Local\Temp\w\sampleapp --include C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench --yes
-error: C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench: danger: explicit confirmation required (not a git repository): add --confirm-danger "C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench"
+error: C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench: danger: explicit confirmation required (no git repository of its own): add --confirm-danger "C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench"
 ```
 
 (exit code 2)
@@ -447,7 +448,7 @@ the summary. It says why the item is `danger` and how it would go:
 ```text
 C:\Users\alice\AppData\Local\Temp\w\sampleapp-bench
   danger: explicit confirmation required
-  - not a git repository
+  - no git repository of its own
   removal: to the Recycle Bin
 Remove this danger item? [y/N]
 ```
@@ -473,9 +474,11 @@ Right before removing, the fresh analysis (with the session history read again, 
 [Safety](#safety)) must find the same folder with the same risks and the same method; any change,
 fewer risks included, skips the item with `its risks changed since it was confirmed: choose it
 again` or `its removal method changed since it was confirmed: choose it again`. A `danger` item
-inside a chosen folder that has no confirmation now, or whose risks changed, stops the folder (`it
-holds <path>, which needs an explicit confirmation`, `it holds <path>, whose risks changed since it
-was confirmed`). A dry run asks nothing: a `danger` item without its confirmation comes out as
+inside a chosen folder that has no confirmation now, or whose risks, method or folder changed,
+stops the folder (`it holds <path>, which needs an explicit confirmation`, `it holds <path>, whose
+risks changed since it was confirmed`, `it holds <path>, whose removal method changed since it was
+confirmed`, `it holds <path>, which is not the folder that was analysed: it was replaced`, `it holds
+<path>, whose identity could not be checked`). A dry run asks nothing: a `danger` item without its confirmation comes out as
 `skipped` with `danger: explicit confirmation required`.
 
 ### Summary, confirmation and `--yes`
@@ -693,11 +696,9 @@ which can now be removed; and `risks`, which moved from `why` to every item.
   the scan as it was before removing, what was chosen, and what happened. `chosen` is `null` when
   no flag named anything; `outcome` is `null` when nothing was run (no flag named anything, or
   nothing matched).
-- `clean --json` never asks: a `danger` item needs `--confirm-danger` (exit 2 otherwise, stdout
-  empty).
 - `clean --json` never asks, so it **needs `--yes` to remove anything**; without it, it exits
   with 2 (`error: --json needs --yes to remove anything`). `--dry-run --json` works without
-  `--yes`.
+  `--yes`. A `danger` item also needs `--confirm-danger` (exit 2 otherwise, stdout empty).
 - On exit code 1 or 2 stdout is empty: the reason is on stderr.
 
 A real `analyze --json` run (formatted and shortened: four items of seven are shown):
@@ -987,12 +988,14 @@ removes nothing. See [xiox-observe.md](xiox-observe.md).
 `clean` analyses the project again and keeps only the chosen items that are still listed, in
 the same category, unblocked and not more suspect than before (an item that now needs a manual
 review, or a copy that gained commits or changes, is skipped). When the listing read the session
-history and a chosen item depends on it (it has provenance, or it is `danger`), the history is
-read again through the same stores; if it cannot be read now, every chosen item with provenance is
-skipped (`the session history could not be read again`). Each folder must be the very folder that
-was analysed (its file identity, not only its path: a folder deleted and made again is skipped
-with `it is not the folder that was analysed: it was replaced`), and a `danger` item must match
-its confirmed plan (see [Confirming danger items](#confirming-danger-items)). The selection rules
+history and the removal depends on it (a chosen item has provenance or is `danger`, or a confirmed
+`danger` item goes with it), the history is read again through the same stores; if it cannot be
+read now, every chosen item with provenance, or holding a confirmed `danger` item, is skipped (`the
+session history could not be read again`). Each worktree, copy, named and scratch folder must be the very folder that was analysed
+(its file identity, not only its path: a folder deleted and made again is skipped with `it is not
+the folder that was analysed: it was replaced`, one whose identity cannot be read now with `its
+identity could not be checked`); a build or log folder carries no file identity and must be
+listed again by its own rule. A `danger` item must match its confirmed plan (see [Confirming danger items](#confirming-danger-items)). The selection rules
 run again on the fresh item, so a hand-made request gets no more than `--include` and
 `--confirm-danger` would give. The item that is removed is the
 fresh one, and a folder is checked once more right before it goes (still there, still a real
