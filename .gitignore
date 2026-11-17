@@ -12,3 +12,6 @@ apps/desktop/src-tauri/gen/
 # Written by mukade.exe when run without MUKADE_INTENT_DIR
 vendor/mukade/intent-prompts/
 __pycache__/
+
+# assembled by build-release.bat
+release/
