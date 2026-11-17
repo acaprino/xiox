@@ -346,6 +346,10 @@ fn recycle_mode_moves_tree_to_bin() {
     let (o, _) = run(RemoveMode::Recycle, item(&t, ArtifactKind::RustTarget), false);
     match o {
         ItemOutcome::Removed { bytes_freed } => {
+            // The only test that reaches the real Recycle Bin empties its own entry before any assert.
+            let mine: Vec<_> = trash::os_limited::list().unwrap().into_iter().filter(|e| e.original_path() == t).collect();
+            trash::os_limited::purge_all(&mine).unwrap();
+            assert_eq!(mine.len(), 1, "the tree is not in the Recycle Bin");
             assert!(bytes_freed >= 30_000);
             assert!(!t.exists());
         }

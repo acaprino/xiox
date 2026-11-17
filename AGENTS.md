@@ -73,7 +73,8 @@
   solo nel Cestino, i worktree solo con `git worktree remove`. Il desktop non mostra voci della
   cronologia.
 - Test della pulizia: nessun test raggiunge il Cestino reale (le cartelle in modalità Cestino
-  passano dal `ParallelRemover`, non dalla `Trash` finta). Una cartella `danger` si prova con
+  passano dal `ParallelRemover`, non dalla `Trash` finta), salvo `recycle_mode_moves_tree_to_bin`
+  di `xiox-cleaner`, che svuota dal Cestino la voce che ha creato prima di ogni controllo. Una cartella `danger` si prova con
   `dry_run: true`; una rimozione vera si prova solo su una cartella che non è `danger` (per una
   `named`, un clone pulito di un repository estraneo). La fixture `env()` ha l'orologio due giorni
   avanti: ciò che il test crea non è attività recente, salvo un orologio proprio.
