@@ -131,7 +131,8 @@ ones, so not `node_modules`, and never the personal-data ones) or `--include <pa
 (`git worktree list`), wherever they are on disk. A worktree is `recommended` when it is clean
 and its HEAD commit is also contained in a remote branch or in a local branch other than the
 one checked out there, so no commit can be lost. Otherwise it is blocked (see the table
-below); so it is when an agent session is open in it. A worktree used or changed in the last 24
+below); so it is when an agent session is open in it, and when it was locked with `git worktree
+lock`. A worktree used or changed in the last 24
 hours (a session worked in it, or its folder changed) is `danger`. A registered worktree whose folder no longer exists is not an item: it appears as a
 `note:` ("git still lists a worktree whose folder is gone"), and `git worktree prune` clears
 it. Selected with `--worktrees` or `--include <path>`.
@@ -259,6 +260,7 @@ description; in JSON the `blocked` array holds the value of the first column.
 | `live-session` | an agent session is open | builds, worktrees, copies, named folders |
 | `dirty-git` | uncommitted changes (also when git cannot tell) | worktrees |
 | `unpushed-commits` | commits not kept anywhere else (also when git cannot tell) | worktrees |
+| `worktree-locked` | locked with git worktree lock | worktrees |
 | `unreachable` | could not be checked | builds |
 | `session-locked` | session locked by its harness | sessions |
 | `unsaved-work` | has commits or changes the project does not have | copies, named folders that are repositories |
@@ -682,7 +684,7 @@ which can now be removed; and `risks`, which moved from `why` to every item.
 |---|---|---|
 | `items[].level` | `recommended`, `optional`, `caution` | also `danger` |
 | `items[].risks` | absent; `why.risks` in `session-folder` only | on every item, `[]` when there is none; `why.risks` is gone |
-| `items[].blocked` | | new values `other-project-writes`, `holds-repositories`, `tracked-files` |
+| `items[].blocked` | | new values `other-project-writes`, `holds-repositories`, `tracked-files`, `worktree-locked` |
 | `items[].target` | `dir`, `file`, `worktree`, `session` | also `subtree` (`repo`): a scratch folder inside the project or a worktree |
 | `items[].provenance.otherProjects` | absent | the sessions of other projects that wrote in the folder |
 | `history.conflicts` | absent | `read`, `unread`: the nearby sessions of other projects read, and left unread, to look for their writes |

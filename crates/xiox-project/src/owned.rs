@@ -276,6 +276,9 @@ fn worktrees(
             continue;
         }
         let mut blocked = Vec::new();
+        if e.locked {
+            blocked.push(Block::WorktreeLocked);
+        }
         if GitCli.state(&path).dirty != Some(false) {
             blocked.push(Block::DirtyGit);
         }

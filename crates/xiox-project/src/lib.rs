@@ -87,6 +87,8 @@ pub enum Block {
     HoldsRepositories,
     /// The folder holds files git tracks.
     TrackedFiles,
+    /// A worktree someone kept with `git worktree lock`.
+    WorktreeLocked,
     Unknown,
 }
 
@@ -104,6 +106,7 @@ impl Block {
             Block::OtherProjectWrites => "sessions of another project wrote here",
             Block::HoldsRepositories => "holds git repositories",
             Block::TrackedFiles => "holds files tracked by git",
+            Block::WorktreeLocked => "locked with git worktree lock",
             Block::Unknown => "unknown reason",
         }
     }
