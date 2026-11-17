@@ -3,6 +3,7 @@
   "tagPrefix": "v",
   "files": [
     "package.json",
+    "package-lock.json",
     "apps/desktop/src-tauri/Cargo.toml",
     "apps/desktop/src-tauri/tauri.conf.json",
     "crates/xiox-app/Cargo.toml",
