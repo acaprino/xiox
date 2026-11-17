@@ -87,6 +87,13 @@
 ## Git
 
 - I rami sono due, e solo due: `main` (ciò che si rilascia) e `develop` (dove si integra).
-- Il lavoro si fa su `develop`, o su un ramo breve che parte da `develop` e torna in `develop`,
-  poi si cancella. In `main` entra solo `develop`, con un merge, quando si rilascia.
-- Non lasciare altri rami, né locali né su GitHub.
+- Si lavora sempre su `develop`, o su un ramo breve che parte da `develop`, torna in `develop` e poi si
+  cancella. Mai merge o push in `main`, e nessun altro ramo, né locale né su GitHub.
+- Una release è la pull request `develop` → `main`, aperta e unita dal proprietario: ogni merge in `main` è
+  una release (`.github/workflows/release.yml`, lo stesso in Shinatama, Mukade, Xiox, Muro, Ethel e Qemille).
+  La versione sale di una patch, o di una minor o major se la pull request ha l'etichetta `release:minor` o
+  `release:major`; `build-release.bat` costruisce su Windows; si pubblicano il tag `v<versione>` e la GitHub
+  Release (`release\` in zip, i suoi programmi, i suoi installer), e `main` torna in `develop`. Se la build
+  fallisce non si pubblica nulla.
+- Mai cambiare la versione o creare tag di release a mano: lo fa il workflow (`.github/release.json` elenca i
+  file della versione, `.github/scripts/release.mjs` li scrive).
