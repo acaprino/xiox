@@ -180,6 +180,15 @@ fn provenance_text(why: &Why, risks: &[Risk], p: &Provenance) -> String {
     text
 }
 
+/// The sessions recorded creations of the folder, none with a result that says it succeeded, and
+/// left none of their operations out of the list: "made" would claim more than the history holds.
+fn creation_unrecorded(p: &Provenance) -> bool {
+    let mut created = p.sessions.iter().flat_map(|s| &s.operations).filter(|o| o.strength == Some(Strength::Created)).peekable();
+    created.peek().is_some()
+        && p.sessions.iter().all(|s| s.omitted == 0)
+        && created.all(|o| o.outcome != xiox_project::CallOutcome::Succeeded)
+}
+
 fn reason_text(item: &Item) -> String {
     let mut reason = if item.blocked.is_empty() {
         why_text(&item.why)
@@ -187,6 +196,10 @@ fn reason_text(item: &Item) -> String {
         item.blocked.iter().map(|b| block_reason(*b)).collect::<Vec<_>>().join(", ")
     };
     if let Some(p) = &item.provenance {
+        let made = matches!(item.why, Why::SessionFolder { strength: Strength::Created, .. });
+        if made && item.blocked.is_empty() && creation_unrecorded(p) {
+            reason.push_str(", result not recorded");
+        }
         reason.push_str(&provenance_text(&item.why, &item.risks, p));
     }
     if too_shallow(item) {
@@ -1022,6 +1035,42 @@ mod tests {
         ] {
             assert!(out.contains(needle), "{needle:?} missing in:\n{out}");
         }
+    }
+
+    #[test]
+    fn scratch_reasons_never_claim_what_was_not_recorded() {
+        use xiox_project::{CallOutcome, Operation, OperationSource, Strength};
+        use CallOutcome::{Succeeded, Unknown};
+        let op = |outcome| Operation {
+            source: OperationSource::Cwd,
+            outcome,
+            strength: Some(Strength::Created),
+            entry: None,
+            call: None,
+            time: None,
+            cwd: None,
+        };
+        // (strength, outcomes of the session's creations, operations left out, reason)
+        let cases = [
+            (Strength::Created, vec![Succeeded], 0, "made by a session (1 session, no date)"),
+            (Strength::Created, vec![Unknown], 0, "made by a session, result not recorded (1 session, no date)"),
+            (Strength::Created, vec![Unknown, Succeeded], 0, "made by a session (1 session, no date)"),
+            // A left-out operation may be the one that succeeded.
+            (Strength::Created, vec![Unknown], 1, "made by a session (1 session, no date)"),
+            (Strength::Written, vec![], 0, "files written here by a session (1 session, no date)"),
+        ];
+        let promises = ["inactive", "not active", "no longer used", "not in use"];
+        for (strength, outcomes, omitted, want) in cases {
+            let mut p = provenance(1, None);
+            p.sessions[0].operations = outcomes.into_iter().map(op).collect();
+            p.sessions[0].omitted = omitted;
+            let i = scratch("D:/w/x", folder(strength, false, vec![]), p);
+            assert_eq!(reason_text(&i), want);
+            let out = render_scan(&scan(vec![i]));
+            assert!(!promises.iter().any(|w| out.contains(w)), "{out}");
+        }
+        let out = render_scan(&crate::testdata::danger_scan());
+        assert!(!promises.iter().any(|w| out.contains(w)), "{out}");
     }
 
     #[test]

@@ -181,7 +181,8 @@ files into, while working on the project: a run folder, a benchmark output, a sc
 folder is proposed only when the history holds evidence at least at the level `written` (a file
 was written in it, or the folder itself was made, copied, moved or cloned); a folder that was
 only read, listed or entered is never proposed. The listing says what the sessions did (`made by
-a session`, `files written here by a session`), how many distinct sessions touched the folder,
+a session`, `files written here by a session`; `made by a session, result not recorded` when the
+history holds the command that makes the folder but no result of it), how many distinct sessions touched the folder,
 the date of the last one (`no date` when no session gave one), `from a script` when the evidence
 comes from a script that a session ran, and the **risks** in short (`risk: no git, weak
 evidence, partial history, recent activity`; the folder date feeds `recent activity` only, never
