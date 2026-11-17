@@ -313,6 +313,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         Which::Observe => Command::Observe { project, interval_secs, grow_threshold, worktree_threshold, no_drives, mcp },
         Which::Analyze => Command::Analyze { project, json, no_drives, no_history },
         Which::Clean => {
+            // Category flags never take a danger item: without --include a confirmation names nothing.
+            if include.is_empty()
+                && let Some(given) = confirm_danger.first()
+            {
+                return Err(xiox_project::SelectError::ConfirmNotIncluded(given.clone()).to_string());
+            }
             Command::Clean { project, categories, include, confirm_danger, permanent, yes, dry_run, json, no_drives, no_history }
         }
     })
@@ -416,9 +422,17 @@ mod tests {
         let Ok(Command::Clean { include, confirm_danger, .. }) = got else { panic!("a clean command: {got:?}") };
         assert_eq!(include, vec![PathBuf::from("a")]);
         assert_eq!(confirm_danger, vec![PathBuf::from("a"), PathBuf::from("b")]);
-        let got = p(&["clean", "--confirm-danger=D:\\x"]);
+        let got = p(&["clean", "--include", "D:\\", "--confirm-danger=D:\\x"]);
         let Ok(Command::Clean { confirm_danger, .. }) = got else { panic!("a clean command: {got:?}") };
         assert_eq!(confirm_danger, vec![PathBuf::from("D:\\x")]);
+    }
+
+    #[test]
+    fn confirm_danger_without_include_is_refused() {
+        let needs = Err("--confirm-danger needs that folder, or a folder that holds it, with --include: D:\\x".to_string());
+        for args in [&["clean", "--confirm-danger", "D:\\x"][..], &["clean", "--builds", "--confirm-danger", "D:\\x", "--yes"]] {
+            assert_eq!(p(args), needs, "{args:?}");
+        }
     }
 
     #[test]

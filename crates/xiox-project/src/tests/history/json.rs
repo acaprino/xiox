@@ -200,7 +200,8 @@ fn identity_never_reaches_the_json() {
 #[test]
 fn risk_reasons_are_the_guide_texts() {
     let cases = [
-        (Risk::NoGit, "not a git repository"),
+        // A folder inside the project has no repository of its own either: git tracks none of its files.
+        (Risk::NoGit, "no git repository of its own"),
         (Risk::WeakEvidence, "the sessions wrote or worked here; no creation is recorded"),
         (Risk::PartialCoverage, "the session history was read only in part"),
         (Risk::RecentActivity, "used or changed in the last 24 hours"),

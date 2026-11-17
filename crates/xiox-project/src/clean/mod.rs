@@ -25,8 +25,8 @@ use crate::nested::{NotChecked, nested_repos};
 use crate::owned::{agent_slug, key_within};
 use crate::search::is_link;
 use crate::{
-    Block, Category, DANGER_TEXT, Env, Item, Level, Note, Options, Project, ProjectScan, Risk, SCHEMA, SearchMode,
-    SessionHealth, Target, Why, Exclusion,
+    Block, Category, DANGER_TEXT, Env, FolderId, Item, Level, Note, Options, Project, ProjectScan, Risk, SCHEMA,
+    SearchMode, SessionHealth, Target, Why, Exclusion,
 };
 use xiox_cleaner::{Cancel, ParallelRemover, guard, remove_files_parallel, worker_count};
 use xiox_model::{Agent, ArtifactKind, CleanPlan, ItemOutcome, PlanAction, PlanItem, RemoveMode, path_key};
@@ -49,6 +49,8 @@ const HISTORY_UNREAD: &str = "the session history could not be read again";
 
 const RISKS_CHANGED: &str = "its risks changed since it was confirmed: choose it again";
 const METHOD_CHANGED: &str = "its removal method changed since it was confirmed: choose it again";
+const REPLACED: &str = "it is not the folder that was analysed: it was replaced";
+const IDENTITY_UNCHECKED: &str = "its identity could not be checked";
 
 /// Start of the reason of an item that went with a chosen item that holds it.
 pub(crate) const ALREADY_REMOVED: &str = "already removed with ";
@@ -592,8 +594,8 @@ fn clean_impl(
     }
     match sessions {
         Sessions::Real => {
-            // The history is listed and read only when a chosen item depends on it.
-            let history = wants_history(scan, &chosen_items(scan, chosen));
+            // The history is listed and read only when the removal depends on it.
+            let history = wants_history(scan, chosen);
             crate::with_real_env(xiox_app::cache_dir(), history, |real| {
                 let env = Env {
                     sessions: real.sessions,
@@ -625,10 +627,13 @@ fn clean_impl(
     }
 }
 
-/// The scan read the session history and a chosen item depends on it: it has provenance, or it
-/// is `danger`. A scan made without the history is checked without it, so its risks compare.
-pub(crate) fn wants_history(scan: &ProjectScan, old: &[&Item]) -> bool {
-    scan.history.is_some() && old.iter().any(|i| i.provenance.is_some() || i.level == Level::Danger)
+/// The scan read the session history and the removal depends on it: a chosen item has
+/// provenance or is `danger`, or a confirmed `danger` item goes with it. A scan made without the
+/// history is checked without it, so its risks compare.
+pub(crate) fn wants_history(scan: &ProjectScan, chosen: &Chosen) -> bool {
+    scan.history.is_some()
+        && (!chosen.confirmed.is_empty()
+            || chosen_items(scan, chosen).iter().any(|i| i.provenance.is_some() || i.level == Level::Danger))
 }
 
 pub(crate) fn clean_with(
@@ -644,9 +649,9 @@ pub(crate) fn clean_with(
     let mut done: HashMap<String, Outcome> = HashMap::new();
 
     // The reach of the search (copies, named and session folders) is only worth repeating when
-    // one of them was chosen, and the history only when a chosen item depends on it.
+    // one of them was chosen, and the history only when the removal depends on it.
     let wants_search = old.iter().any(|i| matches!(i.category, Category::Copies | Category::Named | Category::Scratch));
-    let history = wants_history(scan, &old);
+    let history = wants_history(scan, chosen);
     let opts = Options {
         drives: wants_search && scan.search != SearchMode::ParentOnly,
         measure: false,
@@ -668,6 +673,7 @@ pub(crate) fn clean_with(
                 dry_run,
                 project: &fresh.project,
                 items: &fresh.items,
+                shown: &scan.items,
                 confirmed: &chosen.confirmed,
                 history_lost,
                 env,
@@ -738,6 +744,8 @@ struct Run<'a> {
     project: &'a Project,
     /// Everything the fresh analysis lists.
     items: &'a [Item],
+    /// Everything the analysis the user chose from lists.
+    shown: &'a [Item],
     /// The `danger` plans the user confirmed; the pending ones never count.
     confirmed: &'a [Confirmation],
     /// The history was wanted and the fresh analysis could not read it.
@@ -775,12 +783,10 @@ pub(crate) fn recheck<'a>(
         }
     }
     let danger = f.level == Level::Danger;
-    match old.identity {
-        Some(id) if f.identity != Some(id) => {
-            return Err("it is not the folder that was analysed: it was replaced".to_string());
-        }
-        None if danger => return Err("its identity could not be checked".to_string()),
-        _ => {}
+    match same_folder(old.identity, f.identity, danger) {
+        Ok(()) => {}
+        Err(Changed::Replaced) => return Err(REPLACED.to_string()),
+        Err(Changed::Unchecked) => return Err(IDENTITY_UNCHECKED.to_string()),
     }
     match confirmation {
         None if danger => return Err(DANGER_TEXT.to_string()),
@@ -792,6 +798,23 @@ pub(crate) fn recheck<'a>(
         return Err("now needs a manual review (it is no longer a recommended item)".to_string());
     }
     Ok(f)
+}
+
+/// Why a folder is not known to be the one analysed.
+enum Changed {
+    Replaced,
+    /// Its identity cannot be read now, or it had none and is `danger`.
+    Unchecked,
+}
+
+/// The folder whose identity was `then` is still the one at its path, whose identity is `now`.
+fn same_folder(then: Option<FolderId>, now: Option<FolderId>, danger: bool) -> Result<(), Changed> {
+    match (then, now) {
+        (Some(a), Some(b)) if a != b => Err(Changed::Replaced),
+        (Some(_), None) => Err(Changed::Unchecked),
+        (None, _) if danger => Err(Changed::Unchecked),
+        _ => Ok(()),
+    }
 }
 
 impl Run<'_> {
@@ -808,7 +831,8 @@ impl Run<'_> {
                 done.insert(o.key.clone(), skipped(SESSIONS_UNREAD));
                 continue;
             }
-            if self.history_lost && o.provenance.is_some() {
+            let holds_confirmed = self.confirmed.iter().any(|c| key_within(&c.key, &o.key));
+            if self.history_lost && (o.provenance.is_some() || holds_confirmed) {
                 done.insert(o.key.clone(), skipped(HISTORY_UNREAD));
                 continue;
             }
@@ -827,17 +851,28 @@ impl Run<'_> {
         self.remove_sessions(&sessions, done);
     }
 
-    /// [`admit`] on the fresh item, and every `danger` item inside it confirmed as it is now.
+    /// [`admit`] on the fresh item, and every `danger` item inside it confirmed as it is now: the
+    /// same folder, risks and method.
     fn admitted(&self, fresh: &Item) -> Result<(), String> {
         let danger = admit(self.items, fresh, self.mode).map_err(refusal_reason)?;
         for inner in danger.into_iter().filter(|d| d.key != fresh.key) {
             let at = inner.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
-            match self.confirmed.iter().find(|c| c.key == inner.key) {
-                Some(c) if c.risks != inner.risks => {
-                    return Err(format!("it holds {at}, whose risks changed since it was confirmed"));
+            let Some(c) = self.confirmed.iter().find(|c| c.key == inner.key) else {
+                return Err(format!("it holds {at}, which needs an explicit confirmation"));
+            };
+            if c.risks != inner.risks {
+                return Err(format!("it holds {at}, whose risks changed since it was confirmed"));
+            }
+            if c.method != method_of(&inner.target, self.mode) {
+                return Err(format!("it holds {at}, whose removal method changed since it was confirmed"));
+            }
+            let then = self.shown.iter().find(|i| i.key == inner.key).and_then(|i| i.identity);
+            match same_folder(then, inner.identity, true) {
+                Ok(()) => {}
+                Err(Changed::Replaced) => {
+                    return Err(format!("it holds {at}, which is not the folder that was analysed: it was replaced"));
                 }
-                Some(c) if c.method == method_of(&inner.target, self.mode) => {}
-                _ => return Err(format!("it holds {at}, which needs an explicit confirmation")),
+                Err(Changed::Unchecked) => return Err(format!("it holds {at}, whose identity could not be checked")),
             }
         }
         Ok(())

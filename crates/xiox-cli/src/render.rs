@@ -145,7 +145,7 @@ fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-/// The reasons of `risks`, in the guide's wording: `not a git repository, used or changed in …`.
+/// The reasons of `risks`, in the guide's wording: `no git repository of its own, used or changed in …`.
 pub fn risk_reasons(risks: &[Risk]) -> String {
     risks.iter().map(|r| r.reason()).collect::<Vec<_>>().join(", ")
 }
@@ -1090,7 +1090,7 @@ mod tests {
         bench.risks = vec![Risk::NoGit, Risk::RecentActivity];
         let out = render_scan(&scan(vec![bench, build()]));
         assert!(line_with(&out, "D:\\agent-runs\\bench").trim_start().starts_with("danger"), "{out}");
-        let why = "danger: explicit confirmation required: not a git repository, used or changed in the last 24 hours";
+        let why = "danger: explicit confirmation required: no git repository of its own, used or changed in the last 24 hours";
         assert!(out.contains(why), "{out}");
         assert_eq!(out.matches("explicit confirmation required").count(), 1, "only the danger item: {out}");
     }

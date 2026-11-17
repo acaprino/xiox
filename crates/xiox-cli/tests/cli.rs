@@ -466,7 +466,7 @@ fn clean_danger_without_confirmation_exits_2() {
     let out = run_clean(&project, &["--include", &path, "--yes", "--no-history"]);
     assert_eq!(out.status.code(), Some(2), "stdout: {}", text(&out.stdout));
     let err = text(&out.stderr);
-    assert!(err.contains("danger: explicit confirmation required (not a git repository"), "{err}");
+    assert!(err.contains("danger: explicit confirmation required (no git repository of its own"), "{err}");
     assert!(err.contains(&format!("add --confirm-danger \"{path}\"")), "{err}");
     assert!(named.join("a.txt").exists());
 

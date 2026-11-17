@@ -723,7 +723,7 @@ mod tests {
         let not_danger = xiox_project::SelectError::ConfirmNotDanger(PathBuf::from(BUILD)).to_string();
         let not_included = xiox_project::SelectError::ConfirmNotIncluded(PathBuf::from(BENCH)).to_string();
         let add = format!("add --confirm-danger \"{BENCH}\"");
-        let why = "danger: explicit confirmation required (not a git repository)";
+        let why = "danger: explicit confirmation required (no git repository of its own)";
         // (flags, a terminal's answer or no terminal, what stderr says)
         let table: Vec<(CleanFlags, Option<&str>, Vec<&str>)> = vec![
             (include(&[BENCH], &[], true, false, false), Some("y\n"), vec![why, &add]),
@@ -762,7 +762,7 @@ mod tests {
         for needle in [
             BENCH,
             "danger: explicit confirmation required",
-            "- not a git repository",
+            "- no git repository of its own",
             "removal: to the Recycle Bin",
             "Remove this danger item? [y/N] ",
             "Remove 1 item",

@@ -1804,6 +1804,12 @@ fn hand_made_chosen_gets_no_more_than_select() {
             vec![right(&named), plan(&copy, Vec::new())],
             skipped_with(format!("it holds {}, whose risks changed since it was confirmed", copy.display())),
         ),
+        (
+            "the container and a plan of its copy that goes another way",
+            &named,
+            vec![right(&named), Confirmation { method: Method::Permanent, ..right(&copy) }],
+            skipped_with(format!("it holds {}, whose removal method changed since it was confirmed", copy.display())),
+        ),
         ("a danger folder without its confirmation", &bench, Vec::new(), skipped_with(DANGER_TEXT)),
         ("a danger folder with false risks", &bench, vec![plan(&bench, Vec::new())], skipped_with(RISKS_CHANGED)),
     ];
@@ -1850,6 +1856,58 @@ fn replaced_folder_is_skipped_by_identity() {
         assert_eq!(outcome_of(&out, &bench), &skipped_with(expected), "{case}");
         assert!(target.join("keep.txt").exists(), "{case}");
     }
+}
+
+#[test]
+fn a_replaced_danger_folder_inside_a_chosen_one_stops_it() {
+    let lab = Lab::new();
+    // The copy made now is recent activity, so it is danger inside the named folder.
+    let now = xiox_app::now_ms();
+    let named = lab.base.join("work").join("proj-box");
+    fs::create_dir_all(&named).unwrap();
+    let copy = clone(&lab.project, &named.join("c"));
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let env = lab.env(&stores, now);
+    let scan = scan_in(&lab.project, &env);
+    let chosen = select(&scan, &asked(&[&named], &[&named, &copy], RemoveMode::Recycle)).unwrap();
+    assert_eq!(chosen.confirmed.len(), 2, "{chosen:?}");
+
+    fs::rename(&copy, lab.base.join("moved-c")).unwrap();
+    clone(&lab.project, &copy);
+    // A dry run: the same checks, and a regression never reaches the real Recycle Bin.
+    let out = clean_in_recycle(&scan, &chosen, true, &env, &FakeBin::new(lab.base.join("fake-bin")));
+    let expected = format!("it holds {}, which is not the folder that was analysed: it was replaced", copy.display());
+    assert_eq!(outcome_of(&out, &named), &skipped_with(expected));
+}
+
+#[test]
+fn an_identity_that_cannot_be_read_now_is_not_called_a_replacement() {
+    let (_t, base) = tmp();
+    let dir = base.join("work").join("proj-old");
+    fs::create_dir_all(&dir).unwrap();
+    let old = Item { identity: crate::identity::folder_id(&dir), ..listed(Category::Named, &dir, Why::NameOnly) };
+    assert!(old.identity.is_some(), "this machine gives folders an identity");
+    let unread = Item { identity: None, ..old.clone() };
+    let checked = crate::clean::recheck(&old, Some(&unread), None, RemoveMode::Recycle);
+    assert_eq!(checked, Err("its identity could not be checked".to_string()));
+}
+
+#[test]
+fn a_confirmed_item_inside_the_chosen_one_depends_on_the_history() {
+    let lab = Lab::new();
+    let now = env().now_ms;
+    let stores = Stores::of(vec![lab.s1(now - 3 * DAY)]);
+    let (mut scan, confirmed) = lab.confirmed_bench(&lab.env(&stores, now));
+    // A container without provenance and not danger itself, as a hand-made request may name it.
+    let runs = lab.base.join("agent-runs");
+    scan.items.push(listed(Category::Named, &runs, Why::NameOnly));
+    let chosen = Chosen { keys: vec![path_key(&runs)], ..confirmed };
+    assert!(crate::clean::wants_history(&scan, &chosen), "{chosen:?}");
+
+    // When that history cannot be read again, the container waits like an item with provenance.
+    let failing = Stores::failing(vec![lab.s1(now - 3 * DAY)]);
+    let out = clean_in_recycle(&scan, &chosen, true, &lab.env(&failing, now), &FakeBin::new(lab.base.join("bin")));
+    assert_eq!(outcome_of(&out, &runs), &skipped_with("the session history could not be read again"));
 }
 
 #[test]
@@ -1965,7 +2023,7 @@ fn permanent_never_reaches_a_danger_folder() {
 }
 
 #[test]
-fn danger_worktree_is_removed_by_git_never_forced() {
+fn danger_worktree_is_removed_by_git_and_a_git_refusal_stands() {
     let lab = Lab::new();
     // Worktrees made now are recent activity: danger.
     let now = xiox_app::now_ms();
@@ -1977,15 +2035,19 @@ fn danger_worktree_is_removed_by_git_never_forced() {
     assert_eq!((scan_item(&scan, &one).level, &scan_item(&scan, &one).risks), (Level::Danger, &vec![Risk::RecentActivity]));
     let chosen = select(&scan, &asked(&[&one, &two], &[&one, &two], RemoveMode::Recycle)).unwrap();
     assert!(chosen.confirmed.iter().all(|c| c.method == Method::GitWorktreeRemove), "{:?}", chosen.confirmed);
-    fs::write(two.join("untracked.txt"), "work in progress").unwrap();
+    // Locked after the choice: the analysis still lists it, and only git refuses it.
+    git(&lab.project, &["worktree", "lock", &two.to_string_lossy()]);
 
     let out = clean_in_recycle(&scan, &chosen, false, &env, &FakeBin::new(lab.base.join("bin")));
     let removed = out.items.iter().find(|i| i.key == path_key(&one)).expect("one has an outcome");
     assert!(matches!(removed.outcome, Outcome::Removed { .. }), "{removed:?}");
     assert_eq!(removed.method, Method::GitWorktreeRemove);
     assert!(!one.exists());
-    assert!(matches!(outcome_of(&out, &two), Outcome::Skipped { .. } | Outcome::Failed { .. }), "{:#?}", out.items);
-    assert!(two.join("untracked.txt").exists());
+    match outcome_of(&out, &two) {
+        Outcome::Failed { error } => assert!(error.starts_with("git refused to remove the worktree (not forced"), "{error}"),
+        other => panic!("git did not refuse the locked worktree: {other:?}"),
+    }
+    assert!(two.exists());
 }
 
 #[test]

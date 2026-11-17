@@ -126,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn json_has_schema_1_and_camel_case_kebab_case_fields() {
+    fn json_has_schema_2_and_camel_case_kebab_case_fields() {
         let v = scan_json(&full_scan()).unwrap();
         assert_eq!(v["schema"], 2);
         assert_eq!(v["project"]["name"], "mukade");
