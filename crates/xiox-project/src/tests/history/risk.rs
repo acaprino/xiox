@@ -1,9 +1,8 @@
 //! Risks, activity and the order of the scratch candidates.
 
 use std::collections::HashSet;
-use std::fs::{self, File, FileTimes, OpenOptions};
+use std::fs;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
 
 use xiox_model::{Agent, Loaded, SessionRecord};
 
@@ -12,7 +11,7 @@ use crate::history::risk::{activity, risks, RECENT_MS};
 use crate::history::{assess, RiskContext};
 use crate::history::{Provenance, SessionEvidence};
 use crate::owned::sort_items;
-use crate::tests::fixtures::{env, tmp};
+use crate::tests::fixtures::{env, set_times, tmp};
 use crate::*;
 
 const NOW: i64 = 1_793_527_200_000;
@@ -40,13 +39,7 @@ fn provenance(strength: Strength, last: Option<i64>, gaps: bool) -> Provenance {
 }
 
 fn set_mtime(dir: &Path, ms: i64) {
-    let mut open = OpenOptions::new();
-    open.write(true);
-    #[cfg(windows)]
-    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut open, 0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS
-    let file: File = open.open(dir).unwrap();
-    let at = SystemTime::UNIX_EPOCH + Duration::from_millis(ms as u64);
-    file.set_times(FileTimes::new().set_modified(at)).unwrap();
+    set_times(dir, None, ms);
 }
 
 #[test]

@@ -127,6 +127,36 @@ fn a_rewritten_transcript_is_read_again_not_reused() {
 }
 
 #[test]
+fn file_dates_neither_attribute_nor_cancel() {
+    const HOUR: i64 = 60 * 60 * 1000;
+    // The session's one call ran at this second (the synthetic store's timestamp).
+    let call = xiox_mukade::parse_time_ms("2026-11-01T10:00:01.000Z").unwrap();
+    // (name, folder under runs, created, modified, listed as made by the session)
+    let table: [(&str, &str, i64, i64, bool); 3] = [
+        ("a neighbour made at the session's second", "neighbour", call, call, false),
+        ("created a year before", "bench-1", call - 365 * 24 * HOUR, call - 365 * 24 * HOUR, true),
+        ("changed after the session", "bench-1", call, call + 2 * HOUR, true),
+    ];
+    for (name, folder, created, modified, made) in table {
+        let world = World::new();
+        let dir = world.base.join("runs").join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        set_times(&dir, Some(created), modified);
+
+        let scan = world.scan(&Options::default());
+        let item = scan.items.iter().find(|i| i.path.as_deref() == Some(dir.as_path()));
+        match (made, item) {
+            (false, None) => {}
+            (true, Some(i)) => {
+                let p = i.provenance.as_ref().expect("provenance");
+                assert_eq!((i.category, p.strength, p.sessions.len()), (Category::Scratch, Some(Strength::Created), 1), "{name}");
+            }
+            (_, other) => panic!("{name}: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn without_history_the_scan_is_the_old_one() {
     let world = World::new();
     let opts = Options { history: false, ..Options::default() };
