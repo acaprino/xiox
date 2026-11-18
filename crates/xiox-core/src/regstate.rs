@@ -43,6 +43,14 @@ pub const UNKNOWN_ISSUE: &str = "That issue is not in the list.";
 pub const UNKNOWN_CATEGORY: &str = "That category does not exist.";
 pub const FIX_DIED: &str = "The worker stopped: some issues may already have been fixed. Scan again to see what is left.";
 
+/// The id of the sub-heading of a kind of issue: `t:<index into registry::CATEGORIES>`. Its box ticks the kind's issues.
+const KIND_ROW: &str = "t:";
+
+/// The issue of a row id `i:<index>`.
+fn issue_index(row: &str) -> Option<usize> {
+    row.strip_prefix("i:")?.parse().ok()
+}
+
 pub struct RegistryState {
     /// One tick per `registry::CATEGORIES` entry.
     sel: Vec<bool>,
@@ -211,14 +219,17 @@ impl RegistryState {
         }
     }
 
-    /// `row` is `i:<index>` as in the view.
+    /// `row` is `i:<index>` (an issue) or `t:<category>` (the box of a kind of issue), as in the view.
     pub fn toggle(&mut self, row: &str) -> Result<(), String> {
         self.editable()?;
-        let i = row
-            .strip_prefix("i:")
-            .and_then(|n| n.parse::<usize>().ok())
-            .filter(|&i| i < self.issues.len())
-            .ok_or_else(|| UNKNOWN_ISSUE.to_string())?;
+        if row.starts_with(KIND_ROW) {
+            let (ids, on) = header_toggle(&self.rows(), row).ok_or_else(|| UNKNOWN_CATEGORY.to_string())?;
+            for i in ids.iter().filter_map(|id| issue_index(id)) {
+                self.issues[i].selected = on;
+            }
+            return Ok(());
+        }
+        let i = issue_index(row).filter(|&i| i < self.issues.len()).ok_or_else(|| UNKNOWN_ISSUE.to_string())?;
         self.issues[i].selected = !self.issues[i].selected;
         Ok(())
     }
@@ -372,11 +383,17 @@ impl RegistryState {
         v
     }
 
+    /// The issues found, under a sub-heading per kind of issue (in the order of `registry::CATEGORIES`, with how many
+    /// it holds) whose box ticks the kind's issues.
     fn rows(&self) -> Vec<RowView> {
-        self.issues
-            .iter()
-            .enumerate()
-            .map(|(i, it)| RowView {
+        let mut rows = Vec::new();
+        for (c, kind) in registry::CATEGORIES.iter().enumerate() {
+            let found: Vec<(usize, &registry::Issue)> = self.issues.iter().enumerate().filter(|(_, it)| it.category == c).collect();
+            if found.is_empty() {
+                continue;
+            }
+            rows.push(RowView { name: format!("{} ({})", kind.name, fmt_count(found.len() as u64)), ..blank_row(format!("{KIND_ROW}{c}"), RowKind::Header) });
+            rows.extend(found.into_iter().map(|(i, it)| RowView {
                 check: if it.selected { Check::On } else { Check::Off },
                 name: it.problem.clone(),
                 sub: Some(it.data.clone()),
@@ -387,8 +404,10 @@ impl RegistryState {
                     ("data".into(), it.data.clone()),
                 ],
                 ..blank_row(format!("i:{i}"), RowKind::Item)
-            })
-            .collect()
+            }));
+        }
+        box_headers(&mut rows, self.busy());
+        rows
     }
 
     fn empty_view(&self, no_rows: bool) -> Option<EmptyView> {
@@ -771,7 +790,10 @@ mod tests {
         let mut st = scanned();
         let v = st.view();
         assert!(v.bulk && v.empty.is_none());
-        assert_eq!(v.rows.len(), 3);
+        assert_eq!(v.rows.iter().map(|r| (r.id.as_str(), r.kind)).collect::<Vec<_>>(), [
+            ("t:0", RowKind::Header), ("i:0", RowKind::Item), ("i:1", RowKind::Item), ("i:2", RowKind::Item),
+        ]);
+        assert_eq!((row(&v, "t:0").name.as_str(), row(&v, "t:0").check), ("Missing shared DLLs (3)", Check::Mixed));
         let r = row(&v, "i:0");
         assert_eq!((r.name.as_str(), r.sub.as_deref()), ("Missing shared DLL 0", Some("C:\\gone\\0.dll")));
         assert_eq!(r.cells, vec!["HKLM\\SOFTWARE\\Acme\\SharedDLLs".to_string()]);
@@ -794,6 +816,30 @@ mod tests {
         assert!(button(d, "backup").enabled && d.ack.is_none());
         st.close_confirm();
         assert!(st.view().dialog.is_none());
+    }
+
+    #[test]
+    fn issues_sit_under_their_kind_whose_box_ticks_them_all() {
+        let mut st = scanned();
+        st.issues.push(Issue { category: 1, ..issue(3, false) });
+        st.issues.insert(0, Issue { category: 1, ..issue(4, true) });
+        let v = st.view();
+        assert_eq!(
+            v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["t:0", "i:1", "i:2", "i:3", "t:1", "i:0", "i:4"],
+            "the kinds in the order of the categories, each with its issues in the order found"
+        );
+        assert_eq!(row(&v, "t:1").name, format!("{} (2)", registry::CATEGORIES[1].name));
+        // Some ticked: all go on; all ticked: all go off; the other kind does not move.
+        st.toggle("t:0").unwrap();
+        assert!((1..4).all(|i| st.issues[i].selected));
+        assert_eq!(row(&st.view(), "t:0").check, Check::On);
+        st.toggle("t:0").unwrap();
+        assert!((1..4).all(|i| !st.issues[i].selected));
+        assert_eq!((st.issues[0].selected, st.issues[4].selected), (true, false));
+        assert_eq!(err(st.toggle("t:7")), UNKNOWN_CATEGORY, "a kind with no issue has no box");
+        st.open_fix().ok();
+        assert!(st.toggle("t:1").is_err(), "refused with the backup question open");
     }
 
     static HOLD2: AtomicU8 = AtomicU8::new(0);
@@ -916,8 +962,9 @@ mod tests {
     static FIX_GATE: AtomicU8 = AtomicU8::new(0);
 
     /// The forty issues of the fixture's `analyzed` state: two ticked, the rest not.
+    /// The fixture's 40 issues: the kinds in turn (as the fixture lists them), the first two ticked.
     fn script_issues() -> Vec<Issue> {
-        (0..40).map(|n| issue(n, n < 2)).collect()
+        (0..40).map(|n| Issue { category: n % 11, ..issue(n, n < 2) }).collect()
     }
 
     fn script_scan(_: Vec<usize>, out: Outbox<RegMsg>) {

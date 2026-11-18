@@ -14,7 +14,8 @@ export type ActionKey = 'a' | 'Enter' | 'Esc';
 
 export type KeyAction =
   | { kind: 'section'; section: SectionId } | { kind: 'move'; delta: number } | { kind: 'toggle' }
-  | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' } | { kind: 'about' };
+  | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' } | { kind: 'about' }
+  | { kind: 'sort'; reverse: boolean } | { kind: 'details' };
 
 const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 'Enter']);
 
@@ -22,7 +23,8 @@ const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 'Enter']);
  * What a key press means. `inField`: a text field has the focus; `dialog`: a confirmation is open.
  * A chord (Ctrl, Alt, Meta) is never ours. Escape is the only key a field or a dialog leaves to us:
  * it closes the dialog (the About window counts as one), else it is the `Esc` action (main.ts turns it
- * into a blur inside a field). `?` opens About.
+ * into a blur inside a field). `?` opens About. `s` orders the list by the next column, `S` turns the order round, `i` opens
+ * or closes the details of the selected row.
  * A key that is held down (`repeat`) never presses an action: one Enter is one press, so a held Enter cannot run
  * on past the dialog it just opened. Arrows keep repeating (that is how a long list is crossed).
  * In a dialog the browser does the rest: Enter / Space press the focused button (guarded by `dialogKeySwallowed`), Tab is trapped.
@@ -42,6 +44,9 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
     case 'End': return { kind: 'move', delta: Infinity };
     case ' ': return { kind: 'toggle' };
     case '?': return { kind: 'about' };
+    case 's': return { kind: 'sort', reverse: false };
+    case 'S': return { kind: 'sort', reverse: true };
+    case 'i': return { kind: 'details' };
     case 'ArrowRight': return { kind: 'expand', open: true };
     case 'ArrowLeft': return { kind: 'expand', open: false };
     default: return ACTION_KEYS.has(e.key) && e.repeat !== true ? { kind: 'action', key: e.key as ActionKey } : null;
@@ -89,13 +94,13 @@ const KEY_WORDS: Record<string, string> = { Enter: '↵' };
 const HINT_WORDS: Record<string, string> = { scan: 'find issues' };
 
 /**
- * The footer's key hints for the section on screen: movement and Space, then every action that has a
+ * The footer's key hints for the section on screen: movement, Space and the sort key, then every action that has a
  * key (`a analyze · ↵ clean`, Registry `s scan · ↵ fix`, Services `r refresh`). Esc is left out so the
  * hint does not change while a job runs. Derived from the actions, so the hint and the keys agree.
  */
 export function footerHint(view: SectionView): string {
   const keyed = view.actions.filter((a) => a.key !== null && !isEsc(a.key)).map((a) => `${KEY_WORDS[a.key as string] ?? a.key} ${HINT_WORDS[a.id] ?? a.id}`);
-  return ['↑↓ move', 'space toggle', ...keyed].join(' · ');
+  return ['↑↓ move', 'space toggle', 's sort', ...keyed].join(' · ');
 }
 
 /**

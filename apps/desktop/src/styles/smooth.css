@@ -1,0 +1,361 @@
+/* The Smooth look, the default (docs/superpowers/specs/2026-11-18-desktop-ux-rework-design.md): modern and clean, as close
+   as it can be to Qamille (D:\Projects\qamille\desktop\src\ds: its tokens, light and dark, its type, its structure) and to
+   Shinatama's Smooth (its glass, its title bar), with Xiox's amber where they have their own accent. It is a layer over the
+   ONI stylesheets, which stay what they were and are ONI MODE: every rule here is scoped to :root[data-skin="smooth"].
+
+   As in Qamille: two depths (the ground of the title bar and of the sidebar, and one sheet a step lighter that carries the
+   work), hairline borders, corners of 4, 6 and 10px, outlined secondary buttons and one filled primary, underlined tabs,
+   sentence case, IBM Plex Sans. In the light palette the sidebar stays a dark column. In the desktop window the ground is
+   glass over Windows' acrylic (`.native-glass`, as in Shinatama). The amber marks what is chosen or is the thing to press:
+   the open tab, the active menu entry, the selected row, a ticked box, the sort arrow, a category's total, the primary
+   button. Contrast: tests/contrast.test.ts. */
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/ibm-plex-sans/IBMPlexSans-latin-ext-wght.woff2') format('woff2-variations');
+  font-style: normal; font-weight: 100 700; font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('/fonts/ibm-plex-sans/IBMPlexSans-latin-wght.woff2') format('woff2-variations');
+  font-style: normal; font-weight: 100 700; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root[data-skin="smooth"] {
+  /* Qamille's dark tokens, under the names the shared ONI rules read. */
+  --stage: #12161e; --chrome: #12161e; --sidebar: #12161e; --pane: #1a202c; --pane-fill: #1a202c; --surface: #1a202c;
+  --line: #2a3240; --line-soft: #242b38; --line-strong: #7a8396; --box: #1e2533; --box-line: #2a3240; --inner: transparent;
+  --text: #e8ecf3; --text-2: #c0c8d6; --text-hi: #ffffff; --muted: #9aa5b8; --ice: #c0c8d6; --live: #ffb21e;
+  --warn: #ef9ba1; --err: #ef9ba1; --ok: #a3cfb8;
+  --sel: #272f40; --sel-soft: #382f1f; --band: #1d2331; --band-hi: #222a38; --band-sel: #382f1f; --hover: #222a38; --press: #2a3240;
+  --button: #1a202c; --hover-btn: #222a38; --press-btn: #2a3240; --button-primary: #ffb21e; --grid: transparent; --glow: transparent;
+  --scrim: #00000080;
+  /* Smooth's own. --amber fills and marks; --amber-ink is amber as text (darker on the light sheet). */
+  --amber: #ffb21e; --amber-ink: #ffb21e; --on-amber: #1a1104; --hover-primary: #ffc04a; --press-primary: #e89d0c;
+  --chip: #303b4d; --chip-text: #a8b3c6; --danger-fill: #ef9ba1; --on-danger: #1a1104; --danger-bg: #402b35; --danger-line: #74404c;
+  --window-close: #c42b1c; --shadow-dlg: 0 10px 40px #0005;
+  --radius: 10px; --radius-sm: 6px; --radius-xs: 4px; --control: 32px; --side: clamp(208px, 18vw, 232px); --bar: 46px;
+  --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; --font-display: var(--font-body);
+  --fs-sm: 12.5px; --fs-md: 13.5px; --fs-lg: 15px; --ls-caps: .06em; --dur: .15s; --indent: 28px;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+
+  & body { font: 400 var(--fs-md)/1.5 var(--font-body); background: var(--stage); -webkit-font-smoothing: antialiased; }
+  & kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--radius-xs); color: var(--muted); font: 500 12px/16px var(--font-body); }
+
+  /* ---------- the window: the title bar and the sidebar on the ground, one sheet for the work ---------- */
+  & #app {
+    grid-template-columns: var(--side) minmax(0, 1fr);
+    grid-template-rows: var(--bar) auto auto auto minmax(0, 1fr) auto 30px;
+    grid-template-areas: "brand tabs" "side status" "side job" "side profile" "side main" "side actions" "side foot";
+    background: linear-gradient(90deg, var(--sidebar) 0 var(--side), var(--stage) var(--side));
+  }
+  /* The sheet: drawn by the grid itself, right of the sidebar and under the title bar. */
+  & #app::before {
+    position: static; inset: auto; grid-row: 2 / -1; grid-column: 2;
+    background: var(--surface); border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: var(--radius);
+  }
+  & #top, & #body { display: contents; }
+  & #wordmark, & #version, & .spring { display: none; }
+  & #status { grid-area: status; padding: 14px 20px 6px; color: var(--muted); }
+  & #job { grid-area: job; padding: 2px 20px 8px; }
+  & #profile { grid-area: profile; padding: 2px 20px 8px; color: var(--warn); }
+  & #bar2 { grid-area: side; }
+  & #main { grid-area: main; }
+  & #actions { grid-area: actions; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 20px; border-top: 1px solid var(--line-soft); }
+  & #foot { grid-area: foot; padding: 0 20px; border-top: 1px solid var(--line-soft); }
+  & .frame { border: 0; border-radius: 0; background: none; box-shadow: none; clip-path: none; }
+
+  /* ---------- the title bar: a drag strip under the brand, the tabs, the switches and the window buttons ---------- */
+  & #titlebar { display: block; grid-row: 1; grid-column: 1 / -1; z-index: 0; }
+  & #brand, & #sections, & #look, & #caption { position: relative; z-index: 1; }
+  & #brand {
+    grid-area: brand; display: inline-flex; align-items: center; gap: 9px; align-self: center; margin-left: 16px;
+    color: var(--text-hi); font: 600 var(--fs-lg) var(--font-body); pointer-events: none;
+  }
+  /* Qamille's brand mark, an amber square, with Xiox's X. */
+  & .brand-mark {
+    flex: none; width: 22px; height: 22px; border-radius: var(--radius-sm);
+    background:
+      linear-gradient(45deg, transparent calc(50% - 1.2px), var(--on-amber) calc(50% - 1.2px) calc(50% + 1.2px), transparent calc(50% + 1.2px)) center / 11px 11px no-repeat,
+      linear-gradient(-45deg, transparent calc(50% - 1.2px), var(--on-amber) calc(50% - 1.2px) calc(50% + 1.2px), transparent calc(50% + 1.2px)) center / 11px 11px no-repeat,
+      var(--amber);
+  }
+  & #look { grid-area: tabs; justify-self: end; align-self: center; gap: 12px; margin-right: calc(46px * 3 + 12px); }
+  & #caption { grid-area: tabs; justify-self: end; align-self: stretch; display: flex; }
+  & #caption button {
+    display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: none; color: var(--muted);
+    transition: background-color var(--dur) ease, color var(--dur) ease;
+  }
+  & #caption svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1; pointer-events: none; }
+  /* The browser's [hidden] rule is for HTML elements: the maximize or the restore icon is hidden here. */
+  & #caption svg[hidden] { display: none; }
+  & #caption button:hover, & #window-maximize.os-hover { color: var(--text); background: var(--hover); }
+  & #caption button:active, & #window-maximize.os-pressed { background: var(--press); }
+  & #caption #window-close:hover { color: #fff; background: var(--window-close); }
+  & #caption button:focus-visible { box-shadow: none; outline: 2px solid var(--live); outline-offset: -4px; }
+
+  /* ---------- the tabs (the sections bar of ONI): Qamille's underlined tabs ---------- */
+  & #sections {
+    grid-area: tabs; align-self: stretch; justify-self: start; max-width: calc(100% - 46px * 3 - 260px); padding-left: 12px;
+    flex-direction: row; align-items: stretch; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  }
+  & #sections > .hd { display: none; }
+  & .nv {
+    position: relative; flex: none; width: auto; min-height: 0; padding: 0 10px;
+    color: var(--muted); font: 500 var(--fs-md) var(--font-body); text-transform: none; letter-spacing: 0;
+  }
+  & .nv kbd { display: none; }
+  & .nv::after {
+    content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--amber);
+    transform: scaleX(0); transition: transform .3s var(--ease);
+  }
+  & .nv:hover:not(:disabled):not(.on) { background: none; color: var(--text); }
+  & .nv:active:not(:disabled):not(.on) { background: none; color: var(--text-hi); }
+  & .nv.on { background: none; color: var(--text-hi); font-weight: 600; }
+  & .nv.on::after { transform: scaleX(1); }
+  /* A tab clicked, its section on its way: lit at once, the bar half drawn. */
+  & .nv[aria-busy="true"]:not(.on) { color: var(--text); }
+  & .nv[aria-busy="true"]:not(.on)::after { transform: scaleX(.4); }
+  & #sections .nv.about { margin: 0; }
+
+  /* ---------- buttons: Qamille's .primary and .secondary ---------- */
+  & .btn, & .btn.sm {
+    gap: 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--button); color: var(--text);
+    clip-path: none; font: 600 var(--fs-md) var(--font-body); letter-spacing: 0; text-transform: none;
+    transition: background-color var(--dur) ease, border-color var(--dur) ease, color var(--dur) ease;
+  }
+  & .btn { min-height: var(--control); padding: 0 12px; }
+  & .btn.sm { min-height: 28px; padding: 0 10px; font-size: var(--fs-sm); }
+  & .btn kbd { border-color: currentColor; color: inherit; opacity: .55; }
+  & .btn:hover:not(:disabled) { background: var(--hover-btn); border-color: var(--line); }
+  & .btn:active:not(:disabled) { background: var(--press-btn); }
+  & .btn:disabled { opacity: .5; }
+  /* The focus ring of a button sits outside it, so it reads on the amber fill too. */
+  & .btn:focus-visible { box-shadow: none; outline: 2px solid var(--live); outline-offset: 2px; }
+  & .btn.primary { background: var(--amber); border-color: var(--amber); color: var(--on-amber); }
+  & .btn.primary:hover:not(:disabled) { background: var(--hover-primary); border-color: var(--hover-primary); }
+  & .btn.primary:active:not(:disabled) { background: var(--press-primary); border-color: var(--press-primary); }
+  & .btn.danger { background: var(--danger-fill); border-color: var(--danger-fill); color: var(--on-danger); }
+  & .btn.danger:hover:not(:disabled) { filter: brightness(1.06); }
+  & .btn.danger:active:not(:disabled) { filter: brightness(.94); }
+
+  /* The ONI MODE switch: a native toggle. */
+  & .btn.skin-switch { min-height: var(--hit); padding: 2px 6px; border: 0; background: none; color: var(--muted); font: 500 var(--fs-sm) var(--font-body); }
+  & .btn.skin-switch::before {
+    content: ""; flex: none; width: 30px; height: 16px; border-radius: 8px; border: 1px solid var(--line-strong);
+    background: radial-gradient(circle at 7px 50%, var(--muted) 0 4px, transparent 4.5px);
+  }
+  & .btn.skin-switch:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+
+  /* Smooth's theme: a segmented control, the pressed choice raised. */
+  & #theme { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--stage); }
+  & .theme-choice {
+    min-height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-xs); background: none; color: var(--muted); font: 500 var(--fs-sm) var(--font-body);
+    transition: background-color var(--dur) ease, color var(--dur) ease;
+  }
+  & .theme-choice:hover:not([aria-pressed="true"]) { color: var(--text); background: var(--hover); }
+  & .theme-choice:active:not([aria-pressed="true"]) { background: var(--press); }
+  & .theme-choice[aria-pressed="true"] { background: var(--surface); color: var(--text-hi); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+  & .theme-choice:focus-visible { box-shadow: none; outline: 2px solid var(--live); outline-offset: 1px; }
+
+  /* ---------- status row and job ---------- */
+  & #status { gap: 10px; }
+  & #badge { padding: 1px 8px; border: 0; border-radius: var(--radius-xs); background: var(--chip); color: var(--chip-text); font: 600 var(--fs-sm) var(--font-body); letter-spacing: 0; text-transform: none; }
+  & #status-text { color: var(--text-hi); font: 600 var(--fs-lg) var(--font-body); }
+  & #status-right { color: var(--muted); font-size: var(--fs-sm); }
+  & .job-label { color: var(--text-2); font: 600 var(--fs-sm) var(--font-body); letter-spacing: 0; text-transform: none; }
+  & .track { height: 4px; border: 0; border-radius: 2px; background: var(--line); }
+  & .track i { min-width: 4px; border-radius: 2px; background: var(--amber); animation: none; transition: none; }
+  & .job-pct { color: var(--text); }
+
+  /* ---------- headings: small spaced capitals for the sidebar, Qamille's list title ---------- */
+  & .hd { padding: 14px 12px 6px 18px; color: var(--muted); font: 600 12px var(--font-body); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+  & .hd .count { color: var(--muted); font: 500 12px var(--font-body); }
+  & #list-head { align-items: center; padding: 6px 20px 8px; color: var(--text-hi); text-transform: none; letter-spacing: 0; }
+  & #list-head .hd-title { font: 650 var(--fs-lg) var(--font-body); }
+  & #list-head .sub { color: var(--muted); font: 400 var(--fs-sm) var(--font-body); }
+  & .hd-sub { margin-top: 10px; }
+  & .items .hd { padding-left: 10px; }
+  & .num, & #version { font-family: var(--font-body); font-variant-numeric: tabular-nums; }
+
+  /* ---------- the sidebar: Qamille's nav list, the current row with the short accent bar ---------- */
+  & .items { padding: 0 8px 12px; background: none; }
+  & .it { position: relative; min-height: var(--control); padding: 6px 10px; border-radius: var(--radius-sm); color: var(--text); font-weight: 500; }
+  & .it::before {
+    content: ""; position: absolute; left: 0; top: 50%; width: 3px; height: 14px; margin-top: -7px; border-radius: 999px; background: var(--amber);
+    transform: scaleY(0); transition: transform .25s var(--ease);
+  }
+  & .it.menu { padding: 6px 10px; }
+  & .it:hover:not(:disabled):not(.on) { background: var(--hover); color: var(--text-hi); }
+  & .it:active:not(:disabled):not(.on) { background: var(--press); }
+  & .it.on { background: var(--sel); color: var(--text-hi); }
+  & .it.on::before { transform: scaleY(1); }
+  & .it small, & .it.on small { color: var(--muted); font-weight: 400; }
+  & .it b, & .it.on b, & .it:hover:not(:disabled):not(.on) b { color: var(--text-2); font-weight: 500; font-variant-numeric: tabular-nums; }
+  & .pip { border-radius: 3px; border-width: 1.5px; border-color: var(--line-strong); }
+  & .pip.on { border-color: var(--amber); background: var(--amber); }
+  & .pip.mixed { border-color: var(--amber); background: linear-gradient(var(--amber), var(--amber)) center / 100% 2px no-repeat; }
+  & .ctl { padding: 5px 10px; color: var(--text); font-weight: 400; }
+  & .ctl-title { color: var(--muted); font-weight: 600; }
+  & .ctl-text { color: var(--tone, var(--muted)); }
+  & .radio input { border: 1.5px solid var(--line-strong); background: none; }
+  & .radio input:checked { border-color: var(--amber); background: radial-gradient(circle, var(--amber) 0 3.5px, transparent 4px); }
+  & .pick { border-radius: var(--radius-sm); border-color: var(--line); background: var(--box); }
+  & .pick-item { font-family: var(--font-body); color: var(--text-2); }
+  & .pick-item[aria-selected="true"] { background: var(--sel); color: var(--text-hi); box-shadow: inset 3px 0 var(--amber); }
+  & .pick-item[aria-selected="true"]:focus-visible { box-shadow: inset 3px 0 var(--amber), inset 0 0 0 2px var(--live); }
+  & .meter { height: 4px; border: 0; border-radius: 2px; background: var(--line); }
+  & .meter i { border-radius: 2px; }
+  & .meter-text { font-family: var(--font-body); }
+  & .field { min-height: var(--control); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: 400 var(--fs-md) var(--font-body); }
+  & .field:hover:not(:disabled) { border-color: var(--line-strong); }
+  & .field:focus-visible { border-color: var(--live); box-shadow: 0 0 0 1px var(--live); }
+  & .num-in { min-height: 28px; }
+
+  /* ---------- check boxes: native size, amber when ticked ---------- */
+  /* The size on its own (the ONI size rules are more specific than the look below): the ticked look must win over the rest look. */
+  & .ckbox, & .ckc .ckbox, & .r.h .ckc .ckbox { --ck: 16px; }
+  & .ckbox { border: 1.5px solid var(--line-strong); border-radius: var(--radius-xs); background: none; transition: background-color var(--dur) ease, border-color var(--dur) ease, transform var(--dur) ease; }
+  & [role="checkbox"][aria-checked="true"] > .ckbox, & [role="checkbox"][aria-checked="mixed"] > .ckbox { border-color: var(--amber); background: var(--amber); }
+  & [role="checkbox"][aria-checked="true"] > .ckbox::after { inset: auto; left: 4.5px; top: 1px; width: 4px; height: 8px; background: none; border: solid var(--on-amber); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  & [role="checkbox"][aria-checked="mixed"] > .ckbox::after { left: 3px; right: 3px; top: calc(50% - 1px); height: 2px; border-radius: 1px; background: var(--on-amber); }
+  & [role="checkbox"]:hover:not(:disabled) > .ckbox { border-color: var(--amber); }
+  & [role="checkbox"]:not([aria-checked="false"]):hover:not(:disabled) > .ckbox { border-color: var(--hover-primary); background: var(--hover-primary); }
+  & [role="checkbox"]:active:not(:disabled) > .ckbox, & .radio input:active:not(:disabled) { transform: scale(.88); }
+  & .radio input { transition: background-color var(--dur) ease, border-color var(--dur) ease, transform var(--dur) ease; }
+  & .radio:hover:not(:has(:disabled)) input:not(:checked) { border-color: var(--amber); }
+  & .ack { border-radius: var(--radius-sm); }
+  & :where(.sort, .more, .ack) { transition: color var(--dur) ease, background-color var(--dur) ease; }
+
+  /* ---------- the list: Qamille's mail list ---------- */
+  & #rows .tools { padding: 0 20px 10px; }
+  & .search { min-height: var(--control); }
+  /* The list's focus ring is an outline, drawn above its sticky header and category rows. */
+  & #rows .grid:focus-visible { box-shadow: none; outline: 2px solid var(--live); outline-offset: -2px; }
+  & #rows .grid { padding: 0 12px 0 8px; }
+  & .r { min-height: 42px; border-bottom-color: var(--line-soft); }
+  & .r.h { min-height: 32px; background: var(--pane); border-bottom: 1px solid var(--line); color: var(--muted); font: 600 12px var(--font-body); letter-spacing: 0; text-transform: none; }
+  & .sort:hover { color: var(--text); }
+  & .sort.on { color: var(--text-hi); }
+  & .sort-arrow { color: var(--amber-ink); }
+  /* A category: Qamille's group heading ("PRIORITY 1"), small spaced capitals, its total in amber. */
+  & .r.grp { top: 32px; min-height: 44px; background: var(--band); border-top: 0; border-bottom: 1px solid var(--line-soft); }
+  & .r.grp:hover { background: var(--band-hi); }
+  & .r.grp.sel { background: var(--band-sel); box-shadow: none; }
+  & .r.grp .nm-text .t { color: var(--text-hi); font: 700 12px var(--font-body); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+  & .r.grp .nm-text .s, & .r.grp.sel .nm-text .s { color: var(--muted); }
+  & .r.grp .cell { color: var(--text-2); }
+  & .r.grp .sz { color: var(--amber-ink); font-weight: 700; }
+  /* A sub-heading: the same capitals, quieter. */
+  & .r.sec { padding-top: 12px; color: var(--muted); font: 600 12px var(--font-body); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+  & .r.sec.boxed { padding: 6px 0 4px; }
+  & .r.sec.boxed .sec-name .t { color: var(--text-2); }
+  & .r.sec.boxed .sec-name .s { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  & .r.sec.boxed .sz { color: var(--text-2); }
+  /* The selected row: Qamille's selection, a wash, here amber. */
+  & .r.sel, & .r.sec.boxed.sel { background: var(--sel-soft); box-shadow: none; }
+  & .r:not(.h):not(.grp):not(.sec):not(.sel):hover, & .r.sec.boxed:hover:not(.sel) { background: var(--hover); }
+  & .nm-text .t { color: var(--text); font-weight: 500; }
+  & .r.sel .nm-text .t { color: var(--text-hi); }
+  & .nm-text .s { color: var(--muted); }
+  & .nm-text .s.blocked { color: var(--warn); }
+  /* The tree: a row sits one indent under its heading or parent, its box and its name together, and a hairline runs down
+     from the heading's box along its rows (--depth comes from the page, list.ts). */
+  & .r > .ckcell { position: relative; transform: translateX(calc(var(--depth, 0) * var(--indent))); }
+  & .r .nm, & .r.child .nm { padding-left: calc(var(--depth, 0) * var(--indent)); }
+  & .caret-gap.tree { display: block; }
+  & .r.sec.boxed > .sec-name { padding-left: calc(var(--depth, 0) * var(--indent) + var(--hit) + 4px); }
+  & .r[style*="--depth"] > .ckcell::before { content: ""; position: absolute; left: calc(17px - var(--indent)); top: -4px; bottom: -4px; width: 1px; background: var(--line); }
+  /* Open and closed: a chevron that turns. */
+  & .caret { width: var(--hit); height: var(--hit); color: var(--text-2); border-radius: var(--radius-xs); }
+  & .caret::before, & .caret[aria-expanded="true"]::before, & .r[aria-expanded="true"] > .nm > .caret::before {
+    content: ""; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; transform: translate(-1px, 0) rotate(-45deg);
+  }
+  & .caret[aria-expanded="true"]::before, & .r[aria-expanded="true"] > .nm > .caret::before { transform: translate(0, -2px) rotate(45deg); }
+  & .caret:hover { color: var(--text-hi); background: var(--hover); }
+  & .caret:active { background: var(--press); }
+  & .r:not(.h):not(.sec):not(.grp):active, & .r.sec.boxed:active { background: var(--press); }
+  & .cell { color: var(--text-2); font-family: var(--font-body); font-variant-numeric: tabular-nums; }
+  & .sz { color: var(--text); font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* The level: Qamille's label chip; Caution in the danger colours. */
+  & .lv { justify-self: start; font: 500 12px var(--font-body); letter-spacing: 0; text-transform: capitalize; }
+  & .lv.recommended, & .lv.caution { padding: 0 7px; border-radius: var(--radius-xs); line-height: 20px; }
+  & .lv.recommended { color: var(--chip-text); background: var(--chip); }
+  & .lv.optional { color: var(--muted); }
+  & .lv.caution { color: var(--warn); background: var(--danger-bg); font-weight: 600; }
+  & .empty-title { color: var(--text-hi); font: 650 var(--fs-lg) var(--font-body); text-transform: none; }
+  & .notice { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--tone, var(--line)) 40%, transparent); background: color-mix(in srgb, var(--tone, var(--line)) 10%, var(--pane)); }
+
+  /* ---------- the details: closed, opened on request ---------- */
+  & #list-head .details-toggle { display: inline-flex; }
+  & #main:not(.details-open) #detail { display: none; }
+  & #detail { max-height: 40%; padding: 4px 12px 0; border-top: 1px solid var(--line-soft); }
+  & .box { border: 1px solid var(--line); border-radius: 8px; background: var(--box); }
+  & .kv { color: var(--muted); }
+  & .kv b { color: var(--text); font-weight: 500; }
+
+  /* ---------- footer ---------- */
+  & #foot .dot { display: none; }
+  & #foot .foot-right { font-family: var(--font-body); }
+
+  /* ---------- dialogs and the report: Qamille's modal sheet ---------- */
+  & .dlg { border: 1px solid var(--line); border-radius: 14px; background: var(--pane); box-shadow: var(--shadow-dlg); }
+  & .dlg-title, & .rp-title { color: var(--text-hi); font: 600 20px/1.3 var(--font-body); letter-spacing: -.4px; text-transform: none; }
+  & .dlg-text { color: var(--text-2); }
+  & .dlg-sum { color: var(--text-hi); font: 600 var(--fs-md) var(--font-body); }
+  & .dlg-rows { border-radius: var(--radius-sm); }
+  & .rp-sub, & .dlg-sub { color: var(--muted); font: 600 12px var(--font-body); letter-spacing: var(--ls-caps); }
+  & .rp-hrow { text-transform: none; }
+  & .rp-sum b { color: var(--amber-ink); }
+  & .rp-path { font-family: var(--font-body); }
+
+  /* ---------- glass: in the desktop window the ground lets Windows' acrylic through (chrome.rs tints it) ---------- */
+  &.native-glass, &.native-glass body { background: transparent; }
+  &.native-glass #app {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--sidebar) 74%, transparent) 0 var(--side), color-mix(in srgb, var(--stage) 62%, transparent) var(--side));
+  }
+  &.native-glass #app::before { background: color-mix(in srgb, var(--surface) 94%, transparent); }
+  &.native-glass .r.h { background: color-mix(in srgb, var(--surface) 98%, transparent); }
+
+  /* ---------- light: Qamille's light tokens; the sidebar stays a dark column, as in Qamille ---------- */
+  &[data-theme="light"] {
+    color-scheme: light;
+    --stage: #f6f7f9; --chrome: #f6f7f9; --pane: #ffffff; --pane-fill: #ffffff; --surface: #ffffff;
+    --line: #e3e6ea; --line-soft: #eef0f3; --line-strong: #767e8b; --box: #f7f8fa; --box-line: #e3e6ea;
+    --text: #111827; --text-2: #4b5563; --text-hi: #0b1220; --muted: #5b6472; --ice: #4b5563; --live: #9a5b00;
+    --warn: #b03f49; --err: #b03f49; --ok: #3f7560;
+    --sel-soft: #fdf1df; --band: #f9fafb; --band-hi: #f4f5f8; --band-sel: #fdf1df; --hover: #f4f5f8; --press: #eceef2;
+    --button: #ffffff; --hover-btn: #f4f5f8; --press-btn: #eceef2; --scrim: #0f183055;
+    --amber-ink: #8a4a06; --chip: #eef0f5; --chip-text: #4a5363; --danger-fill: #b03f49; --on-danger: #ffffff; --danger-bg: #fff2f3; --danger-line: #ebc3c7;
+    --shadow-dlg: 0 10px 40px #15274a26;
+
+    /* The dark column: the sidebar and the brand above it read the column's own colours. */
+    & #bar2, & #brand {
+      color-scheme: dark;
+      --text: #d3d7de; --text-2: #c2c8d2; --text-hi: #ffffff; --muted: #a3aab7; --ice: #c2c8d2; --live: #ffb21e; --warn: #ef9ba1;
+      --sel: #2a2e38; --hover: #22262e; --press: #2a2e38; --line: #2c313b; --line-soft: #23272f; --line-strong: #8a929f;
+      --box: #1f232b; --surface: #1f232b; --button: #22262e; --hover-btn: #2a2e38; --press-btn: #1b1e24; --chip: #2c313b; --chip-text: #c2c8d2;
+    }
+    /* A blocked row is dimmed less on white, so its words keep 4.5:1. */
+    & .r.muted > :not(.nm), & .r.muted .nm-text .t, & .r.muted .caret { opacity: .85; }
+  }
+  &[data-theme="light"] { --sidebar: #16181d; }
+
+  /* Contrast themes repaint the fills: the tick, the bars and the switch say their state in system colours. */
+  @media (forced-colors: active) {
+    & [role="checkbox"][aria-checked="true"] > .ckbox::after { forced-color-adjust: none; background: none; border-color: Highlight; }
+    & .nv.on::after, & .it.on::before { forced-color-adjust: none; background: Highlight; }
+    & .r.sel, & .r.sec.boxed.sel { outline: 2px solid Highlight; outline-offset: -2px; }
+    & #app::before { border-color: CanvasText; }
+    & .theme-choice[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  }
+
+  /* Narrow (a half-width window, or 200 % zoom): a narrower sidebar. */
+  @media (max-width: 760px) {
+    & #app { --side: clamp(150px, 28vw, 196px); }
+    & .nv { padding: 0 7px; }
+    & .nv::after { left: 7px; right: 7px; }
+  }
+}

@@ -3,14 +3,17 @@ import './styles/frame.css';
 import './styles/shell.css';
 import './styles/list.css';
 import './styles/dialog.css';
+import './styles/smooth.css';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { api, errorText, inTauri, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
+import { initializeWindowControls } from './window-controls.ts';
+import { effectiveTheme, otherSkin, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowTheme, type Skin, type Theme } from './skin.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
-import { rowParents } from './rows.ts';
+import { cycleSort, nextSort, rowParents } from './rows.ts';
 import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SERVICES_POLL_MS, shouldPollServices, shownRows } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
@@ -117,6 +120,8 @@ function render(): void {
 }
 
 async function open(section: SectionId): Promise<void> {
+  // The tab answers the click at once; the next render (shell.ts) clears the mark, whatever came back.
+  document.querySelector(`#sections [data-section="${section}"]`)?.setAttribute('aria-busy', 'true');
   await opening.run(
     () => api.show(section),
     (view) => {
@@ -185,6 +190,17 @@ const handlers: Handlers = {
     for (const row of view.rows) if (row.kind === 'group') ui.fold.set(row.id, fold);
     render();
   },
+  toggleDetails: () => {
+    ui.details = !ui.details;
+    render();
+  },
+  sortBy: (column) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    const key = nextSort(view.columns, ui.sort[ui.section] ?? null, column);
+    if (key === null) delete ui.sort[ui.section]; else ui.sort[ui.section] = key;
+    render();
+  },
   goToGroup: (id) => {
     const view = ui.views[ui.section];
     if (!view) return;
@@ -246,7 +262,7 @@ function onKey(event: KeyboardEvent): void {
     }
     case 'toggle': {
       const row = rows.find((r) => r.id === currentFocus(ui, view));
-      if (!listed || !row || row.kind === 'header' || row.check === 'none' || !row.enabled || view.job !== null) return;
+      if (!listed || !row || row.check === 'none' || !row.enabled || view.job !== null) return;
       handlers.send(section, toggleIntent(section, row.id));
       break;
     }
@@ -263,6 +279,18 @@ function onKey(event: KeyboardEvent): void {
       render();
       break;
     }
+    case 'sort': {
+      if (!listed) return;
+      const key = cycleSort(view.columns, ui.sort[section] ?? null, act.reverse);
+      if (key === null) delete ui.sort[section]; else ui.sort[section] = key;
+      render();
+      showSelected();
+      break;
+    }
+    case 'details':
+      if (!listed) return;
+      handlers.toggleDetails();
+      break;
     case 'action': {
       if (act.key === 'Esc' && inField) { (target as HTMLElement).blur(); break; }
       if (act.key === 'Esc' && view.report !== null) { handlers.send(section, { kind: 'closeDialog' }); break; }
@@ -286,6 +314,54 @@ function selectAll(target: Element | null): void {
   }
   window.getSelection()?.removeAllRanges();
 }
+
+/** The look (skin.ts): Smooth unless ONI MODE was chosen; on the root before the first view is drawn, kept like the zoom. */
+function applySkin(skin: Skin): void {
+  document.documentElement.dataset.skin = skin;
+  // In the desktop window Smooth is glass: the page lets Windows' acrylic through (smooth.css `.native-glass`, chrome.rs).
+  document.documentElement.classList.toggle('native-glass', inTauri && skin === 'smooth');
+  document.getElementById('skin')?.setAttribute('aria-checked', String(skin === 'oni'));
+  // ONI MODE is dark whatever the system says; Smooth follows its theme (the window's theme decides the page's prefers-color-scheme).
+  syncChrome();
+}
+
+function readSkin(): Skin {
+  try { return storedSkin(localStorage.getItem(SKIN_KEY)); } catch { return storedSkin(null); }
+}
+
+/**
+ * Smooth's theme (skin.ts). The page draws it itself (`data-theme` on the root: the chosen one, or the Windows one for Auto,
+ * followed as it changes) and asks the window for the same (chrome.rs), so the title bar agrees.
+ */
+let theme: Theme = 'system';
+const systemLight = window.matchMedia('(prefers-color-scheme: light)');
+function drawTheme(): void {
+  document.documentElement.dataset.theme = effectiveTheme(theme, systemLight.matches);
+}
+systemLight.addEventListener('change', () => { drawTheme(); syncChrome(); });
+
+function applyTheme(next: Theme): void {
+  theme = next;
+  for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
+    choice.setAttribute('aria-pressed', String(choice.dataset.themeChoice === next));
+  }
+  drawTheme();
+  syncChrome();
+}
+
+for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
+  choice.addEventListener('click', () => {
+    const next = storedTheme(choice.dataset.themeChoice ?? null);
+    applyTheme(next);
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* no storage: the theme lasts until the window closes */ }
+  });
+}
+
+document.getElementById('skin')?.addEventListener('click', () => {
+  const next = otherSkin(storedSkin(document.documentElement.dataset.skin ?? null));
+  applySkin(next);
+  try { localStorage.setItem(SKIN_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
+});
 
 /** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
 const ZOOM_KEY = 'xiox.zoom';
@@ -351,6 +427,8 @@ setInterval(pollServices, SERVICES_POLL_MS);
 async function start(): Promise<void> {
   // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.
   applyZoom(readZoom());
+  applySkin(readSkin());
+  try { applyTheme(storedTheme(localStorage.getItem(THEME_KEY))); } catch { applyTheme('system'); }
   try {
     app = await api.appInfo();
     onView((view) => {
@@ -366,6 +444,7 @@ async function start(): Promise<void> {
   }
   focusList();
   signalReady();
+  void initializeWindowControls((failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
 }
 
 /** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */
@@ -402,11 +481,16 @@ function signalReady(): void {
 let chromeSent = '';
 function syncChrome(): void {
   const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
-  const next = { section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))) };
+  const next = {
+    section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))),
+    theme: windowTheme(storedSkin(document.documentElement.dataset.skin ?? null), theme),
+    // Smooth's glass, tinted for the palette on screen; ONI MODE has none (and the system frame).
+    glass: storedSkin(document.documentElement.dataset.skin ?? null) === 'smooth' ? effectiveTheme(theme, systemLight.matches) : null,
+  };
   const key = JSON.stringify(next);
   if (key === chromeSent) return;
   chromeSent = key;
-  void api.chrome(next.section, next.job).catch(() => undefined);
+  void api.chrome(next.section, next.job, next.theme, next.glass).catch(() => undefined);
 }
 
 void start();

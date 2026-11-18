@@ -1,7 +1,7 @@
 // What the page remembers: the open section, per section the view with the highest `rev`, the focused
 // row and the expanded parents. No DOM here, so node can test it.
 
-import { groupSizes, sortRows, visibleRows } from './rows.ts';
+import { groupSizes, orderFor, sortRows, visibleRows, type SortKey } from './rows.ts';
 import type { Check, RowView, SectionId, SectionView } from './types.ts';
 
 export const SECTION_ORDER: readonly SectionId[] = ['cleanup', 'registry', 'services', 'developers'];
@@ -17,10 +17,14 @@ export interface UiState {
   fold: Map<string, boolean>;
   /** The category the list is scrolled to, per section (the menu marks it); set by the scroll and by a click on the menu. */
   spy: Partial<Record<SectionId, string>>;
+  /** The column and direction each section's list is ordered by; none: the default, by size from the largest. */
+  sort: Partial<Record<SectionId, SortKey>>;
+  /** Whether the details of the focused row are open (Smooth: closed until asked for; ONI MODE always shows them). */
+  details: boolean;
 }
 
 export function createUi(): UiState {
-  return { section: 'cleanup', views: {}, focus: {}, expanded: new Set(), fold: new Map(), spy: {} };
+  return { section: 'cleanup', views: {}, focus: {}, expanded: new Set(), fold: new Map(), spy: {}, sort: {}, details: false };
 }
 
 /** Keeps `v` when it is newer than what is held; false for a stale or repeated revision. */
@@ -31,13 +35,16 @@ export function acceptView(ui: UiState, v: SectionView): boolean {
   return true;
 }
 
+/** A row the selection can rest on: any row but a plain sub-heading (one with a box is a row of its own: Space ticks it). */
+export const focusable = (row: RowView): boolean => row.kind !== 'header' || row.check !== 'none';
+
 /**
- * The row after moving `delta` rows from `current` over the rows on screen: header rows are skipped
+ * The row after moving `delta` rows from `current` over the rows on screen: plain sub-headings are skipped
  * and the ends clamp. Without a current row (or one no longer listed) it is the first row going down
  * and the last going up. Null when there is no row to land on.
  */
 export function moveFocus(rows: RowView[], current: string | null, delta: number): string | null {
-  const ids = rows.filter((r) => r.kind !== 'header').map((r) => r.id);
+  const ids = rows.filter(focusable).map((r) => r.id);
   if (ids.length === 0) return null;
   const at = current === null ? -1 : ids.indexOf(current);
   if (at < 0) return (delta < 0 ? ids[ids.length - 1] : ids[0]) ?? null;
@@ -60,14 +67,15 @@ export function foldedGroups(ui: UiState, view: SectionView): Set<string> {
   return folded;
 }
 
-/** The rows on screen, in drawing order: sorted, children under an open parent, nothing inside a folded category. */
-export const shownRows = (ui: UiState, view: SectionView): RowView[] => visibleRows(sortRows(view.rows), ui.expanded, foldedGroups(ui, view));
+/** The rows on screen, in drawing order: in the section's order, children under an open parent, nothing inside a folded category. */
+export const shownRows = (ui: UiState, view: SectionView): RowView[] =>
+  visibleRows(sortRows(view.rows, orderFor(view.columns, ui.sort[view.section] ?? null)), ui.expanded, foldedGroups(ui, view));
 
 /** The focused row of the section as the list shows it: the chosen one if it is on screen, else the first. */
 export function currentFocus(ui: UiState, view: SectionView): string | null {
   const shown = shownRows(ui, view);
   const chosen = ui.focus[view.section];
-  if (chosen !== undefined && shown.some((r) => r.id === chosen && r.kind !== 'header')) return chosen;
+  if (chosen !== undefined && shown.some((r) => r.id === chosen && focusable(r))) return chosen;
   return moveFocus(shown, null, 1);
 }
 

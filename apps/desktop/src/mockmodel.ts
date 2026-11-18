@@ -50,11 +50,12 @@
 //       (so never when FROZEN); goes to that state. No memory is needed: each state's nav marks its own.
 //   toggle{row}                      refused when FROZEN, or when the row is missing, disabled
 //       (enabled false: blocked rows) or has check 'none'. Otherwise that row's check goes on<->off
-//       (mixed -> on) in the current fixture state. A `group` row ticks (or, when it was on, clears) its ELIGIBLE rows,
-//       the rows after it up to the next group row that are items or children, enabled, with a check and not level
-//       `caution`. Afterwards the check of every group row is recounted from its rows: `on` when
-//       every eligible row is on, `off` when none is, else `mixed` (`none` when there is no eligible row); nothing
-//       else (parent rows, nav notes, subtitle, status) is recounted.
+//       (mixed -> on) in the current fixture state. A box row ticks (or, when it was on, clears) its ELIGIBLE rows:
+//       a `group` row the rows after it up to the next group row, a `header` row (a sub-heading with a box) the rows
+//       after it up to the next header or group row; eligible are the items or children, enabled, with a check and not
+//       level `caution`. Afterwards the check of every box row is recounted from its rows: `on` when every eligible
+//       row is on, `off` when none is, else `mixed` (`none` when there is no eligible row); nothing else (parent
+//       rows, nav notes, subtitle, status) is recounted.
 //   selectAll{on}                    refused when FROZEN or when the view's `bulk` is false. Otherwise every eligible
 //       row (above) of the view goes on / off, then the checks are recounted as above. A `caution` row and a blocked row
 //       keep what they had, in every state.
@@ -109,7 +110,7 @@
 //       it gets a `cancel` (a busy Registry would go back), because the page can never send one; the
 //       Rust FakeBackend rejects it at the type level (no such variant).
 //   cancel of a developers scan, closeDialog with no dialog and no report, cancel when nothing is busy, select of a category that is
-//       not in the nav, toggle of a row whose check is `none` (a header: the OTHER WORKTREES row of
+//       not in the nav, toggle of a row whose check is `none` (a header without a box: the OTHER WORKTREES row of
 //       developers:worktrees) or that does not exist, openConfirm from a state that is not analyzed-like: all refused, as above
 //       (steps at the end of fixtures/intent-script.json).
 //
@@ -178,12 +179,14 @@ function runRule(s: SectionId, intent: AnyIntent): { from: string; button: strin
 /** A row that a group box or «select all» may change: an item or a child, enabled, with a check, and not a `caution` one. */
 const eligible = (r: RowView): boolean => (r.kind === 'item' || r.kind === 'child') && r.enabled && r.check !== 'none' && r.level !== 'caution';
 
-/** The rows after a `group` row, up to the next one, that it may change. */
-function groupRows(rows: RowView[], group: RowView): RowView[] {
-  const at = rows.indexOf(group);
+/** A row with a box over other rows: a category (`group`) or a sub-heading (`header`). */
+const isBox = (r: RowView): boolean => r.kind === 'group' || r.kind === 'header';
+
+/** The rows a box row may change: after it, up to the next group row (a sub-heading: also the next sub-heading). */
+function boxRows(rows: RowView[], box: RowView): RowView[] {
   const out: RowView[] = [];
-  for (const r of rows.slice(at + 1)) {
-    if (r.kind === 'group') break;
+  for (const r of rows.slice(rows.indexOf(box) + 1)) {
+    if (r.kind === 'group' || (box.kind === 'header' && r.kind === 'header')) break;
     if (eligible(r)) out.push(r);
   }
   return out;
@@ -191,9 +194,9 @@ function groupRows(rows: RowView[], group: RowView): RowView[] {
 
 const tally = (checks: Check[]): Check => (checks.length === 0 ? 'none' : checks.every((c) => c === 'on') ? 'on' : checks.every((c) => c === 'off') ? 'off' : 'mixed');
 
-/** The check of every group row, counted again from the rows it covers (a parent row is not recounted: the engine's own figures stay). */
+/** The check of every box row, counted again from the rows it covers (a parent row is not recounted: the engine's own figures stay). */
 function recount(rows: RowView[]): void {
-  for (const r of rows) if (r.kind === 'group') r.check = tally(groupRows(rows, r).map((x) => x.check));
+  for (const r of rows) if (isBox(r)) r.check = tally(boxRows(rows, r).map((x) => x.check));
 }
 
 export class MockModel {
@@ -373,9 +376,9 @@ export class MockModel {
     const rows = this.current(s).rows;
     const row = rows.find((r) => r.id === id);
     if (!row || !row.enabled || row.check === 'none') return;
-    if (row.kind === 'group') {
+    if (isBox(row)) {
       const to = row.check === 'on' ? 'off' : 'on';
-      for (const r of groupRows(rows, row)) r.check = to;
+      for (const r of boxRows(rows, row)) r.check = to;
     } else {
       row.check = row.check === 'on' ? 'off' : 'on';
     }

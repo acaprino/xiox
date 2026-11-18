@@ -56,7 +56,9 @@ pub enum Check {
 #[serde(rename_all = "camelCase")]
 pub enum RowKind {
     Item,
-    /// A sub-heading inside a group (the sections of Winapp2): no check box.
+    /// A sub-heading: the rows after it, up to the next sub-heading or category, are its own (the sections of Winapp2,
+    /// the issue types of Registry, the projects of the archived sessions). Its box ([`box_headers`]) ticks them; a
+    /// sub-heading over rows that cannot be ticked has none.
     Header,
     Child,
     /// A category of a list that shows all its categories one after another (Cleanup): its check
@@ -450,6 +452,56 @@ pub(crate) fn blank_row(id: String, kind: RowKind) -> RowView {
     }
 }
 
+/// A row that the box of its category or sub-heading, and «select all», may tick: an item that can be chosen, with a
+/// box, and not at the Caution level (a free-space wipe is never one click away).
+pub(crate) fn eligible(r: &RowView) -> bool {
+    r.kind == RowKind::Item && r.enabled && r.check != Check::None && r.level != Some(LevelView::Caution)
+}
+
+/// The box of a set of rows: on when every row it may tick is ticked, off when none is, mixed in between, none when
+/// it may tick nothing.
+pub(crate) fn box_of<'a>(rows: impl IntoIterator<Item = &'a RowView>) -> Check {
+    let (mut n, mut on) = (0usize, 0usize);
+    for r in rows.into_iter().filter(|r| eligible(r)) {
+        n += 1;
+        on += usize::from(r.check == Check::On);
+    }
+    match (n, on) {
+        (0, _) => Check::None,
+        (n, o) if n == o => Check::On,
+        (_, 0) => Check::Off,
+        _ => Check::Mixed,
+    }
+}
+
+/// The rows of the sub-heading at `at`: those after it, up to the next sub-heading or category.
+fn under(rows: &[RowView], at: usize) -> &[RowView] {
+    let rest = &rows[at + 1..];
+    let end = rest.iter().position(|r| matches!(r.kind, RowKind::Header | RowKind::Group)).unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// Gives every sub-heading of a list the box of its rows, which can be clicked when it may tick something and no job
+/// runs. A sub-heading over rows that cannot be ticked keeps no box (the worktrees made by hand).
+pub(crate) fn box_headers(rows: &mut [RowView], busy: bool) {
+    for at in 0..rows.len() {
+        if rows[at].kind == RowKind::Header {
+            let check = box_of(under(rows, at));
+            rows[at].check = check;
+            rows[at].enabled = check != Check::None && !busy;
+        }
+    }
+}
+
+/// A click on a sub-heading's box: the ids of its rows that it may tick, and whether they go on (some or none is
+/// ticked) or off (all are). `None` when `id` is not a sub-heading of `rows`; an empty list is the caller's to refuse.
+pub(crate) fn header_toggle(rows: &[RowView], id: &str) -> Option<(Vec<String>, bool)> {
+    let at = rows.iter().position(|r| r.kind == RowKind::Header && r.id == id)?;
+    let ticks: Vec<&RowView> = under(rows, at).iter().filter(|r| eligible(r)).collect();
+    let on = !ticks.iter().all(|r| r.check == Check::On);
+    Some((ticks.into_iter().map(|r| r.id.clone()).collect(), on))
+}
+
 /// Helpers the intent tests of every section share.
 #[cfg(test)]
 pub(crate) mod testing {
@@ -642,6 +694,42 @@ mod tests {
             }
         }
         assert!(n >= 20, "{n} fixture views");
+    }
+
+    fn item(id: &str, check: Check) -> RowView {
+        RowView { check, level: None, ..row(id) }
+    }
+
+    fn sub(id: &str) -> RowView {
+        blank_row(id.into(), RowKind::Header)
+    }
+
+    #[test]
+    fn a_sub_heading_boxes_its_own_rows_up_to_the_next_heading() {
+        let caution = RowView { level: Some(LevelView::Caution), ..item("c", Check::Off) };
+        let blocked = RowView { enabled: false, ..item("b", Check::Off) };
+        let mut rows = vec![
+            sub("h:all"), item("a1", Check::On), item("a2", Check::On), caution,
+            sub("h:some"), item("s1", Check::On), item("s2", Check::Off),
+            sub("h:none"), item("n1", Check::Off), blocked,
+            sub("h:nothing"), RowView { check: Check::None, ..item("o1", Check::None) },
+            RowView { kind: RowKind::Group, ..item("g", Check::Off) }, item("after", Check::Off),
+        ];
+        box_headers(&mut rows, false);
+        let boxes: Vec<(&str, Check, bool)> = rows.iter().filter(|r| r.kind == RowKind::Header).map(|r| (r.id.as_str(), r.check, r.enabled)).collect();
+        assert_eq!(boxes, [("h:all", Check::On, true), ("h:some", Check::Mixed, true), ("h:none", Check::Off, true), ("h:nothing", Check::None, false)]);
+        box_headers(&mut rows, true);
+        assert!(rows.iter().filter(|r| r.kind == RowKind::Header).all(|r| !r.enabled), "no box while a job runs");
+    }
+
+    #[test]
+    fn a_sub_heading_box_ticks_what_it_may_and_clears_when_all_is_ticked() {
+        let caution = RowView { level: Some(LevelView::Caution), ..item("c", Check::Off) };
+        let rows = vec![sub("h:a"), item("a1", Check::On), item("a2", Check::Off), caution, sub("h:b"), item("b1", Check::On)];
+        assert_eq!(header_toggle(&rows, "h:a"), Some((vec!["a1".to_string(), "a2".to_string()], true)), "some ticked: all go on, the caution row stays");
+        assert_eq!(header_toggle(&rows, "h:b"), Some((vec!["b1".to_string()], false)), "all ticked: they go off");
+        assert_eq!(header_toggle(&rows, "a1"), None, "an item is not a sub-heading");
+        assert_eq!(header_toggle(&rows, "h:gone"), None);
     }
 
     #[test]

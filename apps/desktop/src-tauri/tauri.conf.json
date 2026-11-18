@@ -18,8 +18,11 @@
         "height": 800,
         "minWidth": 960,
         "minHeight": 540,
-        "theme": "Dark",
-        "backgroundColor": "#0b0416",
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "backgroundColor": "#00000000",
+        "windowEffects": { "effects": ["acrylic"], "color": [18, 22, 30, 150] },
         "visible": false,
         "center": true
       }

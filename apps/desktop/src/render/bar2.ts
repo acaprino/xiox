@@ -96,6 +96,7 @@ function listControl(s: SectionId, o: OptionOf<'list'>, on: Handlers): HTMLEleme
       button(h('span', { 'data-fit': '' }, o.addLabel), { class: 'btn sm', disabled: !o.enabled, 'data-key': `opt:${o.id}:add`, onClick: () => on.addRoot() }),
       button(h('span', { 'data-fit': '' }, o.removeLabel), {
         class: 'btn sm', disabled: !o.enabled || o.selected === null, 'data-key': `opt:${o.id}:remove`,
+        title: o.enabled && o.selected === null ? 'Pick a folder in the list first.' : null,
         onClick: () => on.send(s, optionIntent(s, o, 'remove')),
       })));
 }
@@ -148,5 +149,7 @@ export function renderBar2(root: HTMLElement, view: SectionView, ui: UiState, on
   }
   parts.push(h('div', { class: 'opts' }, ...view.options.map((o) => optionControl(s, o, on))));
   const scroll = h('div', { class: 'items' }, ...parts);
-  fill(root, heading(view.nav.length > 0 ? 'Categories' : 'Options', view.nav.length > 0 ? view.nav.length : view.options.length), scroll);
+  // Registry's options are the kinds of issue the scan looks for: the heading says so.
+  const title = view.nav.length > 0 ? 'Categories' : s === 'registry' ? 'Look for' : 'Options';
+  fill(root, heading(title, view.nav.length > 0 ? view.nav.length : view.options.length), scroll);
 }

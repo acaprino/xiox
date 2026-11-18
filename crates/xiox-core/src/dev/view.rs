@@ -173,13 +173,16 @@ impl DevState {
         .into()
     }
 
-    fn rows(&self) -> Vec<RowView> {
+    /// The rows of the open list, each sub-heading with the box of the rows under it.
+    pub(super) fn rows(&self) -> Vec<RowView> {
         let Some(scan) = self.scan.as_ref().filter(|_| self.view == View::Scanned) else { return Vec::new() };
-        match self.section {
+        let mut rows = match self.section {
             Section::Projects => self.project_rows(scan),
             Section::Worktrees => self.worktree_rows(scan),
             Section::Sessions => self.session_rows(scan),
-        }
+        };
+        box_headers(&mut rows, self.busy());
+        rows
     }
 
     fn project_rows(&self, scan: &DevScan) -> Vec<RowView> {
@@ -249,9 +252,10 @@ impl DevState {
         rows
     }
 
+    /// The worktrees under their main repository; those made by hand last, under their own heading, with no box.
     fn worktree_rows(&self, scan: &DevScan) -> Vec<RowView> {
         let repo = |r: &ProjectReport| r.git.main_worktree.as_deref().map_or_else(|| "—".to_string(), folder_name);
-        let mut rows = Vec::new();
+        let mut managed = Vec::new();
         for (i, r) in scan.worktrees.iter().enumerate() {
             let on = selectable(r);
             let nothing = nothing_to_remove(r);
@@ -266,7 +270,7 @@ impl DevState {
             if let Some(why) = blocked.clone().or_else(|| (!r.reason.is_empty()).then(|| r.reason.clone())) {
                 detail.push(("why".into(), why));
             }
-            rows.push(RowView {
+            managed.push((r.git.main_worktree.as_deref(), RowView {
                 check: if self.sel_worktrees.get(i).copied().unwrap_or(false) { Check::On } else { Check::Off },
                 enabled: on,
                 name: r.name.clone(),
@@ -277,8 +281,11 @@ impl DevState {
                 why: blocked,
                 detail,
                 ..blank_row(format!("w:{}", r.id), RowKind::Item)
-            });
+            }));
         }
+        let mut rows = under_headings(managed, REPO_ROW, |repo, n| {
+            format!("{} ({})", repo.map_or_else(|| "No main repository".to_string(), folder_name), plural(n, "worktree", "worktrees"))
+        });
         if !scan.other_worktrees.is_empty() {
             rows.push(RowView {
                 name: "Other worktrees (created by hand, not removed from here)".into(),
@@ -303,9 +310,11 @@ impl DevState {
         rows
     }
 
+    /// The archived sessions under the project they ran in; those with no project last.
     fn session_rows(&self, scan: &DevScan) -> Vec<RowView> {
         let mode = self.mode_text();
-        scan.archived
+        let rows = scan
+            .archived
             .iter()
             .enumerate()
             .map(|(i, s)| {
@@ -319,7 +328,7 @@ impl DevState {
                 if let Some(why) = &s.blocked {
                     detail.push(("why".into(), why.clone()));
                 }
-                RowView {
+                let row = RowView {
                     check: if self.sel_sessions.get(i).copied().unwrap_or(false) { Check::On } else { Check::Off },
                     enabled: free,
                     name: session_title(s),
@@ -334,9 +343,13 @@ impl DevState {
                     why: s.blocked.clone(),
                     detail,
                     ..blank_row(format!("s:{}:{}", session_agent_id(s.agent), s.id), RowKind::Item)
-                }
+                };
+                (s.cwd.as_deref(), row)
             })
-            .collect()
+            .collect();
+        under_headings(rows, PROJECT_ROW, |project, n| {
+            format!("{} ({})", project.map_or_else(|| "No project".to_string(), folder_name), plural(n, "session", "sessions"))
+        })
     }
 
     fn empty_view(&self, no_rows: bool) -> Option<EmptyView> {
@@ -538,4 +551,34 @@ fn level_view(l: Level) -> LevelView {
         Level::Optional => LevelView::Optional,
         Level::Caution => LevelView::Caution,
     }
+}
+
+/// The id of the sub-heading of a project in the archived sessions: `h:project:<folder>` (`none`: no project).
+pub(super) const PROJECT_ROW: &str = "h:project:";
+/// The id of the sub-heading of a main repository in the worktrees: `h:repo:<folder>` (`none`: not known).
+pub(super) const REPO_ROW: &str = "h:repo:";
+
+/// Rows under a sub-heading per folder (a project, a repository): the folders in the order they first come, the rows
+/// without one last, each row's own order kept. `heading` names a folder's sub-heading from the folder and how many
+/// rows it holds; its full path is the sub-heading's second line.
+fn under_headings(rows: Vec<(Option<&Path>, RowView)>, prefix: &str, heading: impl Fn(Option<&Path>, usize) -> String) -> Vec<RowView> {
+    let mut groups: Vec<(Option<&Path>, Vec<RowView>)> = Vec::new();
+    for (key, row) in rows {
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, inside)) => inside.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    groups.sort_by_key(|(key, _)| key.is_none());
+    let mut out = Vec::new();
+    for (key, inside) in groups {
+        let id = key.map_or_else(|| "none".to_string(), |p| p.display().to_string());
+        out.push(RowView {
+            name: heading(key, inside.len()),
+            sub: key.map(|p| p.display().to_string()),
+            ..blank_row(format!("{prefix}{id}"), RowKind::Header)
+        });
+        out.extend(inside);
+    }
+    out
 }

@@ -5,7 +5,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::window::{ProgressBarState, ProgressBarStatus};
-use tauri::UserAttentionType;
+use serde::Deserialize;
+use std::sync::Mutex;
+use tauri::window::{Color, Effect, EffectsBuilder};
+use tauri::{Theme, UserAttentionType};
 use xiox_core::notify::SectionId;
 
 /// The name every window title ends with: `single_instance::is_title_of` finds the window by it.
@@ -48,13 +51,78 @@ pub fn taskbar(was_running: bool, job: Option<u8>, focused: bool) -> Taskbar {
     }
 }
 
+/// The theme the page asks the window for: the Windows one, or light or dark whatever Windows says (ONI MODE is
+/// always `dark`; Smooth is what its theme switch says).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Look {
+    System,
+    Light,
+    Dark,
+}
+
+/// The theme the window asks Windows for. The runtime hands the window's theme to WebView2, so the title bar and the
+/// page's `prefers-color-scheme` agree: Smooth's light and dark palettes follow it with no switch of their own.
+pub fn theme(look: Look) -> Option<Theme> {
+    match look {
+        Look::System => None,
+        Look::Light => Some(Theme::Light),
+        Look::Dark => Some(Theme::Dark),
+    }
+}
+
+/// The material behind the page in Smooth: Windows' acrylic, tinted for its light or its dark palette.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Glass {
+    Light,
+    Dark,
+}
+
+/// The acrylic tint (RGBA) of each palette: the look's ground colour (smooth.css `--stage`), partly see-through, as
+/// Shinatama tints its own.
+pub fn tint(glass: Glass) -> Color {
+    match glass {
+        Glass::Dark => Color(18, 22, 30, 150),
+        Glass::Light => Color(246, 247, 249, 170),
+    }
+}
+
+/// The frame last applied, so a report that changes only the section or the job leaves the frame alone.
+static FRAME: Mutex<Option<Option<Glass>>> = Mutex::new(None);
+
+/// Smooth (`glass`): no system frame (the page draws the title bar, `native_frame` gives its maximize button the snap
+/// layouts), the system shadow and rounded corners kept, the acrylic behind the page. ONI MODE: the system frame and no
+/// material (its page is opaque), as it always was.
+fn apply_frame(window: &tauri::WebviewWindow, glass: Option<Glass>) {
+    let mut last = FRAME.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == Some(glass) {
+        return;
+    }
+    *last = Some(glass);
+    match glass {
+        Some(tone) => {
+            let _ = window.set_decorations(false);
+            let _ = window.set_shadow(true);
+            let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Acrylic).color(tint(tone)).build());
+        }
+        None => {
+            let _ = window.set_effects(None);
+            let _ = window.set_decorations(true);
+        }
+    }
+}
+
 /// A job was running at the last report. Process-wide on purpose: the app has one window.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// The page's report: the open section and the percent of the running job, if any.
+/// The page's report: the open section, the percent of the running job, if any, the theme its look wants and its glass
+/// (none: ONI MODE).
 #[tauri::command]
-pub fn window_chrome(window: tauri::WebviewWindow, section: SectionId, job: Option<u8>) {
+pub fn window_chrome(window: tauri::WebviewWindow, section: SectionId, job: Option<u8>, theme: Look, glass: Option<Glass>) {
     let _ = window.set_title(&title(section));
+    let _ = window.set_theme(self::theme(theme));
+    apply_frame(&window, glass);
     let was_running = RUNNING.swap(job.is_some(), Ordering::SeqCst);
     let focused = window.is_focused().unwrap_or(true);
     let Taskbar { bar, attention } = taskbar(was_running, job, focused);
@@ -72,6 +140,23 @@ pub fn window_chrome(window: tauri::WebviewWindow, section: SectionId, job: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_glass_is_tinted_with_the_ground_of_each_palette_and_stays_see_through() {
+        assert_eq!(tint(Glass::Dark), Color(18, 22, 30, 150));
+        assert_eq!(tint(Glass::Light), Color(246, 247, 249, 170));
+        let page: Option<Glass> = serde_json::from_str("null").unwrap();
+        assert_eq!(page, None, "ONI MODE sends no glass");
+    }
+
+    #[test]
+    fn the_window_follows_windows_unless_the_look_says_light_or_dark() {
+        assert_eq!(theme(Look::System), None);
+        assert_eq!(theme(Look::Light), Some(Theme::Light));
+        assert_eq!(theme(Look::Dark), Some(Theme::Dark));
+        let page: Look = serde_json::from_str("\"system\"").unwrap();
+        assert_eq!(page, Look::System, "the page's spelling");
+    }
 
     #[test]
     fn the_title_names_the_section_and_ends_with_the_app() {

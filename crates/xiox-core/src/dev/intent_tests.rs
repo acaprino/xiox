@@ -241,6 +241,36 @@ fn toggles_follow_the_tables() {
 }
 
 #[test]
+fn a_heading_ticks_the_free_rows_under_it() {
+    let mut scan = three_sections();
+    scan.archived.push(ArchivedSession { agent: Agent::Claude, ..session("1", Some("session in use"), true, 9) });
+    scan.archived.push(ArchivedSession { cwd: None, ..session("3", None, true, 2) });
+    let mut st = with_scan(scan);
+    st.select_category(DevCategory::Sessions).unwrap();
+    let v = st.view(false);
+    let demo = r"h:project:D:\Projects\demo";
+    assert_eq!(
+        v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        [demo, "s:codex:1", "s:codex:2", "s:claude:1", "h:project:none", "s:codex:3"],
+        "the sessions under their project, those with none last"
+    );
+    assert_eq!((row(&v, demo).name.as_str(), row(&v, demo).sub.as_deref(), row(&v, demo).check), ("demo (3 sessions)", Some(r"D:\Projects\demo"), Check::Off));
+    assert_eq!(row(&v, "h:project:none").name, "No project (1 session)");
+    st.toggle(demo).unwrap();
+    assert_eq!(st.sel_sessions, vec![true, true, false, false], "the session in use stays, the other project does not move");
+    assert_eq!(row(&st.view(false), demo).check, Check::On);
+    st.toggle(demo).unwrap();
+    assert_eq!(st.sel_sessions, vec![false; 4]);
+
+    // The worktrees under their repository; a heading of another list is not there to click.
+    st.select_category(DevCategory::Worktrees).unwrap();
+    assert_eq!(row(&st.view(false), "h:repo:none").name, "No main repository (1 worktree)");
+    st.toggle("h:repo:none").unwrap();
+    assert_eq!(st.sel_worktrees, vec![true]);
+    assert_eq!(err(st.toggle(demo)), unknown_row(demo));
+}
+
+#[test]
 fn a_worktree_that_cannot_be_removed_cannot_be_ticked() {
     let mut dirty = report("d", ProjectStatus::Inactive, true, 40);
     dirty.is_agent_worktree = true;
@@ -671,7 +701,7 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     let mut st = st;
     st.select_category(DevCategory::Worktrees).unwrap();
     let v = st.view(false);
-    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["w:w"]);
+    assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["h:repo:none", "w:w"], "the worktree under its repository");
     let w = row(&v, "w:w");
     assert_eq!((w.check, w.enabled), (Check::Off, true));
     assert!(w.detail.iter().any(|(k, val)| k == "mode" && val == "permanently (git)"));

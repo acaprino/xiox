@@ -48,11 +48,11 @@ pub(super) struct Shown {
     pub entries: Vec<Entry>,
 }
 
-/// A row that a category's box and «select all» may tick: an item that can be chosen (not blocked)
-/// and is not at the Caution level (a free-space wipe is never one click away).
-pub(super) fn eligible(r: &RowView) -> bool {
-    r.kind == RowKind::Item && r.enabled && r.level != Some(LevelView::Caution)
-}
+/// A row that a category's box, a sub-heading's box and «select all» may tick (the rule all the lists share).
+pub(super) use crate::view::eligible;
+
+/// The id of a sub-heading of Winapp2 (a section of its rules): `section:<name>`. Its box ticks the section's rows.
+pub(super) const SECTION_ROW: &str = "section:";
 
 /// The label of the clean action and the first line of its confirmation: «Clean 8 items».
 fn clean_label(items: usize) -> String {
@@ -225,7 +225,7 @@ impl CleanupState {
                     let mut entries = Vec::new();
                     for (section, idx) in winapp2_matches(rs, &self.rule_search) {
                         entries.push(Entry {
-                            row: RowView { name: format!("{section} ({})", sys::fmt_count(idx.len() as u64)), ..blank_row(format!("section:{section}"), RowKind::Header) },
+                            row: RowView { name: format!("{section} ({})", sys::fmt_count(idx.len() as u64)), ..blank_row(format!("{SECTION_ROW}{section}"), RowKind::Header) },
                             files: 0,
                         });
                         entries.extend(
@@ -249,13 +249,14 @@ impl CleanupState {
         Entry { row: self.option_row(c, o), files: self.rule_found_of(&rules::key(c, o)).map_or(0, |f| f.count) }
     }
 
-    /// The flat list the page draws: a `Group` row, then the rows of its category.
-    fn list_rows(&self, shown: Vec<Shown>, busy: bool) -> Vec<RowView> {
+    /// The flat list the page draws: a `Group` row, then the rows of its category, each sub-heading with its box.
+    pub(super) fn list_rows(&self, shown: Vec<Shown>, busy: bool) -> Vec<RowView> {
         let mut rows = Vec::new();
         for g in shown {
             rows.push(self.group_row(&g, busy));
             rows.extend(g.entries.into_iter().map(|e| e.row));
         }
+        crate::view::box_headers(&mut rows, busy);
         rows
     }
 
@@ -263,19 +264,12 @@ impl CleanupState {
     /// answered there, the files and bytes of its rows. Rows at the Caution level are not ticked by
     /// the box, and the line says so.
     fn group_row(&self, g: &Shown, busy: bool) -> RowView {
-        let ticks: Vec<&RowView> = g.entries.iter().map(|e| &e.row).filter(|r| eligible(r)).collect();
-        let on = ticks.iter().filter(|r| r.check == Check::On).count();
-        let check = match (ticks.len(), on) {
-            (0, _) => Check::None,
-            (n, o) if n == o => Check::On,
-            (_, 0) => Check::Off,
-            _ => Check::Mixed,
-        };
+        let check = crate::view::box_of(g.entries.iter().map(|e| &e.row));
         let analysed = g.entries.iter().any(|e| e.row.bytes.is_some());
         let caution = g.entries.iter().any(|e| e.row.kind == RowKind::Item && e.row.level == Some(LevelView::Caution));
         RowView {
             check,
-            enabled: !ticks.is_empty() && !busy,
+            enabled: check != Check::None && !busy,
             name: g.name.clone(),
             cells: if analysed { vec![sys::fmt_count(g.entries.iter().map(|e| e.files).sum())] } else { Vec::new() },
             bytes: analysed.then(|| g.entries.iter().filter_map(|e| e.row.bytes).sum()),

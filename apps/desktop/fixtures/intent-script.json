@@ -1647,7 +1647,7 @@
    }
   },
   {
-   "note": "toggle on an enabled row whose check is none (the OTHER WORKTREES header) changes nothing",
+   "note": "toggle on a header without a box (the OTHER WORKTREES header: nothing under it can be ticked) changes nothing",
    "op": "intent",
    "section": "developers",
    "intent": {
@@ -1660,6 +1660,115 @@
      "h:others": "none"
     },
     "rev": 48
+   }
+  },
+  {
+   "note": "back to the Cleanup analysis, nothing ticked",
+   "op": "go",
+   "section": "cleanup",
+   "state": "analyzed"
+  },
+  {
+   "note": "selectAll off clears every eligible row, so the box of a Winapp2 section is off",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "selectAll",
+    "on": false
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "section:Utilities": "off"
+    }
+   }
+  },
+  {
+   "note": "a click on the box of a Winapp2 section ticks every eligible row of it",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "section:Utilities"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "section:Utilities": "on"
+    }
+   }
+  },
+  {
+   "note": "a second click clears them, since they were all ticked",
+   "op": "intent",
+   "section": "cleanup",
+   "intent": {
+    "kind": "toggle",
+    "row": "section:Utilities"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "section:Utilities": "off"
+    }
+   }
+  },
+  {
+   "note": "back to the Registry issues, nothing ticked",
+   "op": "go",
+   "section": "registry",
+   "state": "analyzed"
+  },
+  {
+   "note": "selectAll off clears every issue, so the box of a kind is off",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "selectAll",
+    "on": false
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "t:0": "off",
+     "i:0": "off"
+    }
+   }
+  },
+  {
+   "note": "a click on the box of a kind of issue ticks its issues, and only those",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "toggle",
+    "row": "t:0"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "t:0": "on",
+     "i:0": "on",
+     "i:11": "on",
+     "i:1": "off",
+     "t:1": "off"
+    }
+   }
+  },
+  {
+   "note": "a second click clears them",
+   "op": "intent",
+   "section": "registry",
+   "intent": {
+    "kind": "toggle",
+    "row": "t:0"
+   },
+   "expect": {
+    "state": "analyzed",
+    "checks": {
+     "t:0": "off",
+     "i:0": "off",
+     "i:11": "off"
+    }
    }
   }
  ]
