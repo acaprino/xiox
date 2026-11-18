@@ -10,6 +10,7 @@
 
 mod clean;
 mod container;
+mod gitref;
 mod hint;
 mod history;
 mod identity;
@@ -391,21 +392,20 @@ pub(crate) fn with_real_env<R>(cache: PathBuf, history: bool, run: impl FnOnce(&
 
 /// [`analyze_project`] with `copies`/`named` searched only below `search_roots` (to depth 3)
 /// instead of the fixed drives and the home folder. Used by tests and by debug builds of `xiox`.
-/// Still reads the real sessions of this PC, but not their history: no `scratch` items.
+/// Reads the sessions, and with `opts.history` their history, from the stores the environment
+/// names, as [`analyze_project`] and [`clean::clean_in`] do.
 pub fn analyze_project_in(path: &Path, opts: &Options, search_roots: &[PathBuf]) -> Result<ProjectScan, Error> {
-    let cache = Some(xiox_app::cache_dir());
-    let (sessions, loader_warnings) = xiox_app::load_sessions(cache.clone());
-    let (archived, archived_warnings) = xiox_app::load_archived_sessions(cache);
-    let health = session_health(&sessions, &loader_warnings, &archived, &archived_warnings);
-    let env = Env {
-        sessions: &sessions,
-        archived: &archived,
-        health,
-        search_roots: Some(search_roots.to_vec()),
-        now_ms: xiox_app::now_ms(),
-        history: history::HistoryInput::none(),
-    };
-    analyze_with(path, opts, &env)
+    with_real_env(xiox_app::cache_dir(), opts.history, |real| {
+        let env = Env {
+            sessions: real.sessions,
+            archived: real.archived,
+            health: real.health,
+            search_roots: Some(search_roots.to_vec()),
+            now_ms: real.now_ms,
+            history: real.history,
+        };
+        analyze_with(path, opts, &env)
+    })
 }
 
 /// [`analyze_project_in`] without reading any session of this PC (no `sessions` items, no live

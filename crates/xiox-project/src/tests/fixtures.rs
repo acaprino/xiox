@@ -6,6 +6,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Sets the modification time of `path`, a file or a folder, and its creation time when given.
+pub fn set_times(path: &Path, created_ms: Option<i64>, modified_ms: i64) {
+    use std::time::{Duration, SystemTime};
+    let at = |ms: i64| SystemTime::UNIX_EPOCH + Duration::from_millis(ms as u64);
+    let mut open = fs::OpenOptions::new();
+    open.write(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut open, 0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS
+    let mut times = fs::FileTimes::new().set_modified(at(modified_ms));
+    #[cfg(windows)]
+    if let Some(ms) = created_ms {
+        times = std::os::windows::fs::FileTimesExt::set_created(times, at(ms));
+    }
+    #[cfg(not(windows))]
+    let _ = created_ms;
+    open.open(path).unwrap().set_times(times).unwrap();
+}
+
 /// A fresh temp dir and its canonical path. The first call sets `GIT_CEILING_DIRECTORIES` to the
 /// temp root for the whole test process, so a temp folder inside someone's repository (CI or
 /// sandbox) is never taken for part of it.

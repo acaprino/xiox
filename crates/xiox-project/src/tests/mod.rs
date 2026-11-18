@@ -1,4 +1,5 @@
 mod clean;
+mod gitref;
 mod fixtures;
 mod history;
 mod identity;

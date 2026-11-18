@@ -1,0 +1,45 @@
+{
+  "app": "Xiox",
+  "tagPrefix": "v",
+  "files": [
+    "package.json",
+    "package-lock.json",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "crates/xiox-app/Cargo.toml",
+    "crates/xiox-cleaner/Cargo.toml",
+    "crates/xiox-cli/Cargo.toml",
+    "crates/xiox-core/Cargo.toml",
+    "crates/xiox-disktree/Cargo.toml",
+    "crates/xiox-engine/Cargo.toml",
+    "crates/xiox-git/Cargo.toml",
+    "crates/xiox-model/Cargo.toml",
+    "crates/xiox-mukade/Cargo.toml",
+    "crates/xiox-observer/Cargo.toml",
+    "crates/xiox-project/Cargo.toml",
+    "crates/xiox-rules/Cargo.toml",
+    "crates/xiox-scanner/Cargo.toml",
+    "crates/xiox-sessions/Cargo.toml"
+  ],
+  "locks": [
+    "Cargo.lock"
+  ],
+  "crates": [
+    "xiox-ui",
+    "xiox-app",
+    "xiox-cleaner",
+    "xiox-cli",
+    "xiox-core",
+    "xiox-disktree",
+    "xiox-engine",
+    "xiox-git",
+    "xiox-model",
+    "xiox-mukade",
+    "xiox-observer",
+    "xiox-project",
+    "xiox-rules",
+    "xiox-scanner",
+    "xiox-sessions"
+  ],
+  "prepare": []
+}

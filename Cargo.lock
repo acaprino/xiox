@@ -4779,7 +4779,9 @@ dependencies = [
  "embed-resource",
  "serde_json",
  "tempfile",
+ "trash",
  "xiox-model",
+ "xiox-mukade",
  "xiox-observer",
  "xiox-project",
 ]

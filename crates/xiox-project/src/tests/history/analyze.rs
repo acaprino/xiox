@@ -1,16 +1,20 @@
 //! The real history source end to end: a synthetic Claude Code store read through Mukade.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use xiox_model::Agent;
+use xiox_model::{Agent, RemoveMode};
 use xiox_mukade::test_support::write_claude_session;
 use xiox_mukade::{MukadeSessions, StoreRoots};
 
 use super::fake::{descriptor, input, listing, FakeCalls};
 use crate::history::{Budget, MukadeCalls, ReadFailure, UserDirs, BUDGET};
+use crate::tests::clean::{run_with, FakeBin};
 use crate::tests::fixtures::*;
 use crate::*;
+
+/// The one session of [`World`]'s store.
+const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 
 /// A git project and a Claude store whose one session ran in it and made `<base>\runs\bench-1`.
 struct World {
@@ -30,7 +34,7 @@ impl World {
         fs::create_dir_all(&made).unwrap();
         let store = base.join("claude");
         let command = format!("mkdir \"{}\"", made.display());
-        write_claude_session(&store, "11111111-2222-3333-4444-555555555555", &project.to_string_lossy(), &command);
+        write_claude_session(&store, SESSION, &project.to_string_lossy(), &command);
         let roots = StoreRoots { claude_config_dir: Some(store), ..Default::default() };
         let sessions = MukadeSessions::with_roots(Agent::Claude, roots).with_cache_dir(Some(base.join("data")));
         let user = UserDirs { home: base.join("home"), temp: base.join("home").join("Temp"), resolved: true };
@@ -38,11 +42,21 @@ impl World {
     }
 
     fn scan(&self, opts: &Options) -> ProjectScan {
+        self.with_env(|env| analyze_with(&self.project, opts, env).unwrap())
+    }
+
+    /// `run` with an environment that lists and reads the store as it is now, for an analysis
+    /// and a cleaning alike.
+    fn with_env<R>(&self, run: impl FnOnce(&Env) -> R) -> R {
         let listings = [(Agent::Claude, self.sessions.descriptors())];
         let own = std::slice::from_ref(&self.sessions);
         let calls = MukadeCalls::new(own);
-        let env = Env { search_roots: Some(Vec::new()), history: input(&listings, Some(&calls), &self.user), ..env() };
-        analyze_with(&self.project, opts, &env).unwrap()
+        run(&Env { search_roots: Some(Vec::new()), history: input(&listings, Some(&calls), &self.user), ..env() })
+    }
+
+    /// The transcript file of [`SESSION`].
+    fn transcript(&self) -> PathBuf {
+        self.base.join("claude").join("projects").join("D--proj").join(format!("{SESSION}.jsonl"))
     }
 }
 
@@ -59,6 +73,115 @@ fn analyze_reads_a_fake_claude_store_through_mukade() {
     assert_eq!(provenance.strength, Some(Strength::Created));
     assert_eq!(provenance.sessions[0].harness, "claude_code");
     assert_eq!(scan.history.as_ref().unwrap().sessions_read, 1);
+}
+
+#[test]
+fn a_rewritten_transcript_is_read_again_not_reused() {
+    // (name, the command the session's one call now holds, its old date put back, outcome)
+    type Rewrite = fn(&Path) -> String;
+    let table: [(&str, Rewrite, bool, &str); 3] = [
+        ("another folder", |runs| format!("mkdir \"{}\"", runs.join("bench-2").display()), false, "no longer there"),
+        // `bench-X` keeps the length of `bench-1`: same prefix, same size, same date.
+        ("same size and date", |runs| format!("mkdir \"{}\"", runs.join("bench-X").display()), true, "no longer there"),
+        (
+            "only a write is left",
+            |runs| format!("echo x > \"{}\"", runs.join("bench-1").join("a.txt").display()),
+            false,
+            "its risks changed since it was confirmed: choose it again",
+        ),
+    ];
+    let choose = |world: &World| {
+        let bench = world.base.join("runs").join("bench-1");
+        let scan = world.scan(&Options::default());
+        let request = CleanRequest {
+            categories: Vec::new(),
+            include: vec![bench.clone()],
+            confirm_danger: vec![bench],
+            mode: RemoveMode::Recycle,
+        };
+        let chosen = select(&scan, &request).unwrap();
+        (scan, chosen)
+    };
+    // The control: the transcript left as it was, the same dry run removes the folder.
+    let world = World::new();
+    let (scan, chosen) = choose(&world);
+    let bin = FakeBin::new(world.base.join("bin"));
+    let out = world.with_env(|env| run_with(&scan, &chosen, RemoveMode::Recycle, true, env, &bin, &|_| Vec::new()));
+    assert!(matches!(out.items[0].outcome, Outcome::Removed { .. }), "{:?}", out.items);
+
+    for (name, rewrite, same_date, expected) in table {
+        let world = World::new();
+        let (scan, chosen) = choose(&world);
+
+        let transcript = world.transcript();
+        let before = fs::metadata(&transcript).unwrap();
+        write_claude_session(&world.base.join("claude"), SESSION, &world.project.to_string_lossy(), &rewrite(&world.base.join("runs")));
+        if same_date {
+            assert_eq!(fs::metadata(&transcript).unwrap().len(), before.len(), "{name}");
+            fs::File::options().write(true).open(&transcript).unwrap().set_modified(before.modified().unwrap()).unwrap();
+        }
+        let bin = FakeBin::new(world.base.join("bin"));
+        let out = world.with_env(|env| run_with(&scan, &chosen, RemoveMode::Recycle, true, env, &bin, &|_| Vec::new()));
+        assert_eq!(out.items[0].outcome, Outcome::Skipped { reason: expected.into() }, "{name}");
+    }
+}
+
+#[test]
+fn file_dates_neither_attribute_nor_cancel() {
+    const HOUR: i64 = 60 * 60 * 1000;
+    // The session's one call ran at this second (the synthetic store's timestamp).
+    let call = xiox_mukade::parse_time_ms("2026-11-01T10:00:01.000Z").unwrap();
+    // (name, folder under runs, created, modified, listed as made by the session)
+    let table: [(&str, &str, i64, i64, bool); 3] = [
+        ("a neighbour made at the session's second", "neighbour", call, call, false),
+        ("created a year before", "bench-1", call - 365 * 24 * HOUR, call - 365 * 24 * HOUR, true),
+        ("changed after the session", "bench-1", call, call + 2 * HOUR, true),
+    ];
+    for (name, folder, created, modified, made) in table {
+        let world = World::new();
+        let dir = world.base.join("runs").join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        set_times(&dir, Some(created), modified);
+
+        let scan = world.scan(&Options::default());
+        let item = scan.items.iter().find(|i| i.path.as_deref() == Some(dir.as_path()));
+        match (made, item) {
+            (false, None) => {}
+            (true, Some(i)) => {
+                let p = i.provenance.as_ref().expect("provenance");
+                assert_eq!((i.category, p.strength, p.sessions.len()), (Category::Scratch, Some(Strength::Created), 1), "{name}");
+            }
+            (_, other) => panic!("{name}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_forbidden_gitdir_is_never_followed() {
+    // The session's folder points its `.git` at a repository with a commit no remote has: git,
+    // reading it, finds unsaved work. Through a junction the reference is never followed.
+    for through_a_link in [false, true] {
+        let world = World::new();
+        let real = repo(&world.base.join("real"));
+        let target = if through_a_link {
+            let link = world.base.join("link");
+            if !link_dir(&link, &real) {
+                println!("skipped: this machine cannot make a junction");
+                continue;
+            }
+            link.join(".git")
+        } else {
+            real.join(".git")
+        };
+        let bench = world.base.join("runs").join("bench-1");
+        fs::write(bench.join(".git"), format!("gitdir: {}\n", target.display())).unwrap();
+
+        let scan = world.scan(&Options::default());
+        let item = scan.items.iter().find(|i| i.path.as_deref() == Some(bench.as_path())).expect("bench-1 is listed");
+        let followed = item.blocked.contains(&Block::UnsavedWork);
+        let unknown = item.blocked.contains(&Block::UnsavedWorkUnknown);
+        assert_eq!((followed, unknown), (!through_a_link, through_a_link), "through a link: {through_a_link}: {:?}", item.blocked);
+    }
 }
 
 #[test]
