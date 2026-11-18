@@ -982,11 +982,13 @@ removes nothing. See [xiox-observe.md](xiox-observe.md).
   worktrees, are refused;
 - **through a link**: symbolic links and junctions are not followed, are never listed as copies,
   name-matched folders or logs, and an item that has become a link since the analysis is
-  skipped (`now a link: not followed`). git is not followed either: a repository found as a
-  candidate whose `.git` file, `commondir`, object `alternates` or included config files point
-  off the local fixed drives, through a link or into a cloud folder is never asked about. It is
-  not taken for a copy, and a folder that is or holds one is blocked (`could not be checked for
-  unsaved work`);
+  skipped (`now a link: not followed`). git is not followed either. A repository found as a
+  candidate is never asked about when a place git would read for it is off the local fixed
+  drives, behind a link or in a cloud folder: its `.git` file, `commondir`, object `alternates`
+  (and theirs), included config files (and theirs), `core.worktree`, `core.excludesFile`,
+  `core.attributesFile`, the folders git opens inside its git folder, and before `git status`
+  every repository inside it (a submodule). It is not taken for a copy, and a folder that is or
+  holds one is blocked (`could not be checked for unsaved work`);
 - **a protected location**: the safety guard of the cleaner (the same one the desktop
   app uses) refuses system locations and any folder directly under a drive or share root;
 - **branches** or git history: `git worktree remove` is never forced, and `git gc` is never run.
