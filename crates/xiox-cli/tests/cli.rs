@@ -7,22 +7,11 @@
 #![cfg(debug_assertions)]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-/// Variables that make git work on a repository chosen by the environment (set when the tests run
-/// from a git hook): never passed to `xiox` or to the git the tests run.
-const GIT_SELECTION: [&str; 5] = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"];
+mod common;
 
-fn xiox() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_xiox"));
-    c.env("XIOX_NO_SESSIONS", "1");
-    c.env_remove("XIOX_SEARCH_ROOTS");
-    c.env("GIT_TERMINAL_PROMPT", "0");
-    for var in GIT_SELECTION {
-        c.env_remove(var);
-    }
-    c
-}
+use common::*;
 
 #[test]
 fn the_test_commands_never_inherit_a_repository_selection() {
@@ -161,31 +150,6 @@ fn run_clean(project: &Path, extra: &[&str]) -> Output {
         .unwrap()
 }
 
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
-}
-
-fn git_command(dir: &Path, args: &[&str]) -> Command {
-    let mut c = Command::new("git");
-    c.arg("-C")
-        .arg(dir)
-        .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .env("GIT_TERMINAL_PROMPT", "0");
-    for var in GIT_SELECTION {
-        c.env_remove(var);
-    }
-    c
-}
-
-fn git(dir: &Path, args: &[&str]) {
-    let out = git_command(dir, args).output().expect("git must be installed to run these tests");
-    assert!(out.status.success(), "git {args:?} failed: {}", text(&out.stderr));
-}
 
 /// The fake project as a git repository with one commit, and a linked worktree `wt` next to it.
 fn project_with_worktree() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -617,6 +581,37 @@ fn repo_project() -> (tempfile::TempDir, PathBuf) {
     git(&project, &["add", "Cargo.toml"]);
     git(&project, &["commit", "-q", "-m", "first"]);
     (t, project)
+}
+
+#[test]
+fn observe_shows_worktrees_made_during_the_run_as_danger() {
+    let (_t, project) = repo_project();
+    let mut o = Observer::spawn(&project, &["--no-drives", "--worktree-threshold", "1"]);
+    assert_eq!(o.next(60)["event"], "started");
+    for name in ["spike1", "spike2"] {
+        let wt = project.parent().unwrap().join(name);
+        git(&project, &["worktree", "add", "-q", "-b", name, &wt.to_string_lossy()]);
+    }
+    // Every worktree added on the way to the worktrees attention is danger, without provenance:
+    // the observer never reads the session history.
+    let (mut worktrees, mut seen) = (0, Vec::new());
+    let attention = loop {
+        let line = o.next(60);
+        if line["event"] == "attention" && line["kind"] == "worktrees" {
+            break line;
+        }
+        for added in line["added"].as_array().into_iter().flatten().filter(|a| a["category"] == "worktrees") {
+            let shown = (&added["level"], &added["risks"], &added["provenance"]);
+            assert_eq!(shown, (&"danger".into(), &serde_json::json!(["recent-activity"]), &serde_json::Value::Null), "{added:#}");
+            worktrees += 1;
+        }
+        seen.push(line);
+        assert!(seen.len() <= 20, "no worktrees attention: {seen:?}");
+    };
+    assert_eq!(worktrees, 2, "{seen:?}");
+    assert_eq!(attention["cleanCommand"], serde_json::Value::Null, "{attention}");
+    drop(o.stdin.take());
+    assert_eq!(o.exit_code(30), Some(0));
 }
 
 #[test]

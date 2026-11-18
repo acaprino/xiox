@@ -181,7 +181,8 @@ files into, while working on the project: a run folder, a benchmark output, a sc
 folder is proposed only when the history holds evidence at least at the level `written` (a file
 was written in it, or the folder itself was made, copied, moved or cloned); a folder that was
 only read, listed or entered is never proposed. The listing says what the sessions did (`made by
-a session`, `files written here by a session`), how many distinct sessions touched the folder,
+a session`, `files written here by a session`; `made by a session, result not recorded` when the
+history holds the command that makes the folder but no result of it), how many distinct sessions touched the folder,
 the date of the last one (`no date` when no session gave one), `from a script` when the evidence
 comes from a script that a session ran, and the **risks** in short (`risk: no git, weak
 evidence, partial history, recent activity`; the folder date feeds `recent activity` only, never
@@ -981,7 +982,13 @@ removes nothing. See [xiox-observe.md](xiox-observe.md).
   worktrees, are refused;
 - **through a link**: symbolic links and junctions are not followed, are never listed as copies,
   name-matched folders or logs, and an item that has become a link since the analysis is
-  skipped (`now a link: not followed`);
+  skipped (`now a link: not followed`). git is not followed either. A repository found as a
+  candidate is never asked about when a place git would read for it is off the local fixed
+  drives, behind a link or in a cloud folder: its `.git` file, `commondir`, object `alternates`
+  (and theirs), included config files (and theirs), `core.worktree`, `core.excludesFile`,
+  `core.attributesFile`, the folders git opens inside its git folder, and before `git status`
+  every repository inside it (a submodule). It is not taken for a copy, and a folder that is or
+  holds one is blocked (`could not be checked for unsaved work`);
 - **a protected location**: the safety guard of the cleaner (the same one the desktop
   app uses) refuses system locations and any folder directly under a drive or share root;
 - **branches** or git history: `git worktree remove` is never forced, and `git gc` is never run.
@@ -1065,6 +1072,9 @@ desktop app does not list them.
 - **Two projects in one folder are seen only through their sessions.** The conflict check reads
   only the sessions of other projects that worked in or around the folder; a project that wrote
   there from a session working somewhere else is not seen.
+- **Pages of one session are not told apart.** The evidence of a folder names the session, the
+  entry and the tool call, not the page of the transcript they came from: the store reader does
+  not give pages for Claude Code transcripts.
 - `--include` cannot name a session: sessions are taken together with `--sessions`.
 
 ## Troubleshooting
