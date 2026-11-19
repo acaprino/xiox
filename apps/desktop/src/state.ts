@@ -4,7 +4,7 @@
 import { groupSizes, orderFor, rowParents, sortRows, visibleRows, type SortKey } from './rows.ts';
 import type { Check, RowView, SectionId, SectionView } from './types.ts';
 
-export const SECTION_ORDER: readonly SectionId[] = ['cleanup', 'registry', 'services', 'developers'];
+export const SECTION_ORDER: readonly SectionId[] = ['cleanup', 'registry', 'developers'];
 
 export interface UiState {
   section: SectionId;
@@ -97,17 +97,6 @@ export function bulkCheck(view: SectionView): Check {
   if (boxes.length === 0) return 'none';
   if (boxes.every((r) => r.check === 'on')) return 'on';
   return boxes.every((r) => r.check === 'off') ? 'off' : 'mixed';
-}
-
-/** How often the RAM meter of Services & RAM is read again while the section is shown (the old window repainted every 2 s). */
-export const SERVICES_POLL_MS = 2000;
-
-/**
- * Whether the page asks for Services & RAM again now: only while that section is the open one, the window is
- * visible and no confirmation is open (the dialog describes a selection that a refresh must not move under it).
- */
-export function shouldPollServices(ui: UiState, visible: boolean): boolean {
-  return ui.section === 'services' && visible && (ui.views.services?.dialog ?? null) === null;
 }
 
 export interface Gate {

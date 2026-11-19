@@ -8,10 +8,12 @@
 //! JSON shape (Tauri <-> React): structs are camelCase, enums are kebab-case strings
 //! (unit variants) or `{ "type": "...", ... }` (data variants). `src/types.ts` mirrors this.
 
-pub mod legacy;
-
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Name of every folder the app owns (settings, caches, backups, the Winapp2 rules): `<base>\Xiox`
+/// under `%APPDATA%`, `%LOCALAPPDATA%`, `%ProgramData%` or Documents.
+pub const APP_DIR: &str = "Xiox";
 
 pub const DEFAULT_INACTIVE_DAYS: u32 = 14;
 
@@ -495,18 +497,13 @@ pub struct CleanResult {
     pub dry_run: bool,
     /// Files deleted (or moved to the Recycle Bin). Links (symlinks, junctions) are not
     /// counted, in either mode, as in the measured `SizeInfo::file_count`.
-    #[serde(default)]
     pub files_removed: u64,
     /// Folders deleted (or moved to the Recycle Bin), each item's own folder included.
-    #[serde(default)]
     pub dirs_removed: u64,
-    #[serde(default)]
     pub elapsed_ms: u64,
     /// At least one item was left out or interrupted by «Annulla».
-    #[serde(default)]
     pub cancelled: bool,
     /// The part of `bytes_freed` moved to the Recycle Bin: freed only when it is emptied.
-    #[serde(default)]
     pub recycled_bytes: u64,
 }
 
@@ -606,20 +603,16 @@ impl CleanReport {
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// Find the projects from the working directories of the agents' sessions (default on).
-    #[serde(default = "yes")]
     pub session_projects: bool,
     /// Extra folders, walked in full only when `scan_roots` is on (projects never opened with
     /// an agent).
     pub roots: Vec<PathBuf>,
-    /// Walk every folder in `roots` too. Default off: a settings file written before this field
-    /// existed keeps its folder list, but only the session projects are scanned.
-    #[serde(default)]
+    /// Walk every folder in `roots` too. Default off.
     pub scan_roots: bool,
     pub inactive_days: u32,
     pub remove_mode: RemoveMode,
     /// Look for projects on every fixed drive (MFT for NTFS, walker for the others), not only
     /// in the folders above. Default on; `--only-root` turns it off.
-    #[serde(default = "yes")]
     pub all_drives: bool,
 }
 
@@ -631,10 +624,6 @@ pub struct ScanResult {
     /// Name of the scan backend that produced the result
     pub backend: String,
     pub elapsed_ms: u64,
-}
-
-fn yes() -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -675,26 +664,6 @@ mod tests {
     }
 
     #[test]
-    fn old_clean_result_without_counts_still_loads() {
-        let r: CleanResult = serde_json::from_str(r#"{"items":[],"bytesFreed":5,"dryRun":false}"#).unwrap();
-        assert_eq!(r.bytes_freed, 5);
-        assert_eq!((r.files_removed, r.dirs_removed, r.elapsed_ms, r.recycled_bytes), (0, 0, 0, 0));
-        assert!(!r.cancelled);
-    }
-
-    #[test]
-    fn old_settings_file_keeps_roots_but_scans_sessions_only() {
-        let s: Settings = serde_json::from_str(
-            r#"{"roots":["D:\\Projects"],"inactiveDays":14,"removeMode":"permanent"}"#,
-        )
-        .unwrap();
-        assert!(s.session_projects);
-        assert!(!s.scan_roots);
-        assert!(s.all_drives, "an old settings file searches every fixed drive");
-        assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
-    }
-
-    #[test]
     fn system_dirs() {
         for n in ["Program Files", "Program Files (x86)", "PROGRAMDATA", "Windows", "AppData", "$Recycle.Bin", "System Volume Information"] {
             assert!(is_system_dir(n, true), "{n} at the drive root");
@@ -721,17 +690,6 @@ mod tests {
         assert!(!name_matches("*", "anything"));
         assert!(!name_matches("*a*", "bab"));
         assert!(!name_matches("*.egg-info", "è.egg-inf"));
-    }
-
-    #[test]
-    fn old_devclean_settings_with_wiztree_fields_still_load() {
-        let json = r#"{"sessionProjects":true,"roots":["D:\\Projects"],"scanRoots":false,
-                       "inactiveDays":30,"useWiztree":true,"wiztreePath":"C:\\x\\WizTree64.exe",
-                       "removeMode":"permanent"}"#;
-        let s: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.inactive_days, 30);
-        assert_eq!(s.remove_mode, RemoveMode::Permanent);
-        assert_eq!(s.roots, vec![PathBuf::from(r"D:\Projects")]);
     }
 
     #[test]

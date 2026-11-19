@@ -1,6 +1,6 @@
 /* The list, the detail panel, bar 2's controls and the notices (look of the approved mock-up). */
 
-/* Tones shared by notices, texts and meters. */
+/* Tones shared by notices and texts. */
 .tone-info { --tone: var(--ice); }
 .tone-ok { --tone: var(--ok); }
 .tone-warn { --tone: var(--warn); }
@@ -212,9 +212,6 @@
 .pick-item[aria-selected="true"] { background: var(--sel); color: var(--text-hi); }
 .pick-empty { display: block; padding: 4px 8px; color: var(--muted); font-weight: 400; }
 .pick-buttons { display: flex; gap: 6px; margin-top: 6px; }
-.meter { height: 8px; border: 1px solid var(--box-line); background: var(--box); }
-.meter i { display: block; height: 100%; background: var(--tone, var(--line-strong)); }
-.meter-text { display: block; margin-top: 3px; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
 .ctl-text { margin: 0; color: var(--tone, var(--muted)); font-size: var(--fs-sm); font-weight: 400; }
 
 /* A short window (1000x640): the options of Developers are the tallest, so bar 2 is packed tighter and its list of folders is shorter. */

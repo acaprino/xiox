@@ -19,7 +19,6 @@ test('the views say what a confirmation is: its numbers and whether it deletes f
   const cleanup = confirm('cleanup', 'confirm');
   assert.equal(cleanup.permanent, true);
   assert.deepEqual(cleanup.summary, ['Clean 8 items', '13.48 GB to delete (46,999 files)']);
-  assert.equal(confirm('services', 'confirm').permanent, false);
   assert.equal(confirm('registry', 'backup').permanent, false);
   assert.equal(confirm('developers', 'confirm').permanent, false);
   assert.equal(confirm('developers', 'shortfall').permanent, true);
@@ -38,5 +37,4 @@ test('a disabled action says why', () => {
 test('an empty list offers the enabled action that starts the work', () => {
   assert.equal(emptyAction(view({ actions: [action('scan', true, 'Find issues'), action('fix', false)] }))?.label, 'Find issues');
   assert.equal(emptyAction(view({ actions: [action('analyze', false)] })), null);
-  assert.equal(emptyAction(view({ actions: [action('refresh', true)] })), null);
 });

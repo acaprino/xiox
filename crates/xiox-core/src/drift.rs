@@ -266,7 +266,6 @@ const NOUNS: &[(&str, &str)] = &[
     ("item", "items"),
     ("file", "files"),
     ("folder", "folders"),
-    ("service", "services"),
     ("rule", "rules"),
     ("issue", "issues"),
     ("session", "sessions"),
@@ -347,7 +346,7 @@ mod tests {
         assert!(count_problems("Winapp2: version 260915").is_empty());
         assert_eq!(count_problems("(46999 files)").len(), 1);
         assert_eq!(count_problems("1 items left").len(), 1);
-        assert_eq!(count_problems("3 service disabled").len(), 1);
+        assert_eq!(count_problems("3 folder removed").len(), 1);
         assert_eq!(view_problems("v", &serde_json::json!({"rows": [{"cells": ["18204"]}]})).len(), 1);
         assert!(view_problems("v", &serde_json::json!({"rows": [{"cells": ["18,204", "512"]}]})).is_empty());
     }

@@ -2,7 +2,7 @@
 name = "xiox-mukade"
 version = "0.2.1"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 
 [features]
 # The synthetic store writer of `test_support`, for dev-dependents.

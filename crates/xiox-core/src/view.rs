@@ -147,7 +147,6 @@ pub enum OptionView {
         empty: String,
     },
     Button { id: String, label: String, enabled: bool, #[serde(deserialize_with = "required")] hint: Option<String> },
-    Meter { id: String, label: String, used_bytes: u64, total_bytes: u64, tone: Tone },
     Text { text: String, tone: Tone, #[serde(deserialize_with = "required")] hint: Option<String> },
 }
 
@@ -351,28 +350,6 @@ pub enum RegistryIntent {
     Scan,
     OpenFix,
     Fix { backup: bool },
-    CloseDialog,
-}
-
-/// What a services confirmation does: `disable` | `manual` | `restore`.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum ServiceAction {
-    Disable,
-    Manual,
-    Restore,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
-pub enum ServicesIntent {
-    SetAll { all: bool },
-    Search { text: String },
-    Toggle { row: String },
-    SelectAll { on: bool },
-    Refresh,
-    OpenConfirm { action: ServiceAction },
-    Confirm,
     CloseDialog,
 }
 
@@ -613,7 +590,6 @@ mod tests {
                     empty: "None".into(),
                 },
                 OptionView::Button { id: "b".into(), label: "B".into(), enabled: true, hint: Some("h".into()) },
-                OptionView::Meter { id: "m".into(), label: "M".into(), used_bytes: 1, total_bytes: 2, tone: Tone::Warn },
                 OptionView::Text { text: "t".into(), tone: Tone::Error, hint: None },
             ],
             title: "Projects".into(),
@@ -673,7 +649,6 @@ mod tests {
         assert!(json["dialog"].get("cautionTitle").is_some());
         assert_eq!(json["options"][3]["kind"], "list");
         assert!(json["options"][3].get("addLabel").is_some());
-        assert!(json["options"][5].get("usedBytes").is_some());
         assert_eq!(json["rows"][0]["check"], "mixed");
         assert_eq!(json["rows"][0]["kind"], "group");
         assert_eq!(json["rows"][1]["kind"], "item");
@@ -771,14 +746,10 @@ mod tests {
         let intent: DevIntent = serde_json::from_value(json!({ "kind": "setInactiveDays", "days": 90 })).unwrap();
         assert_eq!(intent, DevIntent::SetInactiveDays { days: 90 });
         assert_eq!(serde_json::to_value(DevIntent::OpenConfirm).unwrap(), json!({ "kind": "openConfirm" }));
-        let intent: ServicesIntent = serde_json::from_value(json!({ "kind": "openConfirm", "action": "restore" })).unwrap();
-        assert_eq!(intent, ServicesIntent::OpenConfirm { action: ServiceAction::Restore });
         assert_eq!(serde_json::to_value(RegistryIntent::Fix { backup: true }).unwrap(), json!({ "kind": "fix", "backup": true }));
         assert_eq!(serde_json::to_value(CleanupIntent::SetOnlyOld { on: true }).unwrap(), json!({ "kind": "setOnlyOld", "on": true }));
-        // Cleanup and Services select all the way Registry and Developers do; Cleanup has no `select` any more.
+        // Cleanup selects all the way Registry and Developers do; it has no `select` any more.
         assert_eq!(serde_json::to_value(CleanupIntent::SelectAll { on: true }).unwrap(), json!({ "kind": "selectAll", "on": true }));
-        let intent: ServicesIntent = serde_json::from_value(json!({ "kind": "selectAll", "on": false })).unwrap();
-        assert_eq!(intent, ServicesIntent::SelectAll { on: false });
         assert!(serde_json::from_value::<CleanupIntent>(json!({ "kind": "select", "category": "builtin:System" })).is_err());
         assert!(serde_json::from_value::<DevIntent>(json!({ "kind": "format-c" })).is_err());
     }

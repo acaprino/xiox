@@ -449,8 +449,8 @@ fn nothing_changes_while_busy_or_with_the_dialog_open() {
 
 #[test]
 fn settings_intents_clamp_dedupe_and_stay_in_memory_with_only_root() {
-    // The real settings file (`%APPDATA%\Xiox`) is never looked at here: asking where it is could even
-    // move a legacy folder. What keeps it untouched is `persist`, which `only_root` turns off.
+    // The real settings file (`%APPDATA%\Xiox`) is never looked at here: what keeps it untouched is
+    // `persist`, which `only_root` turns off.
     let tmp = tempfile::tempdir().unwrap();
     let mut st = DevState::only_root(tmp.path().to_path_buf(), Section::Projects).with_workers(TEST_WORKERS);
     assert!(!st.persist, "an --only-root state keeps its settings in memory");

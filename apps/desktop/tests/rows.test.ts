@@ -51,8 +51,6 @@ test('gridTemplate adds the check column only when rows have checks', () => {
   ];
   assert.equal(gridTemplate(columns, true), '34px minmax(12ch,1fr) 96px minmax(74px,max-content)');
   assert.equal(gridTemplate(columns, false), 'minmax(12ch,1fr) 96px minmax(74px,max-content)');
-  const cells: ColumnView[] = [{ title: 'Service', kind: 'name' }, { title: 'Startup', kind: 'cell' }, { title: 'State', kind: 'cell' }];
-  assert.equal(gridTemplate(cells, false), 'minmax(12ch,1fr) fit-content(260px) fit-content(260px)');
 });
 
 test('gridVars drops the level first, then the cells, and never the name or the size', () => {

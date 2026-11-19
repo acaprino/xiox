@@ -53,11 +53,11 @@ kbd { font: var(--fs-sm) var(--font-mono); letter-spacing: 0; text-transform: no
   .r.sel, .nv.on, .it.on, .pick-item[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
   .r.sel:focus-visible, .nv.on:focus-visible, .it.on:focus-visible, .pick-item[aria-selected="true"]:focus-visible { outline-style: double; outline-width: 4px; }
   /* A state carried by a background fill is repainted to the canvas colour: these are kept, in the system highlight. */
-  .ckbox::after, .pip.on, .track i, .meter i { forced-color-adjust: none; }
-  [aria-checked="true"] > .ckbox::after, [aria-checked="mixed"] > .ckbox::after, .pip.on, .track i, .meter i { background: Highlight; }
+  .ckbox::after, .pip.on, .track i { forced-color-adjust: none; }
+  [aria-checked="true"] > .ckbox::after, [aria-checked="mixed"] > .ckbox::after, .pip.on, .track i { background: Highlight; }
   .pip.mixed { forced-color-adjust: none; background: linear-gradient(Highlight, Highlight) center / 100% 2px no-repeat; }
   .radio input:checked { forced-color-adjust: none; background: radial-gradient(circle, Highlight 0 3px, Canvas 4px); }
-  .track, .meter { border-color: CanvasText; }
+  .track { border-color: CanvasText; }
   /* A hover, a press and the danger tint are fills too: the border says what the fill no longer can. */
   .btn:hover:not(:disabled), .nv:hover:not(:disabled), .it:hover:not(:disabled), .pick-item:hover:not(:disabled), .caret:hover { outline: 1px solid Highlight; outline-offset: -1px; }
   .btn.danger { border-style: double; }

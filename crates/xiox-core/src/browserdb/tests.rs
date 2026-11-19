@@ -222,67 +222,9 @@ fn keep_list_ignores_comments_blank_lines_case_and_leading_dot() {
     assert!(!is_kept("google.com.evil.net", &["google.com".to_string()]));
 }
 
-/// Chi aveva già la lista in `Documenti\PulisciPC` la ritrova in `Documenti\Xiox` (cartella rinominata), oppure
-/// dov'era se la rinomina non riesce: i cookie scelti dall'utente non si perdono di vista.
+/// A new install: the «open the list» button creates `Xiox\cookie-keep-list.txt` and opens it.
 #[test]
-fn keep_list_of_the_old_folder_is_found_after_the_rename() {
-    let t = tempfile::tempdir().unwrap();
-    let old = t.path().join("PulisciPC");
-    fs::create_dir_all(&old).unwrap();
-    fs::write(old.join("cookie_da_conservare.txt"), "google.com\n").unwrap();
-    let path = keep_list_in(t.path());
-    assert_eq!(path, t.path().join(r"Xiox\cookie_da_conservare.txt"), "the old file keeps being the list");
-    assert!(!old.exists());
-    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com".to_string()]);
-
-    // Nome nuovo occupato da un file: resta in uso la cartella vecchia, con la lista dentro.
-    let t = tempfile::tempdir().unwrap();
-    let old = t.path().join("PulisciPC");
-    fs::create_dir_all(&old).unwrap();
-    fs::write(old.join("cookie_da_conservare.txt"), "google.com\n").unwrap();
-    fs::write(t.path().join("Xiox"), "x").unwrap();
-    let path = keep_list_in(t.path());
-    assert_eq!(path, old.join("cookie_da_conservare.txt"));
-    assert_eq!(read_keep_list(&path).unwrap().domains, vec!["google.com".to_string()]);
-}
-
-/// The most dangerous rename: a keep list that stops being read means the user's cookies are
-/// deleted. The old name is read, written and opened as it was; the new one only when it is the one
-/// that exists (or neither does); both: the new one.
-#[test]
-fn the_keep_list_of_an_older_version_still_keeps_the_cookies() {
-    let t = tempfile::tempdir().unwrap();
-    let dir = t.path().join("Xiox");
-    fs::create_dir_all(&dir).unwrap();
-    let old = dir.join("cookie_da_conservare.txt");
-    fs::write(&old, "google.com\n").unwrap();
-
-    // Read: the old file is the list, and its cookies are kept.
-    let path = keep_list_in(t.path());
-    assert_eq!(path, old);
-    let list = read_keep_list(&path).unwrap();
-    assert_eq!(list.domains, vec!["google.com".to_string()]);
-    assert!(is_kept("accounts.google.com", &list.domains));
-    assert!(!is_kept("tracker.example", &list.domains));
-
-    // The «open the list» button opens the resolved file and creates nothing next to it.
-    let opened = std::cell::RefCell::new(Vec::new());
-    open_keep_list_in(t.path(), &|p: &Path| {
-        opened.borrow_mut().push(p.to_path_buf());
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(*opened.borrow(), vec![old.clone()]);
-    assert!(!dir.join("cookie-keep-list.txt").exists());
-    assert_eq!(fs::read_to_string(&old).unwrap(), "google.com\n", "the user's list is not rewritten");
-
-    // Both exist: the new one wins.
-    let new = dir.join("cookie-keep-list.txt");
-    fs::write(&new, "live.com\n").unwrap();
-    assert_eq!(keep_list_in(t.path()), new);
-    assert_eq!(read_keep_list(&keep_list_in(t.path())).unwrap().domains, vec!["live.com".to_string()]);
-
-    // Neither exists (a new install): the button creates the English-named file.
+fn opening_the_keep_list_creates_it_under_xiox() {
     let t = tempfile::tempdir().unwrap();
     let opened = std::cell::RefCell::new(Vec::new());
     open_keep_list_in(t.path(), &|p: &Path| {
@@ -290,10 +232,9 @@ fn the_keep_list_of_an_older_version_still_keeps_the_cookies() {
         Ok(())
     })
     .unwrap();
-    let new = t.path().join("Xiox").join("cookie-keep-list.txt");
-    assert_eq!(*opened.borrow(), vec![new.clone()]);
-    assert!(new.is_file());
-    assert!(!t.path().join("Xiox").join("cookie_da_conservare.txt").exists());
+    let list = t.path().join("Xiox").join("cookie-keep-list.txt");
+    assert_eq!(*opened.borrow(), vec![list.clone()]);
+    assert!(list.is_file());
 }
 
 #[test]

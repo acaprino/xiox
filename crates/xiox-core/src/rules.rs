@@ -315,12 +315,9 @@ pub fn after_update(outcome: UpdateOutcome, reload: impl FnOnce() -> RuleSet, no
 }
 
 /// Cartelle dell'app da proteggere con tutto il contenuto: `%ProgramData%\Xiox`
-/// (le regole) e `Documenti\Xiox` (backup del registro e dei servizi):
+/// (le regole) e `Documenti\Xiox` (i backup del registro):
 /// sia `%USERPROFILE%\Documents\Xiox`, quella di `sys::data_dir`, sia
 /// `<documents>\Xiox` dell'`Env` (Documenti spostati, per esempio in OneDrive).
-/// Si proteggono anche le cartelle con il nome di prima (`PulisciPC`): finché una
-/// vecchia installazione non è stata rinominata (o se la rinomina non è riuscita)
-/// ci stanno ancora i backup dell'utente.
 pub fn own_folders(env: &Env) -> Vec<PathBuf> {
     let app_data = updater::data_dir().parent().map(Path::to_path_buf).unwrap_or_else(updater::data_dir);
     own_folders_with(&app_data, std::env::var("USERPROFILE").ok().as_deref(), env)
@@ -329,23 +326,11 @@ pub fn own_folders(env: &Env) -> Vec<PathBuf> {
 /// [`own_folders`] con le cartelle passate da fuori (nei test, finte).
 pub fn own_folders_with(app_data: &Path, profile: Option<&str>, env: &Env) -> Vec<PathBuf> {
     let mut out = vec![app_data.to_path_buf()];
-    // Stessa cartella dati con l'altro nome (`Xiox` <-> `PulisciPC`), accanto alla prima.
-    let known_name = app_data.file_name().is_some_and(|n| {
-        n.eq_ignore_ascii_case(xiox_model::legacy::APP_DIR) || n.eq_ignore_ascii_case(xiox_model::legacy::LEGACY_APP_DIR)
-    });
-    if let (true, Some(parent)) = (known_name, app_data.parent()) {
-        out.push(parent.join(xiox_model::legacy::APP_DIR));
-        out.push(parent.join(xiox_model::legacy::LEGACY_APP_DIR));
-    }
-    let mut under = |base: &Path| {
-        out.push(base.join(xiox_model::legacy::APP_DIR));
-        out.push(base.join(xiox_model::legacy::LEGACY_APP_DIR));
-    };
     if let Some(p) = profile.filter(|p| !p.trim().is_empty()) {
-        under(&Path::new(p).join("Documents"));
+        out.push(Path::new(p).join("Documents").join(xiox_model::APP_DIR));
     }
     if let Some(docs) = env.get("documents") {
-        under(Path::new(docs));
+        out.push(Path::new(docs).join(xiox_model::APP_DIR));
     }
     out.sort();
     out.dedup();
@@ -1655,37 +1640,13 @@ mod tests {
         assert!(ids(&rs).contains(&"winapp2:Cargo Reg".to_string()), "{:?}", ids(&rs));
     }
 
-    /// Valore di `XIOX_<nome>`; se manca, quello del vecchio nome `PULISCI_<nome>`.
-    fn first_env(get: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-        get(&format!("XIOX_{name}")).or_else(|| get(&format!("PULISCI_{name}")))
-    }
-
-    /// Il Winapp2 per le prove sul file vero: `XIOX_WINAPP2`, altrimenti `PULISCI_WINAPP2`.
-    fn winapp2_from_env() -> Option<String> {
-        first_env(&|n| std::env::var(n).ok().filter(|v| !v.is_empty()), "WINAPP2")
-    }
-
-    #[test]
-    fn winapp2_env_var_reads_the_new_name_first_then_the_old_one() {
-        let both = |n: &str| match n {
-            "XIOX_WINAPP2" => Some("nuovo".to_string()),
-            "PULISCI_WINAPP2" => Some("vecchio".to_string()),
-            _ => None,
-        };
-        assert_eq!(first_env(&both, "WINAPP2").as_deref(), Some("nuovo"));
-        let only_old = |n: &str| (n == "PULISCI_WINAPP2").then(|| "vecchio".to_string());
-        assert_eq!(first_env(&only_old, "WINAPP2").as_deref(), Some("vecchio"));
-        assert_eq!(first_env(&|_| None, "WINAPP2"), None);
-    }
-
     /// Misura sul Winapp2 vero (sola lettura): quali voci nasconde la regola 9
     /// con tutti gli inglobati presenti e ogni `Detect` considerato vero.
     /// `XIOX_WINAPP2=<percorso> cargo test -p xiox-core real_winapp2_rule_9 -- --ignored --nocapture`
-    /// (anche il vecchio nome `PULISCI_WINAPP2` vale, se `XIOX_WINAPP2` non c'è).
     #[test]
     #[ignore]
     fn real_winapp2_rule_9_keeps_broad_entries() {
-        let path = winapp2_from_env().expect("XIOX_WINAPP2 non impostata");
+        let path = std::env::var("XIOX_WINAPP2").expect("XIOX_WINAPP2 non impostata");
         let text = fs::read_to_string(path).unwrap();
         let env = Env(HashMap::from([
             ("userprofile".to_string(), r"C:\Users\u".to_string()),
@@ -2279,17 +2240,12 @@ mod tests {
         base.0.insert("documents".into(), profile.join("Documents").to_string_lossy().into_owned());
         let app_data = t.path().join(r"ProgramData\Xiox");
         let backups = profile.join(r"Documents\Xiox");
-        // Le cartelle con il nome di prima (rinomina non ancora fatta o non riuscita) sono protette uguale.
-        let old_app_data = t.path().join(r"ProgramData\PulisciPC");
-        let old_backups = profile.join(r"Documents\PulisciPC");
         let files = [
             app_data.join(r"winapp2\Winapp2.ini"),
             app_data.join(r"winapp2\etag.txt"),
             app_data.join(r"winapp2\tmp\xiox-curl-1\body.bin"),
             backups.join("rules-backup-20261110_120000.reg"),
-            backups.join("servizi_originali.txt"),
-            old_app_data.join(r"winapp2\Winapp2.ini"),
-            old_backups.join("backup_registro_20261001_090000.reg"),
+            backups.join("cookie-keep-list.txt"),
         ];
         for f in &files {
             write(f, "dati");
@@ -2299,8 +2255,6 @@ mod tests {
             files_rule(&app_data.join("winapp2"), &["*.*"]),
             files_rule(&app_data.join(r"winapp2\tmp"), &["*"]),
             files_rule(&backups, &["*.reg", "*.txt"]),
-            files_rule(&old_app_data.join("winapp2"), &["*.*"]),
-            files_rule(&old_backups, &["*.reg", "*.txt"]),
         ]);
         o.actions.push(Action::Files {
             path: app_data.join("winapp2").to_string_lossy().into_owned(),
@@ -2315,21 +2269,13 @@ mod tests {
         let mut env = base.clone();
         let own = own_folders_with(&app_data, Some(&profile.to_string_lossy()), &env);
         assert!(own.contains(&app_data) && own.contains(&backups), "{own:?}");
-        assert!(own.contains(&old_app_data) && own.contains(&old_backups), "{own:?}");
         protect_own_folders(&mut env, &own);
         let found = ctl_run(&o, &env);
         assert_eq!((found.count, found.dirs_to_remove.len()), (0, 0), "{found:?}");
         // Anche un `RuleFound` costruito a mano con quei file non li cancella.
         let forged = RuleFound {
             files: files.iter().map(|f| (f.clone(), 4)).collect(),
-            dirs_to_remove: vec![
-                app_data.join(r"winapp2\tmp"),
-                app_data.join("winapp2"),
-                app_data.clone(),
-                backups.clone(),
-                old_app_data.clone(),
-                old_backups.clone(),
-            ],
+            dirs_to_remove: vec![app_data.join(r"winapp2\tmp"), app_data.join("winapp2"), app_data.clone(), backups.clone()],
             count: files.len() as u64,
             ..Default::default()
         };

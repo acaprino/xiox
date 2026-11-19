@@ -13,8 +13,8 @@
 
 pub use xiox_cleaner::{Cancel, Tick};
 use xiox_model::{
-    Agent, AnalysisResult, CleanPlan, CleanReport, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome, Level,
-    Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
+    APP_DIR, Agent, AnalysisResult, CleanPlan, CleanReport, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome,
+    Level, Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
     Selection, SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
 use xiox_mukade::{ArchivedSession, Descriptor, MukadeSessions};
@@ -25,7 +25,6 @@ use std::path::{Path, PathBuf};
 use std::cell::Cell;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use xiox_model::legacy::app_dir_in;
 const AGENTS: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Opencode, Agent::Pi];
 
 // ───────────────────────────────── settings ─────────────────────────────────
@@ -92,28 +91,25 @@ fn default_settings_for(home: Option<&Path>) -> Settings {
     }
 }
 
-/// `%APPDATA%\Xiox\settings.json`. An existing `%APPDATA%\PulisciPC` (the folder before the
-/// rename) is moved to `Xiox` first, or stays in use if it cannot be moved
-/// ([`xiox_model::legacy::migrate_legacy_dir`]).
+/// `%APPDATA%\Xiox\settings.json`.
 pub fn settings_path() -> PathBuf {
     settings_path_in(&env_dir("APPDATA", &["AppData", "Roaming"]))
 }
 
 /// [`settings_path`] under the given `%APPDATA%`.
 pub fn settings_path_in(appdata: &Path) -> PathBuf {
-    app_dir_in(appdata).join("settings.json")
+    appdata.join(APP_DIR).join("settings.json")
 }
 
 /// `%LOCALAPPDATA%\Xiox\mukade`: mukade's session listing cache. Nothing else is written
-/// there, and mukade never writes beside the executable or in the harnesses' stores. Same
-/// legacy-folder rule as [`settings_path`].
+/// there, and mukade never writes beside the executable or in the harnesses' stores.
 pub fn cache_dir() -> PathBuf {
     cache_dir_in(&env_dir("LOCALAPPDATA", &["AppData", "Local"]))
 }
 
 /// [`cache_dir`] under the given `%LOCALAPPDATA%`.
 pub fn cache_dir_in(local_appdata: &Path) -> PathBuf {
-    app_dir_in(local_appdata).join("mukade")
+    local_appdata.join(APP_DIR).join("mukade")
 }
 
 /// Missing or unreadable file: the defaults.

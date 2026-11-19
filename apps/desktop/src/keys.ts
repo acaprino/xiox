@@ -9,7 +9,7 @@ import type { ZoomStep } from './zoom.ts';
 
 export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; repeat?: boolean }
 
-/** The keys an action can carry (`ActionView.key`): `a` is Analyze, Find issues (Registry) and Refresh (Services); Enter is Clean / Fix / Disable; Esc cancels a job. */
+/** The keys an action can carry (`ActionView.key`): `a` is Analyze and Find issues (Registry); Enter is Clean / Fix; Esc cancels a job. */
 export type ActionKey = 'a' | 'Enter' | 'Esc';
 
 export type KeyAction =
@@ -33,7 +33,7 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
   if (e.key === 'Escape') return ctx.dialog ? { kind: 'closeDialog' } : { kind: 'action', key: 'Esc' };
   if (ctx.inField || ctx.dialog) return null;
-  const digit = /^[1-4]$/.test(e.key) ? SECTION_ORDER[Number(e.key) - 1] : undefined;
+  const digit = /^[1-3]$/.test(e.key) ? SECTION_ORDER[Number(e.key) - 1] : undefined;
   if (digit !== undefined) return { kind: 'section', section: digit };
   switch (e.key) {
     case 'ArrowDown': return { kind: 'move', delta: 1 };
@@ -95,7 +95,7 @@ const HINT_WORDS: Record<string, string> = { scan: 'find issues' };
 
 /**
  * The footer's key hints for the section on screen: movement, Space and the sort key, then every action that has a
- * key (`a analyze · ↵ clean`, Registry `s scan · ↵ fix`, Services `r refresh`). Esc is left out so the
+ * key (`a analyze · ↵ clean`, Registry `s scan · ↵ fix`). Esc is left out so the
  * hint does not change while a job runs. Derived from the actions, so the hint and the keys agree.
  */
 export function footerHint(view: SectionView): string {

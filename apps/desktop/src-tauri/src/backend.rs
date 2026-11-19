@@ -8,7 +8,7 @@ use crate::error::CmdResult;
 use std::path::PathBuf;
 use std::sync::Arc;
 use xiox_core::notify::SectionId;
-use xiox_core::view::{AboutView, AppInfo, CleanupIntent, DevIntent, RegistryIntent, SectionView, ServicesIntent};
+use xiox_core::view::{AboutView, AppInfo, CleanupIntent, DevIntent, RegistryIntent, SectionView};
 
 pub trait Backend: Send + Sync + 'static {
     fn app_info(&self) -> AppInfo;
@@ -17,7 +17,6 @@ pub trait Backend: Send + Sync + 'static {
     fn view(&self, s: SectionId) -> SectionView;
     fn cleanup(&self, i: CleanupIntent) -> CmdResult<SectionView>;
     fn registry(&self, i: RegistryIntent) -> CmdResult<SectionView>;
-    fn services(&self, i: ServicesIntent) -> CmdResult<SectionView>;
     fn developers(&self, i: DevIntent) -> CmdResult<SectionView>;
     /// A folder for Developers to analyze too. The path comes from the folder picker the command opens
     /// in Rust, never from the page.

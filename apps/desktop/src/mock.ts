@@ -39,10 +39,8 @@ export async function answer(command: string, args?: Args): Promise<unknown> {
     case 'app_info': return { ...structuredClone((fixture as unknown as Fixture).app), ...(mismatch === null ? {} : { profileMismatch: mismatch }) };
     case 'about': return structuredClone((fixture as unknown as Fixture).about);
     case 'show': return model.show(section(args));
-    case 'view': return model.view(section(args));
     case 'cleanup': return model.intent('cleanup', intent(args));
     case 'registry': return model.intent('registry', intent(args));
-    case 'services': return model.intent('services', intent(args));
     case 'developers': return model.intent('developers', intent(args));
     case 'developers_add_root': return model.view('developers');
     case 'save_report': return model.saveReport(section(args));

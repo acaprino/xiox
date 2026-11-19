@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use xiox_core::app::Core;
 use xiox_core::notify::SectionId;
-use xiox_core::view::{AboutView, AppInfo, CleanupIntent, DevIntent, RegistryIntent, SectionView, ServicesIntent};
+use xiox_core::view::{AboutView, AppInfo, CleanupIntent, DevIntent, RegistryIntent, SectionView};
 
 pub struct RealBackend {
     core: Arc<Mutex<Core>>,
@@ -50,10 +50,6 @@ impl Backend for RealBackend {
         self.core().registry(i).map_err(CmdError::refused)
     }
 
-    fn services(&self, i: ServicesIntent) -> CmdResult<SectionView> {
-        self.core().services(i).map_err(CmdError::refused)
-    }
-
     fn developers(&self, i: DevIntent) -> CmdResult<SectionView> {
         self.core().developers(i).map_err(CmdError::refused)
     }
@@ -83,24 +79,10 @@ mod tests {
     use xiox_core::dev::{DevState, Section};
     use xiox_core::notify::{NoNotifier, Outbox};
     use xiox_core::regstate::RegistryState;
-    use xiox_core::svcstate::{ServicesState, ServicesWorkers, SvcMsg};
 
     /// A cleanup worker that only says it is done: no test here reaches the engine.
     fn quiet(_: CleanJob, out: Outbox<CleanMsg>) {
         out.send(CleanMsg::Done);
-    }
-
-    /// Services workers that never touch the machine.
-    fn no_services() -> ServicesState {
-        fn load(_: Outbox<SvcMsg>) {}
-        fn apply(_: Vec<xiox_core::services::Service>, _: Option<u32>, _: Outbox<SvcMsg>) {}
-        fn saved() -> usize {
-            0
-        }
-        fn memory() -> xiox_core::sys::Memory {
-            xiox_core::sys::Memory { total: 8 << 30, available: 4 << 30 }
-        }
-        ServicesState::new().with_workers(ServicesWorkers { load, apply, saved, memory })
     }
 
     fn backend() -> RealBackend {
@@ -111,7 +93,6 @@ mod tests {
             Arc::new(NoNotifier),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers { job: quiet }),
             RegistryState::new(),
-            no_services(),
             dev,
         );
         RealBackend::new(Arc::new(Mutex::new(core)))
@@ -126,8 +107,6 @@ mod tests {
         let e = b.developers(DevIntent::Permanent).unwrap_err();
         assert_eq!(e.kind, "refused");
         let e = b.registry(RegistryIntent::Fix { backup: false }).unwrap_err();
-        assert_eq!(e.kind, "refused");
-        let e = b.services(ServicesIntent::Confirm).unwrap_err();
         assert_eq!(e.kind, "refused");
         assert!(!b.is_fake());
         assert_eq!(b.report_text(SectionId::Cleanup), None);

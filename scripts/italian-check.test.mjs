@@ -81,9 +81,9 @@ test('the allow file skips comments and blank lines', async () => {
   const { loadAllow } = await import('./italian-check.mjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'italian-allow-'));
   const file = path.join(dir, 'allow.txt');
-  fs.writeFileSync(file, '# a comment\n\ncookie_da_conservare.txt\r\nnon un commento\n');
+  fs.writeFileSync(file, '# a comment\n\nil mio drive\r\nnon un commento\n');
   try {
-    assert.deepEqual([...loadAllow(file)], ['cookie_da_conservare.txt', 'non un commento']);
+    assert.deepEqual([...loadAllow(file)], ['il mio drive', 'non un commento']);
     assert.deepEqual([...loadAllow(path.join(dir, 'missing.txt'))], []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

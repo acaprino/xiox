@@ -16,13 +16,9 @@ test('actions, buttons and options map to their section\'s intent', () => {
   assert.deepEqual(actionIntent('cleanup', 'analyze'), { kind: 'analyze' });
   assert.deepEqual(actionIntent('developers', 'analyze'), { kind: 'analyze' });
   assert.deepEqual(actionIntent('registry', 'scan'), { kind: 'scan' });
-  assert.deepEqual(actionIntent('services', 'refresh'), { kind: 'refresh' });
   assert.deepEqual(actionIntent('cleanup', 'clean'), { kind: 'openConfirm' });
   assert.deepEqual(actionIntent('developers', 'clean'), { kind: 'openConfirm' });
   assert.deepEqual(actionIntent('registry', 'fix'), { kind: 'openFix' });
-  assert.deepEqual(actionIntent('services', 'disable'), { kind: 'openConfirm', action: 'disable' });
-  assert.deepEqual(actionIntent('services', 'manual'), { kind: 'openConfirm', action: 'manual' });
-  assert.deepEqual(actionIntent('services', 'restore'), { kind: 'openConfirm', action: 'restore' });
   assert.deepEqual(actionIntent('cleanup', 'cancel'), { kind: 'cancel' });
   assert.deepEqual(actionIntent('developers', 'cancel'), { kind: 'cancel' });
   // An id that belongs to another section, or to none, sends nothing.
@@ -30,14 +26,11 @@ test('actions, buttons and options map to their section\'s intent', () => {
   assert.equal(actionIntent('cleanup', 'scan'), null);
   assert.equal(actionIntent('cleanup', 'fix'), null);
   assert.equal(actionIntent('registry', 'clean'), null);
-  assert.equal(actionIntent('services', 'cancel'), null);
-  assert.equal(actionIntent('services', 'disable '), null);
   assert.equal(actionIntent('developers', 'nothing'), null);
 
   // Dialog buttons.
-  for (const s of ['cleanup', 'registry', 'services', 'developers'] as const) assert.deepEqual(buttonIntent(s, 'cancel'), { kind: 'closeDialog' });
+  for (const s of ['cleanup', 'registry', 'developers'] as const) assert.deepEqual(buttonIntent(s, 'cancel'), { kind: 'closeDialog' });
   assert.deepEqual(buttonIntent('cleanup', 'continue'), { kind: 'confirm' });
-  assert.deepEqual(buttonIntent('services', 'continue'), { kind: 'confirm' });
   assert.deepEqual(buttonIntent('developers', 'clean'), { kind: 'confirm' });
   assert.deepEqual(buttonIntent('developers', 'permanent'), { kind: 'permanent' });
   assert.deepEqual(buttonIntent('registry', 'backup'), { kind: 'fix', backup: true });
@@ -56,9 +49,6 @@ test('actions, buttons and options map to their section\'s intent', () => {
   assert.deepEqual(optionIntent('registry', toggle('cat:12'), false), { kind: 'toggleCategory', index: 12 });
   assert.equal(optionIntent('registry', toggle('cat:x'), true), null);
   assert.equal(optionIntent('registry', toggle('cat:'), true), null);
-  assert.deepEqual(optionIntent('services', choice('filter'), 'all'), { kind: 'setAll', all: true });
-  assert.deepEqual(optionIntent('services', choice('filter'), 'recommended'), { kind: 'setAll', all: false });
-  assert.equal(optionIntent('services', choice('filter'), 'other'), null);
   assert.deepEqual(optionIntent('developers', number('inactiveDays'), 45), { kind: 'setInactiveDays', days: 45 });
   assert.equal(optionIntent('developers', number('inactiveDays'), Number.NaN), null);
   assert.equal(optionIntent('developers', number('inactiveDays'), 'x'), null);
@@ -77,11 +67,10 @@ test('actions, buttons and options map to their section\'s intent', () => {
   assert.equal(optionIntent('registry', toggle('onlyOld'), true), null);
   assert.equal(optionIntent('developers', toggle('onlyOld'), true), null);
   assert.equal(optionIntent('cleanup', { kind: 'text', text: 'x', tone: 'info', hint: null }, null), null);
-  assert.equal(optionIntent('services', { kind: 'meter', id: 'ram', label: 'RAM', usedBytes: 1, totalBytes: 2, tone: 'info' }, null), null);
 });
 
 test('rows, categories, search and bulk selection map to their section\'s intent', () => {
-  for (const s of ['cleanup', 'registry', 'services', 'developers'] as const) {
+  for (const s of ['cleanup', 'registry', 'developers'] as const) {
     assert.deepEqual(toggleIntent(s, 'row:1'), { kind: 'toggle', row: 'row:1' });
   }
   assert.equal(selectIntent('cleanup', 'cat:browser'), null, 'Cleanup lists every category: its menu only scrolls');
@@ -90,15 +79,12 @@ test('rows, categories, search and bulk selection map to their section\'s intent
   assert.deepEqual(selectIntent('developers', 'sessions'), { kind: 'select', category: 'sessions' });
   assert.equal(selectIntent('developers', 'cat:browser'), null);
   assert.equal(selectIntent('registry', 'x'), null);
-  assert.equal(selectIntent('services', 'x'), null);
 
   assert.deepEqual(searchIntent('cleanup', 'temp'), { kind: 'search', text: 'temp' });
-  assert.deepEqual(searchIntent('services', ''), { kind: 'search', text: '' });
   assert.equal(searchIntent('registry', 'x'), null);
   assert.equal(searchIntent('developers', 'x'), null);
 
   assert.deepEqual(bulkIntent('registry', true), { kind: 'selectAll', on: true });
   assert.deepEqual(bulkIntent('developers', false), { kind: 'selectAll', on: false });
   assert.deepEqual(bulkIntent('cleanup', true), { kind: 'selectAll', on: true });
-  assert.deepEqual(bulkIntent('services', false), { kind: 'selectAll', on: false });
 });

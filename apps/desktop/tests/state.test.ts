@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptView, bulkCheck, bulkLocked, createGate, createInflight, createUi, currentFocus, foldedGroups, LONG_GROUP, moveFocus, noticeKey, SERVICES_POLL_MS, shouldPollServices, shownRows } from '../src/state.ts';
+import { acceptView, bulkCheck, bulkLocked, createGate, createInflight, createUi, currentFocus, foldedGroups, LONG_GROUP, moveFocus, noticeKey, shownRows } from '../src/state.ts';
 import { visibleRows } from '../src/rows.ts';
-import type { DialogView, RowView, SectionId, SectionView } from '../src/types.ts';
+import type { RowView, SectionId, SectionView } from '../src/types.ts';
 
 function row(id: string, extra: Partial<RowView> = {}): RowView {
   return {
@@ -94,32 +94,6 @@ test('a stale failure is dropped too and a current one is reported', async () =>
   assert.deepEqual(errors, ['second boom']);
 });
 
-test('services refresh only while shown, visible and without a dialog', () => {
-  const dialog: DialogView = {
-    id: 'confirm', title: 'Disable 3 services?', text: [], summary: [], permanent: false, rows: [], warningsTitle: null, warnings: [], cautionTitle: null,
-    cautions: [], ack: null, error: null, buttons: [],
-  };
-  const ui = createUi();
-  // Not the open section: nothing to refresh, whatever else holds.
-  ui.section = 'cleanup';
-  assert.equal(shouldPollServices(ui, true), false, 'another section is open');
-  ui.section = 'services';
-  assert.equal(shouldPollServices(ui, true), true, 'the section is shown, the window visible, no view yet means no dialog');
-  assert.equal(shouldPollServices(ui, false), false, 'the window is hidden');
-  acceptView(ui, view('services', 1));
-  assert.equal(shouldPollServices(ui, true), true, 'a view without a dialog');
-  assert.equal(shouldPollServices(ui, false), false);
-  // A dialog describes a selection: the list does not move under it.
-  acceptView(ui, { ...view('services', 2), dialog });
-  assert.equal(shouldPollServices(ui, true), false, 'a dialog is open');
-  acceptView(ui, view('services', 3));
-  assert.equal(shouldPollServices(ui, true), true, 'the dialog closed');
-  // Another section's dialog is not ours.
-  acceptView(ui, { ...view('developers', 1), dialog });
-  assert.equal(shouldPollServices(ui, true), true);
-  assert.equal(SERVICES_POLL_MS, 2000, 'the RAM meter is read every 2 s, as the old window repainted');
-});
-
 test('an identical intent is dropped while one is in flight, and goes again after the answer', () => {
   const flight = createInflight();
   const confirm = { kind: 'confirm' };
@@ -190,7 +164,6 @@ test('the check box at the top of the list sums the categories, or the rows of a
   assert.equal(bulkCheck(view('registry', 1, [row('i:0', { check: 'on' }), row('i:1', { check: 'on' })])), 'on');
   assert.equal(bulkCheck(view('registry', 1, [row('i:0', { check: 'on' }), row('i:1', { check: 'off' })])), 'mixed');
   assert.equal(bulkCheck(view('developers', 1, [row('p', { check: 'mixed' }), row('c', { kind: 'child', parent: 'p', check: 'off' })])), 'mixed', 'children do not count');
-  assert.equal(bulkCheck(view('services', 1, [])), 'none');
 });
 
 test('a folder of the projects starts open, folds when the user folds it, and the focus can rest on it even without a box', () => {

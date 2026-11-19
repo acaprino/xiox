@@ -29,7 +29,7 @@ const TICK_MS: u64 = 200;
 /// Ticks a fake job shows its fraction for before it lands (`TICKS` of the mock).
 const TICKS: u32 = 3;
 
-const SECTIONS: [SectionId; 4] = [SectionId::Cleanup, SectionId::Registry, SectionId::Services, SectionId::Developers];
+const SECTIONS: [SectionId; 3] = [SectionId::Cleanup, SectionId::Registry, SectionId::Developers];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +44,6 @@ pub struct Fixture {
 fn initial(s: SectionId) -> &'static str {
     match s {
         SectionId::Cleanup | SectionId::Registry | SectionId::Developers => "idle",
-        SectionId::Services => "loaded",
     }
 }
 
@@ -52,7 +51,6 @@ fn initial(s: SectionId) -> &'static str {
 fn home(s: SectionId) -> &'static str {
     match s {
         SectionId::Cleanup | SectionId::Registry => "analyzed",
-        SectionId::Services => "loaded",
         SectionId::Developers => "projects",
     }
 }
@@ -62,7 +60,6 @@ fn analyzed(s: SectionId) -> &'static [&'static str] {
     match s {
         SectionId::Cleanup => &["analyzed", "interrupted"],
         SectionId::Registry => &["analyzed"],
-        SectionId::Services => &["loaded"],
         SectionId::Developers => &["projects", "worktrees", "sessions"],
     }
 }
@@ -76,7 +73,6 @@ fn lands(s: SectionId, state: &str) -> Option<&'static str> {
         (SectionId::Cleanup, "cleaning") => Some("report"),
         (SectionId::Registry, "scanning") => Some("analyzed"),
         (SectionId::Registry, "fixing") => Some("fixed"),
-        (SectionId::Services, "loading") => Some("loaded"),
         (SectionId::Developers, "analyzing") => Some("projects"),
         (SectionId::Developers, "cleaning") => Some("report"),
         _ => None,
@@ -87,7 +83,6 @@ fn analyze_busy(s: SectionId) -> &'static str {
     match s {
         SectionId::Cleanup | SectionId::Developers => "analyzing",
         SectionId::Registry => "scanning",
-        SectionId::Services => "loading",
     }
 }
 
@@ -96,7 +91,6 @@ fn analyze_kind(s: SectionId) -> &'static str {
     match s {
         SectionId::Cleanup | SectionId::Developers => "analyze",
         SectionId::Registry => "scan",
-        SectionId::Services => "refresh",
     }
 }
 
@@ -134,32 +128,22 @@ fn dialog_state(s: SectionId) -> &'static str {
     }
 }
 
-fn notice_text(action: &str) -> &'static str {
-    match action {
-        "manual" => "Selected services set to Manual.",
-        "restore" => "Original startup types restored.",
-        _ => "Selected services disabled.",
-    }
-}
-
-/// What it takes to run: the dialog state, the dialog button and the busy state it starts
-/// (`None`: Services applies the change at once).
+/// What it takes to run: the dialog state, the dialog button and the busy state it starts.
 struct Run {
     from: &'static str,
     button: &'static str,
-    busy: Option<&'static str>,
+    busy: &'static str,
 }
 
 fn run_rule(s: SectionId, kind: &str, intent: &Value) -> Option<Run> {
     match (s, kind) {
-        (SectionId::Cleanup, "confirm") => Some(Run { from: "confirm", button: "continue", busy: Some("cleaning") }),
-        (SectionId::Services, "confirm") => Some(Run { from: "confirm", button: "continue", busy: None }),
+        (SectionId::Cleanup, "confirm") => Some(Run { from: "confirm", button: "continue", busy: "cleaning" }),
         (SectionId::Registry, "fix") => {
             let backup = intent["backup"].as_bool().unwrap_or(false);
-            Some(Run { from: "backup", button: if backup { "backup" } else { "nobackup" }, busy: Some("fixing") })
+            Some(Run { from: "backup", button: if backup { "backup" } else { "nobackup" }, busy: "fixing" })
         }
-        (SectionId::Developers, "confirm") => Some(Run { from: "confirm", button: "clean", busy: Some("cleaning") }),
-        (SectionId::Developers, "permanent") => Some(Run { from: "shortfall", button: "permanent", busy: Some("cleaning") }),
+        (SectionId::Developers, "confirm") => Some(Run { from: "confirm", button: "clean", busy: "cleaning" }),
+        (SectionId::Developers, "permanent") => Some(Run { from: "shortfall", button: "permanent", busy: "cleaning" }),
         _ => None,
     }
 }
@@ -235,8 +219,6 @@ pub struct FakeModel {
     /// Where `closeDialog` and `cancel` go back to; none = Home.
     back: BTreeMap<SectionId, String>,
     ticks: BTreeMap<SectionId, u32>,
-    /// The Services action whose dialog is open (decides the notice text).
-    pending_action: String,
 }
 
 impl FakeModel {
@@ -257,7 +239,6 @@ impl FakeModel {
             revs: SECTIONS.iter().map(|s| (*s, 0)).collect(),
             back: BTreeMap::new(),
             ticks: SECTIONS.iter().map(|s| (*s, 0)).collect(),
-            pending_action: "disable".into(),
         })
     }
 
@@ -275,11 +256,8 @@ impl FakeModel {
         self.about.clone()
     }
 
-    /// Opens a section: its current view (the Services notice does not outlive the section being left).
+    /// Opens a section: its current view.
     pub fn show(&mut self, s: SectionId) -> SectionView {
-        if s == SectionId::Services {
-            self.clear_notice();
-        }
         self.stamp(s)
     }
 
@@ -390,12 +368,6 @@ impl FakeModel {
         }
     }
 
-    fn clear_notice(&mut self) {
-        if let Some(loaded) = self.work.get_mut(&SectionId::Services).and_then(|v| v.get_mut(home(SectionId::Services))) {
-            loaded.notices.clear();
-        }
-    }
-
     fn action_enabled(&self, s: SectionId, id: &str) -> bool {
         self.current(s).actions.iter().any(|a| a.id == id && a.enabled)
     }
@@ -408,9 +380,6 @@ impl FakeModel {
                 return; // a report does not stop it
             }
             self.back.insert(s, here);
-            if s == SectionId::Services {
-                self.clear_notice();
-            }
             self.go_to(s, analyze_busy(s));
         } else if kind == "select" && s == SectionId::Developers {
             if self.frozen(s) {
@@ -429,19 +398,11 @@ impl FakeModel {
                 self.select_all(s, intent["on"].as_bool().unwrap_or(false));
             }
         } else if kind == open_kind(s) {
-            let action = match s {
-                SectionId::Services => intent["action"].as_str().unwrap_or("").to_string(),
-                SectionId::Registry => "fix".to_string(),
-                _ => "clean".to_string(),
-            };
-            if !analyzed(s).contains(&here.as_str()) || !self.action_enabled(s, &action) {
+            let action = if s == SectionId::Registry { "fix" } else { "clean" };
+            if !analyzed(s).contains(&here.as_str()) || !self.action_enabled(s, action) {
                 return;
             }
             self.back.insert(s, here);
-            if s == SectionId::Services {
-                self.clear_notice();
-                self.pending_action = action;
-            }
             self.go_to(s, dialog_state(s));
             self.reset_ack(s);
         } else if kind == "setAck" && s == SectionId::Developers {
@@ -542,18 +503,8 @@ impl FakeModel {
         if !allowed {
             return;
         }
-        match rule.busy {
-            None => {
-                // Services: the change is applied at once and the list comes back with a notice.
-                let text = notice_text(&self.pending_action).to_string();
-                if let Some(loaded) = self.work.get_mut(&s).and_then(|v| v.get_mut(home(s))) {
-                    loaded.notices = vec![NoticeView { tone: Tone::Ok, text, more: Vec::new() }];
-                }
-                self.go_to(s, home(s));
-            }
-            // `back` stays what it was when the dialog opened; a cancelled clean forgets it.
-            Some(busy) => self.go_to(s, busy),
-        }
+        // `back` stays what it was when the dialog opened; a cancelled clean forgets it.
+        self.go_to(s, rule.busy);
     }
 }
 
@@ -616,10 +567,6 @@ impl Backend for FakeBackend {
         self.intent(SectionId::Registry, &i)
     }
 
-    fn services(&self, i: ServicesIntent) -> CmdResult<SectionView> {
-        self.intent(SectionId::Services, &i)
-    }
-
     fn developers(&self, i: DevIntent) -> CmdResult<SectionView> {
         self.intent(SectionId::Developers, &i)
     }
@@ -656,13 +603,12 @@ mod tests {
     }
 
     /// Every state of the table of `mockmodel.ts`.
-    const STATES: [(SectionId, &[&str]); 4] = [
+    const STATES: [(SectionId, &[&str]); 3] = [
         (
             SectionId::Cleanup,
             &["idle", "analyzing", "analyzed", "interrupted", "confirm", "cleaning", "report", "cancelled"],
         ),
         (SectionId::Registry, &["idle", "scanning", "analyzed", "backup", "fixing", "fixed"]),
-        (SectionId::Services, &["loading", "loaded", "confirm"]),
         (
             SectionId::Developers,
             &["idle", "analyzing", "projects", "worktrees", "sessions", "confirm", "shortfall", "cleaning", "report", "cancelled"],
@@ -743,7 +689,7 @@ mod tests {
     fn fake_cancel_returns_to_the_state_before_the_job() {
         let mut m = model();
         // A job with no state of its own to land on goes back to where it started (the page never sends a
-        // `cancel` for Registry or Services: the intent types have none; the table still holds it).
+        // `cancel` for Registry: its intent type has none; the table still holds it).
         intent(&mut m, SectionId::Registry, json!({ "kind": "scan" }));
         assert_eq!(m.state_of(SectionId::Registry), "scanning");
         intent(&mut m, SectionId::Registry, json!({ "kind": "cancel" }));
@@ -801,9 +747,9 @@ mod tests {
         let v = m.set_saved(SectionId::Cleanup, "Report saved.".into(), true);
         assert_eq!(v.report.unwrap().saved, Some(SavedView { text: "Report saved.".into(), ok: true }));
         // Not a report: unchanged.
-        m.go(SectionId::Services, "loaded");
-        assert_eq!(m.report_text(SectionId::Services), None);
-        assert!(m.set_saved(SectionId::Services, "x".into(), true).report.is_none());
+        m.go(SectionId::Registry, "analyzed");
+        assert_eq!(m.report_text(SectionId::Registry), None);
+        assert!(m.set_saved(SectionId::Registry, "x".into(), true).report.is_none());
     }
 
     /// The save notice lands only if the report on screen is the one that was written.
@@ -879,7 +825,6 @@ mod tests {
         let ok = match section {
             SectionId::Cleanup => serde_json::from_value::<CleanupIntent>(intent.clone()).is_ok(),
             SectionId::Registry => serde_json::from_value::<RegistryIntent>(intent.clone()).is_ok(),
-            SectionId::Services => serde_json::from_value::<ServicesIntent>(intent.clone()).is_ok(),
             SectionId::Developers => serde_json::from_value::<DevIntent>(intent.clone()).is_ok(),
         };
         assert!(ok, "{section:?}: `{intent}` is not an intent of the contract");

@@ -19,7 +19,6 @@ pub fn title(section: SectionId) -> String {
     let name = match section {
         SectionId::Cleanup => "Cleanup",
         SectionId::Registry => "Registry",
-        SectionId::Services => "Services",
         SectionId::Developers => "Developers",
     };
     format!("{name} - {APP_NAME}")
@@ -163,7 +162,6 @@ mod tests {
         for (section, want) in [
             (SectionId::Cleanup, "Cleanup - Xiox"),
             (SectionId::Registry, "Registry - Xiox"),
-            (SectionId::Services, "Services - Xiox"),
             (SectionId::Developers, "Developers - Xiox"),
         ] {
             assert_eq!(title(section), want);

@@ -914,33 +914,6 @@ fn settings_and_cache_live_under_xiox() {
 }
 
 #[test]
-fn settings_of_the_old_pulisci_pc_folder_are_found_after_the_rename() {
-    let t = tempfile::tempdir().unwrap();
-    let old = t.path().join("PulisciPC");
-    let mut s = settings_walking(vec![PathBuf::from(r"D:\Projects")]);
-    s.inactive_days = 41;
-    write_settings(&old.join("settings.json"), &s).unwrap();
-    // First start after the update: the folder is moved, the settings are the user's.
-    let path = settings_path_in(t.path());
-    assert_eq!(path, t.path().join("Xiox").join("settings.json"));
-    assert!(!old.exists());
-    assert_eq!(read_settings(&path).inactive_days, 41);
-}
-
-#[test]
-fn settings_stay_in_the_old_folder_when_it_cannot_be_moved() {
-    // The new name is taken by a file: the rename is refused and the old settings keep being used.
-    let t = tempfile::tempdir().unwrap();
-    let mut s = settings_walking(vec![]);
-    s.inactive_days = 52;
-    write_settings(&t.path().join("PulisciPC").join("settings.json"), &s).unwrap();
-    std::fs::write(t.path().join("Xiox"), "x").unwrap();
-    let path = settings_path_in(t.path());
-    assert_eq!(path, t.path().join("PulisciPC").join("settings.json"));
-    assert_eq!(read_settings(&path).inactive_days, 52);
-}
-
-#[test]
 fn settings_round_trip_and_fall_back_to_defaults() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("nested").join("settings.json");

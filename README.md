@@ -111,13 +111,12 @@ xiox observe C:\work\sampleapp --mcp           # a read-only MCP server on stdio
 
 ## The desktop app
 
-`xiox-ui.exe` is a Windows desktop app built with [Tauri 2](https://tauri.app) on the same engine and the same safety rules as the command line. It has four sections:
+`xiox-ui.exe` is a Windows desktop app built with [Tauri 2](https://tauri.app) on the same engine and the same safety rules as the command line. It has three sections:
 
 | Section | What it does |
 |---|---|
 | **Cleanup** | temporary files, caches, browser data, logs; the Winapp2-style rules catalog and the embedded developer cleaners |
 | **Registry** | scan for broken entries, back them up as a `.reg` file, fix the ones you ticked |
-| **Services & RAM** | turn off or set to Manual the services nobody needs, with the originals saved so you can restore them |
 | **Developers** | one view over every project on the PC: builds, worktrees, archived agent sessions, with the same blocks as `xiox clean` |
 
 The look follows the suite: a violet-black stage, steel-blue frames with cut corners, amber type, two sidebars (sections, then categories) and the detail of the selected row under the list. It is dark only and English only.
@@ -132,8 +131,7 @@ The look follows the suite: a violet-black stage, steel-blue frames with cut cor
     <td width="50%"><img src="docs/assets/screenshots/registry.png" alt="The Registry section after a scan"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/screenshots/services.png" alt="The Services and RAM section"></td>
-    <td width="50%"><img src="docs/assets/screenshots/confirm.png" alt="The confirmation dialog of the Developers section, with the caution level and the box to tick"></td>
+    <td colspan="2" align="center"><img src="docs/assets/screenshots/confirm.png" alt="The confirmation dialog of the Developers section, with the caution level and the box to tick" width="50%"></td>
   </tr>
 </table>
 
@@ -141,11 +139,11 @@ The look follows the suite: a violet-black stage, steel-blue frames with cut cor
 
 - **Nothing is removed without a confirmation.** Every clean opens a dialog that lists what will run and its warnings; items at the `caution` level need the box "I have read the warnings" ticked first.
 - **Keyboard first.** `↑` `↓` move, `space` toggles, `a` analyzes, `Enter` cleans (and asks first), `Esc` closes a dialog, `?` opens About. Every control is also reachable with `Tab`.
-- **It asks for administrator rights at start**: the registry, the services and the system folders need them. The status bar shows `administrator` or `standard user`. The command line never asks.
+- **It asks for administrator rights at start**: the registry and the system folders need them. The status bar shows `administrator` or `standard user`. The command line never asks.
 - **Same guards as the CLI.** The page only sends clicks: what can be selected or removed is decided in Rust, through the same `xiox_cleaner` guard and the fresh analysis before every removal.
 - **No network from the window**, apart from the Winapp2 rules update, which runs in the engine as before.
 
-**[User guide: docs/xiox-desktop.md](docs/xiox-desktop.md)**: the four sections, the keys, what each warning means, the options, limits.
+**[User guide: docs/xiox-desktop.md](docs/xiox-desktop.md)**: the three sections, the keys, what each warning means, the options, limits.
 
 ## Safety
 
@@ -183,7 +181,7 @@ npm test                                  # the TypeScript of the page
 npm run smoke                             # the page in a browser on sample data: screenshots, focus, fit, language
 ```
 
-The workspace is the Rust engine as crates: `xiox-git` (git queries), `xiox-scanner` and `xiox-engine` (what exists and what it is), `xiox-cleaner` (the only code that removes), `xiox-project` (per-project analysis and cleaning), `xiox-sessions` and `xiox-mukade` (agent sessions), `xiox-rules` (the Winapp2-style catalog), `xiox-core` (the state of the four sections, shared by every front end), `xiox-cli`, and `apps/desktop` (the Tauri app: `src-tauri` is the Rust side, `src` the TypeScript page).
+The workspace is the Rust engine as crates: `xiox-git` (git queries), `xiox-scanner` and `xiox-engine` (what exists and what it is), `xiox-cleaner` (the only code that removes), `xiox-project` (per-project analysis and cleaning), `xiox-sessions` and `xiox-mukade` (agent sessions), `xiox-rules` (the Winapp2-style catalog), `xiox-core` (the state of the three sections, shared by every front end), `xiox-cli`, and `apps/desktop` (the Tauri app: `src-tauri` is the Rust side, `src` the TypeScript page).
 
 ## Roadmap
 
@@ -204,7 +202,7 @@ Xiox sits next to the other tools built on the same ideas: local first, readable
 
 ## Status and license
 
-Early, in daily use by its author. Contributions are not open yet. License: not chosen yet, all rights reserved.
+Early, in daily use by its author. Contributions are not open yet. License: [Apache-2.0](LICENSE).
 
 ---
 

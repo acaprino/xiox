@@ -27,14 +27,13 @@ export function errorText(error: unknown): string {
 }
 
 const intentCommand: Record<SectionId, string> = {
-  cleanup: 'cleanup', registry: 'registry', services: 'services', developers: 'developers',
+  cleanup: 'cleanup', registry: 'registry', developers: 'developers',
 };
 
 export const api = {
   appInfo: () => invoke<AppInfo>('app_info'),
   about: () => invoke<AboutView>('about'),
   show: (s: SectionId) => invoke<SectionView>('show', { section: s }),
-  view: (s: SectionId) => invoke<SectionView>('view', { section: s }),
   /** Sends one intent to the section's own command; the answer is the section's new view. */
   intent: (s: SectionId, i: AnyIntent) => invoke<SectionView>(intentCommand[s], { intent: i }),
   /** The folder picker opens in Rust; the page never sees a path. */

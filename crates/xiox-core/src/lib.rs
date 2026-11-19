@@ -1,5 +1,5 @@
-//! Motore di Xiox senza interfaccia: i moduli che pulizia, registro, servizi e
-//! sviluppatori condividono, indipendenti dall'interfaccia.
+//! Motore di Xiox senza interfaccia: i moduli che pulizia, registro e sviluppatori
+//! condividono, indipendenti dall'interfaccia.
 
 pub mod account;
 pub mod app;
@@ -20,8 +20,6 @@ pub mod regbackup;
 pub mod regstate;
 pub mod registry;
 pub mod rules;
-pub mod services;
-pub mod svcstate;
 pub mod sys;
 pub mod sysclean;
 pub mod winold;

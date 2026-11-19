@@ -1,20 +1,6 @@
-//! Small helpers around Windows: admin rights, accounts, memory, recycle bin, commands.
+//! Small helpers around Windows: admin rights, accounts, memory, recycle bin.
 
-use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-pub fn hidden_cmd(program: &str) -> Command {
-    let mut c = Command::new(program);
-    c.creation_flags(CREATE_NO_WINDOW);
-    c
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 pub fn is_admin() -> bool {
     unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
@@ -105,24 +91,6 @@ pub fn empty_recycle_bin() -> bool {
     hr == 0
 }
 
-/// Turns "@%SystemRoot%\system32\x.dll,-100" into the text it points to.
-pub fn indirect_string(s: &str) -> String {
-    if !s.starts_with('@') {
-        return s.to_string();
-    }
-    let src = wide(s);
-    let mut buf = vec![0u16; 512];
-    let hr = unsafe {
-        windows_sys::Win32::UI::Shell::SHLoadIndirectString(src.as_ptr(), buf.as_mut_ptr(), buf.len() as u32, std::ptr::null_mut())
-    };
-    if hr == 0 {
-        let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
-        String::from_utf16_lossy(&buf[..n])
-    } else {
-        s.to_string()
-    }
-}
-
 /// Replaces %VAR% with the environment variable's value.
 pub fn expand_env(s: &str) -> String {
     let mut out = String::new();
@@ -160,9 +128,7 @@ pub fn env_or(name: &str, fallback: &str) -> String {
 
 pub use xiox_model::fmt_size;
 
-/// Folder where the app keeps its backups (Documents\Xiox). A `Documents\PulisciPC` left by an
-/// older version is renamed to `Xiox` first, or keeps being used if it cannot be renamed
-/// ([`xiox_model::legacy::migrate_legacy_dir`]): the user's backups never go out of sight.
+/// Folder where the app keeps its backups (Documents\Xiox).
 pub fn data_dir() -> std::path::PathBuf {
     let base = std::env::var("USERPROFILE").map(|p| Path::new(&p).join("Documents")).unwrap_or_else(|_| ".".into());
     data_dir_in(&base)
@@ -170,28 +136,9 @@ pub fn data_dir() -> std::path::PathBuf {
 
 /// [`data_dir`] under the given Documents folder.
 pub fn data_dir_in(documents: &Path) -> std::path::PathBuf {
-    let d = xiox_model::legacy::app_dir_in(documents);
+    let d = documents.join(xiox_model::APP_DIR);
     let _ = std::fs::create_dir_all(&d);
     d
-}
-
-/// The path of a data file in `dir` whose name changed from `old` to `new` (English): the file
-/// that exists wins (both exist: the new one), otherwise the NEW name. Readers and writers both go
-/// through it, so a user's old file keeps being the one that is read and written and nothing is
-/// ever copied, renamed or deleted.
-pub fn data_file_in(dir: &Path, new: &str, old: &str) -> std::path::PathBuf {
-    // A link counts as present too (even a dangling one): its owner decides what to do with it.
-    let present = |p: &Path| std::fs::symlink_metadata(p).is_ok();
-    let new_path = dir.join(new);
-    if present(&new_path) {
-        return new_path;
-    }
-    let old_path = dir.join(old);
-    if present(&old_path) {
-        old_path
-    } else {
-        new_path
-    }
 }
 
 /// A count for the user, grouped with commas (en-US): `18204` is `18,204`. Sizes keep their own
@@ -241,50 +188,12 @@ fn civil(z: i64) -> (i64, u32, u32) {
 mod tests {
     use super::*;
 
-    /// I backup di prima stanno in `Documents\PulisciPC`: dopo l'aggiornamento si ritrovano in
-    /// `Documents\Xiox`; se la cartella non si può rinominare si continua con quella vecchia.
+    /// I backup stanno in `Documents\Xiox`, che si crea al primo uso.
     #[test]
-    fn backups_folder_follows_the_rename_and_never_loses_the_old_backups() {
-        let t = tempfile::tempdir().unwrap();
-        let old = t.path().join("PulisciPC");
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("backup_registro_20261001_090000.reg"), "x").unwrap();
-        let d = data_dir_in(t.path());
-        assert_eq!(d, t.path().join("Xiox"));
-        assert!(d.join("backup_registro_20261001_090000.reg").is_file());
-        assert!(!old.exists());
-
-        let t = tempfile::tempdir().unwrap();
-        let old = t.path().join("PulisciPC");
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("servizi_originali.txt"), "x").unwrap();
-        std::fs::write(t.path().join("Xiox"), "occupato da un file").unwrap();
-        assert_eq!(data_dir_in(t.path()), old);
-        assert!(old.join("servizi_originali.txt").is_file());
-
-        // Prima installazione: si crea la cartella con il nome nuovo.
+    fn backups_folder_is_xiox_under_documents_and_is_created() {
         let t = tempfile::tempdir().unwrap();
         assert_eq!(data_dir_in(t.path()), t.path().join("Xiox"));
         assert!(t.path().join("Xiox").is_dir());
-        assert!(!t.path().join("PulisciPC").exists());
-    }
-
-    #[test]
-    fn a_renamed_data_file_keeps_the_users_old_one() {
-        let t = tempfile::tempdir().unwrap();
-        let d = t.path();
-        // Neither: the new English name.
-        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
-        // Only the old one: it is used (read and written), nothing is created.
-        std::fs::write(d.join("vecchio.txt"), "x").unwrap();
-        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("vecchio.txt"));
-        assert!(!d.join("new.txt").exists());
-        // Both: the new one wins.
-        std::fs::write(d.join("new.txt"), "y").unwrap();
-        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
-        // Only the new one.
-        std::fs::remove_file(d.join("vecchio.txt")).unwrap();
-        assert_eq!(data_file_in(d, "new.txt", "vecchio.txt"), d.join("new.txt"));
     }
 
     #[test]

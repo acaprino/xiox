@@ -1,10 +1,9 @@
 # Xiox: the desktop app
 
 Xiox is a Windows cleaner for people who code. The desktop app (`xiox-ui.exe`) is one window
-with four sections: **Cleanup** (temporary files, caches, browser data, logs), **Registry**
-(entries that point to files or programs that no longer exist), **Services & RAM** (services
-you can turn off, and how much memory they hold) and **Developers** (build folders, git
-worktrees and archived coding-agent sessions of every project on the PC).
+with three sections: **Cleanup** (temporary files, caches, browser data, logs), **Registry**
+(entries that point to files or programs that no longer exist) and **Developers** (build folders,
+git worktrees and archived coding-agent sessions of every project on the PC).
 
 It proposes, you choose. Every section lists what it found with a level and a reason, some
 entries are blocked and cannot be removed at all, and nothing happens until you press a
@@ -16,7 +15,6 @@ uses.
 - [The window](#the-window)
 - [Cleanup](#cleanup)
 - [Registry](#registry)
-- [Services & RAM](#services--ram)
 - [Developers](#developers)
 - [Levels and blocked entries](#levels-and-blocked-entries)
 - [Confirmations, cancel and the report](#confirmations-cancel-and-the-report)
@@ -34,7 +32,7 @@ There is no installer: you run `xiox-ui.exe`. Build instructions are in the
 
 **Administrator rights.** The production build asks for them once, when it starts: Windows
 shows its usual prompt (the executable carries a `requireAdministrator` manifest). Without them
-the app cannot clean system folders, change services or fix `HKLM` registry keys. A
+the app cannot clean system folders or fix `HKLM` registry keys. A
 development build (a debug build, as made by `cargo run`) does not ask and runs as you. The
 status row always says which one you got: `administrator` or `standard user`.
 
@@ -68,7 +66,7 @@ keys, what each button does) is the same in both.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ XIOX        CLEANUP 1  REGISTRY 2  SERVICES & RAM 3  DEVELOPERS 4  ABOUT ? ◯ONI│  top bar: sections as tabs
+│ XIOX        CLEANUP 1  REGISTRY 2  DEVELOPERS 3  ABOUT ? ◯ONI                │  top bar: sections as tabs
 │ ANALYSIS DONE   13.48 GB to delete (46,999 files)  administrator · RAM 32 GB │  status row
 │ Cleaning…  ████████░░░░  64%  Windows temporary files                        │  progress (while a job runs)
 │ Xiox is cleaning the profile of “…”, not that of “…” …                       │  profile strip (when it applies)
@@ -112,7 +110,7 @@ approved with another administrator's password. "Your" Temp folder, browser data
 per-user locations are then those of account A, not of the person sitting at the screen. Close
 the app and start it again from the right account if that is not what you want.
 
-**Sections.** Cleanup `1`, Registry `2`, Services & RAM `3`, Developers `4`, and `Settings` (`?`):
+**Sections.** Cleanup `1`, Registry `2`, Developers `3`, and `Settings` (`?`):
 tabs at the top, with a bar under the open one (in ONI MODE: the first sidebar). The number is
 the key that opens the section.
 
@@ -120,7 +118,7 @@ the key that opens the section.
 looks through. The categories of the open section, each with its
 item count and, after an analysis, its size (`System`, `Explorer`, ...; for Developers
 `Projects`, `Worktrees`, `Archived sessions`). Under them, `Options`: the choices that belong to
-the section. Registry and Services & RAM have no categories: for them this bar is only
+the section. Registry has no categories: for it this bar is only
 `Options`. In Cleanup the list shows every category one after another, so the bar is a menu: a
 click scrolls the list to that category (opening it if it was folded) and the entry of the
 category the list is at is highlighted as you scroll. A small box in front of each entry shows
@@ -138,8 +136,8 @@ around the box is the button, so you do not have to aim at the square; a click o
 row selects it (the detail panel follows). The box in the header of the check column ticks or
 clears everything that can be ticked, in every section that has boxes (it is half-ticked when
 only some rows are on); items marked `caution` are never ticked by it, nor by a category box,
-only by their own box. A caret folds and unfolds the rows under a parent. Where a section has
-many rows (Cleanup, Services) a search box above the list filters them.
+only by their own box. A caret folds and unfolds the rows under a parent. In Cleanup, which has
+many rows, a search box above the list filters them.
 
 **Groups of rows.** The rows that belong together sit under a heading with its own box, which
 ticks or clears every row under it that can be ticked (never a blocked one, never one marked
@@ -166,7 +164,7 @@ holds how many cookies.
 **Notices.** Coloured one-line strips above the list: a result, a warning, or an error or
 refusal. A strip that has more to say ends with a `+2 more` button: reach it with `Tab` and press
 `Enter` or `Space` to open the extra lines under the strip, and again to close them. A result that
-only half worked (some keys not fixed, some services that failed) is shown in the warning colour,
+only half worked (some keys not fixed) is shown in the warning colour,
 not as a success.
 
 **Footer.** The keys of the open section (`↑↓ move · space toggle · s sort · a analyze · ↵ clean`) and,
@@ -263,13 +261,12 @@ and your ticks stay: press `Analyze` again to see what is left.
 
 Registry entries that point to a file or a program that no longer exists: shared DLLs, file
 extensions, ActiveX/COM classes, type libraries, fonts, application paths, help files, installer
-folders, obsolete software, startup entries, the MUI cache and, if you ask for it, services.
+folders, obsolete software, startup entries and the MUI cache.
 
 **Options (second sidebar).** One box per kind of problem: `Missing shared DLLs`, `Unused file
 extensions`, `ActiveX and class problems`, `Type libraries`, `Fonts`, `Application paths`,
-`Help files`, `Installer folders`, `Obsolete software`, `Run at startup`, `MUI cache` and
-`Windows services`. All start ticked except `Windows services`. At least one must be ticked
-(*Tick at least one category to look through.*).
+`Help files`, `Installer folders`, `Obsolete software`, `Run at startup` and `MUI cache`. All
+start ticked. At least one must be ticked (*Tick at least one category to look through.*).
 
 **Find issues** (`a`). Scans the ticked kinds, one at a time (the progress bar says which). It
 does not change anything. The list shows `Issue` and `Registry key`; the detail adds the `data`
@@ -296,54 +293,6 @@ the fixed issues leave the list; when something failed they stay.
 
 **There is no restore button in the app.** To go back, double-click the `.reg` file of the
 backup and let Windows merge it (the section says so in its options).
-
-## Services & RAM
-
-The Windows services, with their state, their startup type and the memory they use, and a meter
-of the memory in use.
-
-**The list.** `Service`, `State` (`Running` or `Stopped`), `Startup` (`Automatic`,
-`Automatic (delayed)`, `Manual`, `Disabled`, ...) and `Memory` (`(shared)` after the figure when
-the service shares a process with others; `–` when it is stopped). The section reads the
-services the first time you open it; `Refresh` (`a`) reads them again.
-
-**Show: Recommended / All.** `Recommended` (the default) lists only the services Xiox suggests
-turning off, each with the reason in the `why turn it off` line of the detail (*Needs a fax
-modem, which almost no PC has.*, *Sends usage data to Microsoft; Windows works without it.*).
-`All` lists every service. The search box filters by display name or service name; when nothing matches, the list says
-`No services` and *Nothing matches “x”.* (*No services to show.* when there is no search). The
-status row says how many services were read and how many are recommended to turn off.
-
-**Memory.** The `RAM in use` meter in the second sidebar changes tone as the memory fills (a
-warning above 65%, an error above 85%) and is refreshed every two seconds while the section is
-open and no confirmation is up. The footer says how many services are ticked and an
-**estimate** of the memory that turning them off would free (`Selected: 3 · Freeable RAM
-(estimate): 47.6 MB`; a service that shares its process with others frees nothing by itself).
-
-**Buttons.**
-
-| Button | What it does | Greyed out when |
-|---|---|---|
-| `Refresh` (`a`) | reads the list again and clears the last result | a job runs or a confirmation is open |
-| `Disable` (`Enter`) | sets the ticked services to `Disabled` and stops them now | nothing is ticked |
-| `Set to Manual` | sets them to `Manual` (Windows starts them only when something needs them) and stops them now | nothing is ticked |
-| `Restore originals (n)` | puts back the startup type every service had before Xiox first changed it; `n` is how many are saved | nothing is saved |
-
-Each of the three actions opens a confirmation first (`Disable 3 services?`, `Set 3 services to
-Manual?`, `Restore the services?`) with `Continue` and `Cancel`. The first two list **every
-service they will change, with its startup type now**, including ticked services that the
-current filter or search hides: they are changed too, so they are listed too.
-
-**Protected services.** A row shown greyed out with *Needed by Windows: protected* cannot be
-ticked, and a service in that state is never changed, whatever the window sends. The protection
-covers a built-in list of the services Windows itself depends on (RPC, the event log, the
-firewall, Windows Defender, Windows Update, the network stack, ...) and everything that is not
-an ordinary service process (drivers).
-
-**Restoring.** The first time Xiox changes a service it saves the service's startup type in
-`Documents\Xiox\services-original.txt` (only the very first state is kept). `Restore originals`
-puts every saved one back and starts the ones that were `Automatic`. A service that could not be
-restored stays in the file for the next try.
 
 ## Developers
 
@@ -452,7 +401,6 @@ of the row says why. The reason is a fact about your PC right now:
 | Where | Reason shown |
 |---|---|
 | Cleanup | *Close Google Chrome to clean* (the program is running); *... : this option cannot be used* (the rule is not supported on this system); *Needs administrator: some folders are skipped* |
-| Services | *Needed by Windows: protected* |
 | Projects | *The project is in use by an agent: its folders are cleaned when the session is closed.*, or the reason it is locked or unreachable |
 | Worktrees | the `State` reason, for example *Unsaved changes: the worktree stays* |
 | Archived sessions | *In use by a running Claude Code session* (or another agent) |
@@ -462,9 +410,9 @@ the program, close the agent session, commit or discard the changes) and analyze
 
 ## Confirmations, cancel and the report
 
-**The confirmation.** Every removal, every service change and every registry fix goes through
+**The confirmation.** Every removal and every registry fix goes through
 one: a window in front of the page, with the title of the action (`Start cleaning?`, `Clean the
-selected folders?`, `Disable 3 services?`, `Save a registry backup?`), what will happen, the list
+selected folders?`, `Save a registry backup?`), what will happen, the list
 of what will be touched, the warnings and its buttons. While it is open the rest of the window is
 inert: you cannot click or Tab behind it, and nothing can be ticked or unticked (what the
 warnings describe must be what runs). `Esc` or `Cancel` closes it and nothing runs.
@@ -474,7 +422,7 @@ warnings describe must be what runs). `Esc` or `Cancel` closes it and nothing ru
   chosen entry that has a warning (cookies, emptying the Recycle Bin, an application cache that
   has to be downloaded again, ...). `Continue` starts.
 - **Developers** asks about folders, worktrees or sessions, as described above.
-- **Services** and **Registry** are described in their chapters.
+- **Registry** is described in its chapter.
 
 When a confirmation opens, the focus goes to its main button or, if that one is greyed out until
 you tick `I have read the warnings`, to that box. The buttons ignore `Enter` and `Space` for 300
@@ -487,8 +435,7 @@ is never held back.
 already done. An analysis that is cancelled keeps what it had found (the other rows have no
 figure and a notice says so); a cleaning that is cancelled ends with a report of what was done,
 marked as cancelled (*Cancelled: the items not yet started stayed where they were.*). While it is
-stopping the button reads `Cancelling…`. Registry and Services have no cancel: their jobs are
-short.
+stopping the button reads `Cancelling…`. Registry has no cancel: its jobs are short.
 
 **The report.** When a cleaning ends (done, cancelled, or stopped by an internal error) a report
 replaces the list:
@@ -538,9 +485,8 @@ The engine is written so that a mistake costs a skipped entry, not your work. In
 - **Protected locations are refused.** The cleaner's safety guard refuses system locations,
   drive roots and folders directly under a drive root, and no link (symbolic link or junction) is
   followed.
-- **Windows keeps what it needs.** The services Windows depends on are never changed. Before
-  fixing the registry the app offers a `.reg` backup, and a fix that was asked to make a backup
-  and could not make it does not run.
+- **Windows keeps what it needs.** Before fixing the registry the app offers a `.reg` backup,
+  and a fix that was asked to make a backup and could not make it does not run.
 - **The window cannot name a path.** The page that draws the window sends clicks and keys, never a
   path: the folder picker and the save dialog are opened by the program itself, and the page has
   no access to your files, to the network or to a shell. The only network use is the download of
@@ -557,7 +503,7 @@ that is greyed out ignores its key.
 
 | Key | What it does |
 |---|---|
-| `1` `2` `3` `4` | open Cleanup, Registry, Services & RAM, Developers |
+| `1` `2` `3` | open Cleanup, Registry, Developers |
 | `?` | open Settings (not while a confirmation is open) |
 | `↑` `↓` | move the selection one row |
 | `PageUp` `PageDown` | move ten rows |
@@ -566,8 +512,8 @@ that is greyed out ignores its key.
 | `Space` | tick or untick the selected row, or every row under the selected heading (not while a job runs, not on a blocked row) |
 | `s` / `S` | order the list by the next column / turn the order round |
 | `i` | open or close the details of the selected row (Smooth) |
-| `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry, `Refresh` in Services & RAM |
-| `Enter` | the section's main button: `Clean`, `Fix selected` or `Disable`; it opens the confirmation |
+| `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry |
+| `Enter` | the section's main button: `Clean` or `Fix selected`; it opens the confirmation |
 | `Esc` | in this order: close Settings or the confirmation; leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
 
@@ -576,7 +522,7 @@ on past the confirmation it just opened. The arrows do repeat, that is how a lon
 The footer shows the keys of the open section, taken from the buttons themselves, so what it says
 and what the keys do agree.
 
-**Tab order.** The sections (the four sections and `Settings`), the categories and options of
+**Tab order.** The sections (the three sections and `Settings`), the categories and options of
 the sidebar, then the main panel (`Details`, the search box, the list with its top check box, the
 detail), and last the buttons of the section and Smooth's theme (`Auto`, `Light`, `Dark`). The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The detail
@@ -632,14 +578,11 @@ next chapter). Their licence stays their own.
 | The window's size and position | `%APPDATA%\Xiox\window.json` (next to the settings file) |
 | Registry backups | `Documents\Xiox\registry-backup-<date>_<time>.reg` |
 | Backup of the registry keys an `Applications` rule is about to delete | `Documents\Xiox\rules-backup-<date>_<time>.reg` |
-| The startup types saved before a service was changed | `Documents\Xiox\services-original.txt` |
 | The cookie keep list | `Documents\Xiox\cookie-keep-list.txt` |
 | `.reg` backup of an Environment PATH change | `Documents\Xiox` |
 | The Winapp2 rules | `%ProgramData%\Xiox\winapp2\` |
 | Cache of the agent-session listing | `%LOCALAPPDATA%\Xiox\mukade` |
 | Reports | nowhere, unless you press `Save as text…` and choose a place |
-
-Files that an earlier version created under their old names (`servizi_originali.txt`, `cookie_da_conservare.txt`) keep working: Xiox goes on reading and writing the old file if it is there, and never renames, copies or deletes it.
 
 `Documents` is your Documents folder (`%USERPROFILE%\Documents`). The app writes nothing else
 outside the places you choose. A window position that no longer fits is ignored; a settings file
@@ -649,8 +592,8 @@ that cannot be written is reported in the window (`Settings not saved: ...`).
 
 **A button is greyed out.** It has a reason, and it is one of these: a job is running (wait for
 it, or `Cancel`); a confirmation is open (answer it); nothing is ticked; there is no analysis yet
-(Cleanup: *Analyze first: Clean works on the analysis on screen.*); the report is open (close it);
-or there is nothing to do (`Restore originals (0)`).
+(Cleanup: *Analyze first: Clean works on the analysis on screen.*); or the report is open (close
+it).
 
 **A row cannot be ticked.** It is blocked: read the second line of the row, or the `blocked` line
 of the detail. See [Levels and blocked entries](#levels-and-blocked-entries).
@@ -667,8 +610,6 @@ you are most likely to meet:
 | *The analysis is too old: press “Analyze” again.* | analyze again (the limit is 30 minutes) |
 | *Read the warnings and tick “I have read the warnings” first.* | tick the box in the confirmation |
 | *Tick at least one category to look through.* | Registry: tick a kind of problem |
-| *No original startup types are saved: there is nothing to restore.* | Services: Xiox has not changed any service yet |
-| *Needed by Windows: protected* | a protected service: nothing to do |
 | *Registry backup failed (…): no repair was done.* | fix the cause (disk full, no rights) and try again |
 
 **Registry: `n not fixed (administrator rights are needed)`.** You are running as a standard
@@ -716,7 +657,7 @@ are for and in what they cover.
 | | Desktop app | `xiox` |
 |---|---|---|
 | Administrator | asks once, at start (production build) | never asks |
-| Scope | the whole PC: files, registry, services, and **every** project | **one** project at a time |
+| Scope | the whole PC: files, registry and **every** project | **one** project at a time |
 | Categories for projects | `Projects`, `Worktrees`, `Archived sessions` | builds, worktrees, copies of the repository, named folders, logs, sessions |
 | Output | a window | text, or JSON for scripts and agents |
 | Confirmation | a dialog | a summary and a y/N question (`--yes` skips it) |

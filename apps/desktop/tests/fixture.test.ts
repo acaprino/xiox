@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MockModel, type Fixture } from '../src/mockmodel.ts';
+import type { Fixture } from '../src/mockmodel.ts';
 import type { NoticeView, SectionId, SectionView } from '../src/types.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8')) as Fixture;
@@ -39,7 +39,7 @@ test('a count of one agrees with its word', () => {
     const notices = [...view.notices, ...(view.report?.notes ?? [])];
     const texts = [view.status.text, view.subtitle, view.footer ?? '', view.empty?.text ?? '', ...view.nav.map((n) => n.note ?? ''), ...notices.map((n) => n.text)];
     for (const text of texts) {
-      assert.ok(!/(?<![0-9,.])\b1 (items|files|services|rules|folders|issues|projects|worktrees|sessions)\b/.test(text), `${name}: ${JSON.stringify(text)} says "1" with a plural`);
+      assert.ok(!/(?<![0-9,.])\b1 (items|files|rules|folders|issues|projects|worktrees|sessions)\b/.test(text), `${name}: ${JSON.stringify(text)} says "1" with a plural`);
     }
   }
 });
@@ -52,25 +52,12 @@ test('a partial failure is a warning, not a success', () => {
   };
   assert.equal(partial('registry', 'partial').tone, 'warn');
   assert.match(partial('registry', 'partial').text, /\d+ not fixed/);
-  assert.equal(partial('services', 'partial').tone, 'warn');
-  assert.match(partial('services', 'partial').text, /\d+ failed/);
   assert.equal(partial('registry', 'fixed').tone, 'ok', 'a clean fix stays a success');
-});
-
-test('Services with a search that matches nothing says so', () => {
-  const view = fixture.views.services.nomatch as SectionView;
-  assert.equal(view.rows.length, 0);
-  assert.deepEqual(view.empty, { title: 'No services', text: 'Nothing matches “x”.' });
-  assert.equal(view.search?.value, 'x');
-  assert.equal(view.subtitle, '0 of 8 services shown');
-  const model = new MockModel(fixture);
-  const shown = model.go('services', 'nomatch');
-  assert.equal(shown.empty?.title, 'No services', 'the mock can be put on it (the smoke script does)');
 });
 
 test('the data files the page names are the English ones', () => {
   const text = JSON.stringify(fixture);
-  for (const old of ['cookie_da_conservare', 'servizi_originali', 'backup_registro', 'backup_regole']) assert.ok(!text.includes(old), `${old} is gone`);
+  for (const old of ['cookie_da_conservare', 'backup_registro', 'backup_regole']) assert.ok(!text.includes(old), `${old} is gone`);
   assert.match(text, /registry-backup-\d{8}_\d{6}\.reg/);
   assert.ok(text.includes('cookie-keep-list.txt'));
 });

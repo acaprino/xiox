@@ -970,7 +970,6 @@ fn a_saved_notice_lands_only_on_the_report_that_was_written() {
         std::sync::Arc::new(crate::notify::NoNotifier),
         st,
         crate::regstate::RegistryState::new(),
-        crate::svcstate::ServicesState::new(),
         dev,
     );
     let written = core.report_text(SectionId::Cleanup).expect("a report on screen can be saved");
