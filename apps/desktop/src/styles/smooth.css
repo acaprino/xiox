@@ -141,14 +141,6 @@
   & .btn.danger:hover:not(:disabled) { filter: brightness(1.06); }
   & .btn.danger:active:not(:disabled) { filter: brightness(.94); }
 
-  /* The ONI MODE switch: a native toggle. */
-  & .btn.skin-switch { min-height: var(--hit); padding: 2px 6px; border: 0; background: none; color: var(--muted); font: 500 var(--fs-sm) var(--font-body); }
-  & .btn.skin-switch::before {
-    content: ""; flex: none; width: 30px; height: 16px; border-radius: 8px; border: 1px solid var(--line-strong);
-    background: radial-gradient(circle at 7px 50%, var(--muted) 0 4px, transparent 4.5px);
-  }
-  & .btn.skin-switch:hover:not(:disabled) { background: var(--hover); color: var(--text); }
-
   /* Smooth's theme: a segmented control, the pressed choice raised. */
   & #theme { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--stage); }
   & .theme-choice {
@@ -267,6 +259,16 @@
   & .r .nm, & .r.child .nm { padding-left: calc(var(--depth, 0) * var(--indent)); }
   & .caret-gap.tree { display: block; }
   & .r.sec.boxed > .sec-name { padding-left: calc(var(--depth, 0) * var(--indent) + var(--hit) + 4px); }
+  /* A folder of the projects' tree: its own caret in the place the other headings leave empty, its name as a folder
+     reads (not in capitals), a folder glyph in amber before it. */
+  & .r.sec.folder { font: 600 var(--fs-md) var(--font-body); letter-spacing: 0; text-transform: none; }
+  & .r.sec.boxed > .sec-name.nm { padding-left: calc(var(--depth, 0) * var(--indent)); }
+  & .r.sec.folder .sec-name .t { color: var(--text); }
+  & .r.sec.folder .sec-name .t::before {
+    content: ""; display: inline-block; width: 14px; height: 12px; margin: 0 7px -1px 0; background: var(--amber-ink);
+    -webkit-mask: var(--folder-glyph) center / contain no-repeat; mask: var(--folder-glyph) center / contain no-repeat;
+    --folder-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 12'%3E%3Cpath d='M0 1.5A1.5 1.5 0 0 1 1.5 0h3.4l1.6 1.6h6A1.5 1.5 0 0 1 14 3.1v7.4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 0 10.5z'/%3E%3C/svg%3E");
+  }
   & .r[style*="--depth"] > .ckcell::before { content: ""; position: absolute; left: calc(17px - var(--indent)); top: -4px; bottom: -4px; width: 1px; background: var(--line); }
   /* Open and closed: a chevron that turns. */
   & .caret { width: var(--hit); height: var(--hit); color: var(--text-2); border-radius: var(--radius-xs); }
@@ -350,6 +352,7 @@
     & .r.sel, & .r.sec.boxed.sel { outline: 2px solid Highlight; outline-offset: -2px; }
     & #app::before { border-color: CanvasText; }
     & .theme-choice[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+    & .r.sec.folder .sec-name .t::before { forced-color-adjust: none; background: CanvasText; }
   }
 
   /* Narrow (a half-width window, or 200 % zoom): a narrower sidebar. */

@@ -276,7 +276,7 @@ async function checkCopy(page, label, section, view) {
   want('actions', found.actions, view.actions.map((a) => [a.label, a.key === null ? null : (KEY_LABELS[a.key] ?? a.key), !a.enabled]));
   want('section bar', found.sections, SECTION_NAMES.map(([id, name], i) => [id, name, String(i + 1)]));
   want('section bar heading', found.sectionsHead, 'Sections');
-  want('About button', found.about, ['About', '?']);
+  want('Settings button', found.about, ['Settings', '?']);
   want('footer hint', found.hint, FOOTER[section]);
   want('footer text', found.footLeft, view.footer ?? '');
   want('list title', found.title, view.title);
@@ -674,6 +674,13 @@ async function sectionFlows(page, size, shot) {
   check(await page.locator('#rows [data-row="a:3"] .lv.caution').count() === 1, 'the caution child is not drawn at the caution level');
   await setOpen('p:3', true);
   check(await page.locator('#rows [data-row="a:5"] [role=checkbox]').isDisabled(), 'the child of the project in use is not disabled');
+  // The projects' tree: a folder folds everything inside it and opens again (its id holds a backslash, escaped for CSS).
+  const projectsFolder = 'h:folder:D:\\\\Projects';
+  await setOpen(projectsFolder, false);
+  check(await page.locator('#rows [data-row="p:1"]').count() === 0 && await page.locator('#rows [data-row="a:3"]').count() === 0, 'a folded folder still shows what is inside it');
+  check(await page.locator('#rows [data-row="p:3"]').count() === 1, 'folding a folder hid the projects of its sibling');
+  await setOpen(projectsFolder, true);
+  check(await page.locator('#rows [data-row="p:1"]').count() === 1, 'an opened folder does not show its projects');
   failures.push(...await checkFit(page, `developers-projects-all-open-${size}`));
   await page.screenshot({ path: `${shot}developers-projects-all-open-${size}.png` });
   // Worktrees: the other-worktrees header, rows without a box, the blocked one.
@@ -940,7 +947,7 @@ async function fixWaveFlows(page, size, shot) {
 }
 
 /** No continuous animation; and with prefers-reduced-motion: reduce nothing animates or transitions at all. */
-/** The About window: opens from its button and from `?`, says what Rust says, closes with Escape or Close and gives the focus back. */
+/** The Settings window: opens from its button and from `?`, offers the look, says what Rust says (About), closes with Escape or Close and gives the focus back. */
 async function aboutFlows(page, size, shot) {
   const failures = [];
   const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
@@ -950,13 +957,14 @@ async function aboutFlows(page, size, shot) {
   await page.locator('#sections .nv.about').click();
   await open().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the About button did not open About`));
   const text = (await open().innerText()).replace(/\s+/g, ' ');
-  for (const part of ['Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
+  for (const part of ['Settings', 'Look', 'Smooth', 'ONI mode', 'About Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
   check(await focusKey(page) === 'about:close', `About opens with the focus on ${await focusKey(page)}, expected Close`);
   check(await page.evaluate(() => document.getElementById('body').inert && document.getElementById('top').inert), 'the page behind About is not inert');
   failures.push(...await checkFit(page, `about-${size}`));
   await page.screenshot({ path: `${shot}about-${size}.png` });
-  // Tab never leaves it (one control), Escape closes it and the focus goes back to the About button that opened it.
+  // Tab never leaves it (the chosen look and Close), Escape closes it and the focus goes back to the button that opened it.
   await page.keyboard.press('Tab');
+  check(await focusKey(page) === 'look:smooth', `Tab from Close went to ${await focusKey(page)}, expected the chosen look`);
   await page.keyboard.press('Shift+Tab');
   check(await focusKey(page) === 'about:close', `Tab left About (focus on ${await focusKey(page)})`);
   check(await ringOf(page) !== 'none', 'the Close button of About has no visible ring');
@@ -1209,11 +1217,19 @@ try {
     expect(await page.evaluate(() => window.__xioxMock.calls.some((c) => c.command === 'registry' && c.args.intent.kind === 'toggle' && c.args.intent.row === 't:2')), `${size}: the box of a kind of issue sent no toggle`);
     expect(await page.locator('#rows [data-row="t:2"] [aria-checked="true"]').count() === 1, `${size}: the box of a kind of issue did not come back ticked`);
 
-    // ONI MODE: the switch turns the look, the choice outlives a reload, and every state is drawn and fit-checked in it too.
-    await page.locator('#skin').click();
-    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'oni', `${size}: the switch did not turn ONI MODE on`);
-    expect(await page.locator('#skin[aria-checked="true"]').count() === 1, `${size}: the switch does not say it is on`);
+    // ONI MODE: chosen in Settings, it turns the look, the choice outlives a reload, and every state is drawn and fit-checked in it too.
+    const chooseLook = async (skin) => {
+      await page.locator('#sections .nv.about').click();
+      await page.locator(`#about [data-key="look:${skin}"]`).check();
+      await page.locator('[data-key="about:close"]').click();
+    };
+    expect(await page.locator('#skin').count() === 0, `${size}: the top bar still has an ONI MODE switch`);
+    await chooseLook('oni');
+    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'oni', `${size}: Settings did not turn ONI MODE on`);
     await page.reload();
+    await page.locator('#sections .nv.about').click();
+    expect(await page.locator('#about [data-key="look:oni"]:checked').count() === 1, `${size}: Settings does not say ONI MODE is on after a reload`);
+    await page.locator('[data-key="about:close"]').click();
     await page.locator('#sections [data-section="cleanup"].on').waitFor();
     failures.push(...await checkTokens(page, 'oni'));
     await page.evaluate(() => window.__xioxMock.pause(true));
@@ -1227,8 +1243,8 @@ try {
       await page.screenshot({ path: `${out}${label}.png` });
       shots += 1;
     }
-    await page.locator('#skin').click();
-    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'smooth', `${size}: the switch did not turn ONI MODE off`);
+    await chooseLook('smooth');
+    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'smooth', `${size}: Settings did not turn ONI MODE off`);
     await page.reload();
     await page.locator('#sections [data-section="cleanup"].on').waitFor();
 

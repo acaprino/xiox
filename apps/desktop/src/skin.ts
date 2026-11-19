@@ -10,9 +10,6 @@ export const SKIN_KEY = 'xiox.skin';
 /** The look a stored value stands for: ONI MODE only when it was chosen, anything else (nothing stored, a stale value) is Smooth. */
 export const storedSkin = (raw: string | null): Skin => (raw === 'oni' ? 'oni' : 'smooth');
 
-/** The other look: what the ONI MODE switch turns to. */
-export const otherSkin = (skin: Skin): Skin => (skin === 'oni' ? 'smooth' : 'oni');
-
 /** Smooth's theme: the one of Windows, or light or dark whatever Windows says. ONI MODE has none: it is always dark. */
 export type Theme = 'system' | 'light' | 'dark';
 

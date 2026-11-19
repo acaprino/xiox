@@ -98,52 +98,35 @@ export function cycleSort(columns: ColumnView[], key: SortKey | null, reverse: b
   return { column: next.title, desc: naturalDesc(next.kind) };
 }
 
-/** A top-level row with the rows that hang under it. */
-interface Entry {
-  row: RowView;
-  children: RowView[];
-  /** Its value in the order: for sizes its own bytes or what the children add up to, else its own. */
-  value: SortValue;
-}
-
-function entries(group: RowView[], order: Order): Entry[] {
-  const present = new Set(group.map((r) => r.id));
-  const kids = new Map<string, RowView[]>();
-  const tops: RowView[] = [];
-  for (const row of group) {
-    if (row.parent !== null && present.has(row.parent)) kids.set(row.parent, [...(kids.get(row.parent) ?? []), row]);
-    else tops.push(row);
-  }
-  return tops.map((row) => {
-    const children = byValue(kids.get(row.id) ?? [], order.value, order.desc);
-    const own = order.value(row);
-    return { row, children, value: order.kind === 'size' ? own ?? sum(children.map(order.value)) : own };
-  });
-}
-
-function flatten(group: RowView[], order: Order): { rows: RowView[]; values: SortValue[] } {
-  const sorted = byValue(entries(group, order), (e) => e.value, order.desc);
-  return { rows: sorted.flatMap((e) => [e.row, ...e.children]), values: sorted.map((e) => e.value) };
-}
+/** A row with the rows that hang under it, in order, and its value in the order. */
+interface Branch { row: RowView; rows: RowView[]; value: SortValue }
 
 /**
- * One block of rows in order, children under their parent. Rows before the first header stay first; each header moves
- * with the rows after it up to the next header. The headers go by what their rows add up to (sizes), by their own name,
- * or, for any other column, by the value of their first row.
+ * One block of rows in order, as the tree it draws: a row hangs under its parent, and a row with no parent in the block
+ * under the header before it (a header with no parent in the block, and a row before the first header, sit at the top;
+ * those rows stay first). Rows hanging under the same one go by their value: their own; for sizes, when they have none,
+ * what the rows under them add up to; for a header with no value of its own (a column it has no cell in), that of its
+ * first row. A folder of the projects' tree is a header whose parent is the folder above it.
  */
 function sortBlock(rows: RowView[], order: Order): RowView[] {
-  const lead: RowView[] = [];
-  const groups: { header: RowView; rows: RowView[] }[] = [];
+  const present = new Set(rows.map((r) => r.id));
+  const kids = new Map<string | null, RowView[]>();
+  let header: string | null = null;
   for (const row of rows) {
-    if (row.kind === 'header') groups.push({ header: row, rows: [] });
-    else (groups.length === 0 ? lead : groups[groups.length - 1]!.rows).push(row);
+    const parent = row.parent !== null && present.has(row.parent) ? row.parent : row.kind === 'header' ? null : header;
+    if (row.kind === 'header') header = row.id;
+    const list = kids.get(parent);
+    if (list) list.push(row); else kids.set(parent, [row]);
   }
-  const built = groups.map((g) => {
-    const { rows: inside, values } = flatten(g.rows, order);
-    const value = order.kind === 'size' ? sum(values) : order.kind === 'name' ? g.header.name : values[0] ?? null;
-    return { header: g.header, rows: inside, value };
-  });
-  return [...flatten(lead, order).rows, ...byValue(built, (g) => g.value, order.desc).flatMap((g) => [g.header, ...g.rows])];
+  const branch = (row: RowView): Branch => {
+    const inner = byValue((kids.get(row.id) ?? []).map(branch), (b) => b.value, order.desc);
+    const own = order.value(row);
+    const value = order.kind === 'size' ? own ?? sum(inner.map((b) => b.value)) : row.kind === 'header' ? own ?? inner[0]?.value ?? null : own;
+    return { row, rows: [row, ...inner.flatMap((b) => b.rows)], value };
+  };
+  const tops = (kids.get(null) ?? []).map(branch);
+  const sorted = (list: Branch[]): RowView[] => byValue(list, (b) => b.value, order.desc).flatMap((b) => b.rows);
+  return [...sorted(tops.filter((b) => b.row.kind !== 'header')), ...sorted(tops.filter((b) => b.row.kind === 'header'))];
 }
 
 /**
@@ -164,8 +147,9 @@ export function sortRows(rows: RowView[], order: Order = BY_SIZE): RowView[] {
 }
 
 /**
- * The rows on screen: a child shows only while every parent above it is expanded, and the rows of a folded category
- * (`folded` holds the ids of its `group` rows) are not shown at all, its own row stays.
+ * The rows on screen: a child shows only while every parent above it is open, and the rows of a folded category are not
+ * shown at all, its own row stays. A parent row is open when expanded; a folder (a header with rows hanging under it) is
+ * open unless folded. `folded` holds the ids of the folded categories and folders.
  */
 export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, folded: ReadonlySet<string> = new Set()): RowView[] {
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -173,7 +157,8 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, fold
     if (row.parent === null) return true;
     const parent = byId.get(row.parent);
     if (!parent) return true;
-    if (!expanded.has(parent.id) || seen.has(parent.id)) return false;
+    const open = parent.kind === 'header' ? !folded.has(parent.id) : expanded.has(parent.id);
+    if (!open || seen.has(parent.id)) return false;
     return shown(parent, seen.add(row.id));
   };
   let hidden = false;
@@ -185,7 +170,8 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, fold
 
 /**
  * How deep each row sits in the tree the list draws: a category, and a sub-heading outside one, at 0; a sub-heading inside a
- * category at 1; a row one deeper than the heading above it (0 when there is none); a child one deeper than its parent.
+ * category at 1; a folder inside a folder one deeper than it; a row one deeper than the heading above it (0 when there is
+ * none); a child one deeper than its parent.
  * Computed on the engine's order, where a heading precedes its rows and a parent its children.
  */
 export function rowDepths(rows: RowView[]): Map<string, number> {
@@ -198,7 +184,8 @@ export function rowDepths(rows: RowView[]): Map<string, number> {
       inGroup = true;
       base = 1;
     } else if (row.kind === 'header') {
-      const d = inGroup ? 1 : 0;
+      const above = row.parent === null ? undefined : depth.get(row.parent);
+      const d = above !== undefined ? above + 1 : inGroup ? 1 : 0;
       depth.set(row.id, d);
       base = d + 1;
     } else {
@@ -209,12 +196,18 @@ export function rowDepths(rows: RowView[]): Map<string, number> {
   return depth;
 }
 
-/** What the rows of a sub-heading add up to (its own line shows it): the top rows after it, up to the next sub-heading or category; null when none has a size. */
+/**
+ * What the rows of a sub-heading add up to (its own line shows it): the rows right under it, and under the folders inside
+ * it, up to the next sub-heading or category that is not inside it; null when none has a size.
+ */
 export function headerBytes(rows: RowView[], id: string): number | null {
+  const inside = new Set([id]);
   const sizes: number[] = [];
   for (const r of rows.slice(rows.findIndex((x) => x.id === id) + 1)) {
-    if (r.kind === 'header' || r.kind === 'group') break;
-    if (r.parent === null && r.bytes !== null) sizes.push(r.bytes);
+    const under = r.parent !== null && inside.has(r.parent);
+    if ((r.kind === 'header' || r.kind === 'group') && !under) break;
+    if (r.kind === 'header') inside.add(r.id);
+    else if ((r.parent === null || under) && r.bytes !== null) sizes.push(r.bytes);
   }
   return sizes.length === 0 ? null : sizes.reduce((a, b) => a + b, 0);
 }

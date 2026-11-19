@@ -1,7 +1,7 @@
 // What the page remembers: the open section, per section the view with the highest `rev`, the focused
 // row and the expanded parents. No DOM here, so node can test it.
 
-import { groupSizes, orderFor, sortRows, visibleRows, type SortKey } from './rows.ts';
+import { groupSizes, orderFor, rowParents, sortRows, visibleRows, type SortKey } from './rows.ts';
 import type { Check, RowView, SectionId, SectionView } from './types.ts';
 
 export const SECTION_ORDER: readonly SectionId[] = ['cleanup', 'registry', 'services', 'developers'];
@@ -13,7 +13,7 @@ export interface UiState {
   focus: Partial<Record<SectionId, string>>;
   /** Parents whose children are shown; every parent starts collapsed. */
   expanded: Set<string>;
-  /** What the user chose for a category (`group` row id): true = folded, false = open. A category without an entry follows `LONG_GROUP`. */
+  /** What the user chose for a category (`group` row id) or a folder (a header that is a parent): true = folded, false = open. A category without an entry follows `LONG_GROUP`, a folder starts open. */
   fold: Map<string, boolean>;
   /** The category the list is scrolled to, per section (the menu marks it); set by the scroll and by a click on the menu. */
   spy: Partial<Record<SectionId, string>>;
@@ -35,16 +35,20 @@ export function acceptView(ui: UiState, v: SectionView): boolean {
   return true;
 }
 
-/** A row the selection can rest on: any row but a plain sub-heading (one with a box is a row of its own: Space ticks it). */
-export const focusable = (row: RowView): boolean => row.kind !== 'header' || row.check !== 'none';
+/**
+ * A row the selection can rest on: any row but a plain sub-heading (one with a box is a row of its own: Space ticks it;
+ * a folder, in `parents` with the rows that have rows under them, too: the arrows fold it).
+ */
+export const focusable = (row: RowView, parents: ReadonlySet<string> = new Set()): boolean =>
+  row.kind !== 'header' || row.check !== 'none' || parents.has(row.id);
 
 /**
  * The row after moving `delta` rows from `current` over the rows on screen: plain sub-headings are skipped
  * and the ends clamp. Without a current row (or one no longer listed) it is the first row going down
  * and the last going up. Null when there is no row to land on.
  */
-export function moveFocus(rows: RowView[], current: string | null, delta: number): string | null {
-  const ids = rows.filter(focusable).map((r) => r.id);
+export function moveFocus(rows: RowView[], current: string | null, delta: number, parents: ReadonlySet<string> = new Set()): string | null {
+  const ids = rows.filter((r) => focusable(r, parents)).map((r) => r.id);
   if (ids.length === 0) return null;
   const at = current === null ? -1 : ids.indexOf(current);
   if (at < 0) return (delta < 0 ? ids[ids.length - 1] : ids[0]) ?? null;
@@ -57,13 +61,15 @@ export const LONG_GROUP = 40;
 /** Whether the search box has text: a search shows what it found, so no category stays folded over a match. */
 export const searching = (view: SectionView): boolean => (view.search?.value.trim() ?? '') !== '';
 
-/** The ids of the categories whose rows are not drawn. */
+/** The ids of the categories and folders whose rows are not drawn. */
 export function foldedGroups(ui: UiState, view: SectionView): Set<string> {
   const folded = new Set<string>();
   if (searching(view)) return folded;
   for (const [id, size] of groupSizes(view.rows)) {
     if (ui.fold.get(id) ?? size > LONG_GROUP) folded.add(id);
   }
+  const parents = rowParents(view.rows);
+  for (const row of view.rows) if (row.kind === 'header' && parents.has(row.id) && ui.fold.get(row.id) === true) folded.add(row.id);
   return folded;
 }
 
@@ -74,9 +80,10 @@ export const shownRows = (ui: UiState, view: SectionView): RowView[] =>
 /** The focused row of the section as the list shows it: the chosen one if it is on screen, else the first. */
 export function currentFocus(ui: UiState, view: SectionView): string | null {
   const shown = shownRows(ui, view);
+  const parents = rowParents(view.rows);
   const chosen = ui.focus[view.section];
-  if (chosen !== undefined && shown.some((r) => r.id === chosen && focusable(r))) return chosen;
-  return moveFocus(shown, null, 1);
+  if (chosen !== undefined && shown.some((r) => r.id === chosen && focusable(r, parents))) return chosen;
+  return moveFocus(shown, null, 1, parents);
 }
 
 /**
@@ -85,7 +92,8 @@ export function currentFocus(ui: UiState, view: SectionView): string | null {
  */
 export function bulkCheck(view: SectionView): Check {
   const grouped = view.rows.some((r) => r.kind === 'group');
-  const boxes = view.rows.filter((r) => (grouped ? r.kind === 'group' : r.kind === 'item' && r.parent === null) && r.check !== 'none' && r.enabled);
+  // An item is a top row, or a project in its folder; a child (a project's folder to clean) is not one of the boxes.
+  const boxes = view.rows.filter((r) => (grouped ? r.kind === 'group' : r.kind === 'item') && r.check !== 'none' && r.enabled);
   if (boxes.length === 0) return 'none';
   if (boxes.every((r) => r.check === 'on')) return 'on';
   return boxes.every((r) => r.check === 'off') ? 'off' : 'mixed';

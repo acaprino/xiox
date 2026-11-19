@@ -1663,6 +1663,56 @@
    }
   },
   {
+   "note": "back to the projects, under the folders they sit in",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "select",
+    "category": "projects"
+   },
+   "expect": {
+    "state": "projects",
+    "active": "projects",
+    "rev": 49
+   }
+  },
+  {
+   "note": "a folder's box ticks every free project inside it",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "h:folder:D:\\Projects"
+   },
+   "expect": {
+    "state": "projects",
+    "checks": {
+     "p:1": "on",
+     "p:2": "on",
+     "h:folder:D:\\Projects": "on"
+    },
+    "rev": 50
+   }
+  },
+  {
+   "note": "all of them ticked, the same box clears them",
+   "op": "intent",
+   "section": "developers",
+   "intent": {
+    "kind": "toggle",
+    "row": "h:folder:D:\\Projects"
+   },
+   "expect": {
+    "state": "projects",
+    "checks": {
+     "p:1": "off",
+     "p:2": "off",
+     "h:folder:D:\\Projects": "off"
+    },
+    "rev": 51
+   }
+  },
+  {
    "note": "back to the Cleanup analysis, nothing ticked",
    "op": "go",
    "section": "cleanup",

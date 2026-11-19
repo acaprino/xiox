@@ -30,7 +30,7 @@ Due look per la stessa finestra:
   pannello dei dettagli è chiuso e si apre a richiesta. (Una prima versione con pannelli arrotondati e menu in
   maiuscolo è stata scartata dall'utente il 2026-11-18: "molto più clean e moderno, quasi nativo, un po' come
   Qamille".)
-- **ONI MODE**, il look di oggi, da attivare con un interruttore nella barra in alto: stessa palette, stessa
+- **ONI MODE**, il look di oggi, da scegliere in Settings (la finestra che era About): stessa palette, stessa
   disposizione a tre colonne, stesso pannello dei dettagli sempre visibile. La scelta resta tra un avvio e l'altro.
 
 In entrambi i look:
@@ -38,7 +38,11 @@ In entrambi i look:
 - un clic sull'intestazione di una colonna ordina la lista per quella colonna; un secondo clic inverte il verso; una
   freccia dice colonna e verso. L'ordine di partenza è quello di oggi (dimensione, dalla più grande);
 - ogni gruppo di voci ha una casella che spunta o toglie tutto ciò che il gruppo può spuntare: sottogruppi di Winapp2,
-  problemi del Registro per tipo, sessioni archiviate per progetto, worktree per repository.
+  problemi del Registro per tipo, sessioni archiviate per progetto, worktree per repository;
+- in Developers → Progetti i progetti stanno in un albero delle cartelle in cui si trovano (richiesta dell'utente del
+  2026-11-19: "vedere tutto come un ramo folders"). Una cartella senza progetti propri e con una sola cartella dentro è
+  una riga sola (`D:\Projects`); ogni cartella somma i suoi progetti, si piega (parte aperta) e ha la casella dei
+  progetti liberi che contiene. Worktree e sessioni restano raggruppati come prima.
 
 ## User Stories
 
@@ -128,10 +132,11 @@ In entrambi i look:
   scritte nel suggerimento dei tasti.
 - **Due look, un DOM.** Il markup è uno; il look è un attributo sulla radice del documento. Ogni look ha il proprio
   foglio di stile completo; il foglio di ONI MODE è quello di oggi, toccato solo per i nuovi controlli (pulsanti di
-  ordinamento, casella delle intestazioni, interruttore del look). Il primo fotogramma e lo sfondo della finestra
+  ordinamento, casella delle intestazioni, scelta del look). Il primo fotogramma e lo sfondo della finestra
   restano `#0b0416` in entrambi i look, così all'avvio non c'è lampo.
-- **Interruttore del look.** Un interruttore "ONI MODE" nella barra in alto, accanto alle azioni, presente in
-  entrambi i look. La scelta si salva nella memoria del webview come lo zoom; senza memoria vale Smooth.
+- **Scelta del look.** In Settings (la finestra About, rinominata), voce `Look`: Smooth o ONI mode. L'interruttore
+  nella barra in alto è stato tolto su richiesta dell'utente il 2026-11-19 ("elimina tasto oni mode, il tema vecchio
+  resta attivabile da settings"). La scelta si salva nella memoria del webview come lo zoom; senza memoria vale Smooth.
 - **Chiaro e scuro.** Smooth segue il tema di Windows (chiesto dall'utente il 2026-11-18: "anche light voglio"): la
   finestra non forza più il tema scuro, la pagina dice a Rust se il look è solo scuro e Rust chiede a Windows il tema
   scuro per ONI MODE e per Smooth quello del suo selettore (Auto, Chiaro, Scuro; Auto = nessuno, segue Windows; la scelta resta
@@ -150,7 +155,7 @@ In entrambi i look:
   minuscolo; maiuscole spaziate solo per le etichette di sezione e i nomi di categoria. Controlli da 32 px, angoli di
   4–10 px, linee di 1 px, transizioni di 150–300 ms, nessuna animazione con la riduzione del movimento attiva.
 - **Disposizione Smooth.** Barra in alto sul fondo: marchio sopra la colonna, schede delle sezioni allineate al
-  foglio con la barra ambra sotto quella aperta, interruttore del look a destra. Colonna di categorie e opzioni sul
+  foglio con la barra ambra sotto quella aperta, tema (Auto, Light, Dark) a destra. Colonna di categorie e opzioni sul
   fondo; sul foglio: riga di stato, lista, dettagli, pulsanti della sezione in basso a destra, piede. La colonna delle
   sezioni non si vede (ONI MODE la mostra come oggi). Le scorciatoie 1–4 delle sezioni restano.
 - **Dettagli a richiesta.** Nello stato della pagina un flag "dettagli aperti", chiuso all'inizio. In Smooth il

@@ -176,11 +176,27 @@ fn is_box(r: &RowView) -> bool {
 }
 
 /// The indexes of the rows the box row at `at` may change: after it, up to the next group row (a sub-heading: also
-/// the next sub-heading).
+/// the next sub-heading that is not inside it, as a folder of the projects' tree is inside the folder its `parent` names).
 fn box_rows(rows: &[RowView], at: usize) -> Vec<usize> {
     let header = rows[at].kind == RowKind::Header;
+    let mut inside = vec![rows[at].id.as_str()];
     let after = &rows[at + 1..];
-    let end = after.iter().position(|r| r.kind == RowKind::Group || (header && r.kind == RowKind::Header)).unwrap_or(after.len());
+    let end = after
+        .iter()
+        .position(|r| {
+            if r.kind == RowKind::Group {
+                return true;
+            }
+            if !(header && r.kind == RowKind::Header) {
+                return false;
+            }
+            let nested = r.parent.as_deref().is_some_and(|p| inside.contains(&p));
+            if nested {
+                inside.push(&r.id);
+            }
+            !nested
+        })
+        .unwrap_or(after.len());
     (at + 1..at + 1 + end).filter(|&i| eligible(&rows[i])).collect()
 }
 

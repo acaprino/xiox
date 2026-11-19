@@ -10,7 +10,7 @@ import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
 import { initializeWindowControls } from './window-controls.ts';
-import { effectiveTheme, otherSkin, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowTheme, type Skin, type Theme } from './skin.ts';
+import { effectiveTheme, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowTheme, type Skin, type Theme } from './skin.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
@@ -152,12 +152,12 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
   render();
 }
 
-/** The About window: the page's own, with no intent. A confirmation that is open keeps the keyboard, so About waits. */
+/** The Settings window: the page's own, with no intent. A confirmation that is open keeps the keyboard, so Settings waits. */
 async function openAbout(): Promise<void> {
   if (aboutOpen() || ui.views[ui.section]?.dialog != null) return;
   const from = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key ?? null : null;
   try {
-    showAbout(await api.about(), from, closeAbout);
+    showAbout(await api.about(), from, { skin: storedSkin(document.documentElement.dataset.skin ?? null), choose: chooseSkin }, closeAbout);
   } catch (failure) {
     error = { section: ui.section, text: errorText(failure) };
     render();
@@ -256,7 +256,7 @@ function onKey(event: KeyboardEvent): void {
       break;
     case 'move': {
       if (!listed) return;
-      const next = moveFocus(rows, currentFocus(ui, view), act.delta);
+      const next = moveFocus(rows, currentFocus(ui, view), act.delta, rowParents(view.rows));
       if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
       break;
     }
@@ -269,12 +269,15 @@ function onKey(event: KeyboardEvent): void {
     case 'expand': {
       const id = currentFocus(ui, view);
       if (!listed || id === null) return;
-      if (rows.find((r) => r.id === id)?.kind === 'group') {
+      const parents = rowParents(view.rows);
+      // A category, and a folder of the projects' tree (a sub-heading with rows under it), fold; a parent row expands.
+      const kind = rows.find((r) => r.id === id)?.kind;
+      if (kind === 'group' || (kind === 'header' && parents.has(id))) {
         ui.fold.set(id, !act.open);
         render();
         break;
       }
-      if (!rowParents(view.rows).has(id)) return;
+      if (!parents.has(id)) return;
       if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
       render();
       break;
@@ -320,7 +323,6 @@ function applySkin(skin: Skin): void {
   document.documentElement.dataset.skin = skin;
   // In the desktop window Smooth is glass: the page lets Windows' acrylic through (smooth.css `.native-glass`, chrome.rs).
   document.documentElement.classList.toggle('native-glass', inTauri && skin === 'smooth');
-  document.getElementById('skin')?.setAttribute('aria-checked', String(skin === 'oni'));
   // ONI MODE is dark whatever the system says; Smooth follows its theme (the window's theme decides the page's prefers-color-scheme).
   syncChrome();
 }
@@ -357,11 +359,11 @@ for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]
   });
 }
 
-document.getElementById('skin')?.addEventListener('click', () => {
-  const next = otherSkin(storedSkin(document.documentElement.dataset.skin ?? null));
+/** The look chosen in Settings (render/about.ts), kept for the next start. */
+function chooseSkin(next: Skin): void {
   applySkin(next);
   try { localStorage.setItem(SKIN_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
-});
+}
 
 /** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
 const ZOOM_KEY = 'xiox.zoom';

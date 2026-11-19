@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeSort, cycleSort, gridTemplate, gridVars, groupSizes, nextSort, orderFor, rowDepths, rowParents, sortRows, visibleRows } from '../src/rows.ts';
+import { activeSort, cycleSort, gridTemplate, gridVars, groupSizes, headerBytes, nextSort, orderFor, rowDepths, rowParents, sortRows, visibleRows } from '../src/rows.ts';
 import type { ColumnView, RowView } from '../src/types.ts';
 
 function row(id: string, bytes: number | null, extra: Partial<RowView> = {}): RowView {
@@ -174,4 +174,39 @@ test('each row sits one level under its heading or parent, a sub-heading one lev
   assert.deepEqual([...rowDepths(grouped)], [['g:a', 0], ['a1', 1], ['h:s', 1], ['s1', 2], ['p', 2], ['p:c', 3], ['g:b', 0], ['b1', 1]]);
   const plain = [row('lead', 1), header('h:x'), row('x1', 1), row('q', 1), child('q:c', 'q', 1)];
   assert.deepEqual([...rowDepths(plain)], [['lead', 0], ['h:x', 0], ['x1', 1], ['q', 1], ['q:c', 2]]);
+});
+
+/** The projects' tree: D:\ holds the folder `work` and the project `top`; `work` holds `a` (two folders to clean) and `b`. */
+const folder = (id: string, parent: string | null): RowView => row(id, null, { kind: 'header', parent });
+const TREE = [
+  folder('h:d', null),
+  folder('h:work', 'h:d'), row('a', 30, { parent: 'h:work' }), child('a:1', 'a', 10), child('a:2', 'a', 20), row('b', 50, { parent: 'h:work' }),
+  row('top', 40, { parent: 'h:d' }),
+  folder('h:e', null), row('e', 5, { parent: 'h:e' }),
+];
+
+test('a folder sits one level inside the folder above it, its projects one level inside it', () => {
+  assert.deepEqual([...rowDepths(TREE)], [['h:d', 0], ['h:work', 1], ['a', 2], ['a:1', 3], ['a:2', 3], ['b', 2], ['top', 1], ['h:e', 0], ['e', 1]]);
+});
+
+test('the tree of the projects sorts inside each folder and a folder goes by what it holds', () => {
+  assert.deepEqual(ids(sortRows(TREE)), ['h:d', 'h:work', 'b', 'a', 'a:2', 'a:1', 'top', 'h:e', 'e'], 'work (80) before top (40), b before a');
+  const byName = sortRows(TREE, by('item', false));
+  assert.deepEqual(ids(byName), ['h:d', 'h:work', 'a', 'a:1', 'a:2', 'b', 'top', 'h:e', 'e'], 'h:work before top by name; folders by their own name');
+});
+
+test('a folder adds up the projects inside it and inside its folders, not their folders to clean twice', () => {
+  assert.equal(headerBytes(TREE, 'h:d'), 120);
+  assert.equal(headerBytes(TREE, 'h:work'), 80);
+  assert.equal(headerBytes(TREE, 'h:e'), 5);
+  const flat = [header('h:x'), row('x1', 10), child('x1:c', 'x1', 4), row('x2', 6), header('h:y'), row('y1', 1)];
+  assert.equal(headerBytes(flat, 'h:x'), 16, 'a plain sub-heading: its top rows up to the next sub-heading');
+});
+
+test('a folder is open unless folded, and folding it hides everything inside it', () => {
+  const all = new Set(['a']);
+  assert.deepEqual(ids(visibleRows(TREE, all)), ids(TREE), 'folders start open; a project shows its folders when expanded');
+  assert.deepEqual(ids(visibleRows(TREE, new Set())), ['h:d', 'h:work', 'a', 'b', 'top', 'h:e', 'e'], 'a project starts collapsed');
+  assert.deepEqual(ids(visibleRows(TREE, all, new Set(['h:work']))), ['h:d', 'h:work', 'top', 'h:e', 'e']);
+  assert.deepEqual(ids(visibleRows(TREE, all, new Set(['h:d']))), ['h:d', 'h:e', 'e']);
 });

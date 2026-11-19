@@ -20,7 +20,7 @@ import { renderReport } from './report.ts';
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
   openSection(id: SectionId): void;
-  /** The About window (the button of the sections bar; `?` opens it too). */
+  /** The Settings window, with the look and what About said (the button of the sections bar; `?` opens it too). */
   openAbout(): void;
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
@@ -176,7 +176,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
       ...SECTION_ORDER.map((id, index) => h('button', {
         type: 'button', class: 'nv', 'data-section': id, 'data-key': `section:${id}`, onClick: () => on.openSection(id),
       }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))),
-      h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'About'), kbd('?')));
+      h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'Settings'), kbd('?')));
   }
   for (const tab of sections.querySelectorAll<HTMLElement>('.nv[data-section]')) {
     const here = tab.dataset.section === view.section;

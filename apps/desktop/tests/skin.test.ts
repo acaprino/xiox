@@ -1,26 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { effectiveTheme, otherSkin, storedSkin, storedTheme, windowTheme } from '../src/skin.ts';
+import { effectiveTheme, storedSkin, storedTheme, windowTheme } from '../src/skin.ts';
 
 test('the window opens in Smooth unless ONI MODE was chosen', () => {
   assert.equal(storedSkin(null), 'smooth');
   assert.equal(storedSkin(''), 'smooth');
   assert.equal(storedSkin('ONI'), 'smooth', 'only the exact stored word');
   assert.equal(storedSkin('oni'), 'oni');
-  assert.equal(otherSkin('smooth'), 'oni');
-  assert.equal(otherSkin('oni'), 'smooth');
 });
 
-test('the first frame is already Smooth, and the switch is in the page with its state', () => {
+test('the first frame is already Smooth, and the top bar has no look switch (the look is chosen in Settings)', () => {
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(html, /<html[^>]*data-skin="smooth"/);
-  assert.match(html, /id="skin"[^>]*role="switch"[^>]*aria-checked="false"/);
+  assert.doesNotMatch(html, /id="skin"|role="switch"/);
+  const settings = readFileSync(new URL('../src/render/about.ts', import.meta.url), 'utf8');
+  assert.match(settings, /'Look'/);
+  assert.match(settings, /\['oni', 'ONI mode/);
 });
 
 test('every Smooth rule is scoped to the Smooth root, so ONI MODE sees none of them', () => {
   const css = readFileSync(new URL('../src/styles/smooth.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  // Top-level blocks: the scoped root, the root rule of the switch and the keyframes. Nothing else.
+  // Top-level blocks: the scoped root, the fonts and the keyframes. Nothing else.
   let depth = 0;
   const tops: string[] = [];
   let start = 0;

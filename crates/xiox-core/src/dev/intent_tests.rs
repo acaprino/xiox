@@ -271,6 +271,60 @@ fn a_heading_ticks_the_free_rows_under_it() {
 }
 
 #[test]
+fn projects_sit_in_a_tree_of_their_folders_whose_boxes_tick_the_free_ones_inside() {
+    let at = |id: &str, root: &str, status, pre| ProjectReport { root: PathBuf::from(root), ..report(id, status, pre, 10) };
+    let scan = DevScan {
+        projects: vec![
+            at("a", r"D:\Projects\a", ProjectStatus::Inactive, true),
+            at("b", r"D:\Projects\clients\b", ProjectStatus::Inactive, false),
+            at("c", r"D:\Projects\clients\c", ProjectStatus::Blocked, false),
+            // Another spelling of the same folder.
+            at("d", r"d:\projects\d", ProjectStatus::Inactive, false),
+            at("e", r"C:\code\e", ProjectStatus::Inactive, false),
+            // A drive's root has no folder above it.
+            at("r", r"D:\", ProjectStatus::Inactive, false),
+        ],
+        scanned_at_ms: xiox_app::now_ms(),
+        ..Default::default()
+    };
+    let mut st = with_scan(scan);
+    let v = st.view(false);
+    let (top, clients, code) = (r"h:folder:D:\Projects", r"h:folder:D:\Projects\clients", r"h:folder:C:\code");
+    let tree: Vec<(&str, Option<&str>)> = v.rows.iter().filter(|r| r.kind != RowKind::Child).map(|r| (r.id.as_str(), r.parent.as_deref())).collect();
+    assert_eq!(
+        tree,
+        [
+            ("p:r", None),
+            (top, None),
+            (clients, Some(top)),
+            ("p:b", Some(clients)),
+            ("p:c", Some(clients)),
+            ("p:a", Some(top)),
+            ("p:d", Some(top)),
+            (code, None),
+            ("p:e", Some(code)),
+        ],
+        "D:\\ and its one folder are one row; the folders before the projects beside them"
+    );
+    let heading = |v: &SectionView, id: &str| {
+        let r = row(v, id);
+        (r.name.clone(), r.sub.clone(), r.check)
+    };
+    assert_eq!(heading(&v, top), (r"D:\Projects".to_string(), None, Check::Mixed));
+    assert_eq!(heading(&v, clients), ("clients".to_string(), None, Check::Off), "the blocked project is not in its box");
+    assert_eq!(row(&v, &format!("a:{}", tid("b"))).parent.as_deref(), Some("p:b"), "a project's folders to clean stay under it");
+
+    st.toggle(top).unwrap();
+    assert_eq!(st.sel_artifacts, ids(&["a", "b", "d"]), "every free project inside it, the inner folder's too");
+    assert_eq!(heading(&st.view(false), top).2, Check::On);
+    st.toggle(top).unwrap();
+    assert!(st.sel_artifacts.is_empty());
+    st.toggle(clients).unwrap();
+    assert_eq!(st.sel_artifacts, ids(&["b"]));
+    assert_eq!(heading(&st.view(false), top).2, Check::Mixed);
+}
+
+#[test]
 fn a_worktree_that_cannot_be_removed_cannot_be_ticked() {
     let mut dirty = report("d", ProjectStatus::Inactive, true, 40);
     dirty.is_agent_worktree = true;
@@ -658,13 +712,17 @@ fn dev_view_lists_sections_rows_and_the_clean_button() {
     );
     assert_eq!(v.nav[0].name, Section::Projects.name());
 
-    // Projects: the project, then its folders under it; the blocked one greyed out with its reason.
+    // Projects: under the folder they sit in, each with its folders to clean under it; the blocked one greyed out with
+    // its reason. The folder's box is the free project's.
     let ids: Vec<String> = v.rows.iter().map(|r| r.id.clone()).collect();
-    assert_eq!(ids, vec!["p:a".to_string(), format!("a:{}", tid("a")), "p:b".to_string(), format!("a:{}", tid("b"))]);
+    let folder = r"h:folder:D:\p";
+    assert_eq!(ids, vec![folder.to_string(), "p:a".to_string(), format!("a:{}", tid("a")), "p:b".to_string(), format!("a:{}", tid("b"))]);
+    let f = row(&v, folder);
+    assert_eq!((f.kind, f.name.as_str(), f.parent.as_deref(), f.check, f.enabled), (RowKind::Header, r"D:\p", None, Check::On, true));
     let a = row(&v, "p:a");
     assert_eq!((a.kind, a.check, a.enabled, a.muted), (RowKind::Item, Check::On, true, false));
     assert_eq!(a.bytes, Some(100));
-    assert!(a.parent.is_none() && a.why.is_none());
+    assert!(a.parent.as_deref() == Some(folder) && a.why.is_none());
     let child = row(&v, &format!("a:{}", tid("a")));
     assert_eq!((child.kind, child.parent.as_deref(), child.check, child.enabled), (RowKind::Child, Some("p:a"), Check::On, true));
     assert_eq!(child.level, Some(LevelView::Recommended));
@@ -962,6 +1020,9 @@ fn script_scan() -> DevScan {
     // left even when `p:1` is switched off.
     let mut p2 = report("2", ProjectStatus::Inactive, true, 50);
     p2.artifacts[0].level = xiox_model::Level::Caution;
+    // The folder the fixture's first two projects sit in: the script ticks its box.
+    p1.root = PathBuf::from(r"D:\Projects\acme-api");
+    p2.root = PathBuf::from(r"D:\Projects\old-prototype");
     let wt = |id: &str, pre: bool| {
         let mut r = report(id, ProjectStatus::Inactive, pre, 10);
         // Its own folders: the ids repeat the projects', the paths must not (the plan finds

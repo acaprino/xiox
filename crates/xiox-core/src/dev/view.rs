@@ -185,71 +185,100 @@ impl DevState {
         rows
     }
 
+    /// The projects under the folders they sit in (a tree: [`folder_tree`]), each folder a heading with the box of the
+    /// projects inside it; a project with no folder above it (a drive's root) comes first, under none.
     fn project_rows(&self, scan: &DevScan) -> Vec<RowView> {
-        let mode = self.mode_text();
+        let (loose, tree) = folder_tree(&scan.projects);
         let mut rows = Vec::new();
-        for r in &scan.projects {
-            let free = status_allows(r);
-            let locked = (!free).then(|| locked_why(r));
-            let check = if r.artifacts.is_empty() {
-                Check::None
-            } else {
-                match tri_state(r, &self.sel_artifacts) {
-                    Tri::All => Check::On,
-                    Tri::None => Check::Off,
-                    Tri::Some => Check::Mixed,
-                }
-            };
-            let date = r.last_activity_ms.map_or_else(|| "—".to_string(), fmt_date);
-            let mut detail = vec![
-                ("item".to_string(), r.name.clone()),
-                ("folder".to_string(), r.root.display().to_string()),
-                ("last use".to_string(), date.clone()),
-                ("size".to_string(), sys::fmt_size(r.reclaimable_bytes)),
-            ];
-            if let Some(why) = locked.clone().or_else(|| (!r.reason.is_empty()).then(|| r.reason.clone())) {
-                detail.push(("why".into(), why));
+        for i in loose {
+            self.push_project(&mut rows, &scan.projects[i], None);
+        }
+        for folder in &tree {
+            self.push_folder(&mut rows, scan, folder, None);
+        }
+        rows
+    }
+
+    /// A folder's heading (named after the part of its path below the folder above it: the tree says the rest), then the
+    /// folders and the projects inside it.
+    fn push_folder(&self, rows: &mut Vec<RowView>, scan: &DevScan, folder: &Folder, above: Option<(&Folder, &str)>) {
+        let id = format!("{FOLDER_ROW}{}", folder.path.display());
+        let name = match above {
+            Some((up, _)) => folder.path.components().skip(up.path.components().count()).collect::<PathBuf>().display().to_string(),
+            None => folder.path.display().to_string(),
+        };
+        rows.push(RowView { parent: above.map(|(_, up)| up.to_string()), name, ..blank_row(id.clone(), RowKind::Header) });
+        for inner in &folder.folders {
+            self.push_folder(rows, scan, inner, Some((folder, &id)));
+        }
+        for &i in &folder.projects {
+            self.push_project(rows, &scan.projects[i], Some(&id));
+        }
+    }
+
+    /// A project's row, then its folders to clean under it.
+    fn push_project(&self, rows: &mut Vec<RowView>, r: &ProjectReport, folder: Option<&str>) {
+        let mode = self.mode_text();
+        let free = status_allows(r);
+        let locked = (!free).then(|| locked_why(r));
+        let check = if r.artifacts.is_empty() {
+            Check::None
+        } else {
+            match tri_state(r, &self.sel_artifacts) {
+                Tri::All => Check::On,
+                Tri::None => Check::Off,
+                Tri::Some => Check::Mixed,
             }
-            let id = format!("p:{}", r.id);
+        };
+        let date = r.last_activity_ms.map_or_else(|| "—".to_string(), fmt_date);
+        let mut detail = vec![
+            ("item".to_string(), r.name.clone()),
+            ("folder".to_string(), r.root.display().to_string()),
+            ("last use".to_string(), date.clone()),
+            ("size".to_string(), sys::fmt_size(r.reclaimable_bytes)),
+        ];
+        if let Some(why) = locked.clone().or_else(|| (!r.reason.is_empty()).then(|| r.reason.clone())) {
+            detail.push(("why".into(), why));
+        }
+        let id = format!("p:{}", r.id);
+        rows.push(RowView {
+            check,
+            enabled: free,
+            name: r.name.clone(),
+            sub: (!r.reason.is_empty()).then(|| r.reason.clone()),
+            cells: vec![date],
+            bytes: Some(r.reclaimable_bytes),
+            muted: !free,
+            why: locked.clone(),
+            detail,
+            parent: folder.map(str::to_string),
+            ..blank_row(id.clone(), RowKind::Item)
+        });
+        for a in &r.artifacts {
+            let mut detail = vec![
+                ("item".to_string(), format!("{} · {}", r.name, a.label)),
+                ("folder".to_string(), a.path.display().to_string()),
+                ("size".to_string(), sys::fmt_size(a.size.effective_bytes())),
+                ("level".to_string(), level_word(a.level).to_string()),
+                ("mode".to_string(), mode.to_string()),
+            ];
+            if !a.note.is_empty() {
+                detail.push(("why".into(), a.note.clone()));
+            }
             rows.push(RowView {
-                check,
+                parent: Some(id.clone()),
+                check: if self.sel_artifacts.contains(&a.id) { Check::On } else { Check::Off },
                 enabled: free,
-                name: r.name.clone(),
-                sub: (!r.reason.is_empty()).then(|| r.reason.clone()),
-                cells: vec![date],
-                bytes: Some(r.reclaimable_bytes),
+                name: a.label.clone(),
+                sub: (!a.note.is_empty()).then(|| a.note.clone()),
+                level: Some(level_view(a.level)),
+                bytes: Some(a.size.effective_bytes()),
                 muted: !free,
                 why: locked.clone(),
                 detail,
-                ..blank_row(id.clone(), RowKind::Item)
+                ..blank_row(format!("a:{}", a.id), RowKind::Child)
             });
-            for a in &r.artifacts {
-                let mut detail = vec![
-                    ("item".to_string(), format!("{} · {}", r.name, a.label)),
-                    ("folder".to_string(), a.path.display().to_string()),
-                    ("size".to_string(), sys::fmt_size(a.size.effective_bytes())),
-                    ("level".to_string(), level_word(a.level).to_string()),
-                    ("mode".to_string(), mode.to_string()),
-                ];
-                if !a.note.is_empty() {
-                    detail.push(("why".into(), a.note.clone()));
-                }
-                rows.push(RowView {
-                    parent: Some(id.clone()),
-                    check: if self.sel_artifacts.contains(&a.id) { Check::On } else { Check::Off },
-                    enabled: free,
-                    name: a.label.clone(),
-                    sub: (!a.note.is_empty()).then(|| a.note.clone()),
-                    level: Some(level_view(a.level)),
-                    bytes: Some(a.size.effective_bytes()),
-                    muted: !free,
-                    why: locked.clone(),
-                    detail,
-                    ..blank_row(format!("a:{}", a.id), RowKind::Child)
-                });
-            }
         }
-        rows
     }
 
     /// The worktrees under their main repository; those made by hand last, under their own heading, with no box.
@@ -557,6 +586,59 @@ fn level_view(l: Level) -> LevelView {
 pub(super) const PROJECT_ROW: &str = "h:project:";
 /// The id of the sub-heading of a main repository in the worktrees: `h:repo:<folder>` (`none`: not known).
 pub(super) const REPO_ROW: &str = "h:repo:";
+/// The id of a folder of the projects' tree: `h:folder:<folder>`.
+pub(super) const FOLDER_ROW: &str = "h:folder:";
+
+/// A folder of the projects' tree: the projects right inside it (indexes into the scan's projects) and the folders below.
+#[derive(Default)]
+struct Folder {
+    path: PathBuf,
+    /// The folder's `path_key`: a folder is one whatever the case its projects spell it in.
+    key: String,
+    projects: Vec<usize>,
+    folders: Vec<Folder>,
+}
+
+impl Folder {
+    /// The folder `path` inside this one, made when it is not there yet.
+    fn inner(&mut self, path: PathBuf) -> &mut Folder {
+        let key = path_key(&path);
+        let at = match self.folders.iter().position(|f| f.key == key) {
+            Some(at) => at,
+            None => {
+                self.folders.push(Folder { path, key, ..Default::default() });
+                self.folders.len() - 1
+            }
+        };
+        &mut self.folders[at]
+    }
+
+    /// A folder with no project of its own and a single folder inside it is that folder: `D:\` and `Projects` are one
+    /// row, `D:\Projects`.
+    fn compact(mut self) -> Folder {
+        self.folders = std::mem::take(&mut self.folders).into_iter().map(Folder::compact).collect();
+        match (self.projects.is_empty(), self.folders.len()) {
+            (true, 1) => self.folders.remove(0),
+            _ => self,
+        }
+    }
+}
+
+/// The projects as a tree of the folders they sit in, the folders in the order of their first project: the projects with
+/// no folder above them, and the top folders, compacted ([`Folder::compact`]).
+fn folder_tree(projects: &[ProjectReport]) -> (Vec<usize>, Vec<Folder>) {
+    let mut top = Folder::default();
+    for (i, r) in projects.iter().enumerate() {
+        let mut at = &mut top;
+        let mut path = PathBuf::new();
+        for part in r.root.parent().into_iter().flat_map(Path::components) {
+            path.push(part);
+            at = at.inner(path.clone());
+        }
+        at.projects.push(i);
+    }
+    (top.projects, top.folders.into_iter().map(Folder::compact).collect())
+}
 
 /// Rows under a sub-heading per folder (a project, a repository): the folders in the order they first come, the rows
 /// without one last, each row's own order kept. `heading` names a folder's sub-heading from the folder and how many

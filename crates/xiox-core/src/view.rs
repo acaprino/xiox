@@ -474,10 +474,24 @@ pub(crate) fn box_of<'a>(rows: impl IntoIterator<Item = &'a RowView>) -> Check {
     }
 }
 
-/// The rows of the sub-heading at `at`: those after it, up to the next sub-heading or category.
+/// The rows of the sub-heading at `at`: those after it, up to the next sub-heading or category that is not inside it
+/// (a sub-heading whose `parent` is this one, or one inside it, is a folder of its tree and its rows are this one's too).
 fn under(rows: &[RowView], at: usize) -> &[RowView] {
+    let mut inside = vec![rows[at].id.as_str()];
     let rest = &rows[at + 1..];
-    let end = rest.iter().position(|r| matches!(r.kind, RowKind::Header | RowKind::Group)).unwrap_or(rest.len());
+    let end = rest
+        .iter()
+        .position(|r| {
+            if !matches!(r.kind, RowKind::Header | RowKind::Group) {
+                return false;
+            }
+            let nested = r.parent.as_deref().is_some_and(|p| inside.contains(&p));
+            if nested {
+                inside.push(&r.id);
+            }
+            !nested
+        })
+        .unwrap_or(rest.len());
     &rest[..end]
 }
 
@@ -730,6 +744,20 @@ mod tests {
         assert_eq!(header_toggle(&rows, "h:b"), Some((vec!["b1".to_string()], false)), "all ticked: they go off");
         assert_eq!(header_toggle(&rows, "a1"), None, "an item is not a sub-heading");
         assert_eq!(header_toggle(&rows, "h:gone"), None);
+    }
+
+    #[test]
+    fn a_folder_boxes_the_folders_inside_it_and_stops_at_its_sibling() {
+        let inner = |id: &str, parent: &str| RowView { parent: Some(parent.into()), ..sub(id) };
+        let under = |id: &str, parent: &str, check| RowView { parent: Some(parent.into()), ..item(id, check) };
+        let mut rows = vec![
+            sub("h:d"), inner("h:d/a", "h:d"), under("a1", "h:d/a", Check::On), inner("h:d/b", "h:d"), under("b1", "h:d/b", Check::Off),
+            under("d1", "h:d", Check::On), sub("h:e"), under("e1", "h:e", Check::On),
+        ];
+        box_headers(&mut rows, false);
+        let boxes: Vec<(&str, Check)> = rows.iter().filter(|r| r.kind == RowKind::Header).map(|r| (r.id.as_str(), r.check)).collect();
+        assert_eq!(boxes, [("h:d", Check::Mixed), ("h:d/a", Check::On), ("h:d/b", Check::Off), ("h:e", Check::On)]);
+        assert_eq!(header_toggle(&rows, "h:d"), Some((vec!["a1".to_string(), "b1".to_string(), "d1".to_string()], true)), "every folder inside it, not its sibling");
     }
 
     #[test]

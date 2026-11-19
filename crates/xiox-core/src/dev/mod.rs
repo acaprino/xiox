@@ -617,9 +617,13 @@ impl DevState {
             if ids.is_empty() {
                 return Err(NOTHING_UNDER_HEADING.into());
             }
-            // The rows under a heading are worktrees or sessions the list lets you tick.
+            // The rows under a heading are the free projects of a folder, worktrees or sessions the list lets you tick.
             for id in &ids {
-                if let Some(i) = id.strip_prefix("w:").and_then(|w| scan.worktrees.iter().position(|r| r.id == w)) {
+                if let Some(r) = id.strip_prefix("p:").and_then(|p| scan.projects.iter().find(|r| r.id == p)) {
+                    for a in &r.artifacts {
+                        set_artifact(&mut self.sel_artifacts, a, on);
+                    }
+                } else if let Some(i) = id.strip_prefix("w:").and_then(|w| scan.worktrees.iter().position(|r| r.id == w)) {
                     self.sel_worktrees[i] = on;
                 } else if let Some(i) = session_index(&scan.archived, id) {
                     self.sel_sessions[i] = on;

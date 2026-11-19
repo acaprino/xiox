@@ -64,29 +64,41 @@ function sizeText(row: RowView): string {
   return row.sizeText ?? '—';
 }
 
-/**
- * A sub-heading. Plain, it is a line of text the selection skips; with a box (the rows under it can be ticked in one go)
- * it is a row of its own: the box in the check column, its folder under the name, what its rows add up to in the size
- * column; the selection can rest on it and Space ticks it.
- */
 /** The attributes of a row's place in the tree: its level for a screen reader, and its depth for the indent (Smooth: smooth.css). */
 const treeAttrs = (depth: number): Record<string, string | number | null> => ({ 'aria-level': depth + 1, style: depth > 0 ? `--depth: ${depth}` : null });
 
-function headerNode(row: RowView, view: SectionView, checks: boolean, depth: number, focused: boolean, on: Handlers): HTMLElement {
-  if (!checks || row.check === 'none') return h('div', { class: 'r sec', role: 'row', 'data-row': row.id }, h('div', { role: 'gridcell' }, ellipsis(row.name, 't')));
+/**
+ * A sub-heading. Plain, it is a line of text the selection skips; with a box (the rows under it can be ticked in one go)
+ * it is a row of its own: the box in the check column, its folder under the name, what its rows add up to in the size
+ * column; the selection can rest on it and Space ticks it. A folder of the projects' tree is a sub-heading with rows
+ * hanging under it (`open`: not folded; null: not a folder): a row of its own even without a box, with a caret, and a
+ * click folds it or opens it, as a category's does.
+ */
+function headerNode(row: RowView, view: SectionView, checks: boolean, open: boolean | null, depth: number, focused: boolean, on: Handlers): HTMLElement {
+  const folder = open !== null;
+  if (!folder && (!checks || row.check === 'none')) return h('div', { class: 'r sec', role: 'row', 'data-row': row.id }, h('div', { role: 'gridcell' }, ellipsis(row.name, 't')));
   const sized = view.columns[view.columns.length - 1]?.kind === 'size';
   const bytes = sized ? headerBytes(view.rows, row.id) : null;
+  const text = [ellipsis(row.name, 't'), row.sub ? ellipsis(row.sub, 's') : null];
   return h('div', {
-    class: ['r sec boxed', sized ? 'sized' : '', focused ? 'sel' : ''].filter(Boolean).join(' '),
-    id: rowDomId(row.id), role: 'row', 'data-row': row.id, 'aria-selected': String(focused), ...treeAttrs(depth), onClick: () => on.focusRow(row.id),
+    class: ['r sec boxed', folder ? 'folder' : '', sized ? 'sized' : '', focused ? 'sel' : ''].filter(Boolean).join(' '),
+    id: rowDomId(row.id), role: 'row', 'data-row': row.id, 'aria-selected': String(focused), 'aria-expanded': folder ? String(open) : null, ...treeAttrs(depth),
+    onClick: () => { if (folder) on.toggleFold(row.id); else on.focusRow(row.id); },
   },
-  checkbox(row, on, view.section, view.job !== null),
-  h('div', { class: 'sec-name nm-text', role: 'gridcell' }, ellipsis(row.name, 't'), row.sub ? ellipsis(row.sub, 's') : null),
+  checks ? checkbox(row, on, view.section, view.job !== null) : null,
+  folder
+    ? h('div', { class: 'sec-name nm', role: 'gridcell' },
+      h('button', {
+        type: 'button', class: 'caret', tabindex: -1, 'aria-hidden': 'true', 'aria-label': `${row.name}: show or hide the folders and projects inside`,
+        'data-key': `fold:${row.id}`, onClick: (event: Event) => { event.stopPropagation(); on.toggleFold(row.id); },
+      }),
+      h('div', { class: 'nm-text' }, ...text))
+    : h('div', { class: 'sec-name nm-text', role: 'gridcell' }, ...text),
   sized ? h('div', { class: 'sz num', role: 'gridcell', 'data-fit': '' }, bytes === null ? '' : formatBytes(bytes)) : null);
 }
 
 function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, parents: ReadonlySet<string>, anyParent: boolean, folded: ReadonlySet<string>, depth: number, focused: boolean, on: Handlers): HTMLElement {
-  if (row.kind === 'header') return headerNode(row, view, checks, depth, focused, on);
+  if (row.kind === 'header') return headerNode(row, view, checks, parents.has(row.id) ? !folded.has(row.id) : null, depth, focused, on);
   const group = row.kind === 'group';
   const cells = [...row.cells];
   const parts: HTMLElement[] = [];
@@ -235,7 +247,7 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   const depths = rowDepths(view.rows);
   for (const [name, value] of Object.entries(gridVars(view.columns, checks))) grid.style.setProperty(name, value);
   // The focused row is announced by its id: the focus itself stays on the grid (one Tab stop).
-  const current = rows.find((r) => r.id === focus && focusable(r));
+  const current = rows.find((r) => r.id === focus && focusable(r, parents));
   if (current) grid.setAttribute('aria-activedescendant', rowDomId(current.id)); else grid.removeAttribute('aria-activedescendant');
   grid.classList.toggle('grouped', view.rows.some((r) => r.kind === 'group'));
   const master = view.bulk && view.report === null && bulkIntent(view.section, true) !== null;

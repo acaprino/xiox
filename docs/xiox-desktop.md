@@ -22,7 +22,7 @@ uses.
 - [Confirmations, cancel and the report](#confirmations-cancel-and-the-report)
 - [Safety](#safety)
 - [Keyboard](#keyboard)
-- [About](#about)
+- [Settings](#settings)
 - [Where things are stored](#where-things-are-stored)
 - [Troubleshooting](#troubleshooting)
 - [The command line and the observer](#the-command-line-and-the-observer)
@@ -52,7 +52,7 @@ the Winapp2 rules are neither loaded nor downloaded. The argument needs a folder
 the app prints a message and exits with code 2, instead of falling back to your real profile.
 
 At start the app also loads the cleaning rules (and updates Winapp2 in the background, see
-[About](#about)) and removes the leftovers of a free-space wipe that a power cut or a crash
+[Settings](#settings)) and removes the leftovers of a free-space wipe that a power cut or a crash
 interrupted (see [Cleanup](#cleanup)).
 
 ## The window
@@ -62,8 +62,8 @@ the amber of Xiox as its only accent, the sections as tabs at the top and the bu
 under the list. Its title bar is the app's own: drag it to move the window, double-click it to
 maximize, and use its minimize, maximize and close buttons (hovering maximize offers the Windows 11
 snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is the look of the first version, three
-columns in the style of the approved mock-up; the `ONI mode` switch at the top right turns it on
-and off, and the choice is kept for the next start. Everything else (the lists, the boxes, the
+columns in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
+`Smooth` there to go back); the choice is kept for the next start. Everything else (the lists, the boxes, the
 keys, what each button does) is the same in both.
 
 ```text
@@ -90,7 +90,7 @@ In ONI MODE the window gets the Windows title bar back and no glass, the section
 three columns, the buttons sit at the top right next to the version, and the detail is always shown
 under the list.
 
-**Top bar and buttons.** The Xiox wordmark, the sections and the `ONI mode` switch. The buttons
+**Top bar and buttons.** The Xiox wordmark, the sections and `Settings`. The buttons
 of the open section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...) sit under the list,
 the main one last and in the accent colour (in ONI MODE: at the top right). A small key next to a
 label says which key presses it. A button that cannot be used right now is greyed out; the chapters
@@ -112,7 +112,7 @@ approved with another administrator's password. "Your" Temp folder, browser data
 per-user locations are then those of account A, not of the person sitting at the screen. Close
 the app and start it again from the right account if that is not what you want.
 
-**Sections.** Cleanup `1`, Registry `2`, Services & RAM `3`, Developers `4`, and `About` (`?`):
+**Sections.** Cleanup `1`, Registry `2`, Services & RAM `3`, Developers `4`, and `Settings` (`?`):
 tabs at the top, with a bar under the open one (in ONI MODE: the first sidebar). The number is
 the key that opens the section.
 
@@ -385,7 +385,12 @@ acts on **the open category only**; what you ticked in the other two is not touc
 confirmation says so (*Also chosen in the other lists (not cleaned now): 2 worktrees · 2
 sessions.*). Dates are written `YYYY-MM-DD`.
 
-**Projects.** Each project has a box that ticks all its folders (half-ticked when only some are)
+**Projects.** The projects sit in a tree of the folders they are in, as in Explorer: `D:\` holds
+`Projects` and `Work`, `Projects` holds `acme-api`. A folder with no project of its own and a single
+folder inside it is one row (`D:\Projects`, not `D:\` then `Projects`). Each folder shows what its
+projects add up to, folds and opens with its arrow, a click or ←/→ (it starts open), and has a box
+that ticks every project inside it that is not in use. The sort works inside each folder.
+Each project has a box that ticks all its folders (half-ticked when only some are)
 and, under it, the folders themselves (`target`, `node_modules`, `.venv`, ...), each with its own
 box, level, size and reason (*Build output that cargo recreates.*, *Restored by npm install.*).
 The folders of an inactive project that the engine recommends start ticked; a recently used
@@ -553,7 +558,7 @@ that is greyed out ignores its key.
 | Key | What it does |
 |---|---|
 | `1` `2` `3` `4` | open Cleanup, Registry, Services & RAM, Developers |
-| `?` | open About (not while a confirmation is open) |
+| `?` | open Settings (not while a confirmation is open) |
 | `↑` `↓` | move the selection one row |
 | `PageUp` `PageDown` | move ten rows |
 | `Home` `End` | first and last row |
@@ -563,7 +568,7 @@ that is greyed out ignores its key.
 | `i` | open or close the details of the selected row (Smooth) |
 | `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry, `Refresh` in Services & RAM |
 | `Enter` | the section's main button: `Clean`, `Fix selected` or `Disable`; it opens the confirmation |
-| `Esc` | in this order: close About or the confirmation; leave a text field; close the report; cancel the running job |
+| `Esc` | in this order: close Settings or the confirmation; leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
 
 A key held down does not repeat an action: one `Enter` is one press, so a held `Enter` cannot run
@@ -571,9 +576,9 @@ on past the confirmation it just opened. The arrows do repeat, that is how a lon
 The footer shows the keys of the open section, taken from the buttons themselves, so what it says
 and what the keys do agree.
 
-**Tab order.** The sections (the four sections and `About`), the categories and options of
+**Tab order.** The sections (the four sections and `Settings`), the categories and options of
 the sidebar, then the main panel (`Details`, the search box, the list with its top check box, the
-detail), and last the buttons of the section and the `ONI mode` switch. The list is **one** Tab stop: once in it, move with the
+detail), and last the buttons of the section and Smooth's theme (`Auto`, `Light`, `Dark`). The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The detail
 panel can be reached too, so a long reason can be scrolled with the arrows. A visible ring shows
 where the focus is.
@@ -600,10 +605,12 @@ cannot be selected and keep the arrow pointer, the right button opens a menu onl
 can be selected with the mouse: the paths and reasons of the detail panel, the report, the notices
 and the text of a confirmation.
 
-## About
+## Settings
 
-Open it with the `About` entry of the sections bar or with `?`. It shows `Xiox`, the version
-(`Version 0.1.0`), the state of the cleaning rules and where they come from:
+Open it with the `Settings` entry of the sections bar or with `?`. At the top, `Look`: `Smooth`
+(the default) or `ONI mode (the original look)`; the window changes at once and keeps the choice
+for the next start. Under it, `About Xiox`: the version (`Version 0.1.0`), the state of the
+cleaning rules and where they come from:
 
 - `Winapp2: version 260915` when the rules are loaded, `Winapp2: loading` while they are being
   read, `Winapp2: not downloaded yet` when no copy is available.
@@ -611,7 +618,8 @@ Open it with the `About` entry of the sections bar or with `?`. It shows `Xiox`,
   from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every
   start.*
 
-`Close` or `Esc` closes it. About does not open while a confirmation is up.
+`Close` or `Esc` closes it; `Tab` goes between the chosen look and `Close`, the arrows change the
+look. Settings does not open while a confirmation is up.
 
 The Winapp2 rules are downloaded when the app starts and stored outside the executable (see the
 next chapter). Their licence stays their own.
@@ -681,7 +689,7 @@ the `Recycle Bin` entry of Cleanup, or choose `Permanently` next time.
 agent's sessions was not readable, so the projects only that agent knows are not in this
 analysis. The warning names what was missing; the rest of the analysis is valid.
 
-**`Winapp2: not downloaded yet` in About.** No copy of the Winapp2 rules is available yet. The
+**`Winapp2: not downloaded yet` in Settings.** No copy of the Winapp2 rules is available yet. The
 built-in entries still work; the Winapp2 entries of `Applications` appear once the rules are
 there.
 

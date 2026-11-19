@@ -192,3 +192,26 @@ test('the check box at the top of the list sums the categories, or the rows of a
   assert.equal(bulkCheck(view('developers', 1, [row('p', { check: 'mixed' }), row('c', { kind: 'child', parent: 'p', check: 'off' })])), 'mixed', 'children do not count');
   assert.equal(bulkCheck(view('services', 1, [])), 'none');
 });
+
+test('a folder of the projects starts open, folds when the user folds it, and the focus can rest on it even without a box', () => {
+  const ui = createUi();
+  const folder = row('h:d', { kind: 'header', check: 'none' });
+  const rows = [folder, row('p', { parent: 'h:d', check: 'off', enabled: false }), row('h:plain', { kind: 'header', check: 'none' }), row('q')];
+  const v = view('developers', 1, rows);
+  acceptView(ui, v);
+  assert.equal(foldedGroups(ui, v).size, 0, 'open until folded');
+  assert.equal(currentFocus(ui, v), 'h:d', 'a folder is a row of its own, a plain sub-heading is not');
+  assert.equal(moveFocus(shownRows(ui, v), 'p', 1, new Set(['h:d'])), 'q', 'the plain sub-heading is skipped');
+  ui.fold.set('h:d', true);
+  ui.fold.set('h:plain', true);
+  assert.deepEqual([...foldedGroups(ui, v)], ['h:d'], 'only a sub-heading with rows under it folds');
+  assert.deepEqual(shownRows(ui, v).map((r) => r.id), ['h:d', 'h:plain', 'q']);
+});
+
+test('the projects in their folders count for the box at the top, their folders to clean do not', () => {
+  const rows = [
+    row('h:d', { kind: 'header', check: 'mixed' }), row('p1', { parent: 'h:d', check: 'on' }), row('c', { kind: 'child', parent: 'p1', check: 'on' }),
+    row('p2', { parent: 'h:d', check: 'off' }),
+  ];
+  assert.equal(bulkCheck(view('developers', 1, rows)), 'mixed');
+});

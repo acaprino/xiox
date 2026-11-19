@@ -182,11 +182,19 @@ const eligible = (r: RowView): boolean => (r.kind === 'item' || r.kind === 'chil
 /** A row with a box over other rows: a category (`group`) or a sub-heading (`header`). */
 const isBox = (r: RowView): boolean => r.kind === 'group' || r.kind === 'header';
 
-/** The rows a box row may change: after it, up to the next group row (a sub-heading: also the next sub-heading). */
+/**
+ * The rows a box row may change: after it, up to the next group row (a sub-heading: also the next sub-heading that is
+ * not inside it, as a folder of the projects' tree is inside the folder its `parent` names).
+ */
 function boxRows(rows: RowView[], box: RowView): RowView[] {
+  const inside = new Set([box.id]);
   const out: RowView[] = [];
   for (const r of rows.slice(rows.indexOf(box) + 1)) {
-    if (r.kind === 'group' || (box.kind === 'header' && r.kind === 'header')) break;
+    if (r.kind === 'group') break;
+    if (box.kind === 'header' && r.kind === 'header') {
+      if (r.parent === null || !inside.has(r.parent)) break;
+      inside.add(r.id);
+    }
     if (eligible(r)) out.push(r);
   }
   return out;

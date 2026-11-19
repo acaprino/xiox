@@ -33,15 +33,14 @@
       <span id="version"></span>
       <span class="spring"></span>
       <div id="actions"></div>
-      <!-- The look (src/skin.ts), after the actions in the Tab order: Smooth's theme (Windows, light, dark; main.ts keeps
-           aria-pressed in step, ONI MODE hides it) and the ONI MODE switch (aria-checked). -->
+      <!-- Smooth's theme (src/skin.ts), after the actions in the Tab order: Windows, light, dark (main.ts keeps aria-pressed
+           in step; ONI MODE, chosen in Settings, hides it: it is always dark). -->
       <div id="look">
         <div id="theme" role="group" aria-label="Theme">
           <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="true" data-key="theme:system" title="Follow the Windows theme">Auto</button>
           <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false" data-key="theme:light" title="Always light">Light</button>
           <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false" data-key="theme:dark" title="Always dark">Dark</button>
         </div>
-        <button id="skin" class="btn sm skin-switch" type="button" role="switch" aria-checked="false" data-key="skin" title="The look of the approved ONI mock-up">ONI mode</button>
       </div>
       <!-- The window buttons of Smooth's title bar (src/window-controls.ts); Windows' snap layouts sit over the maximize one. -->
       <div id="caption" role="group" aria-label="Window controls">

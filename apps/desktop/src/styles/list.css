@@ -91,13 +91,11 @@
 .sort.on { color: var(--ice); font-weight: 600; }
 .sort-label { white-space: nowrap; }
 .sort-arrow { flex: none; font-style: normal; font-size: var(--fs-sm); line-height: 1; }
-/* The look controls of the top bar: in ONI MODE only the switch (the theme is Smooth's: ONI MODE is always dark). */
+/* The look controls of the top bar: the theme is Smooth's (ONI MODE is always dark), the look itself is chosen in Settings. */
 #look { display: flex; align-items: center; gap: 6px; }
 /* Smooth's title bar, brand and window buttons: ONI MODE has the system frame and the wordmark. */
 #titlebar, #brand, #caption { display: none; }
 #theme { display: none; }
-/* The ONI MODE switch, on: the button is lit as a pressed toggle (in Smooth it is a track and knob: smooth.css). */
-.skin-switch[aria-checked="true"] { border-color: var(--live); color: var(--text-hi); }
 /* The details are always shown in ONI MODE: the switch that opens them is Smooth's (smooth.css). */
 .details-toggle { display: none; }
 .r.grp {
