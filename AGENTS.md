@@ -107,7 +107,8 @@
   artcraft-web).
   La versione sale di una patch, o di una minor o major se la pull request ha l'etichetta `release:minor` o
   `release:major`; `build-release.bat` costruisce su Windows; si pubblicano il tag `v<versione>` e la GitHub
-  Release (`release\` in zip, i suoi programmi, i suoi installer), e `main` torna in `develop`. Se la build
+  Release (l'installer di `release\installer\` e uno zip portabile con tutto `release\` in una cartella; nessun
+  programma sciolto), e `main` torna in `develop`. Se la build
   fallisce non si pubblica nulla.
 - Mai cambiare la versione o creare tag di release a mano: lo fa il workflow (`.github/release.json` elenca i
   file della versione, `.github/scripts/release.mjs` li scrive).
