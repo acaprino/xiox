@@ -4744,7 +4744,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -4760,7 +4760,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-cleaner"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "rayon",
  "tempfile",
@@ -4773,7 +4773,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "embed-resource",
@@ -4788,7 +4788,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "idna",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-disktree"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "windows-sys 0.61.2",
  "xiox-cleaner",
@@ -4817,21 +4817,21 @@ dependencies = [
 
 [[package]]
 name = "xiox-engine"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "xiox-model",
 ]
 
 [[package]]
 name = "xiox-git"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "xiox-model",
 ]
 
 [[package]]
 name = "xiox-model"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4840,7 +4840,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-mukade"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4853,7 +4853,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-observer"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4864,7 +4864,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-project"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4884,7 +4884,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-rules"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "roxmltree",
  "tempfile",
@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-scanner"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "filesize",
  "rayon",
@@ -4905,7 +4905,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-sessions"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -4916,7 +4916,7 @@ dependencies = [
 
 [[package]]
 name = "xiox-ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
