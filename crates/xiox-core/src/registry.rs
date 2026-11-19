@@ -78,7 +78,6 @@ pub const CATEGORIES: &[Category] = &[
     Category { name: "Obsolete software", default_on: true },
     Category { name: "Run at startup", default_on: true },
     Category { name: "MUI cache", default_on: true },
-    Category { name: "Windows services", default_on: false },
 ];
 
 const KNOWN_EXT: &[&str] = &[".exe", ".dll", ".ocx", ".sys", ".cpl", ".scr", ".com", ".chm", ".hlp", ".tlb", ".olb", ".msc", ".bat", ".cmd", ".ax"];
@@ -343,23 +342,6 @@ pub fn scan(category: usize, progress: &dyn Fn(&str)) -> Vec<Issue> {
             for (name, _) in values(Root::Hkcu, path) {
                 if let Some(p) = missing_cmd(&name) {
                     out.push(issue(c, "Invalid MUI entry", p, Fix::DeleteValue { root: Root::Hkcu, path: path.into(), value: name }));
-                }
-            }
-        }
-        11 => {
-            let base = "SYSTEM\\CurrentControlSet\\Services";
-            for svc in subkeys(Root::Hklm, base) {
-                let kp = format!("{base}\\{svc}");
-                let Some(k) = open(Root::Hklm, &kp) else { continue };
-                let ty = k.get_value::<u32, _>("Type").unwrap_or(0);
-                if ty & 0x30 == 0 {
-                    continue;
-                }
-                let Ok(img) = k.get_value::<String, _>("ImagePath") else { continue };
-                if let Some(p) = missing_cmd(&img) {
-                    let mut i = issue(c, "Service with a missing file", format!("{svc}: {p}"), Fix::DeleteKey { root: Root::Hklm, path: kp });
-                    i.selected = false;
-                    out.push(i);
                 }
             }
         }

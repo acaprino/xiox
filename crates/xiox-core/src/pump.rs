@@ -81,7 +81,6 @@ mod tests {
     use crate::dev::{DevCleanJob, DevMsg, DevState, DevWorkers, Section};
     use crate::notify::Outbox;
     use crate::regstate::RegistryState;
-    use crate::svcstate::{ServicesState, ServicesWorkers, SvcMsg};
     use crate::view::{DevIntent, Tone};
     use std::time::Instant;
 
@@ -120,23 +119,6 @@ mod tests {
 
     /// A core whose workers never reach the engine, whose notifier is the pump's, and the pump over it.
     fn running(scan: fn(xiox_model::Settings, bool, Outbox<DevMsg>)) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
-        running_with(scan, quiet_services())
-    }
-
-    /// Services workers that never touch the machine: a view of Services here would otherwise read
-    /// the real service list, the memory and `Documents\Xiox`.
-    fn quiet_services() -> ServicesState {
-        ServicesState::new().with_workers(ServicesWorkers { load: load_never, apply: apply_never, saved: saved_none, memory: memory_fixed })
-    }
-
-    fn memory_fixed() -> crate::sys::Memory {
-        crate::sys::Memory { total: 8 << 30, available: 4 << 30 }
-    }
-
-    fn running_with(
-        scan: fn(xiox_model::Settings, bool, Outbox<DevMsg>),
-        services: ServicesState,
-    ) -> (Arc<Mutex<Core>>, Arc<Recorder>, PumpNotifier) {
         let (notifier, rx) = pump_channel();
         let mut dev = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
             .with_workers(DevWorkers { scan, clean: clean_never });
@@ -146,7 +128,6 @@ mod tests {
             Arc::new(PumpNotifier { tx: notifier.tx.clone() }),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers::REAL),
             RegistryState::new(),
-            services,
             dev,
         );
         let core = Arc::new(Mutex::new(core));
@@ -186,33 +167,23 @@ mod tests {
         });
     }
 
-    fn load_never(_: Outbox<SvcMsg>) {}
-    fn apply_never(_: Vec<crate::services::Service>, _: Option<u32>, _: Outbox<SvcMsg>) {}
-    fn saved_none() -> usize {
-        0
-    }
-    fn memory_panics() -> crate::sys::Memory {
-        panic!("a view builder panicked");
-    }
-
-    /// A panic inside one view (here the Services meter, read while the core is locked: the lock is
-    /// poisoned) does not end the pump: the next wake-up, of any section, is still published.
+    /// A panic while the core is locked (in a view builder, in an intent: here a thread that dies
+    /// holding the lock) poisons the lock: the pump takes it as it is and keeps publishing.
     #[test]
-    fn a_view_that_panics_does_not_stop_the_pump() {
-        let workers = ServicesWorkers { load: load_never, apply: apply_never, saved: saved_none, memory: memory_panics };
-        let (_core, sink, notifier) = running_with(scan_never, ServicesState::new().with_workers(workers));
-        notifier.notify(SectionId::Services);
-        std::thread::sleep(Duration::from_millis(3 * PUMP_COALESCE_MS));
-        assert!(sink.views().is_empty(), "the view that panicked is not published");
+    fn a_poisoned_core_does_not_stop_the_pump() {
+        let (core, sink, notifier) = running(scan_never);
+        let held = core.clone();
+        let _ = std::thread::spawn(move || {
+            let _locked = held.lock().unwrap();
+            panic!("a panic while the core is locked");
+        })
+        .join();
+        assert!(core.is_poisoned());
         notifier.notify(SectionId::Registry);
-        sink.wait_for("the Registry view after the panic", |v| v.iter().any(|v| v.section == SectionId::Registry));
-        // Two sections in one burst: the one that panics does not take the other down with it.
-        notifier.notify(SectionId::Services);
-        notifier.notify(SectionId::Cleanup);
-        sink.wait_for("the Cleanup view of the same burst", |v| v.iter().any(|v| v.section == SectionId::Cleanup));
+        sink.wait_for("the Registry view after the lock was poisoned", |v| v.iter().any(|v| v.section == SectionId::Registry));
     }
 
-    /// A sink that panics once (a closed window, say) does not end it either.
+    /// A sink that panics once (a closed window, say) does not end the pump either.
     #[test]
     fn a_sink_that_panics_does_not_stop_the_pump() {
         struct Flaky(Mutex<u32>, Recorder);
@@ -235,7 +206,6 @@ mod tests {
             Arc::new(PumpNotifier { tx: notifier.tx.clone() }),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers::REAL),
             RegistryState::new(),
-            quiet_services(),
             {
                 let mut d = DevState::with_settings(xiox_app::default_settings(), Section::Projects)
                     .with_workers(DevWorkers { scan: scan_never, clean: clean_never });
@@ -245,9 +215,12 @@ mod tests {
         );
         let sink = Arc::new(Flaky(Mutex::new(0), Recorder::default()));
         spawn_pump(Arc::new(Mutex::new(core)), rx, sink.clone());
-        notifier.notify(SectionId::Cleanup);
-        std::thread::sleep(Duration::from_millis(3 * PUMP_COALESCE_MS));
+        // One burst: Cleanup comes first and its send panics; Registry, in the same burst, is still sent.
         notifier.notify(SectionId::Registry);
-        sink.1.wait_for("a view after the sink panicked", |v| v.iter().any(|v| v.section == SectionId::Registry));
+        notifier.notify(SectionId::Cleanup);
+        sink.1.wait_for("the other view of the burst whose first send panicked", |v| v.iter().any(|v| v.section == SectionId::Registry));
+        // A later wake-up is published too.
+        notifier.notify(SectionId::Cleanup);
+        sink.1.wait_for("a view after the sink panicked", |v| v.iter().any(|v| v.section == SectionId::Cleanup));
     }
 }

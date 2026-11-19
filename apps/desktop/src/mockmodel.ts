@@ -13,19 +13,18 @@
 // `view`, `go`, each `intent` (also an ignored or refused one: the same state with a new rev) and
 // each view `tick` pushes. Revisions are per section.
 //
-// STATES. Initial: cleanup:idle, registry:idle, services:loaded, developers:idle. Busy states (a job
+// STATES. Initial: cleanup:idle, registry:idle, developers:idle. Busy states (a job
 // runs) and what they land on after their ticks:
 //   cleanup    analyzing -> analyzed      cleaning -> report
 //   registry   scanning  -> analyzed      fixing   -> fixed
-//   services   loading   -> loaded
 //   developers analyzing -> projects      cleaning -> report
 // A cleaning that is CANCELLED does not land on the report but on `cancelled` (see `cancel`). A Cleanup
 // ANALYSIS that is cancelled lands on `interrupted`: the partial list, an error notice and Clean enabled.
 // "Home" (where cancel / closeDialog fall back when nothing was recorded, e.g. after `go`):
-//   cleanup analyzed, registry analyzed, services loaded, developers projects.
+//   cleanup analyzed, registry analyzed, developers projects.
 // "Empty" (where closeDialog goes from a report, whose analysis was dropped): cleanup idle, developers idle.
 // "Analyzed-like" (where a dialog can be opened): cleanup analyzed / interrupted,
-//   registry analyzed, services loaded, developers projects / worktrees / sessions.
+//   registry analyzed, developers projects / worktrees / sessions.
 // The Cleanup list holds ALL its categories one after another (contract v2): each starts with a `group` row (its own
 // check box, count and size), Winapp2 keeps its `header` sub-headings, and the menu of bar 2 only scrolls (the page's
 // business: Cleanup has no `select` intent any more).
@@ -36,13 +35,12 @@
 //   accepted (the one intent the frozen rule lets through: see `analyze`).
 //
 // INTENTS (any section unless named). `kind` is the intent's `kind`.
-//   analyze (cleanup, developers) | scan (registry) | refresh (services)
+//   analyze (cleanup, developers) | scan (registry)
 //       refused while a job runs or a dialog is open; accepted over a report (finished or CANCELLED: the
-//       button is on when nothing runs, as in Rust). Otherwise records the current state as `back`, clears
-//       the Services notice, goes to the busy state (analyzing / scanning / loading). That first view has
-//       job.fraction 0.
+//       button is on when nothing runs, as in Rust). Otherwise records the current state as `back`, goes to
+//       the busy state (analyzing / scanning). That first view has job.fraction 0.
 //   tick (the timer: not an intent; returns the views pushed, in section order cleanup, registry,
-//       services, developers, at most one per section)
+//       developers, at most one per section)
 //       a section that is not busy pushes nothing. A busy section counts its ticks: tick 1, 2, 3 push the
 //       busy view with job.fraction 1/3, 2/3, 1 (same state); tick 4 goes to the landing state and
 //       pushes that view (no job). Every pushed view bumps the rev.
@@ -59,26 +57,21 @@
 //   selectAll{on}                    refused when FROZEN or when the view's `bulk` is false. Otherwise every eligible
 //       row (above) of the view goes on / off, then the checks are recounted as above. A `caution` row and a blocked row
 //       keep what they had, in every state.
-//   openConfirm (cleanup, developers) | openFix (registry) | openConfirm{action} (services)
+//   openConfirm (cleanup, developers) | openFix (registry)
 //       only from an analyzed-like state AND only when the action is enabled in the current view
-//       (cleanup / developers action `clean`; registry `fix`; services the action named by `action`:
-//       disable | manual | restore). Records the current state as `back`, clears the Services notice,
-//       remembers the services action, goes to the dialog state (confirm; registry: backup). A dialog's
-//       ack box is reset to false and its primary button to disabled each time it opens.
+//       (cleanup / developers action `clean`; registry `fix`). Records the current state as `back`, goes
+//       to the dialog state (confirm; registry: backup). A dialog's ack box is reset to false and its
+//       primary button to disabled each time it opens.
 //   setAck{on} (developers only)     only when the current view has a dialog with an ack box (ack not
 //       null): dialog.ack = on and the primary button enabled = on. Anything else ignores it.
-//   confirm (cleanup, services, developers) | fix{backup} (registry) | permanent (developers)
+//   confirm (cleanup, developers) | fix{backup} (registry) | permanent (developers)
 //       run only from the right dialog state AND when the dialog's button for that intent is enabled AND
 //       the dialog's ack is null or true:
-//         cleanup confirm: state confirm, button `continue`.   services confirm: state confirm, `continue`.
+//         cleanup confirm: state confirm, button `continue`.
 //         developers confirm: state confirm, button `clean`.   developers permanent: state shortfall,
 //         button `permanent`.   registry fix{backup}: state backup, button `backup` (true) / `nobackup`.
 //       Then: cleanup / developers go to `cleaning`, registry to `fixing` (busy, job.fraction 0, `back`
-//       unchanged: the state recorded when the dialog opened; `go` clears it). Services goes straight
-//       back to `loaded` with one notice {tone ok, more []} whose text is, by the action:
-//         disable  "Selected services disabled."
-//         manual   "Selected services set to Manual."
-//         restore  "Original startup types restored."
+//       unchanged: the state recorded when the dialog opened; `go` clears it).
 //   closeDialog                      only when the view has a dialog or a report.
 //       A dialog: goes to `back` (the state the dialog was opened from), else to Home.
 //       A report (done or CANCELLED): RELEASES the section, as Rust's `release()` does: the analysis and
@@ -92,20 +85,20 @@
 //         error notice and keeps Clean enabled; `back` is forgotten.
 //       analyzing (developers): REFUSED. A scan cannot be stopped: its view has no `cancel` action and
 //         Rust answers "Nothing can be cancelled right now.". The scan runs on to `projects`.
-//       any other busy state (cleanup analyzing, registry scanning / fixing, services loading): goes to
+//       any other busy state (cleanup analyzing, registry scanning / fixing): goes to
 //         `back` (the state before the job), else Home.
 //       A cancelled job stops ticking.
-//   anything else (search, setOnlyOld, setAll, setInactiveDays, ...)   the same state.
+//   anything else (search, setOnlyOld, setInactiveDays, ...)   the same state.
 // An intent that is refused or does not apply is IGNORED: same state, new rev, nothing else changes.
 //
 // WHAT NO INTENT DOES (the FakeBackend must not invent it either).
 //   developers:shortfall is reachable only through `go`: no intent leads to it (confirm from the confirm
 //       dialog goes to `cleaning`; in Rust the shortfall comes from a real disk check the fixture lacks).
-//   services:nomatch (a search that matches nothing: the empty state), services:partial and registry:partial (a change that
-//       half failed: a `warn` notice) are likewise reachable only through `go`; the smoke script draws them, the mock never
-//       moves to or from them by an intent (the real engine does both: the fixture only shows what they look like).
-//   `cancel` is never sent for Registry and Services: their intent types (RegistryIntent, ServicesIntent)
-//       have no `cancel`, and `actionIntent` returns null for it there; the only "Cancel" in Registry is
+//   registry:partial (a change that half failed: a `warn` notice) is likewise reachable only through `go`; the smoke script
+//       draws it, the mock never moves to or from it by an intent (the real engine does both: the fixture only shows what it
+//       looks like).
+//   `cancel` is never sent for Registry: its intent type (RegistryIntent)
+//       has no `cancel`, and `actionIntent` returns null for it there; the only "Cancel" in Registry is
 //       the backup dialog's button, which is `closeDialog`. This mock does not look at the section when
 //       it gets a `cancel` (a busy Registry would go back), because the page can never send one; the
 //       Rust FakeBackend rejects it at the type level (no such variant).
@@ -113,9 +106,6 @@
 //       not in the nav, toggle of a row whose check is `none` (a header without a box: the OTHER WORKTREES row of
 //       developers:worktrees) or that does not exist, openConfirm from a state that is not analyzed-like: all refused, as above
 //       (steps at the end of fixtures/intent-script.json).
-//
-// SERVICES NOTICE. The notice of `services:loaded` is cleared when a refresh starts, when a dialog opens
-// and when `show('services')` is called (the section is shown again); it is set only by a confirm.
 //
 // REPORTS. `saveReport(s)` (the `save_report` command; not an intent, the dialog is Rust's) puts the saved
 // outcome on the report on screen when it can be saved: `report.saved = { text: SAVED, ok: true }`. Anything
@@ -131,12 +121,12 @@ export interface Fixture {
   views: Record<SectionId, Record<string, SectionView>>;
 }
 
-const SECTIONS: readonly SectionId[] = ['cleanup', 'registry', 'services', 'developers'];
+const SECTIONS: readonly SectionId[] = ['cleanup', 'registry', 'developers'];
 
-const INITIAL: Record<SectionId, string> = { cleanup: 'idle', registry: 'idle', services: 'loaded', developers: 'idle' };
-const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
+const INITIAL: Record<SectionId, string> = { cleanup: 'idle', registry: 'idle', developers: 'idle' };
+const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', developers: 'projects' };
 const ANALYZED: Record<SectionId, readonly string[]> = {
-  cleanup: ['analyzed', 'interrupted'], registry: ['analyzed'], services: ['loaded'],
+  cleanup: ['analyzed', 'interrupted'], registry: ['analyzed'],
   developers: ['projects', 'worktrees', 'sessions'],
 };
 /** What the Save as text… command writes (Rust names the real file; the page never sees a path). */
@@ -144,11 +134,10 @@ const SAVED = 'Report saved.';
 const LANDS: Record<SectionId, Record<string, string>> = {
   cleanup: { analyzing: 'analyzed', cleaning: 'report' },
   registry: { scanning: 'analyzed', fixing: 'fixed' },
-  services: { loading: 'loaded' },
   developers: { analyzing: 'projects', cleaning: 'report' },
 };
-const ANALYZE_BUSY: Record<SectionId, string> = { cleanup: 'analyzing', registry: 'scanning', services: 'loading', developers: 'analyzing' };
-const ANALYZE_KIND: Record<SectionId, string> = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' };
+const ANALYZE_BUSY: Record<SectionId, string> = { cleanup: 'analyzing', registry: 'scanning', developers: 'analyzing' };
+const ANALYZE_KIND: Record<SectionId, string> = { cleanup: 'analyze', registry: 'scan', developers: 'analyze' };
 /** The state a report is closed to (Rust `release()`: the section is empty again). */
 const EMPTY: Partial<Record<SectionId, string>> = { cleanup: 'idle', developers: 'idle' };
 /** Where `cancel` goes from a busy state: a state name, or null when that job cannot be cancelled. Missing = `back`, else Home. */
@@ -156,20 +145,14 @@ const CANCEL_TO: Partial<Record<SectionId, Record<string, string | null>>> = {
   cleanup: { analyzing: 'interrupted', cleaning: 'cancelled' },
   developers: { analyzing: null, cleaning: 'cancelled' },
 };
-const OPEN_KIND: Record<SectionId, string> = { cleanup: 'openConfirm', registry: 'openFix', services: 'openConfirm', developers: 'openConfirm' };
-const DIALOG: Record<SectionId, string> = { cleanup: 'confirm', registry: 'backup', services: 'confirm', developers: 'confirm' };
+const OPEN_KIND: Record<SectionId, string> = { cleanup: 'openConfirm', registry: 'openFix', developers: 'openConfirm' };
+const DIALOG: Record<SectionId, string> = { cleanup: 'confirm', registry: 'backup', developers: 'confirm' };
 const DEV_CATEGORIES = ['projects', 'worktrees', 'sessions'];
-const NOTICE: Record<string, string> = {
-  disable: 'Selected services disabled.',
-  manual: 'Selected services set to Manual.',
-  restore: 'Original startup types restored.',
-};
 const TICKS = 3;
 
 /** What it takes to run: the dialog state, the dialog button and the busy state it starts; null when the intent is not a run. */
-function runRule(s: SectionId, intent: AnyIntent): { from: string; button: string; busy: string | null } | null {
+function runRule(s: SectionId, intent: AnyIntent): { from: string; button: string; busy: string } | null {
   if (s === 'cleanup' && intent.kind === 'confirm') return { from: 'confirm', button: 'continue', busy: 'cleaning' };
-  if (s === 'services' && intent.kind === 'confirm') return { from: 'confirm', button: 'continue', busy: null };
   if (s === 'registry' && intent.kind === 'fix') return { from: 'backup', button: intent.backup ? 'backup' : 'nobackup', busy: 'fixing' };
   if (s === 'developers' && intent.kind === 'confirm') return { from: 'confirm', button: 'clean', busy: 'cleaning' };
   if (s === 'developers' && intent.kind === 'permanent') return { from: 'shortfall', button: 'permanent', busy: 'cleaning' };
@@ -213,23 +196,20 @@ export class MockModel {
   private readonly revs: Record<SectionId, number>;
   /** Where closeDialog and cancel go back to; undefined = Home. */
   private readonly back: Partial<Record<SectionId, string>> = {};
-  private readonly ticks: Record<SectionId, number> = { cleanup: 0, registry: 0, services: 0, developers: 0 };
-  /** The Services action whose dialog is open (decides the notice text). */
-  private pendingAction = 'disable';
+  private readonly ticks: Record<SectionId, number> = { cleanup: 0, registry: 0, developers: 0 };
 
   constructor(fixture: Fixture) {
     // A working copy: toggles and acks change it, the fixture stays as loaded.
     this.work = structuredClone(fixture.views);
     this.state = { ...INITIAL };
-    this.revs = { cleanup: 0, registry: 0, services: 0, developers: 0 };
+    this.revs = { cleanup: 0, registry: 0, developers: 0 };
     for (const s of SECTIONS) {
       if (!this.work[s][this.state[s]]) throw new Error(`the fixture has no ${s}:${this.state[s]}`);
     }
   }
 
-  /** Opens a section: its current view (the Services notice does not outlive the section being left). */
+  /** Opens a section: its current view. */
   show(s: SectionId): SectionView {
-    if (s === 'services') this.clearNotice();
     return this.stamp(s);
   }
 
@@ -325,11 +305,6 @@ export class MockModel {
     if (report) report.saved = null;
   }
 
-  private clearNotice(): void {
-    const loaded = this.work.services[HOME.services];
-    if (loaded) loaded.notices = [];
-  }
-
   private actionEnabled(s: SectionId, id: string): boolean {
     return this.current(s).actions.find((a) => a.id === id)?.enabled === true;
   }
@@ -340,7 +315,6 @@ export class MockModel {
     if (kind === ANALYZE_KIND[s]) {
       if (this.isBusy(s) || this.current(s).dialog !== null) return; // a report does not stop it
       this.back[s] = here;
-      if (s === 'services') this.clearNotice();
       this.goTo(s, ANALYZE_BUSY[s]);
     } else if (kind === 'select' && s === 'developers') {
       if (this.frozen(s)) return;
@@ -351,10 +325,9 @@ export class MockModel {
     } else if (kind === 'selectAll') {
       if (!this.frozen(s) && this.current(s).bulk) this.selectAll(s, (intent as { on: boolean }).on);
     } else if (kind === OPEN_KIND[s]) {
-      const action = s === 'services' ? (intent as { action: string }).action : s === 'registry' ? 'fix' : 'clean';
+      const action = s === 'registry' ? 'fix' : 'clean';
       if (!ANALYZED[s].includes(here) || !this.actionEnabled(s, action)) return;
       this.back[s] = here;
-      if (s === 'services') { this.clearNotice(); this.pendingAction = action; }
       this.goTo(s, DIALOG[s]);
       this.resetAck(s);
     } else if (kind === 'setAck' && s === 'developers') {
@@ -422,13 +395,6 @@ export class MockModel {
     const dialog = this.current(s).dialog;
     const button = dialog?.buttons.find((b) => b.id === rule.button);
     if (!dialog || !button || !button.enabled || (dialog.ack !== null && !dialog.ack)) return;
-    if (rule.busy === null) {
-      // Services: the change is applied at once and the list comes back with a notice.
-      const loaded = this.work[s][HOME[s]];
-      if (loaded) loaded.notices = [{ tone: 'ok', text: NOTICE[this.pendingAction] ?? NOTICE.disable ?? '', more: [] }];
-      this.goTo(s, HOME[s]);
-      return;
-    }
     // `back` stays what it was when the dialog opened; a cancelled clean forgets it, a closed report ignores it.
     this.goTo(s, rule.busy);
   }

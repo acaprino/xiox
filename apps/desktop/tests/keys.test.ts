@@ -21,9 +21,8 @@ const fixture = JSON.parse(readFileSync(new URL('../fixtures/views.json', import
 test('digits switch sections', () => {
   assert.deepEqual(keyAction({ key: '1' }, free), { kind: 'section', section: 'cleanup' });
   assert.deepEqual(keyAction({ key: '2' }, free), { kind: 'section', section: 'registry' });
-  assert.deepEqual(keyAction({ key: '3' }, free), { kind: 'section', section: 'services' });
-  assert.deepEqual(keyAction({ key: '4' }, free), { kind: 'section', section: 'developers' });
-  assert.equal(keyAction({ key: '5' }, free), null);
+  assert.deepEqual(keyAction({ key: '3' }, free), { kind: 'section', section: 'developers' });
+  assert.equal(keyAction({ key: '4' }, free), null);
   assert.equal(keyAction({ key: '0' }, free), null);
   // A chord is the browser's or the system's, never ours.
   assert.equal(keyAction({ key: '1', ctrlKey: true }, free), null);
@@ -51,7 +50,7 @@ test('space toggles and arrows move outside fields and dialogs', () => {
 test("Enter and a press the view's action with that key, and nothing when it is disabled", () => {
   assert.deepEqual(keyAction({ key: 'a' }, free), { kind: 'action', key: 'a' });
   assert.deepEqual(keyAction({ key: 'Enter' }, free), { kind: 'action', key: 'Enter' });
-  // `a` is also Registry's Find issues and Services' Refresh: there is no `s` and no `r` key (the old window had them).
+  // `a` is also Registry's Find issues: there is no `s` and no `r` key (the old window had them).
   assert.equal(keyAction({ key: 's' }, free), null);
   assert.equal(keyAction({ key: 'r' }, free), null);
   const view = viewWith(action('analyze', 'a', true), action('clean', 'Enter', false), action('cancel', 'Escape', true));
@@ -61,7 +60,6 @@ test("Enter and a press the view's action with that key, and nothing when it is 
   assert.equal(actionForKey(viewWith(action('cancel', 'Esc', true)), 'Esc')?.id, 'cancel', 'Rust writes the key as "Esc"');
   assert.equal(actionForKey(viewWith(action('cancel', 'Esc', false)), 'Esc'), null, 'a disabled Cancel does not answer');
   assert.equal(actionForKey(viewWith(action('scan', 'a', true)), 'a')?.id, 'scan', 'Registry: a presses Find issues');
-  assert.equal(actionForKey(viewWith(action('refresh', 'a', true)), 'a')?.id, 'refresh', 'Services: a presses Refresh');
   assert.equal(actionForKey(viewWith(action('analyze', 'a', false)), 'a'), null);
   assert.equal(actionForKey(viewWith(action('x', null, true)), 'a'), null, 'an action without a key never answers a key');
 });
@@ -72,7 +70,7 @@ test('Escape closes a dialog before it cancels a job', () => {
 });
 
 test('keys are ignored while typing, except Escape', () => {
-  for (const key of ['1', '4', ' ', 'a', 's', 'r', 'Enter', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'Home', 'End']) {
+  for (const key of ['1', '3', ' ', 'a', 's', 'r', 'Enter', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'PageDown', 'Home', 'End']) {
     assert.equal(keyAction({ key }, typing), null, `${JSON.stringify(key)} in a field`);
   }
   assert.deepEqual(keyAction({ key: 'Escape' }, typing), { kind: 'action', key: 'Esc' });
@@ -91,7 +89,6 @@ test('the footer hint follows the section, from the keys its actions carry', () 
   assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean', 'Esc is not in the footer, busy or not');
   assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean', 'Rust writes the Cancel key as "Esc": still not in the footer');
   assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · s sort · a find issues · ↵ fix');
-  assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · s sort · a refresh · ↵ disable');
   assert.equal(hint('developers', 'projects'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean');
   assert.equal(footerHint(viewWith()), '↑↓ move · space toggle · s sort');
 });

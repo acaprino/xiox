@@ -23,17 +23,6 @@
 //! copia vecchia dov'è. Il download usa il `curl.exe` di Windows, senza
 //! finestra e senza passare da una shell, con i file di lavoro nella
 //! sottocartella `tmp` della cartella protetta (mai in `%TEMP%`).
-//!
-//! La vecchia copia in `%APPDATA%\Xiox\winapp2\` (prima versione, oppure
-//! `%APPDATA%\PulisciPC\winapp2\` se la cartella non è ancora stata
-//! rinominata) non si legge mai; si toglie, al meglio, quando quella nuova è a
-//! posto.
-//!
-//! Le installazioni di prima avevano la cartella dei dati con il vecchio nome
-//! (`%ProgramData%\PulisciPC`): `data_dir` la rinomina in `Xiox`
-//! ([`xiox_model::legacy::migrate_legacy_dir`], serve l'amministratore) e, se
-//! non ci riesce, continua a usare quella vecchia; la catena fidata riconosce
-//! tutti e due i nomi.
 
 use std::ffi::OsString;
 use std::fs;
@@ -45,7 +34,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use xiox_model::legacy::{APP_DIR, LEGACY_APP_DIR, app_dir_in};
+use xiox_model::APP_DIR;
 
 use crate::model::{KnownFolder, known_folder};
 
@@ -124,14 +113,11 @@ impl Protect for AdminOnly {
 }
 
 /// Cartelle da fidare, dalla più esterna: `Xiox` e `winapp2` per
-/// [`data_dir`] (e per ogni `…\Xiox\<dir>`, o `…\PulisciPC\<dir>` finché la
-/// cartella non è stata rinominata), altrimenti solo `dir`.
+/// [`data_dir`] (e per ogni `…\Xiox\<dir>`), altrimenti solo `dir`.
 pub fn trust_chain(dir: &Path) -> Vec<PathBuf> {
     let mut chain = Vec::new();
     if let Some(parent) = dir.parent()
-        && parent
-            .file_name()
-            .is_some_and(|n| n.eq_ignore_ascii_case(APP_DIR) || n.eq_ignore_ascii_case(LEGACY_APP_DIR))
+        && parent.file_name().is_some_and(|n| n.eq_ignore_ascii_case(APP_DIR))
     {
         chain.push(parent.to_path_buf());
     }
@@ -323,31 +309,9 @@ pub enum UpdateOutcome {
 }
 
 /// Cartella delle regole: `%ProgramData%\Xiox\winapp2` (ProgramData da
-/// `SHGetKnownFolderPath`, non dalla variabile d'ambiente). Una cartella
-/// `%ProgramData%\PulisciPC` di una versione precedente si rinomina in `Xiox`
-/// ([`xiox_model::legacy::migrate_legacy_dir`]); se non si riesce resta in uso
-/// quella vecchia.
+/// `SHGetKnownFolderPath`, non dalla variabile d'ambiente).
 pub fn data_dir() -> PathBuf {
-    data_dir_in(&program_data())
-}
-
-/// [`data_dir`] sotto la `ProgramData` data.
-pub fn data_dir_in(program_data: &Path) -> PathBuf {
-    app_dir_in(program_data).join("winapp2")
-}
-
-/// Cartelle della prima versione (`%APPDATA%\Xiox\winapp2` e, prima che
-/// `%APPDATA%\PulisciPC` fosse rinominata, `%APPDATA%\PulisciPC\winapp2`):
-/// non si leggono mai; vedi [`remove_legacy_copy`]. Non si rinomina nulla qui.
-pub fn legacy_dirs() -> Vec<PathBuf> {
-    known_folder(KnownFolder::RoamingAppData)
-        .map(|p| legacy_dirs_in(Path::new(&p)))
-        .unwrap_or_default()
-}
-
-/// [`legacy_dirs`] sotto la `%APPDATA%` data.
-pub fn legacy_dirs_in(appdata: &Path) -> Vec<PathBuf> {
-    [APP_DIR, LEGACY_APP_DIR].iter().map(|n| appdata.join(n).join("winapp2")).collect()
+    program_data().join(APP_DIR).join("winapp2")
 }
 
 fn program_data() -> PathBuf {
@@ -357,28 +321,6 @@ fn program_data() -> PathBuf {
             .unwrap_or_else(|| "C:".to_string());
         PathBuf::from(format!(r"{drive}\ProgramData"))
     })
-}
-
-/// Toglie, al meglio, la vecchia copia (`Winapp2.ini`, `.tmp`, `etag.txt`) e
-/// la cartella se resta vuota. Si cancella con
-/// [`crate::safedelete::delete_checked`]: la cartella è dell'utente e
-/// potrebbe essere diventata una giunzione verso altro.
-pub fn remove_legacy_copy(old: &Path) {
-    #[cfg(windows)]
-    {
-        let env = crate::model::Env::default();
-        for name in [INI_NAME, TMP_NAME, ETAG_NAME] {
-            let p = old.join(name);
-            if fs::symlink_metadata(&p).is_ok() {
-                let _ = crate::safedelete::delete_checked(&p, &env);
-            }
-        }
-        if fs::symlink_metadata(old).is_ok() {
-            let _ = crate::safedelete::delete_checked(old, &env);
-        }
-    }
-    #[cfg(not(windows))]
-    let _ = old;
 }
 
 /// Controlla che `bytes` sia davvero un Winapp2.ini intero. `Ok(versione)`.
@@ -577,25 +519,10 @@ fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Avvia l'aggiornamento della cartella `dir` in un thread staccato (nessun
 /// `join`): non blocca la UI né l'uscita dal programma. `on_done` gira sul
 /// thread di lavoro ed è chiamata sempre una volta sola (anche se il lavoro va
-/// in panico o il thread non riesce a partire). Con `dir` = [`data_dir`],
-/// quando la copia nuova è a posto si toglie quella vecchia di `%APPDATA%`.
+/// in panico o il thread non riesce a partire).
 pub fn spawn_update(dir: PathBuf, on_done: impl FnOnce(UpdateOutcome) + Send + 'static) {
     let fetch = Arc::new(CurlFetch::new(dir.join(WORK_NAME), Arc::new(AdminOnly)));
-    let legacy = if dir == data_dir() { legacy_dirs() } else { Vec::new() };
-    spawn_update_with(
-        dir,
-        fetch,
-        Arc::new(AdminOnly),
-        WINAPP2_URL.to_string(),
-        move |outcome| {
-            if matches!(outcome, UpdateOutcome::Updated { .. } | UpdateOutcome::UpToDate) {
-                for old in &legacy {
-                    remove_legacy_copy(old);
-                }
-            }
-            on_done(outcome);
-        },
-    );
+    spawn_update_with(dir, fetch, Arc::new(AdminOnly), WINAPP2_URL.to_string(), on_done);
 }
 
 type DoneFn = Box<dyn FnOnce(UpdateOutcome) + Send>;
@@ -1047,8 +974,6 @@ static SEQ: AtomicU32 = AtomicU32::new(0);
 
 /// Cartelle di lavoro di curl rimaste da un'esecuzione interrotta.
 const SCRATCH_PREFIX: &str = "xiox-curl-";
-/// Prefisso di prima del cambio di nome: le cartelle rimaste si tolgono lo stesso.
-const LEGACY_SCRATCH_PREFIX: &str = "pulisci-curl-";
 const STALE_AFTER: Duration = Duration::from_secs(600);
 
 struct ScratchDir(PathBuf);
@@ -1076,13 +1001,12 @@ impl Drop for ScratchDir {
     }
 }
 
-/// Toglie da `base` le cartelle `xiox-curl-*` (e `pulisci-curl-*`) più vecchie di `older_than`.
+/// Toglie da `base` le cartelle `xiox-curl-*` più vecchie di `older_than`.
 fn remove_stale_scratch(base: &Path, older_than: Duration) {
     let Ok(rd) = fs::read_dir(base) else { return };
     for entry in rd.flatten() {
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(SCRATCH_PREFIX) && !name.starts_with(LEGACY_SCRATCH_PREFIX) {
+        if !name.to_string_lossy().starts_with(SCRATCH_PREFIX) {
             continue;
         }
         let Ok(ft) = entry.file_type() else { continue };
@@ -1741,20 +1665,6 @@ mod tests {
         assert!(base.path().join("xiox-curl-file").exists(), "solo cartelle");
     }
 
-    /// Le cartelle di lavoro lasciate dalla versione con il vecchio nome si tolgono ancora.
-    #[test]
-    fn stale_scratch_dirs_with_the_old_prefix_are_still_removed() {
-        let base = tempfile::tempdir().unwrap();
-        fs::create_dir(base.path().join("pulisci-curl-1-2-3")).unwrap();
-        fs::write(base.path().join("pulisci-curl-1-2-3").join("body.bin"), b"x").unwrap();
-        fs::write(base.path().join("pulisci-curl-file"), b"x").unwrap();
-        remove_stale_scratch(base.path(), Duration::from_secs(3600));
-        assert!(base.path().join("pulisci-curl-1-2-3").exists(), "recente: non si tocca");
-        remove_stale_scratch(base.path(), Duration::ZERO);
-        assert!(!base.path().join("pulisci-curl-1-2-3").exists());
-        assert!(base.path().join("pulisci-curl-file").exists(), "solo cartelle");
-    }
-
     /// Prova di rete vera (sola lettura): `cargo test -p xiox-rules real_network -- --ignored --nocapture`.
     #[test]
     #[ignore]
@@ -1983,35 +1893,6 @@ mod tests {
         assert!(!p.exists());
     }
 
-    #[test]
-    fn legacy_copy_is_removed_but_a_junction_is_not_followed() {
-        let base = tempfile::tempdir().unwrap();
-        let old = base.path().join("Xiox").join("winapp2");
-        fs::create_dir_all(&old).unwrap();
-        for n in [INI_NAME, ETAG_NAME] {
-            fs::write(old.join(n), "x").unwrap();
-        }
-        remove_legacy_copy(&old);
-        assert!(!old.exists(), "vecchia cartella rimasta");
-        // La vecchia cartella è diventata una giunzione verso altro: i file
-        // della destinazione non si toccano.
-        let other = base.path().join("other");
-        fs::create_dir_all(&other).unwrap();
-        fs::write(other.join(INI_NAME), "prezioso").unwrap();
-        let ok = std::process::Command::new("cmd")
-            .args(["/c", "mklink", "/J"])
-            .arg(&old)
-            .arg(&other)
-            .output()
-            .is_ok_and(|o| o.status.success());
-        if !ok {
-            println!("SKIP: mklink /J non riuscito");
-            return;
-        }
-        remove_legacy_copy(&old);
-        assert_eq!(fs::read_to_string(other.join(INI_NAME)).unwrap(), "prezioso");
-    }
-
     /// ACL vere su una cartella creata apposta:
     /// `cargo test -p xiox-rules secure_dir_real -- --ignored --nocapture`.
     #[test]
@@ -2036,7 +1917,7 @@ mod tests {
             Err(e) => println!("secure_dir non riuscita (serve l'amministratore?): {e}"),
         }
         println!("data_dir: {}", data_dir().display());
-        println!("legacy_dirs: {:?}", legacy_dirs());
+        assert!(data_dir().ends_with(r"Xiox\winapp2"));
     }
     /// Cartelle messe da parte rimaste accanto a quelle vere.
     fn leftovers(parent: &Path) -> usize {
@@ -2234,52 +2115,9 @@ mod tests {
     }
 
     #[test]
-    fn trust_chain_covers_the_xiox_folder_and_the_old_name() {
+    fn trust_chain_covers_the_xiox_folder() {
         let d = Path::new(r"C:\ProgramData\Xiox\winapp2");
         assert_eq!(trust_chain(d), vec![PathBuf::from(r"C:\ProgramData\Xiox"), d.to_path_buf()]);
-        // Cartella dati non ancora rinominata (o rinomina non riuscita): stessa catena.
-        let old = Path::new(r"C:\ProgramData\PulisciPC\winapp2");
-        assert_eq!(trust_chain(old), vec![PathBuf::from(r"C:\ProgramData\PulisciPC"), old.to_path_buf()]);
         assert_eq!(trust_chain(Path::new(r"C:\x\regole")), vec![PathBuf::from(r"C:\x\regole")]);
-    }
-
-    /// Prima installazione con il vecchio nome: la cartella dati si rinomina in `Xiox` con la
-    /// copia delle regole dentro; con la rinomina impossibile resta in uso quella vecchia.
-    #[test]
-    fn data_dir_moves_the_old_folder_or_keeps_using_it() {
-        let pd = tempfile::tempdir().unwrap();
-        let old = pd.path().join("PulisciPC").join("winapp2");
-        fs::create_dir_all(&old).unwrap();
-        fs::write(old.join(INI_NAME), valid_ini("260915")).unwrap();
-        let got = data_dir_in(pd.path());
-        assert_eq!(got, pd.path().join("Xiox").join("winapp2"));
-        assert!(!pd.path().join("PulisciPC").exists());
-        assert_eq!(is_valid(&fs::read(got.join(INI_NAME)).unwrap()), Ok("260915".into()));
-        // Nome nuovo occupato da un file: la rinomina è rifiutata e le regole restano dov'erano.
-        let pd2 = tempfile::tempdir().unwrap();
-        let old2 = pd2.path().join("PulisciPC").join("winapp2");
-        fs::create_dir_all(&old2).unwrap();
-        fs::write(old2.join(INI_NAME), valid_ini("260915")).unwrap();
-        fs::write(pd2.path().join("Xiox"), "x").unwrap();
-        assert_eq!(data_dir_in(pd2.path()), old2);
-        assert!(old2.join(INI_NAME).exists());
-        // Niente di niente: il nome nuovo, senza creare nulla.
-        let pd3 = tempfile::tempdir().unwrap();
-        assert_eq!(data_dir_in(pd3.path()), pd3.path().join("Xiox").join("winapp2"));
-        assert!(!pd3.path().join("Xiox").exists());
-    }
-
-    /// La copia della prima versione si toglie sia sotto `Xiox` sia sotto il vecchio nome.
-    #[test]
-    fn legacy_copies_are_looked_for_under_both_names() {
-        let ad = tempfile::tempdir().unwrap();
-        let both = legacy_dirs_in(ad.path());
-        assert_eq!(both, vec![ad.path().join("Xiox").join("winapp2"), ad.path().join("PulisciPC").join("winapp2")]);
-        for d in &both {
-            fs::create_dir_all(d).unwrap();
-            fs::write(d.join(INI_NAME), "x").unwrap();
-            remove_legacy_copy(d);
-            assert!(!d.exists(), "{}", d.display());
-        }
     }
 }

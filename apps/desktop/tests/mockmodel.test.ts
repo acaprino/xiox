@@ -7,12 +7,11 @@ import type { SectionId, SectionView } from '../src/types.ts';
 const raw = readFileSync(new URL('../fixtures/views.json', import.meta.url), 'utf8');
 const fixture = JSON.parse(raw) as Fixture;
 const fresh = (): MockModel => new MockModel(JSON.parse(raw) as Fixture);
-const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
+const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', developers: 'projects' };
 
 const STATES: Record<SectionId, string[]> = {
   cleanup: ['idle', 'analyzing', 'analyzed', 'confirm', 'cleaning', 'report', 'cancelled'],
   registry: ['idle', 'scanning', 'analyzed', 'backup', 'fixing', 'fixed'],
-  services: ['loading', 'loaded', 'confirm'],
   developers: ['idle', 'analyzing', 'projects', 'worktrees', 'sessions', 'confirm', 'shortfall', 'cleaning', 'report', 'cancelled'],
 };
 
@@ -30,10 +29,10 @@ test('the fixture holds every state the table names', () => {
   }
   // Busy states carry a job; dialog states a dialog; the rest none.
   for (const [section, name] of [['cleanup', 'analyzing'], ['cleanup', 'cleaning'], ['registry', 'scanning'], ['registry', 'fixing'],
-    ['services', 'loading'], ['developers', 'analyzing'], ['developers', 'cleaning']] as const) {
+    ['developers', 'analyzing'], ['developers', 'cleaning']] as const) {
     assert.ok(fixture.views[section][name]?.job, `${section}:${name} has no job`);
   }
-  for (const [section, name] of [['cleanup', 'confirm'], ['registry', 'backup'], ['services', 'confirm'], ['developers', 'confirm'], ['developers', 'shortfall']] as const) {
+  for (const [section, name] of [['cleanup', 'confirm'], ['registry', 'backup'], ['developers', 'confirm'], ['developers', 'shortfall']] as const) {
     assert.ok(fixture.views[section][name]?.dialog, `${section}:${name} has no dialog`);
   }
   for (const [section, name] of [['cleanup', 'report'], ['developers', 'report'], ['cleanup', 'cancelled'], ['developers', 'cancelled']] as const) {
@@ -58,8 +57,8 @@ test('the fixture holds every state the table names', () => {
 test('the sections start where the table says and every returned view has a newer rev', () => {
   const model = fresh();
   assert.deepEqual(
-    [model.stateOf('cleanup'), model.stateOf('registry'), model.stateOf('services'), model.stateOf('developers')],
-    ['idle', 'idle', 'loaded', 'idle'],
+    [model.stateOf('cleanup'), model.stateOf('registry'), model.stateOf('developers')],
+    ['idle', 'idle', 'idle'],
   );
   const a = model.show('cleanup');
   const b = model.view('cleanup');
@@ -96,18 +95,16 @@ test('analyze passes three ticks and lands on analyzed', () => {
   assert.deepEqual(model.tick(), [], 'nothing is pushed once the section is idle');
 });
 
-test('scan and refresh are the same job on their sections and land where the table says', () => {
+test('scan is the same job on its section and lands where the table says', () => {
   const model = fresh();
   model.intent('registry', { kind: 'scan' });
   assert.equal(model.stateOf('registry'), 'scanning');
-  model.intent('services', { kind: 'refresh' });
-  assert.equal(model.stateOf('services'), 'loading');
   model.intent('developers', { kind: 'analyze' });
   assert.equal(model.stateOf('developers'), 'analyzing');
   for (let i = 0; i < 4; i += 1) model.tick();
   assert.deepEqual(
-    [model.stateOf('registry'), model.stateOf('services'), model.stateOf('developers')],
-    ['analyzed', 'loaded', 'projects'],
+    [model.stateOf('registry'), model.stateOf('developers')],
+    ['analyzed', 'projects'],
   );
   // An analyze while the job runs changes nothing.
   model.intent('cleanup', { kind: 'analyze' });
@@ -174,11 +171,6 @@ test('closeDialog returns to the state the dialog was opened from', () => {
   assert.equal(model.stateOf('registry'), 'backup');
   model.intent('registry', { kind: 'closeDialog' });
   assert.equal(model.stateOf('registry'), 'analyzed');
-  model.go('services', 'loaded');
-  model.intent('services', { kind: 'openConfirm', action: 'disable' });
-  assert.equal(model.stateOf('services'), 'confirm');
-  model.intent('services', { kind: 'closeDialog' });
-  assert.equal(model.stateOf('services'), 'loaded');
   // closeDialog with no dialog open changes nothing.
   model.go('cleanup', 'analyzed');
   model.intent('cleanup', { kind: 'closeDialog' });
@@ -298,7 +290,7 @@ test('a confirmed clean runs three ticks and ends on the report', () => {
   assert.equal(model.stateOf('developers'), 'idle');
 });
 
-test('registry fixes through the backup dialog and services confirm goes straight back to loaded', () => {
+test('registry fixes through the backup dialog', () => {
   const model = fresh();
   model.go('registry', 'analyzed');
   model.intent('registry', { kind: 'openFix' });
@@ -306,14 +298,6 @@ test('registry fixes through the backup dialog and services confirm goes straigh
   assert.equal(model.stateOf('registry'), 'fixing');
   for (let i = 0; i < 4; i += 1) model.tick();
   assert.equal(model.stateOf('registry'), 'fixed');
-
-  model.go('services', 'loaded');
-  model.intent('services', { kind: 'openConfirm', action: 'manual' });
-  const done = model.intent('services', { kind: 'confirm' });
-  assert.equal(model.stateOf('services'), 'loaded');
-  assert.equal(done.dialog, null);
-  assert.deepEqual(done.notices.map((n) => n.tone), ['ok']);
-  assert.deepEqual(model.tick(), []);
 });
 
 test('the Cleanup list holds every category one after another, each under its own group row', () => {
@@ -382,19 +366,12 @@ test('a group box ticks what it may, and clears it again; select all and none le
   assert.equal(model.intent('cleanup', { kind: 'selectAll', on: true }).rows.length, 0);
 });
 
-test('select all works in the Registry list too (every issue is eligible), and in Services', () => {
+test('select all works in the Registry list too (every issue is eligible)', () => {
   const model = fresh();
   model.go('registry', 'analyzed');
   const reg = checks(model.intent('registry', { kind: 'selectAll', on: true }));
   assert.ok(Object.values(reg).every((c) => c === 'on'));
   assert.ok(Object.values(checks(model.intent('registry', { kind: 'selectAll', on: false }))).every((c) => c === 'off'));
-  model.go('services', 'loaded');
-  const before = model.view('services');
-  const after = model.intent('services', { kind: 'selectAll', on: false });
-  for (const row of before.rows) assert.equal(after.rows.find((r) => r.id === row.id)?.check, row.enabled && row.check !== 'none' ? 'off' : row.check, row.id);
-  model.go('services', 'loading');
-  const frozen = model.view('services');
-  assert.deepEqual(checks(model.intent('services', { kind: 'selectAll', on: true })), checks(frozen), 'refused while the job runs');
 });
 
 test('Analyze is on over a finished report and starts a new analysis (Rust enables it when nothing runs)', () => {

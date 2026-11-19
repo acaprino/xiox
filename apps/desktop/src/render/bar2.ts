@@ -108,16 +108,6 @@ function buttonControl(s: SectionId, o: OptionOf<'button'>, on: Handlers): HTMLE
     }));
 }
 
-function meterControl(o: OptionOf<'meter'>): HTMLElement {
-  const share = o.totalBytes > 0 ? Math.min(100, Math.max(0, (o.usedBytes / o.totalBytes) * 100)) : 0;
-  const fill = h('i');
-  fill.style.width = `${share.toFixed(1)}%`;
-  return h('div', { class: `ctl ctl-meter tone-${o.tone}` },
-    h('span', { class: 'ctl-title' }, o.label),
-    h('div', { class: 'meter', role: 'meter', 'aria-label': o.label, 'aria-valuemin': 0, 'aria-valuemax': o.totalBytes, 'aria-valuenow': o.usedBytes }, fill),
-    h('span', { class: 'meter-text num', 'data-fit': '' }, `${formatBytes(o.usedBytes)} / ${formatBytes(o.totalBytes)}`));
-}
-
 function textControl(o: OptionOf<'text'>): HTMLElement {
   return h('p', { class: `ctl ctl-text tone-${o.tone}`, title: o.hint }, o.text);
 }
@@ -129,7 +119,6 @@ function optionControl(s: SectionId, o: OptionView, on: Handlers): HTMLElement {
     case 'choice': return choiceControl(s, o, on);
     case 'list': return listControl(s, o, on);
     case 'button': return buttonControl(s, o, on);
-    case 'meter': return meterControl(o);
     case 'text': return textControl(o);
   }
 }

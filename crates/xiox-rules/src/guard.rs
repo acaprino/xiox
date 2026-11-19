@@ -967,7 +967,7 @@ mod tests {
             r"C:\ProgramData\Xiox\*",
             r"c:/programdata/XIOX/Winapp2/etag.txt",
             r"\\?\C:\ProgramData\Xiox\winapp2\etag.txt",
-            r"C:\Users\u\Documents\Xiox\backup_regole_1.reg",
+            r"C:\Users\u\Documents\Xiox\rules-backup-1.reg",
             r"C:\Users\u\Documents\Xiox\sub\x.reg",
         ];
         // Senza le chiavi `protect-tree:` il contenuto è permesso (le cartelle

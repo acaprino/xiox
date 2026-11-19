@@ -1,4 +1,4 @@
-//! The whole application behind the window: the four section states, the section on screen and
+//! The whole application behind the window: the three section states, the section on screen and
 //! the revision counter, with one entry per thing the page can ask.
 //!
 //! `Core` is the only door between the page and the engine. The page sends typed intents (never a
@@ -13,7 +13,6 @@
 use crate::dev::{self, DevState, NO_DIALOG};
 use crate::notify::{SectionId, SharedNotifier};
 use crate::regstate::RegistryState;
-use crate::svcstate::ServicesState;
 use crate::cleanup::{CleanView, CleanupState};
 use crate::view::*;
 use crate::{rules, sys};
@@ -36,7 +35,6 @@ pub struct CoreOptions {
 pub struct Core {
     pub cleanup: CleanupState,
     pub registry: RegistryState,
-    pub services: ServicesState,
     pub dev: DevState,
     admin: bool,
     /// (account of the process, account of the Windows session) when they differ.
@@ -56,7 +54,7 @@ impl Core {
             None => DevState::new(dev::Section::Projects),
         };
         let (load, update) = (o.load_rules, o.update_rules);
-        let mut core = Core::with_states(o, notifier.clone(), CleanupState::new(), RegistryState::new(), ServicesState::new(), dev);
+        let mut core = Core::with_states(o, notifier.clone(), CleanupState::new(), RegistryState::new(), dev);
         core.mismatch = sys::profile_mismatch();
         if load {
             core.cleanup.start_rules(notifier, false, update);
@@ -70,13 +68,11 @@ impl Core {
         notifier: SharedNotifier,
         cleanup: CleanupState,
         registry: RegistryState,
-        services: ServicesState,
         dev: DevState,
     ) -> Core {
         Core {
             cleanup,
             registry,
-            services,
             dev,
             admin: o.admin,
             mismatch: None,
@@ -112,18 +108,10 @@ impl Core {
         AboutView { version: self.version.clone(), winapp2, attribution: rules::ABOUT_RULES.to_string() }
     }
 
-    /// The page opens a section. Leaving Developers frees its analysis (it can be large), the
-    /// result of the last Services change goes off the screen, and Services reads its list the
-    /// first time it is shown.
+    /// The page opens a section. Leaving Developers frees its analysis (it can be large).
     pub fn show(&mut self, s: SectionId) -> SectionView {
         if self.shown == SectionId::Developers && s != SectionId::Developers {
             self.dev.release();
-        }
-        if s == SectionId::Services {
-            self.services.clear_message();
-            if !self.services.loaded && !self.services.busy() {
-                self.services.load(self.notifier.clone());
-            }
         }
         self.shown = s;
         self.view(s)
@@ -135,7 +123,6 @@ impl Core {
         let mut v = match s {
             SectionId::Cleanup => self.cleanup.view(self.admin),
             SectionId::Registry => self.registry.view(),
-            SectionId::Services => self.services.view(),
             SectionId::Developers => self.dev.view(self.admin),
         };
         self.rev += 1;
@@ -147,7 +134,6 @@ impl Core {
         match s {
             SectionId::Cleanup => self.cleanup.poll(),
             SectionId::Registry => self.registry.poll(),
-            SectionId::Services => self.services.poll(self.notifier.clone()),
             SectionId::Developers => self.dev.poll(),
         }
     }
@@ -210,35 +196,6 @@ impl Core {
         Ok(self.view(SectionId::Registry))
     }
 
-    pub fn services(&mut self, i: ServicesIntent) -> Result<SectionView, String> {
-        self.poll(SectionId::Services);
-        let n = self.notifier.clone();
-        let st = &mut self.services;
-        match i {
-            ServicesIntent::SetAll { all } => {
-                st.set_all(all);
-                Ok(())
-            }
-            ServicesIntent::Search { text } => {
-                st.set_search(&text);
-                Ok(())
-            }
-            ServicesIntent::Toggle { row } => st.toggle(&row),
-            ServicesIntent::SelectAll { on } => st.select_all(on),
-            ServicesIntent::Refresh => st.refresh(n),
-            ServicesIntent::OpenConfirm { action } => st.open_confirm(action),
-            ServicesIntent::Confirm => st.confirm(n),
-            ServicesIntent::CloseDialog => {
-                if st.confirm.is_none() {
-                    return Err(NO_DIALOG.into());
-                }
-                st.close_confirm();
-                Ok(())
-            }
-        }?;
-        Ok(self.view(SectionId::Services))
-    }
-
     pub fn developers(&mut self, i: DevIntent) -> Result<SectionView, String> {
         self.poll(SectionId::Developers);
         let n = self.notifier.clone();
@@ -289,7 +246,7 @@ impl Core {
         match s {
             SectionId::Cleanup => self.cleanup.report_text(),
             SectionId::Developers => self.dev.report_text(),
-            SectionId::Registry | SectionId::Services => None,
+            SectionId::Registry => None,
         }
     }
 
@@ -298,7 +255,7 @@ impl Core {
         match s {
             SectionId::Cleanup => self.cleanup.set_saved(text, ok),
             SectionId::Developers => self.dev.set_saved(text, ok),
-            SectionId::Registry | SectionId::Services => {}
+            SectionId::Registry => {}
         }
         self.view(s)
     }
@@ -321,10 +278,8 @@ mod tests {
     use crate::cleanup::{CleanEnd, CleanJob, CleanMsg, CleanupWorkers};
     use crate::dev::{DevCleanJob, DevMsg, DevWorkers};
     use crate::notify::{NoNotifier, Outbox};
-    use crate::svcstate::{ServicesWorkers, SvcMsg};
     use crate::view::testing::wait;
     use crate::view::RemoveModeView;
-    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     use std::sync::Arc;
 
     fn options() -> CoreOptions {
@@ -337,24 +292,6 @@ mod tests {
     }
     fn scan_never(_: xiox_model::Settings, _: bool, _: Outbox<DevMsg>) {}
     fn dev_clean_never(_: DevCleanJob, _: Outbox<DevMsg>) {}
-    fn load_never(_: Outbox<SvcMsg>) {}
-    fn apply_never(_: Vec<crate::services::Service>, _: Option<u32>, _: Outbox<SvcMsg>) {}
-    fn saved_none() -> usize {
-        0
-    }
-    fn memory() -> sys::Memory {
-        sys::Memory { total: 8 << 30, available: 4 << 30 }
-    }
-
-    fn load_empty(out: Outbox<SvcMsg>) {
-        out.send(SvcMsg::Loaded(Vec::new()));
-    }
-
-    static LOADS: AtomicUsize = AtomicUsize::new(0);
-    fn load_counting(out: Outbox<SvcMsg>) {
-        LOADS.fetch_add(1, SeqCst);
-        out.send(SvcMsg::Loaded(Vec::new()));
-    }
 
     fn dev_state() -> DevState {
         let mut dev = DevState::with_settings(xiox_app::default_settings(), dev::Section::Projects)
@@ -363,19 +300,14 @@ mod tests {
         dev
     }
 
-    fn core_with(services: ServicesWorkers) -> Core {
+    fn core() -> Core {
         Core::with_states(
             options(),
             Arc::new(NoNotifier),
             CleanupState::with(Vec::new(), Vec::new(), CleanupWorkers { job: job_quiet }),
             RegistryState::new(),
-            ServicesState::new().with_workers(services),
             dev_state(),
         )
-    }
-
-    fn core() -> Core {
-        core_with(ServicesWorkers { load: load_never, apply: apply_never, saved: saved_none, memory })
     }
 
     #[test]
@@ -397,28 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn services_load_once_on_first_show() {
-        LOADS.store(0, SeqCst);
-        let mut c = core_with(ServicesWorkers { load: load_counting, apply: apply_never, saved: saved_none, memory });
-        assert_eq!(LOADS.load(SeqCst), 0, "nothing is read before the section is shown");
-        c.show(SectionId::Services);
-        wait(|| !c.view(SectionId::Services).job.is_some());
-        c.show(SectionId::Cleanup);
-        c.show(SectionId::Services);
-        c.show(SectionId::Services);
-        wait(|| !c.view(SectionId::Services).job.is_some());
-        assert_eq!(LOADS.load(SeqCst), 1);
-    }
-
-    #[test]
-    fn showing_services_again_clears_the_last_result() {
-        let mut c = core_with(ServicesWorkers { load: load_empty, apply: apply_never, saved: saved_none, memory });
-        c.services.msg = "2 services disabled.".into();
-        assert_eq!(c.view(SectionId::Services).notices.len(), 1);
-        assert!(c.show(SectionId::Services).notices.is_empty());
-    }
-
-    #[test]
     fn views_carry_increasing_revs() {
         let mut c = core();
         let mut last = 0;
@@ -428,7 +338,7 @@ mod tests {
             assert!(v.rev > last, "rev {} after {last}", v.rev);
             last = v.rev;
         }
-        let shown = c.show(SectionId::Services);
+        let shown = c.show(SectionId::Registry);
         assert!(shown.rev > last);
         let answered = c.registry(RegistryIntent::ToggleCategory { index: 0 }).unwrap();
         assert!(answered.rev > shown.rev, "an intent's answer is a new revision too");
@@ -482,8 +392,6 @@ mod tests {
             c.cleanup(CleanupIntent::CloseDialog).unwrap_err(),
             c.registry(RegistryIntent::Fix { backup: true }).unwrap_err(),
             c.registry(RegistryIntent::CloseDialog).unwrap_err(),
-            c.services(ServicesIntent::Confirm).unwrap_err(),
-            c.services(ServicesIntent::CloseDialog).unwrap_err(),
             c.developers(DevIntent::CloseDialog).unwrap_err(),
             c.developers(DevIntent::Permanent).unwrap_err(),
         ] {
@@ -571,7 +479,7 @@ mod tests {
     #[test]
     fn nothing_can_be_saved_where_there_is_no_report() {
         let mut c = core();
-        for s in [SectionId::Cleanup, SectionId::Registry, SectionId::Services, SectionId::Developers] {
+        for s in [SectionId::Cleanup, SectionId::Registry, SectionId::Developers] {
             assert_eq!(c.report_text(s), None, "{s:?}");
         }
         // The outcome of a save is shown by the section that has a report; the others ignore it.

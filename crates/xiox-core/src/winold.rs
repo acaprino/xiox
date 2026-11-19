@@ -10,10 +10,9 @@
 //! si toglie **sempre** il valore. Se `StateFlags0099` c'è già sotto una
 //! qualsiasi sottochiave (lo ha messo qualcun altro) non si procede.
 //! Eccezione: un valore rimasto da Xiox stesso (processo terminato
-//! durante l'attesa) si riconosce dal valore compagno [`MARKER_NAME`] (o dal
-//! nome di prima, [`LEGACY_MARKER_NAME`]), scritto prima del flag e tolto
-//! dopo; se l'unico flag è sotto [`HANDLER`] e il compagno c'è, si toglie e
-//! si procede.
+//! durante l'attesa) si riconosce dal valore compagno [`MARKER_NAME`],
+//! scritto prima del flag e tolto dopo; se l'unico flag è sotto
+//! [`HANDLER`] e il compagno c'è, si toglie e si procede.
 //!
 //! Ogni accesso al sistema passa da un trait ([`Files`], [`VolumeCaches`],
 //! [`Cleanmgr`]): `analyze`/`clean` contengono tutta la logica e i test le
@@ -46,11 +45,6 @@ pub const FLAG_VALUE: u32 = 2;
 /// Valore compagno (`REG_SZ` con l'ora) scritto sotto [`HANDLER`] prima di
 /// [`FLAG_NAME`] e tolto dopo: dice che il flag l'ha messo Xiox.
 pub const MARKER_NAME: &str = "Xiox_StateFlags0099";
-/// Il compagno con il nome di prima: lo scrive solo una versione vecchia, ma si riconosce e si toglie
-/// ancora (un'installazione interrotta prima dell'aggiornamento non resta con un flag "estraneo").
-pub const LEGACY_MARKER_NAME: &str = "PulisciPC_StateFlags0099";
-/// Tutti i nomi del compagno, quello nuovo per primo.
-pub const MARKER_NAMES: [&str; 2] = [MARKER_NAME, LEGACY_MARKER_NAME];
 /// Cartelle dei profili in `Windows.old\Users` guardate per i file personali.
 pub const PERSONAL_DIRS: &[&str] = &["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos", "Favorites"];
 /// Tempo massimo per contare i file personali.
@@ -62,37 +56,6 @@ pub const SIZE_BUDGET: Duration = Duration::from_secs(10);
 pub const MAX_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
 /// Intervallo fra due controlli di `cleanmgr`.
 pub const POLL_STEP: Duration = Duration::from_millis(500);
-
-/// I valori sotto [`HANDLER`] che interessano ai compagni: solo ciò che serve a
-/// riconoscerli e toglierli, così la logica sui due nomi si prova senza registro.
-pub trait MarkerValues {
-    /// `Ok(true)` se il valore `name` c'è.
-    fn exists(&self, name: &str) -> Result<bool, String>;
-    /// Toglie il valore `name`; `Ok` anche se non c'è.
-    fn delete(&self, name: &str) -> Result<(), String>;
-}
-
-/// `Ok(true)` se c'è il compagno con uno qualsiasi dei nomi ([`MARKER_NAMES`]).
-pub fn any_marker(values: &dyn MarkerValues) -> Result<bool, String> {
-    for name in MARKER_NAMES {
-        if values.exists(name)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Toglie il compagno con tutti i nomi ([`MARKER_NAMES`]); un errore su uno non
-/// salta l'altro, e si riporta il primo.
-pub fn remove_markers(values: &dyn MarkerValues) -> Result<(), String> {
-    let mut first = None;
-    for name in MARKER_NAMES {
-        if let Err(e) = values.delete(name) {
-            first.get_or_insert(e);
-        }
-    }
-    first.map_or(Ok(()), Err)
-}
 
 /// Cosa c'è a un percorso, senza seguire collegamenti.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -681,7 +644,7 @@ mod win {
     use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetSystemWindowsDirectoryW};
 
     use super::{
-        Child, Cleanmgr, Entry, Files, Kind, MarkerValues, VolumeCaches, FLAG_NAME, FLAG_VALUE, HANDLER, MARKER_NAME, SAGERUN_ARG,
+        Child, Cleanmgr, Entry, Files, Kind, VolumeCaches, FLAG_NAME, FLAG_VALUE, HANDLER, MARKER_NAME, SAGERUN_ARG,
         VOLUME_CACHES,
     };
 
@@ -906,7 +869,16 @@ mod win {
         }
 
         fn has_marker(&self) -> Result<bool, String> {
-            super::any_marker(&HandlerValues)
+            let path = handler_path();
+            let key = match open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_QUERY_VALUE) {
+                Ok(k) => k,
+                Err(ERROR_FILE_NOT_FOUND) => return Ok(false),
+                Err(rc) => return Err(format!("HKLM\\{path}: {}", os_error(rc))),
+            };
+            if is_link(&key) {
+                return Ok(false);
+            }
+            value_exists(&key, &wide(MARKER_NAME)).map_err(os_error)
         }
 
         fn set_marker(&self) -> Result<(), String> {
@@ -920,29 +892,7 @@ mod win {
         }
 
         fn remove_marker(&self) -> Result<(), String> {
-            super::remove_markers(&HandlerValues)
-        }
-    }
-
-    /// I valori di [`HANDLER`] nel registro vero.
-    struct HandlerValues;
-
-    impl MarkerValues for HandlerValues {
-        fn exists(&self, name: &str) -> Result<bool, String> {
-            let path = handler_path();
-            let key = match open(HKEY_LOCAL_MACHINE, &path, REG_OPTION_OPEN_LINK, KEY_QUERY_VALUE) {
-                Ok(k) => k,
-                Err(ERROR_FILE_NOT_FOUND) => return Ok(false),
-                Err(rc) => return Err(format!("HKLM\\{path}: {}", os_error(rc))),
-            };
-            if is_link(&key) {
-                return Ok(false);
-            }
-            value_exists(&key, &wide(name)).map_err(os_error)
-        }
-
-        fn delete(&self, name: &str) -> Result<(), String> {
-            delete_value(name)
+            delete_value(MARKER_NAME)
         }
     }
 

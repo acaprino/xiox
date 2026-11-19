@@ -16,7 +16,7 @@ mkdirSync(out, { recursive: true });
 // Every state of the fixture is drawn and fit-checked; the ones below also get the click checks.
 const fixture = JSON.parse(readFileSync(`${here}../fixtures/views.json`, 'utf8'));
 export const SECTIONS = Object.entries(fixture.views).flatMap(([section, states]) => Object.keys(states).map((state) => [section, state]));
-const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'services:loaded', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
+const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
 const VIEWPORTS = [[1000, 640], [1440, 900]];
 
 /** Tokens the whole look rests on, per look: a wrong value here means the palette drifted (ONI MODE: from the mock-up). */
@@ -132,7 +132,7 @@ export async function checkFit(page, label) {
 
 /** Every section back on a state without a dialog or a report (a dimmed page cannot be clicked). */
 const resetAll = (page) => page.evaluate(() => {
-  for (const [s, st] of [['developers', 'idle'], ['services', 'loaded'], ['registry', 'idle'], ['cleanup', 'idle']]) window.__xioxMock.go(s, st);
+  for (const [s, st] of [['developers', 'idle'], ['registry', 'idle'], ['cleanup', 'idle']]) window.__xioxMock.go(s, st);
 });
 
 /** One click on the first enabled check box must come back flipped from the mock model. */
@@ -205,10 +205,9 @@ const KEY_LABELS = { Enter: '↵', Escape: 'Esc' };
 const FOOTER = {
   cleanup: '↑↓ move · space toggle · s sort · a analyze · ↵ clean',
   registry: '↑↓ move · space toggle · s sort · a find issues · ↵ fix',
-  services: '↑↓ move · space toggle · s sort · a refresh · ↵ disable',
   developers: '↑↓ move · space toggle · s sort · a analyze · ↵ clean',
 };
-const SECTION_NAMES = [['cleanup', 'Cleanup'], ['registry', 'Registry'], ['services', 'Services & RAM'], ['developers', 'Developers']];
+const SECTION_NAMES = [['cleanup', 'Cleanup'], ['registry', 'Registry'], ['developers', 'Developers']];
 const count = (n) => n.toLocaleString('en-US');
 function bytesText(n) {
   if (n >= 2 ** 30) return `${(n / 2 ** 30).toFixed(2)} GB`;
@@ -333,7 +332,7 @@ const blur = (page) => page.evaluate(() => { if (document.activeElement instance
 async function goTo(page, section, state) {
   await resetAll(page); // no dialog or report left over from the last flow
   await blur(page);
-  const digit = String(['cleanup', 'registry', 'services', 'developers'].indexOf(section) + 1);
+  const digit = String(['cleanup', 'registry', 'developers'].indexOf(section) + 1);
   if (await page.locator(`#sections [data-section="${section}"][aria-current="page"]`).count() === 0) await page.keyboard.press(digit);
   await page.locator(`#sections [data-section="${section}"][aria-current="page"]`).waitFor({ timeout: 2000 });
   await page.evaluate(([s, st]) => window.__xioxMock.go(s, st), [section, state]);
@@ -346,10 +345,10 @@ async function keyboardFlows(page, size, expect, shot) {
   const failures = [];
   const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
 
-  // 1-4 open the sections in the order of the bar.
+  // 1-3 open the sections in the order of the bar.
   await page.evaluate(() => window.__xioxMock.pause(false));
   await blur(page);
-  for (const [key, id] of [['2', 'registry'], ['3', 'services'], ['4', 'developers'], ['1', 'cleanup']]) {
+  for (const [key, id] of [['2', 'registry'], ['3', 'developers'], ['1', 'cleanup']]) {
     await page.keyboard.press(key);
     await page.locator(`#sections [data-section="${id}"][aria-current="page"]`).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: key ${key} did not open ${id}`));
     check(await page.locator('#sections [aria-current]').count() === 1, `after key ${key} more than one section is current`);
@@ -548,7 +547,7 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.waitForTimeout(80);
   check(await page.locator('#rows [data-row="a:1"]').count() === 1, 'ArrowRight did not open the selected parent');
 
-  // Registry and Services: their own keys press their own actions.
+  // Registry: its own keys press its own actions.
   await goTo(page, 'registry', 'idle');
   await page.keyboard.press('a');
   await page.locator('#badge', { hasText: 'Scanning' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the key a did not start the scan`));
@@ -561,10 +560,6 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.screenshot({ path: `${shot}registry-backup-keyboard-${size}.png` });
   await page.keyboard.press('Escape');
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
-  await goTo(page, 'services', 'loaded');
-  await page.keyboard.press('a');
-  await page.locator('#badge', { hasText: 'Working' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the key a did not refresh`));
-  await page.locator('#badge', { hasText: 'Loaded' }).waitFor({ timeout: 4000 }).catch(() => failures.push(`${size}: the refresh did not land`));
 
   return failures;
 }
@@ -613,8 +608,8 @@ const sent = async (page, command, kind, match = () => true) => (await callsOf(p
 
 /**
  * The sections end to end, from the briefs of Tasks 12 to 14: what a click or a key SENDS (read from the mock's log,
- * not from what is drawn), and the page's own behaviours (roots list, number field, search box, keep list, lines,
- * meter, polling). One page, one viewport.
+ * not from what is drawn), and the page's own behaviours (roots list, number field, search box, keep list, lines).
+ * One page, one viewport.
  */
 async function sectionFlows(page, size, shot) {
   const failures = [];
@@ -807,47 +802,21 @@ async function sectionFlows(page, size, shot) {
   await page.locator('[data-key="bulk:master"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'registry', 'selectAll', (a) => a.on === true) && await sent(page, 'registry', 'selectAll', (a) => a.on === false), 'the Registry top check box did not send selectAll on, then off');
-  await page.locator('[data-key="opt:cat:11"]').click();
+  await page.locator('[data-key="opt:cat:10"]').click();
   await page.waitForTimeout(100);
-  check(await sent(page, 'registry', 'toggleCategory', (a) => a.index === 11), 'a category box did not send toggleCategory { index: 11 }');
+  check(await sent(page, 'registry', 'toggleCategory', (a) => a.index === 10), 'a category box did not send toggleCategory { index: 10 }');
   check(await page.locator('#rows [data-row="i:39"]').count() === 1 || (await page.locator('#rows .grid').evaluate((n) => n.scrollHeight > n.clientHeight)), 'the 40 issues are not all reachable in the list');
   await goTo(page, 'registry', 'fixed');
   check((await page.locator('#notices .notice .more').textContent().catch(() => '')) === '+1 more', 'the fixed notice does not say it has one more line');
   await page.screenshot({ path: `${shot}registry-fixed-${size}.png` });
-
-  // ---- Services & RAM: the protected row, the filter, the meter at 72 % in the warning tone, the refresh timer.
-  await goTo(page, 'services', 'loaded');
-  const protectedBox = page.locator('#rows [data-row="svc:wuauserv"] [role=checkbox]');
-  check(await protectedBox.isDisabled() && (await protectedBox.getAttribute('title')) === 'Needed by Windows: protected', 'the protected service is not disabled with its reason');
-  await clearCalls(page);
-  await page.locator('[data-key="opt:filter:recommended"]').click();
-  // The mock's list is static (the filter stays All): the All radio is already checked, so its handler is driven by its event.
-  await page.locator('[data-key="opt:filter:all"]').dispatchEvent('change');
-  await page.waitForTimeout(100);
-  check(await sent(page, 'services', 'setAll', (a) => a.all === false) && await sent(page, 'services', 'setAll', (a) => a.all === true), 'the filter did not send setAll');
-  const meter = await page.locator('.ctl-meter').evaluate((n) => ({ tone: n.className, fill: Number.parseFloat(n.querySelector('.meter i').style.width), color: getComputedStyle(n.querySelector('.meter i')).backgroundColor }));
-  check(meter.tone.includes('tone-warn') && Math.abs(meter.fill - 72) < 0.5, `the RAM meter is not at 72 % in the warning tone (${JSON.stringify(meter)})`);
-  await page.screenshot({ path: `${shot}services-loaded-flow-${size}.png` });
-  await goTo(page, 'services', 'confirm');
-  check(await page.locator('.dlg-rows .dr').count() === 3, 'the Services confirmation does not list the three selected services');
-  // The refresh timer: every 2 s while shown, visible and without a dialog; never otherwise.
-  const polled = async (ms) => { await clearCalls(page); await page.waitForTimeout(ms); return (await callsOf(page)).filter(([c, , a]) => c === 'view' && a?.section === 'services').length; };
-  check(await polled(2600) === 0, 'Services was read again while its dialog is open');
-  await goTo(page, 'services', 'loaded');
-  check(await polled(2600) >= 1, 'Services was not read again while shown');
-  await page.keyboard.press('1');
-  await page.waitForTimeout(300);
-  check(await polled(2600) === 0, 'Services was read again while another section is open');
-  await page.keyboard.press('3');
-  await page.waitForTimeout(300);
   await page.evaluate(() => window.__xioxMock.pause(false));
   return failures;
 }
 
 /**
  * The final fix wave: what a notice hides is reachable by keyboard, a skipped path is on the page, All / None wait for a
- * job, a double click sends once, the Services empty state, bar 2 of Developers reaches its folder buttons, the focus
- * does not fall to nothing when a report closes.
+ * job, a double click sends once, bar 2 of Developers reaches its folder buttons, the focus does not fall to nothing
+ * when a report closes.
  */
 async function fixWaveFlows(page, size, shot) {
   const failures = [];
@@ -878,16 +847,6 @@ async function fixWaveFlows(page, size, shot) {
   await goTo(page, 'registry', 'partial');
   check(await page.locator('#notices .notice.tone-warn').count() === 1 && await page.locator('#notices .tone-ok').count() === 0, 'the partial fix is not shown as a warning');
   await page.screenshot({ path: `${shot}registry-partial-${size}.png` });
-
-  // Services: a search that matches nothing says so, with the box still holding the text.
-  await goTo(page, 'services', 'nomatch');
-  check((await page.locator('#rows .empty-title').textContent().catch(() => '')) === 'No services', 'Services with no match has no empty title');
-  check((await page.locator('#rows .empty span').textContent().catch(() => '')) === 'Nothing matches “x”.', 'Services with no match does not say what it searched');
-  check(await page.locator('input.search').inputValue() === 'x', 'the search box lost its text');
-  failures.push(...await checkFit(page, `services-nomatch-${size}`));
-  await page.screenshot({ path: `${shot}services-nomatch-${size}.png` });
-  await goTo(page, 'services', 'partial');
-  check(await page.locator('#notices .notice.tone-warn').count() === 1, 'the partial Services change is not shown as a warning');
 
   // Skipped / failed: the full path is on the page (a line of its own), not in a tooltip.
   await goTo(page, 'cleanup', 'report');
@@ -1043,7 +1002,7 @@ async function tabAudit(page, size, shot) {
   const failures = [];
   const REGIONS = ['#sections', '#bar2', '#notices', '#list-head', '#rows .tools', '#rows .grid', '#detail', '#actions'];
   const [GRID, DETAIL, ACTIONS] = [5, 6, 7];
-  for (const [section, state] of [['cleanup', 'analyzed'], ['developers', 'projects'], ['services', 'loaded'], ['registry', 'analyzed']]) {
+  for (const [section, state] of [['cleanup', 'analyzed'], ['developers', 'projects'], ['registry', 'analyzed']]) {
     const label = `${size} Tab audit ${section}:${state}`;
     await goTo(page, section, state);
     await page.evaluate(() => { document.body.tabIndex = -1; document.body.focus(); document.body.removeAttribute('tabindex'); });
@@ -1081,7 +1040,7 @@ async function tabAudit(page, size, shot) {
     const order = stops.map((s) => s.region);
     if (order.some((r, i) => i > 0 && r < order[i - 1])) failures.push(`${label}: the Tab order goes back: ${names}`);
     const keys = stops.map((s) => s.key);
-    if (keys.slice(0, 5).join() !== 'section:cleanup,section:registry,section:services,section:developers,about') failures.push(`${label}: Tab starts with ${keys.slice(0, 5).join()}, expected the four sections then About`);
+    if (keys.slice(0, 4).join() !== 'section:cleanup,section:registry,section:developers,about') failures.push(`${label}: Tab starts with ${keys.slice(0, 4).join()}, expected the three sections then About`);
     if (!stops.some((s) => s.region === 1)) failures.push(`${label}: Tab never reached bar 2`);
     if (stops.filter((s) => s.region === GRID).length !== 1) failures.push(`${label}: the list is not exactly one Tab stop (${stops.filter((s) => s.region === GRID).length})`);
     if (stops.filter((s) => s.region === DETAIL).length !== 1) failures.push(`${label}: the detail is not exactly one Tab stop (${stops.filter((s) => s.region === DETAIL).length})`);
@@ -1295,14 +1254,14 @@ try {
     await page.locator('#bar2 [data-key="nav:worktrees"]').click();
     await page.locator('#bar2 [data-key="nav:worktrees"][aria-current="true"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Worktrees did not become the current category`));
 
-    // The sections end to end (Tasks 12-14): Developers, Cleanup, Registry, Services & RAM.
+    // The sections end to end (Tasks 12-14): Developers, Cleanup, Registry.
     failures.push(...await sectionFlows(page, size, out));
-    shots += 7;
+    shots += 6;
 
     // Keyboard, dialogs, report, progress bar and motion (Task 3).
     failures.push(...await keyboardFlows(page, size, expect, out));
     failures.push(...await fixWaveFlows(page, size, out));
-    shots += 5;
+    shots += 4;
     failures.push(...await reportFlows(page, size, out));
     shots += 5;
     // About, the profile strip and the Tab audit (Task 15).

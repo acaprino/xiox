@@ -677,23 +677,6 @@ field names are camelCase and enum values are kebab-case. Every text in it is En
 Within one `schema`, new fields and new values may appear; a changed meaning increments it.
 A script should ignore the fields and the values it does not know, and check `schema` first.
 
-**Schema 1 → 2.** The meanings changed, not only the fields: the level `danger`, which no
-category selects; a selection that wants a confirmation for `danger` items; `scratch` folders,
-which can now be removed; and `risks`, which moved from `why` to every item.
-
-| Field | Schema 1 | Schema 2 |
-|---|---|---|
-| `items[].level` | `recommended`, `optional`, `caution` | also `danger` |
-| `items[].risks` | absent; `why.risks` in `session-folder` only | on every item, `[]` when there is none; `why.risks` is gone |
-| `items[].blocked` | | new values `other-project-writes`, `holds-repositories`, `tracked-files`, `worktree-locked` |
-| `items[].target` | `dir`, `file`, `worktree`, `session` | also `subtree` (`repo`): a scratch folder inside the project or a worktree |
-| `items[].provenance.otherProjects` | absent | the sessions of other projects that wrote in the folder |
-| `history.conflicts` | absent | `read`, `unread`: the nearby sessions of other projects read, and left unread, to look for their writes |
-| `history.excluded` | | new keys `short-name`, `unreadable` |
-| `clean --json`: `chosen` | absent | what the selection took, with `confirmed` and `pending` |
-| `clean --json`: `outcome.items[]` | `key`, `path`, `category`, `outcome` | also `method`: `recycle-bin`, `permanent`, `git-worktree-remove` or `harness-session` |
-| `xiox observe` events and MCP `structuredContent` | `schema` 1 | `schema` 2, with the new item fields |
-
 - `analyze --json` prints the **scan** (below).
 - `clean --json` prints `{"schema":2,"scan":<the scan>,"chosen":<the choice>|null,"outcome":<the outcome>|null}`:
   the scan as it was before removing, what was chosen, and what happened. `chosen` is `null` when

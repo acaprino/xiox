@@ -55,7 +55,7 @@ export interface Screen {
 }
 
 const SECTION_NAMES: Record<SectionId, string> = {
-  cleanup: 'Cleanup', registry: 'Registry', services: 'Services & RAM', developers: 'Developers',
+  cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers',
 };
 
 const KEY_LABELS: Record<string, string> = { Enter: '↵', Escape: 'Esc' };

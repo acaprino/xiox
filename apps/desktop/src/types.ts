@@ -1,7 +1,7 @@
 // The view contract (Rust -> TypeScript). `crates/xiox-core/src/view.rs` mirrors it field for field.
 // The page renders whatever SectionView it receives and sends intents; it decides nothing.
 
-export type SectionId = 'cleanup' | 'registry' | 'services' | 'developers';
+export type SectionId = 'cleanup' | 'registry' | 'developers';
 export type Tone = 'info' | 'ok' | 'warn' | 'error';
 export type LevelView = 'recommended' | 'optional' | 'caution';
 export type Check = 'on' | 'off' | 'mixed' | 'none';
@@ -21,7 +21,6 @@ export type OptionView =
   | { kind: 'choice'; id: string; label: string; value: string; choices: ChoiceItem[]; enabled: boolean }
   | { kind: 'list'; id: string; label: string; items: string[]; selected: number | null; enabled: boolean; addLabel: string; removeLabel: string; empty: string }
   | { kind: 'button'; id: string; label: string; enabled: boolean; hint: string | null }
-  | { kind: 'meter'; id: string; label: string; usedBytes: number; totalBytes: number; tone: Tone }
   | { kind: 'text'; text: string; tone: Tone; hint: string | null };
 export interface ColumnView { title: string; kind: ColumnKind }
 export interface RowView {
@@ -64,12 +63,9 @@ export type CleanupIntent =
 export type RegistryIntent =
   | { kind: 'toggleCategory'; index: number } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean }
   | { kind: 'scan' } | { kind: 'openFix' } | { kind: 'fix'; backup: boolean } | { kind: 'closeDialog' };
-export type ServicesIntent =
-  | { kind: 'setAll'; all: boolean } | { kind: 'search'; text: string } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean } | { kind: 'refresh' }
-  | { kind: 'openConfirm'; action: 'disable' | 'manual' | 'restore' } | { kind: 'confirm' } | { kind: 'closeDialog' };
 export type DevIntent =
   | { kind: 'select'; category: 'projects' | 'worktrees' | 'sessions' } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean }
   | { kind: 'setInactiveDays'; days: number } | { kind: 'setRemoveMode'; mode: 'recycle' | 'permanent' } | { kind: 'setScanRoots'; on: boolean }
   | { kind: 'selectRoot'; index: number | null } | { kind: 'removeRoot' } | { kind: 'analyze' } | { kind: 'openConfirm' }
   | { kind: 'setAck'; on: boolean } | { kind: 'confirm' } | { kind: 'permanent' } | { kind: 'closeDialog' } | { kind: 'cancel' };
-export type AnyIntent = CleanupIntent | RegistryIntent | ServicesIntent | DevIntent;
+export type AnyIntent = CleanupIntent | RegistryIntent | DevIntent;

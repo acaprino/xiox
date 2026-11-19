@@ -7,13 +7,12 @@
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-/// The four sections of the window. Serialised in lower case (`"cleanup"`, ...).
+/// The three sections of the window. Serialised in lower case (`"cleanup"`, ...).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SectionId {
     Cleanup,
     Registry,
-    Services,
     Developers,
 }
 

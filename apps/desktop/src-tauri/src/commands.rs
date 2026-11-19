@@ -117,12 +117,6 @@ pub async fn show(state: State<'_, BackendState>, section: SectionId) -> CmdResu
 }
 
 #[tauri::command]
-pub async fn view(state: State<'_, BackendState>, section: SectionId) -> CmdResult<SectionView> {
-    let b = backend(&state);
-    blocking(move || Ok(b.view(section))).await
-}
-
-#[tauri::command]
 pub async fn cleanup(state: State<'_, BackendState>, intent: CleanupIntent) -> CmdResult<SectionView> {
     let b = backend(&state);
     blocking(move || b.cleanup(intent)).await
@@ -132,12 +126,6 @@ pub async fn cleanup(state: State<'_, BackendState>, intent: CleanupIntent) -> C
 pub async fn registry(state: State<'_, BackendState>, intent: RegistryIntent) -> CmdResult<SectionView> {
     let b = backend(&state);
     blocking(move || b.registry(intent)).await
-}
-
-#[tauri::command]
-pub async fn services(state: State<'_, BackendState>, intent: ServicesIntent) -> CmdResult<SectionView> {
-    let b = backend(&state);
-    blocking(move || b.services(intent)).await
 }
 
 #[tauri::command]
@@ -243,9 +231,6 @@ mod tests {
             unimplemented!()
         }
         fn registry(&self, _: RegistryIntent) -> CmdResult<SectionView> {
-            unimplemented!()
-        }
-        fn services(&self, _: ServicesIntent) -> CmdResult<SectionView> {
             unimplemented!()
         }
         fn developers(&self, _: DevIntent) -> CmdResult<SectionView> {

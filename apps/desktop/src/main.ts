@@ -14,7 +14,7 @@ import { effectiveTheme, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowThe
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
-import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SERVICES_POLL_MS, shouldPollServices, shownRows } from './state.ts';
+import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, shownRows } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -411,20 +411,6 @@ document.addEventListener('wheel', (event) => {
 
 // The mouse's back and forward buttons belong to a browser: the window has no pages to go back to.
 window.addEventListener('mouseup', (event) => { if (event.button === 3 || event.button === 4) event.preventDefault(); });
-
-/**
- * The RAM meter moves by itself: while Services & RAM is shown, the window visible and no dialog open, its view is
- * read again every 2 s. A reading that comes back after a newer view (an intent answered meanwhile) is dropped by
- * `acceptView`; a failed one is not worth a message (the next one will say, and an intent shows its own errors).
- */
-function pollServices(): void {
-  if (!shouldPollServices(ui, document.visibilityState === 'visible')) return;
-  void api.view('services').then((view) => {
-    if (acceptView(ui, view) && ui.section === 'services') render();
-  }, () => undefined);
-}
-
-setInterval(pollServices, SERVICES_POLL_MS);
 
 async function start(): Promise<void> {
   // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.

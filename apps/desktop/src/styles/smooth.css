@@ -198,9 +198,6 @@
   & .pick-item { font-family: var(--font-body); color: var(--text-2); }
   & .pick-item[aria-selected="true"] { background: var(--sel); color: var(--text-hi); box-shadow: inset 3px 0 var(--amber); }
   & .pick-item[aria-selected="true"]:focus-visible { box-shadow: inset 3px 0 var(--amber), inset 0 0 0 2px var(--live); }
-  & .meter { height: 4px; border: 0; border-radius: 2px; background: var(--line); }
-  & .meter i { border-radius: 2px; }
-  & .meter-text { font-family: var(--font-body); }
   & .field { min-height: var(--control); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: 400 var(--fs-md) var(--font-body); }
   & .field:hover:not(:disabled) { border-color: var(--line-strong); }
   & .field:focus-visible { border-color: var(--live); box-shadow: 0 0 0 1px var(--live); }

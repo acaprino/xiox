@@ -21,12 +21,11 @@ const everyView = (views: Fixture['views']): SectionView[] => Object.values(view
 const enableAll = (views: Fixture['views']): void => {
   for (const v of everyView(views)) { v.rows.forEach((r) => { r.enabled = true; }); v.actions.forEach((a) => { a.enabled = true; }); }
 };
-const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', services: 'loaded', developers: 'projects' };
+const HOME: Record<SectionId, string> = { cleanup: 'analyzed', registry: 'analyzed', developers: 'projects' };
 
 const FROZEN: [SectionId, string][] = [
   ['cleanup', 'analyzing'], ['cleanup', 'confirm'], ['cleanup', 'cleaning'], ['cleanup', 'report'], ['cleanup', 'cancelled'],
   ['registry', 'scanning'], ['registry', 'backup'], ['registry', 'fixing'],
-  ['services', 'loading'], ['services', 'confirm'],
   ['developers', 'analyzing'], ['developers', 'confirm'], ['developers', 'shortfall'], ['developers', 'cleaning'], ['developers', 'report'], ['developers', 'cancelled'],
 ];
 
@@ -62,7 +61,7 @@ test('toggle, select and analyze are refused while a job runs, a dialog is open 
       assert.equal(model.stateOf(section), name, `select moved ${section}:${name}`);
     }
     if (before.report !== null) continue; // a report accepts Analyze: see the test below
-    const start = { cleanup: 'analyze', registry: 'scan', services: 'refresh', developers: 'analyze' }[section] as 'analyze';
+    const start = { cleanup: 'analyze', registry: 'scan', developers: 'analyze' }[section] as 'analyze';
     const rev = model.view(section).rev;
     const answered = model.intent(section, { kind: start });
     assert.equal(model.stateOf(section), name, `${start} moved ${section}:${name}`);
@@ -159,7 +158,7 @@ test('confirm needs an open dialog whose button is enabled and whose ack box, wh
   reg.intent('registry', { kind: 'fix', backup: true });
   assert.equal(reg.stateOf('registry'), 'fixing');
   // Nothing runs without a dialog.
-  const bare: [SectionId, AnyIntent][] = [['cleanup', { kind: 'confirm' }], ['registry', { kind: 'fix', backup: true }], ['services', { kind: 'confirm' }], ['developers', { kind: 'confirm' }]];
+  const bare: [SectionId, AnyIntent][] = [['cleanup', { kind: 'confirm' }], ['registry', { kind: 'fix', backup: true }], ['developers', { kind: 'confirm' }]];
   for (const [s, intent] of bare) {
     const m = fresh();
     m.go(s, HOME[s]);
@@ -169,10 +168,6 @@ test('confirm needs an open dialog whose button is enabled and whose ack box, wh
 });
 
 test('openConfirm and openFix are refused when the action is disabled', () => {
-  const model = fresh();
-  model.go('services', 'loaded');
-  model.intent('services', { kind: 'openConfirm', action: 'restore' });
-  assert.equal(model.stateOf('services'), 'loaded', 'Restore originals is disabled in the fixture');
   const off = loose((v) => {
     v.cleanup.analyzed?.actions.forEach((a) => { if (a.id === 'clean') a.enabled = false; });
     v.registry.analyzed?.actions.forEach((a) => { if (a.id === 'fix') a.enabled = false; });
@@ -189,12 +184,11 @@ test('openConfirm and openFix are refused from a state that is not analyzed-like
   const NOT_ANALYZED: [SectionId, string][] = [
     ['cleanup', 'idle'], ['cleanup', 'analyzing'], ['cleanup', 'cleaning'], ['cleanup', 'report'], ['cleanup', 'cancelled'],
     ['registry', 'idle'], ['registry', 'scanning'], ['registry', 'fixed'],
-    ['services', 'loading'],
     ['developers', 'idle'], ['developers', 'analyzing'], ['developers', 'cleaning'], ['developers', 'report'], ['developers', 'cancelled'],
   ];
   for (const [section, name] of NOT_ANALYZED) {
     model.go(section, name);
-    const open: AnyIntent = section === 'registry' ? { kind: 'openFix' } : section === 'services' ? { kind: 'openConfirm', action: 'disable' } : { kind: 'openConfirm' };
+    const open: AnyIntent = section === 'registry' ? { kind: 'openFix' } : { kind: 'openConfirm' };
     model.intent(section, open);
     assert.equal(model.stateOf(section), name, `${section}:${name} opened a dialog`);
     assert.equal(model.view(section).dialog, null);
@@ -217,11 +211,10 @@ test('a dialog that is reopened starts with its ack box off', () => {
 });
 
 // Rust blocks: Winapp2 / browser options of a running program, native items, a worktree with unsaved changes, a project in use,
-// a session in use. It never blocks a built-in category, a registry issue or (but for the protected ones) a service.
+// a session in use. It never blocks a built-in category or a registry issue.
 const BLOCKED: [SectionId, string, string][] = [
   ['cleanup', 'analyzed', 'steam/downloadcache'], ['cleanup', 'analyzed', 'chrome/cache'],
   ['developers', 'worktrees', 'w:3'], ['developers', 'projects', 'p:3'], ['developers', 'projects', 'a:5'], ['developers', 'sessions', 's:claude:3a7c15'],
-  ['services', 'loaded', 'svc:wuauserv'],
 ];
 
 test('Rust has no protected registry issue: every row of the Registry fixture can be ticked', () => {
@@ -247,26 +240,6 @@ test('a blocked row is listed, dimmed, with its reason, and toggling it changes 
     assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view), `toggle of ${id}`);
     assert.deepEqual(checks(model.intent(section, { kind: 'toggle', row: id })), checks(view));
   }
-});
-
-test('the Services notice says what was done and goes when a new job starts, a dialog opens or the section is shown again', () => {
-  const model = fresh();
-  const done = (action: 'disable' | 'manual'): SectionView => {
-    model.go('services', 'loaded');
-    model.intent('services', { kind: 'openConfirm', action });
-    return model.intent('services', { kind: 'confirm' });
-  };
-  assert.deepEqual(done('manual').notices, [{ tone: 'ok', text: 'Selected services set to Manual.', more: [] }]);
-  assert.deepEqual(done('disable').notices, [{ tone: 'ok', text: 'Selected services disabled.', more: [] }]);
-  assert.deepEqual(model.show('services').notices, [], 'shown again');
-  done('disable');
-  model.intent('services', { kind: 'refresh' });
-  for (let i = 0; i < 4; i += 1) model.tick();
-  assert.deepEqual(model.view('services').notices, [], 'a new job');
-  done('manual');
-  model.intent('services', { kind: 'openConfirm', action: 'manual' });
-  model.intent('services', { kind: 'closeDialog' });
-  assert.deepEqual(model.view('services').notices, [], 'a dialog opened');
 });
 
 // ---- The shared script: the Rust FakeBackend replays the same file.

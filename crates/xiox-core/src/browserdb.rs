@@ -521,17 +521,10 @@ pub fn is_kept(host: &str, keep: &[String]) -> bool {
     keep.iter().any(|d| h == *d || (h.len() > d.len() && h.ends_with(d.as_str()) && h.as_bytes()[h.len() - d.len() - 1] == b'.'))
 }
 
-/// The cookie keep list: `<documents>\Xiox\cookie-keep-list.txt`, or the file an older version
-/// wrote, `cookie_da_conservare.txt`, when that is the one that exists (see [`sys::data_file_in`]:
-/// a plain rename would silently stop keeping the user's cookies). A `<documents>\PulisciPC`
-/// folder of an older version is renamed to `Xiox`, or keeps being used if it cannot be
-/// ([`xiox_model::legacy::migrate_legacy_dir`]): the user's list never goes out of sight.
+/// The cookie keep list: `<documents>\Xiox\cookie-keep-list.txt`.
 pub fn keep_list_in(documents: &Path) -> PathBuf {
-    crate::sys::data_file_in(&xiox_model::legacy::app_dir_in(documents), KEEP_LIST_FILE, OLD_KEEP_LIST_FILE)
+    documents.join(xiox_model::APP_DIR).join("cookie-keep-list.txt")
 }
-
-const KEEP_LIST_FILE: &str = "cookie-keep-list.txt";
-const OLD_KEEP_LIST_FILE: &str = "cookie_da_conservare.txt";
 
 const NOT_SAFE: &str = "cookie list not safe (the Xiox folder or the file is a link or a junction)";
 

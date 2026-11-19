@@ -199,10 +199,9 @@ pub fn user_work_dir() -> Result<PathBuf, String> {
     user_work_dir_in(&local)
 }
 
-/// [`user_work_dir`] sotto la `AppData\Local` data. Una cartella `PulisciPC` di una versione
-/// precedente si rinomina in `Xiox` (o resta in uso, se non si riesce).
+/// [`user_work_dir`] sotto la `AppData\Local` data.
 pub fn user_work_dir_in(local: &Path) -> Result<PathBuf, String> {
-    let base = xiox_model::legacy::app_dir_in(local).join("tmp");
+    let base = local.join(xiox_model::APP_DIR).join("tmp");
     if has_link_in_chain(&base) {
         return Err("work folder behind a link".into());
     }
@@ -221,16 +220,9 @@ pub fn user_work_dir_in(local: &Path) -> Result<PathBuf, String> {
 /// all'utente `user_sid`, a SYSTEM e agli amministratori ([`private_dir`]).
 pub fn private_backup_dir(user_sid: &str) -> Result<PathBuf, String> {
     let local = crate::sysclean::local_app_data_dir().ok_or("AppData\\Local folder not found")?;
-    let dir = private_backup_path_in(&local);
+    let dir = local.join(xiox_model::APP_DIR).join("backup");
     private_dir(&dir, user_sid)?;
     Ok(dir)
-}
-
-/// La cartella dei backup privati sotto la `AppData\Local` data: `Xiox\backup`, dopo aver rinominato
-/// un'eventuale `PulisciPC` di una versione precedente (con i backup dentro). Se non si riesce a
-/// rinominarla resta in uso `PulisciPC\backup`: i backup dell'utente non vanno mai persi di vista.
-pub fn private_backup_path_in(local: &Path) -> PathBuf {
-    xiox_model::legacy::app_dir_in(local).join("backup")
 }
 
 /// Argomenti di `icacls` che lasciano `dir` solo all'utente `user_sid`, a
@@ -302,37 +294,12 @@ fn random_name() -> String {
 mod tests {
     use super::*;
 
-    /// Il backup con le password FTP di una versione precedente (`Local\PulisciPC\backup`) si
-    /// ritrova in `Local\Xiox\backup`; con la rinomina impossibile resta dov'è.
     #[test]
-    fn private_backups_of_the_old_folder_are_kept_across_the_rename() {
+    fn user_work_dir_lives_under_xiox() {
         let t = tempfile::tempdir().unwrap();
-        let old = t.path().join(r"PulisciPC\backup");
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("backup_password_ftp_1.reg"), "x").unwrap();
-        let dir = private_backup_path_in(t.path());
-        assert_eq!(dir, t.path().join(r"Xiox\backup"));
-        assert!(dir.join("backup_password_ftp_1.reg").is_file());
-        assert!(!t.path().join("PulisciPC").exists());
-
-        let t = tempfile::tempdir().unwrap();
-        let old = t.path().join(r"PulisciPC\backup");
-        std::fs::create_dir_all(&old).unwrap();
-        std::fs::write(old.join("backup_password_ftp_1.reg"), "x").unwrap();
-        std::fs::write(t.path().join("Xiox"), "occupato da un file").unwrap();
-        assert_eq!(private_backup_path_in(t.path()), old);
-        assert!(old.join("backup_password_ftp_1.reg").is_file());
-    }
-
-    #[test]
-    fn user_work_dir_lives_under_xiox_and_follows_the_old_folder_rename() {
-        let t = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(t.path().join("PulisciPC")).unwrap();
-        std::fs::write(t.path().join(r"PulisciPC\keep.txt"), "x").unwrap();
         let dir = user_work_dir_in(t.path()).unwrap();
         assert!(dir.starts_with(t.path().join(r"Xiox\tmp")), "{}", dir.display());
         assert!(dir.is_dir());
-        assert!(t.path().join(r"Xiox\keep.txt").is_file(), "i dati della cartella vecchia sono passati");
     }
 
     #[test]
