@@ -81,6 +81,23 @@
 }
 .r.h .col-size { text-align: right; }
 .r.h .col-name { grid-column: 2; }
+/* A column header is a button that orders the list: it reads as the header text, the active one is lit and carries its arrow. */
+.sort {
+  appearance: none; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: var(--hit);
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit;
+}
+.sort:hover { color: var(--ice); }
+.sort:active { color: var(--live); }
+.sort.on { color: var(--ice); font-weight: 600; }
+.sort-label { white-space: nowrap; }
+.sort-arrow { flex: none; font-style: normal; font-size: var(--fs-sm); line-height: 1; }
+/* The look controls of the top bar: the theme is Smooth's (ONI MODE is always dark), the look itself is chosen in Settings. */
+#look { display: flex; align-items: center; gap: 6px; }
+/* Smooth's title bar, brand and window buttons: ONI MODE has the system frame and the wordmark. */
+#titlebar, #brand, #caption { display: none; }
+#theme { display: none; }
+/* The details are always shown in ONI MODE: the switch that opens them is Smooth's (smooth.css). */
+.details-toggle { display: none; }
 .r.grp {
   position: sticky; top: 26px; z-index: 2; min-height: 40px; padding: 4px 0;
   background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
@@ -97,6 +114,15 @@
   display: block; padding: 9px 0 3px 34px; color: var(--ice);
   font: 700 var(--fs-sm) var(--font-display); letter-spacing: var(--ls-caps); text-transform: uppercase;
 }
+/* A sub-heading with a box is a row of the grid: the box in the check column, the name across the other columns. */
+.r.sec.boxed { display: grid; padding: 4px 0 2px; }
+.r.sec.boxed > .sec-name { grid-column: 2 / -1; min-width: 0; }
+.r.sec.boxed.sized > .sec-name { grid-column: 2 / -2; }
+.r.sec.boxed .sec-name .t { color: var(--ice); }
+.r.sec.boxed .sec-name .s { font: 400 var(--fs-sm) var(--font-body); letter-spacing: 0; text-transform: none; }
+.r.sec.boxed .sz { color: var(--ice); }
+.r.sec.boxed:hover:not(.sel) { background: var(--hover); }
+.r.sec.boxed.sel { background: var(--sel-soft); }
 .r:not(.h):not(.grp):not(.sec):not(.sel):hover { background: var(--hover); }
 .r.sel { background: var(--sel-soft); }
 /* A blocked row is dimmed, but its text keeps 4.5:1 (tests/contrast.test.ts); the reason under its name is not dimmed at all. */
@@ -117,6 +143,8 @@
 .nm-text .s { color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
 .nm-text .s.blocked { color: var(--warn); }
 .caret, .caret-gap { flex: none; width: var(--hit); height: var(--hit); }
+/* The caret place a row under a heading keeps for the tree of Smooth (smooth.css): ONI MODE lines its rows up as before. */
+.caret-gap.tree { display: none; }
 .caret {
   appearance: none; display: grid; place-items: center; padding: 0; border: 0; background: none; color: var(--ice);
   font-size: var(--fs-sm); line-height: 1;
@@ -125,6 +153,8 @@
 .caret:active { background: var(--press); }
 .caret::before { content: "▸"; }
 .caret[aria-expanded="true"]::before { content: "▾"; }
+/* The carets of the list leave aria-expanded to their row (the tree grid): an open category or parent points down too. */
+.r[aria-expanded="true"] > .nm > .caret::before { content: "▾"; }
 
 .cell { color: var(--text-2); font-size: var(--fs-sm); font-weight: 400; }
 .lv { font: 700 var(--fs-sm) var(--font-display); letter-spacing: var(--ls-caps); text-transform: uppercase; }

@@ -87,13 +87,23 @@ test('inside a dialog only Escape is ours', () => {
 
 test('the footer hint follows the section, from the keys its actions carry', () => {
   const hint = (section: SectionId, state: string): string => footerHint(fixture.views[section][state] as SectionView);
-  assert.equal(hint('cleanup', 'analyzed'), '↑↓ move · space toggle · a analyze · ↵ clean');
-  assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Esc is not in the footer, busy or not');
-  assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · a analyze · ↵ clean', 'Rust writes the Cancel key as "Esc": still not in the footer');
-  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · a find issues · ↵ fix');
-  assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · a refresh · ↵ disable');
-  assert.equal(hint('developers', 'projects'), '↑↓ move · space toggle · a analyze · ↵ clean');
-  assert.equal(footerHint(viewWith()), '↑↓ move · space toggle');
+  assert.equal(hint('cleanup', 'analyzed'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean');
+  assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean', 'Esc is not in the footer, busy or not');
+  assert.equal(hint('cleanup', 'cleaning'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean', 'Rust writes the Cancel key as "Esc": still not in the footer');
+  assert.equal(hint('registry', 'analyzed'), '↑↓ move · space toggle · s sort · a find issues · ↵ fix');
+  assert.equal(hint('services', 'loaded'), '↑↓ move · space toggle · s sort · a refresh · ↵ disable');
+  assert.equal(hint('developers', 'projects'), '↑↓ move · space toggle · s sort · a analyze · ↵ clean');
+  assert.equal(footerHint(viewWith()), '↑↓ move · space toggle · s sort');
+});
+
+test('s orders by the next column and S turns the order round, outside fields and dialogs', () => {
+  assert.deepEqual(keyAction({ key: 's' }, free), { kind: 'sort', reverse: false });
+  assert.deepEqual(keyAction({ key: 'S', shiftKey: true }, free), { kind: 'sort', reverse: true });
+  assert.equal(keyAction({ key: 's' }, { inField: true, dialog: false }), null);
+  assert.equal(keyAction({ key: 's' }, { inField: false, dialog: true }), null);
+  assert.equal(keyAction({ key: 's', ctrlKey: true }, free), null);
+  assert.deepEqual(keyAction({ key: 'i' }, free), { kind: 'details' });
+  assert.equal(keyAction({ key: 'i' }, { inField: true, dialog: false }), null);
 });
 
 test('Tab and Shift+Tab cycle inside a dialog and never leave it', () => {

@@ -493,13 +493,17 @@ impl CleanupState {
     }
 
     /// A row id of the contract: `cat:<index>` a built-in category, `native:<id>` a native item,
-    /// `<cleaner>/<option>` a rule, or the id of a category of the list (`builtin:<group>`,
-    /// `rules:<group>`, `winapp2`: its box). Headers (`section:`) and anything unknown are not
-    /// choosable, and neither is a row the list shows disabled (an unsupported option, a program that runs).
+    /// `<cleaner>/<option>` a rule, the id of a category of the list (`builtin:<group>`,
+    /// `rules:<group>`, `winapp2`: its box) or of a section of Winapp2 (`section:<name>`: its box).
+    /// Anything unknown is not choosable, and neither is a row the list shows disabled (an
+    /// unsupported option, a program that runs).
     pub fn toggle(&mut self, row: &str) -> Result<(), String> {
         self.editable()?;
         if self.groups().iter().any(|g| g.id == row) {
             return self.toggle_group(row);
+        }
+        if row.starts_with(view::SECTION_ROW) {
+            return self.toggle_section(row);
         }
         let unknown = || format!("“{row}” is not a row that can be chosen.");
         if let Some(n) = row.strip_prefix("cat:") {
@@ -541,6 +545,19 @@ impl CleanupState {
         }
         let on = !ticks.iter().all(|e| e.row.check == crate::view::Check::On);
         let ids: Vec<String> = ticks.iter().map(|e| e.row.id.clone()).collect();
+        for row in &ids {
+            self.set_chosen(row, on);
+        }
+        Ok(())
+    }
+
+    /// The box of a section of Winapp2: the same rule as a category's box, over the section's rows the list shows.
+    fn toggle_section(&mut self, id: &str) -> Result<(), String> {
+        let rows = self.list_rows(self.shown_groups(false), false);
+        let (ids, on) = crate::view::header_toggle(&rows, id).ok_or_else(|| CATEGORY_HIDDEN.to_string())?;
+        if ids.is_empty() {
+            return Err(NOTHING_TO_TICK.into());
+        }
         for row in &ids {
             self.set_chosen(row, on);
         }

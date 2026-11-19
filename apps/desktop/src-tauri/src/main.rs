@@ -7,6 +7,7 @@
 
 mod backend;
 mod chrome;
+mod native_frame;
 mod commands;
 mod desktop;
 mod dropped;
@@ -263,6 +264,7 @@ fn main() {
             commands::save_report,
             desktop::window_ready,
             chrome::window_chrome,
+            native_frame::window_caption_maximize,
         ])
         .run(tauri::generate_context!())
         .expect("the Xiox window failed to start");

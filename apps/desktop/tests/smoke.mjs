@@ -19,19 +19,27 @@ export const SECTIONS = Object.entries(fixture.views).flatMap(([section, states]
 const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'services:loaded', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
 const VIEWPORTS = [[1000, 640], [1440, 900]];
 
-/** Tokens the whole look rests on: a wrong value here means the palette drifted from the mock-up. */
-export async function checkTokens(page) {
+/** Tokens the whole look rests on, per look: a wrong value here means the palette drifted (ONI MODE: from the mock-up). */
+const TOKENS = {
+  smooth: { '--stage': '#12161e', '--line': '#2a3240', '--text': '#e8ecf3', '--ice': '#c0c8d6', body: 'rgb(18, 22, 30)' },
+  'smooth-light': { '--stage': '#f6f7f9', '--line': '#e3e6ea', '--text': '#111827', '--ice': '#4b5563', body: 'rgb(246, 247, 249)' },
+  oni: { '--stage': '#0b0416', '--line': '#3f6fb5', '--text': '#ffb21e', '--ice': '#9cc4f5', body: 'rgb(11, 4, 22)' },
+};
+
+export async function checkTokens(page, skin = 'smooth') {
   const found = await page.evaluate(() => {
     const root = getComputedStyle(document.documentElement);
     const token = (name) => root.getPropertyValue(name).trim().toLowerCase();
     return {
       '--stage': token('--stage'), '--line': token('--line'), '--text': token('--text'), '--ice': token('--ice'),
-      body: getComputedStyle(document.body).backgroundColor,
+      body: getComputedStyle(document.body).backgroundColor, skin: document.documentElement.dataset.skin,
     };
   });
-  const want = { '--stage': '#0b0416', '--line': '#3f6fb5', '--text': '#ffb21e', '--ice': '#9cc4f5', body: 'rgb(11, 4, 22)' };
-  return Object.entries(want).filter(([key, value]) => found[key] !== value)
-    .map(([key, value]) => `tokens: ${key} is ${JSON.stringify(found[key])}, expected ${value}`);
+  const want = TOKENS[skin];
+  const bad = Object.entries(want).filter(([key, value]) => found[key] !== value)
+    .map(([key, value]) => `tokens (${skin}): ${key} is ${JSON.stringify(found[key])}, expected ${value}`);
+  const root = skin.startsWith('smooth') ? 'smooth' : skin;
+  return found.skin === root ? bad : [`the root says data-skin=${found.skin}, expected ${root}`, ...bad];
 }
 
 /** Nothing clipped, nothing overlapping: the failures as text lines. */
@@ -195,10 +203,10 @@ async function checkSelection(page, label) {
 
 const KEY_LABELS = { Enter: '↵', Escape: 'Esc' };
 const FOOTER = {
-  cleanup: '↑↓ move · space toggle · a analyze · ↵ clean',
-  registry: '↑↓ move · space toggle · a find issues · ↵ fix',
-  services: '↑↓ move · space toggle · a refresh · ↵ disable',
-  developers: '↑↓ move · space toggle · a analyze · ↵ clean',
+  cleanup: '↑↓ move · space toggle · s sort · a analyze · ↵ clean',
+  registry: '↑↓ move · space toggle · s sort · a find issues · ↵ fix',
+  services: '↑↓ move · space toggle · s sort · a refresh · ↵ disable',
+  developers: '↑↓ move · space toggle · s sort · a analyze · ↵ clean',
 };
 const SECTION_NAMES = [['cleanup', 'Cleanup'], ['registry', 'Registry'], ['services', 'Services & RAM'], ['developers', 'Developers']];
 const count = (n) => n.toLocaleString('en-US');
@@ -268,7 +276,7 @@ async function checkCopy(page, label, section, view) {
   want('actions', found.actions, view.actions.map((a) => [a.label, a.key === null ? null : (KEY_LABELS[a.key] ?? a.key), !a.enabled]));
   want('section bar', found.sections, SECTION_NAMES.map(([id, name], i) => [id, name, String(i + 1)]));
   want('section bar heading', found.sectionsHead, 'Sections');
-  want('About button', found.about, ['About', '?']);
+  want('Settings button', found.about, ['Settings', '?']);
   want('footer hint', found.hint, FOOTER[section]);
   want('footer text', found.footLeft, view.footer ?? '');
   want('list title', found.title, view.title);
@@ -666,6 +674,13 @@ async function sectionFlows(page, size, shot) {
   check(await page.locator('#rows [data-row="a:3"] .lv.caution').count() === 1, 'the caution child is not drawn at the caution level');
   await setOpen('p:3', true);
   check(await page.locator('#rows [data-row="a:5"] [role=checkbox]').isDisabled(), 'the child of the project in use is not disabled');
+  // The projects' tree: a folder folds everything inside it and opens again (its id holds a backslash, escaped for CSS).
+  const projectsFolder = 'h:folder:D:\\\\Projects';
+  await setOpen(projectsFolder, false);
+  check(await page.locator('#rows [data-row="p:1"]').count() === 0 && await page.locator('#rows [data-row="a:3"]').count() === 0, 'a folded folder still shows what is inside it');
+  check(await page.locator('#rows [data-row="p:3"]').count() === 1, 'folding a folder hid the projects of its sibling');
+  await setOpen(projectsFolder, true);
+  check(await page.locator('#rows [data-row="p:1"]').count() === 1, 'an opened folder does not show its projects');
   failures.push(...await checkFit(page, `developers-projects-all-open-${size}`));
   await page.screenshot({ path: `${shot}developers-projects-all-open-${size}.png` });
   // Worktrees: the other-worktrees header, rows without a box, the blocked one.
@@ -932,7 +947,7 @@ async function fixWaveFlows(page, size, shot) {
 }
 
 /** No continuous animation; and with prefers-reduced-motion: reduce nothing animates or transitions at all. */
-/** The About window: opens from its button and from `?`, says what Rust says, closes with Escape or Close and gives the focus back. */
+/** The Settings window: opens from its button and from `?`, offers the look, says what Rust says (About), closes with Escape or Close and gives the focus back. */
 async function aboutFlows(page, size, shot) {
   const failures = [];
   const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
@@ -942,13 +957,14 @@ async function aboutFlows(page, size, shot) {
   await page.locator('#sections .nv.about').click();
   await open().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the About button did not open About`));
   const text = (await open().innerText()).replace(/\s+/g, ' ');
-  for (const part of ['Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
+  for (const part of ['Settings', 'Look', 'Smooth', 'ONI mode', 'About Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
   check(await focusKey(page) === 'about:close', `About opens with the focus on ${await focusKey(page)}, expected Close`);
   check(await page.evaluate(() => document.getElementById('body').inert && document.getElementById('top').inert), 'the page behind About is not inert');
   failures.push(...await checkFit(page, `about-${size}`));
   await page.screenshot({ path: `${shot}about-${size}.png` });
-  // Tab never leaves it (one control), Escape closes it and the focus goes back to the About button that opened it.
+  // Tab never leaves it (the chosen look and Close), Escape closes it and the focus goes back to the button that opened it.
   await page.keyboard.press('Tab');
+  check(await focusKey(page) === 'look:smooth', `Tab from Close went to ${await focusKey(page)}, expected the chosen look`);
   await page.keyboard.press('Shift+Tab');
   check(await focusKey(page) === 'about:close', `Tab left About (focus on ${await focusKey(page)})`);
   check(await ringOf(page) !== 'none', 'the Close button of About has no visible ring');
@@ -1149,7 +1165,8 @@ try {
   }
 
   for (const [width, height] of VIEWPORTS) {
-    const page = await browser.newPage({ viewport: { width, height } });
+    // Smooth follows the Windows theme: the pass runs dark, and the light palette is checked on its own below.
+    const page = await browser.newPage({ viewport: { width, height }, colorScheme: 'dark' });
     const size = `${width}x${height}`;
     watchLanguage(page, size, failures);
     page.on('pageerror', (error) => failures.push(`${size}: page error ${error}`));
@@ -1157,6 +1174,10 @@ try {
     await page.goto(url);
     await page.locator('#sections [data-section="cleanup"].on').waitFor();
     failures.push(...await checkTokens(page));
+    await page.emulateMedia({ colorScheme: 'light' });
+    failures.push(...await checkTokens(page, 'smooth-light'));
+    await page.screenshot({ path: `${out}smooth-light-${size}.png` });
+    await page.emulateMedia({ colorScheme: 'dark' });
     expect(await page.locator('#sections [data-section="cleanup"][aria-current="page"]').count() === 1, `${size}: the open section has no aria-current`);
     expect(await page.locator('#sections [aria-current]').count() === 1, `${size}: more than one section is marked current`);
 
@@ -1183,6 +1204,49 @@ try {
         failures.push(...await checkFit(page, `${label}-after-toggle`));
       }
     }
+
+    // A click on a column header orders the list by it and says so; a sub-heading's box goes to the model as a toggle of its id.
+    await resetAll(page);
+    await page.locator('#sections [data-section="registry"]').click();
+    await page.evaluate(() => window.__xioxMock.go('registry', 'analyzed'));
+    await page.locator('#rows [data-key="sort:Issue"]').click();
+    expect(await page.locator('#rows [role=columnheader][aria-sort="ascending"] [data-key="sort:Issue"]').count() === 1, `${size}: the clicked column header is not marked ascending`);
+    await page.evaluate(() => window.__xioxMock.clearCalls());
+    await page.locator('#rows [data-key="ck:t:2"]').click();
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => window.__xioxMock.calls.some((c) => c.command === 'registry' && c.args.intent.kind === 'toggle' && c.args.intent.row === 't:2')), `${size}: the box of a kind of issue sent no toggle`);
+    expect(await page.locator('#rows [data-row="t:2"] [aria-checked="true"]').count() === 1, `${size}: the box of a kind of issue did not come back ticked`);
+
+    // ONI MODE: chosen in Settings, it turns the look, the choice outlives a reload, and every state is drawn and fit-checked in it too.
+    const chooseLook = async (skin) => {
+      await page.locator('#sections .nv.about').click();
+      await page.locator(`#about [data-key="look:${skin}"]`).check();
+      await page.locator('[data-key="about:close"]').click();
+    };
+    expect(await page.locator('#skin').count() === 0, `${size}: the top bar still has an ONI MODE switch`);
+    await chooseLook('oni');
+    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'oni', `${size}: Settings did not turn ONI MODE on`);
+    await page.reload();
+    await page.locator('#sections .nv.about').click();
+    expect(await page.locator('#about [data-key="look:oni"]:checked').count() === 1, `${size}: Settings does not say ONI MODE is on after a reload`);
+    await page.locator('[data-key="about:close"]').click();
+    await page.locator('#sections [data-section="cleanup"].on').waitFor();
+    failures.push(...await checkTokens(page, 'oni'));
+    await page.evaluate(() => window.__xioxMock.pause(true));
+    for (const [section, stateName] of SECTIONS) {
+      const label = `oni-${section}-${stateName}-${size}`;
+      await resetAll(page);
+      await page.locator(`#sections [data-section="${section}"]`).click();
+      await page.evaluate(([s, st]) => window.__xioxMock.go(s, st), [section, stateName]);
+      await page.waitForTimeout(150);
+      failures.push(...await checkFit(page, label));
+      await page.screenshot({ path: `${out}${label}.png` });
+      shots += 1;
+    }
+    await chooseLook('smooth');
+    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'smooth', `${size}: Settings did not turn ONI MODE off`);
+    await page.reload();
+    await page.locator('#sections [data-section="cleanup"].on').waitFor();
 
     await page.evaluate(() => window.__xioxMock.pause(false));
     await resetAll(page);

@@ -130,8 +130,81 @@ test('the error colour and the hover row text keep 4.5:1 where fields and rows u
 });
 
 test('the secondary text is 12 px at the least: no font size below the scale is left in the styles', () => {
-  for (const name of ['shell.css', 'list.css', 'dialog.css', 'frame.css', 'tokens.css']) {
+  for (const name of ['shell.css', 'list.css', 'dialog.css', 'frame.css', 'tokens.css', 'smooth.css']) {
     const small = [...css(name).matchAll(/font(?:-size)?:[^;}]*?\b(\d+(?:\.\d+)?)px/g)].filter((m) => Number(m[1]) < 12);
     assert.deepEqual(small.map((m) => m[0]), [], `${name} sets a font below 12px`);
+  }
+});
+
+// ---- Smooth: its own tokens (smooth.css), the same AA floor.
+
+const smooth = css('smooth.css');
+function smoothToken(name: string): string {
+  const match = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6,8})`).exec(smooth);
+  assert.ok(match, `--${name} is defined in smooth.css`);
+  return match[1] as string;
+}
+const smoothPane = rgb(smoothToken('pane'));
+
+test('Smooth: words, numbers and states keep 4.5:1 on the pane, the category band and the selected row', () => {
+  const grounds: [string, Rgb][] = [
+    ['pane', smoothPane], ['band', rgb(smoothToken('band'))],
+    ['selected', mix(rgb(smoothToken('sel-soft')), smoothPane, alpha(smoothToken('sel-soft')))],
+  ];
+  for (const name of ['text', 'text-2', 'muted', 'amber', 'ice']) {
+    for (const [ground, colour] of grounds) {
+      const r = ratio(rgb(smoothToken(name)), colour);
+      assert.ok(r >= 4.5, `Smooth --${name} on the ${ground} is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('Smooth: the primary button keeps 4.5:1 at rest, hovered and pressed', () => {
+  for (const ground of ['amber', 'hover-primary', 'press-primary']) {
+    const r = ratio(rgb(smoothToken('on-amber')), rgb(smoothToken(ground)));
+    assert.ok(r >= 4.5, `Smooth --on-amber on --${ground} is ${r.toFixed(2)}:1`);
+  }
+});
+
+test('Smooth: a blocked row, dimmed by the shared rule, stays readable', () => {
+  const dim = opacityOf('.r.muted > :not(.nm)');
+  for (const name of ['text', 'text-2', 'amber']) {
+    const r = ratio(mix(rgb(smoothToken(name)), smoothPane, dim), smoothPane);
+    assert.ok(r >= 4.5, `Smooth --${name} at opacity ${dim} is ${r.toFixed(2)}:1`);
+  }
+});
+
+// ---- Smooth in the light (it follows the Windows theme): the values of its light block, the same floor.
+
+const lightBlock = smooth.slice(smooth.indexOf('&[data-theme="light"]'));
+function lightToken(name: string): string {
+  const match = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6,8})`).exec(lightBlock);
+  return match ? match[1] as string : smoothToken(name);
+}
+const lightPane = rgb(lightToken('pane'));
+
+test('Smooth light: words, amber text and the focus ring keep their ratios on the sheet, the band and the selected row', () => {
+  const grounds: [string, Rgb][] = [
+    ['sheet', lightPane], ['band', rgb(lightToken('band'))], ['ground', rgb(lightToken('stage'))],
+    ['selected', mix(rgb(lightToken('sel-soft')), lightPane, alpha(lightToken('sel-soft')))],
+  ];
+  for (const name of ['text', 'text-2', 'muted', 'amber-ink', 'ice', 'warn', 'err']) {
+    for (const [ground, colour] of grounds) {
+      const r = ratio(rgb(lightToken(name)), colour);
+      assert.ok(r >= 4.5, `Smooth light --${name} on the ${ground} is ${r.toFixed(2)}:1`);
+    }
+  }
+  for (const [name, floor] of [['live', 3], ['line-strong', 3]] as const) {
+    const r = ratio(rgb(lightToken(name)), lightPane);
+    assert.ok(r >= floor, `Smooth light --${name} (a ring, a box) on the sheet is ${r.toFixed(2)}:1`);
+  }
+});
+
+test('Smooth light: a blocked row, dimmed less on white, stays readable', () => {
+  const dim = Number(/r\.muted > :not\(\.nm\)[^{]*\{\s*opacity:\s*([0-9.]+)/.exec(lightBlock)?.[1]);
+  assert.ok(dim > 0, 'the light block sets its own dimming');
+  for (const name of ['text', 'text-2']) {
+    const r = ratio(mix(rgb(lightToken(name)), lightPane, dim), lightPane);
+    assert.ok(r >= 4.5, `Smooth light --${name} at opacity ${dim} is ${r.toFixed(2)}:1`);
   }
 });

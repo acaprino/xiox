@@ -1,74 +1,144 @@
-// Row order and visibility. The engine sends rows in its own order; the page shows rows with sizes
-// largest first (children stay under their parent, a header keeps the rows after it) and hides the
-// children of a collapsed parent. Pure functions: no DOM, so node can test them.
+// Row order and visibility. The engine sends rows in its own order; the page draws them in the order the user chose
+// (a column and a direction; by default the size, largest first), keeps children under their parent and a header with
+// the rows after it, and hides the children of a collapsed parent. Pure functions: no DOM, so node can test them.
 
-import type { ColumnView, RowView } from './types.ts';
+import type { ColumnKind, ColumnView, LevelView, RowView } from './types.ts';
 
-/** A top-level row with the rows that hang under it. */
-interface Entry {
-  row: RowView;
-  children: RowView[];
-  /** Own bytes, or what the children add up to; null when nothing has a size. */
-  bytes: number | null;
+/** What a row is worth in the column the list is ordered by: a number, a text, or nothing (it goes last either way). */
+export type SortValue = number | string | null;
+
+/** The order the user chose: a column, by its title (unique within a list), and the direction. */
+export interface SortKey { column: string; desc: boolean }
+
+/** How a list is ordered: the kind of the column, a row's value in it, and the direction. */
+export interface Order { kind: ColumnKind; value: (row: RowView) => SortValue; desc: boolean }
+
+/** The engine's order of old, kept as the default: by size, largest first (rows without a size keep their place, last). */
+export const BY_SIZE: Order = { kind: 'size', value: (r) => r.bytes, desc: true };
+
+/** Names as a person reads them: «file10» after «file9», case and accents aside. */
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** The level by risk: a list ordered by level, from the top, starts with what needs care. */
+const LEVEL_RANK: Record<LevelView, number> = { recommended: 0, optional: 1, caution: 2 };
+
+/** A count the engine writes with grouping commas (18,204) or a plain decimal (3.5). */
+const NUMBER = /^-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?$/;
+
+/** A cell as a value: a count is a number, a dash or an empty cell is nothing, anything else is its text. */
+function cellValue(text: string | undefined): SortValue {
+  const t = (text ?? '').trim();
+  if (t === '' || t === '—' || t === '-') return null;
+  return NUMBER.test(t) ? Number(t.replaceAll(',', '')) : t;
 }
 
-const sum = (values: (number | null)[]): number | null => {
-  const sized = values.filter((v): v is number => v !== null);
-  return sized.length === 0 ? null : sized.reduce((a, b) => a + b, 0);
-};
+/** Nothing goes last in both directions; numbers compare as numbers, texts as a person reads them. */
+function compare(a: SortValue, b: SortValue, desc: boolean): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
+  const d = typeof a === 'number' && typeof b === 'number' ? a - b : collator.compare(String(a), String(b));
+  return desc ? -d : d;
+}
 
-/** Stable sort, largest first; rows without a size follow the sized ones in their original order. */
-function bySize<T>(items: T[], bytes: (item: T) => number | null): T[] {
+/** Stable: rows of equal value keep the engine's order. */
+function byValue<T>(items: T[], value: (item: T) => SortValue, desc: boolean): T[] {
   return items
-    .map((item, index) => ({ item, index, size: bytes(item) ?? -1 }))
-    .sort((a, b) => b.size - a.size || a.index - b.index)
+    .map((item, index) => ({ item, index, v: value(item) }))
+    .sort((a, b) => compare(a.v, b.v, desc) || a.index - b.index)
     .map((entry) => entry.item);
 }
 
-function entries(group: RowView[]): Entry[] {
-  const present = new Set(group.map((r) => r.id));
-  const kids = new Map<string, RowView[]>();
-  const tops: RowView[] = [];
-  for (const row of group) {
-    if (row.parent !== null && present.has(row.parent)) kids.set(row.parent, [...(kids.get(row.parent) ?? []), row]);
-    else tops.push(row);
+const sum = (values: SortValue[]): number | null => {
+  const sized = values.filter((v): v is number => typeof v === 'number');
+  return sized.length === 0 ? null : sized.reduce((a, b) => a + b, 0);
+};
+
+/** The direction a column takes on its first click: sizes and levels from the top, texts and dates from A and from the oldest. */
+const naturalDesc = (kind: ColumnKind): boolean => kind === 'size' || kind === 'level';
+
+/** The order of `key` over these columns; the default when there is no key or the list has no such column (another category of Developers). */
+export function orderFor(columns: ColumnView[], key: SortKey | null): Order {
+  const at = key === null ? -1 : columns.findIndex((c) => c.title === key.column);
+  const column = columns[at];
+  if (key === null || column === undefined) return BY_SIZE;
+  const desc = key.desc;
+  switch (column.kind) {
+    case 'name': return { kind: 'name', value: (r) => r.name, desc };
+    case 'size': return { ...BY_SIZE, desc };
+    case 'level': return { kind: 'level', value: (r) => (r.level === null ? null : LEVEL_RANK[r.level]), desc };
+    case 'cell': {
+      // The cells of a row follow its `cell` columns in order.
+      const i = columns.slice(0, at).filter((c) => c.kind === 'cell').length;
+      return { kind: 'cell', value: (r) => cellValue(r.cells[i]), desc };
+    }
   }
-  return tops.map((row) => {
-    const children = bySize(kids.get(row.id) ?? [], (c) => c.bytes);
-    return { row, children, bytes: row.bytes ?? sum(children.map((c) => c.bytes)) };
-  });
 }
 
-function flatten(group: RowView[]): { rows: RowView[]; bytes: number | null } {
-  const sorted = bySize(entries(group), (e) => e.bytes);
-  return { rows: sorted.flatMap((e) => [e.row, ...e.children]), bytes: sum(sorted.map((e) => e.bytes)) };
+/** The column and direction the header marks: the user's, else the size column of the default order; null when the list keeps the engine's order. */
+export function activeSort(columns: ColumnView[], key: SortKey | null): SortKey | null {
+  if (key !== null && columns.some((c) => c.title === key.column)) return key;
+  const size = columns.find((c) => c.kind === 'size');
+  return size === undefined ? null : { column: size.title, desc: true };
 }
+
+/** A click on a column's header: the active column turns round, another one becomes active in its natural direction. */
+export function nextSort(columns: ColumnView[], key: SortKey | null, title: string): SortKey | null {
+  const active = activeSort(columns, key);
+  if (active?.column === title) return { column: title, desc: !active.desc };
+  const column = columns.find((c) => c.title === title);
+  return column === undefined ? key : { column: title, desc: naturalDesc(column.kind) };
+}
+
+/** The sort key of the keyboard: the next column in its natural direction (`reverse`: the same column turned round). */
+export function cycleSort(columns: ColumnView[], key: SortKey | null, reverse: boolean): SortKey | null {
+  if (columns.length === 0) return key;
+  const active = activeSort(columns, key);
+  if (reverse) return active === null ? null : { column: active.column, desc: !active.desc };
+  const at = active === null ? -1 : columns.findIndex((c) => c.title === active.column);
+  const next = columns[(at + 1) % columns.length]!;
+  return { column: next.title, desc: naturalDesc(next.kind) };
+}
+
+/** A row with the rows that hang under it, in order, and its value in the order. */
+interface Branch { row: RowView; rows: RowView[]; value: SortValue }
 
 /**
- * Largest group first, children under their parent. Rows before the first header stay first; each
- * header moves with the rows after it up to the next header, and the header groups go by summed bytes.
+ * One block of rows in order, as the tree it draws: a row hangs under its parent, and a row with no parent in the block
+ * under the header before it (a header with no parent in the block, and a row before the first header, sit at the top;
+ * those rows stay first). Rows hanging under the same one go by their value: their own; for sizes, when they have none,
+ * what the rows under them add up to; for a header with no value of its own (a column it has no cell in), that of its
+ * first row. A folder of the projects' tree is a header whose parent is the folder above it.
  */
-function sortBlock(rows: RowView[]): RowView[] {
-  const lead: RowView[] = [];
-  const groups: { header: RowView; rows: RowView[] }[] = [];
+function sortBlock(rows: RowView[], order: Order): RowView[] {
+  const present = new Set(rows.map((r) => r.id));
+  const kids = new Map<string | null, RowView[]>();
+  let header: string | null = null;
   for (const row of rows) {
-    if (row.kind === 'header') groups.push({ header: row, rows: [] });
-    else (groups.length === 0 ? lead : groups[groups.length - 1]!.rows).push(row);
+    const parent = row.parent !== null && present.has(row.parent) ? row.parent : row.kind === 'header' ? null : header;
+    if (row.kind === 'header') header = row.id;
+    const list = kids.get(parent);
+    if (list) list.push(row); else kids.set(parent, [row]);
   }
-  const built = groups.map((g) => ({ header: g.header, ...flatten(g.rows) }));
-  return [...flatten(lead).rows, ...bySize(built, (g) => g.bytes).flatMap((g) => [g.header, ...g.rows])];
+  const branch = (row: RowView): Branch => {
+    const inner = byValue((kids.get(row.id) ?? []).map(branch), (b) => b.value, order.desc);
+    const own = order.value(row);
+    const value = order.kind === 'size' ? own ?? sum(inner.map((b) => b.value)) : row.kind === 'header' ? own ?? inner[0]?.value ?? null : own;
+    return { row, rows: [row, ...inner.flatMap((b) => b.rows)], value };
+  };
+  const tops = (kids.get(null) ?? []).map(branch);
+  const sorted = (list: Branch[]): RowView[] => byValue(list, (b) => b.value, order.desc).flatMap((b) => b.rows);
+  return [...sorted(tops.filter((b) => b.row.kind !== 'header')), ...sorted(tops.filter((b) => b.row.kind === 'header'))];
 }
 
 /**
  * The list in the order it is drawn. A list of categories (`group` rows) keeps the categories in the engine's order (the
- * menu beside it is in that order too) and sorts only inside each one; any other list is one block, largest first.
+ * menu beside it is in that order too) and sorts only inside each one; any other list is one block.
  */
-export function sortRows(rows: RowView[]): RowView[] {
-  if (!rows.some((r) => r.kind === 'group')) return sortBlock(rows);
+export function sortRows(rows: RowView[], order: Order = BY_SIZE): RowView[] {
+  if (!rows.some((r) => r.kind === 'group')) return sortBlock(rows, order);
   const out: RowView[] = [];
   let group: RowView | null = null;
   let block: RowView[] = [];
-  const flush = (): void => { out.push(...(group ? [group] : []), ...sortBlock(block)); block = []; };
+  const flush = (): void => { out.push(...(group ? [group] : []), ...sortBlock(block, order)); block = []; };
   for (const row of rows) {
     if (row.kind === 'group') { flush(); group = row; } else block.push(row);
   }
@@ -77,8 +147,9 @@ export function sortRows(rows: RowView[]): RowView[] {
 }
 
 /**
- * The rows on screen: a child shows only while every parent above it is expanded, and the rows of a folded category
- * (`folded` holds the ids of its `group` rows) are not shown at all, its own row stays.
+ * The rows on screen: a child shows only while every parent above it is open, and the rows of a folded category are not
+ * shown at all, its own row stays. A parent row is open when expanded; a folder (a header with rows hanging under it) is
+ * open unless folded. `folded` holds the ids of the folded categories and folders.
  */
 export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, folded: ReadonlySet<string> = new Set()): RowView[] {
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -86,7 +157,8 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, fold
     if (row.parent === null) return true;
     const parent = byId.get(row.parent);
     if (!parent) return true;
-    if (!expanded.has(parent.id) || seen.has(parent.id)) return false;
+    const open = parent.kind === 'header' ? !folded.has(parent.id) : expanded.has(parent.id);
+    if (!open || seen.has(parent.id)) return false;
     return shown(parent, seen.add(row.id));
   };
   let hidden = false;
@@ -94,6 +166,50 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, fold
     if (row.kind === 'group') { hidden = folded.has(row.id); return true; }
     return !hidden && shown(row, new Set());
   });
+}
+
+/**
+ * How deep each row sits in the tree the list draws: a category, and a sub-heading outside one, at 0; a sub-heading inside a
+ * category at 1; a folder inside a folder one deeper than it; a row one deeper than the heading above it (0 when there is
+ * none); a child one deeper than its parent.
+ * Computed on the engine's order, where a heading precedes its rows and a parent its children.
+ */
+export function rowDepths(rows: RowView[]): Map<string, number> {
+  const depth = new Map<string, number>();
+  let inGroup = false;
+  let base = 0;
+  for (const row of rows) {
+    if (row.kind === 'group') {
+      depth.set(row.id, 0);
+      inGroup = true;
+      base = 1;
+    } else if (row.kind === 'header') {
+      const above = row.parent === null ? undefined : depth.get(row.parent);
+      const d = above !== undefined ? above + 1 : inGroup ? 1 : 0;
+      depth.set(row.id, d);
+      base = d + 1;
+    } else {
+      const parent = row.parent === null ? undefined : depth.get(row.parent);
+      depth.set(row.id, parent === undefined ? base : parent + 1);
+    }
+  }
+  return depth;
+}
+
+/**
+ * What the rows of a sub-heading add up to (its own line shows it): the rows right under it, and under the folders inside
+ * it, up to the next sub-heading or category that is not inside it; null when none has a size.
+ */
+export function headerBytes(rows: RowView[], id: string): number | null {
+  const inside = new Set([id]);
+  const sizes: number[] = [];
+  for (const r of rows.slice(rows.findIndex((x) => x.id === id) + 1)) {
+    const under = r.parent !== null && inside.has(r.parent);
+    if ((r.kind === 'header' || r.kind === 'group') && !under) break;
+    if (r.kind === 'header') inside.add(r.id);
+    else if ((r.parent === null || under) && r.bytes !== null) sizes.push(r.bytes);
+  }
+  return sizes.length === 0 ? null : sizes.reduce((a, b) => a + b, 0);
 }
 
 /** How many rows a category holds (its items and their children, not its sub-headings): the key of «long categories start folded». */

@@ -20,7 +20,7 @@ import { renderReport } from './report.ts';
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
   openSection(id: SectionId): void;
-  /** The About window (the button of the sections bar; `?` opens it too). */
+  /** The Settings window, with the look and what About said (the button of the sections bar; `?` opens it too). */
   openAbout(): void;
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
@@ -31,6 +31,10 @@ export interface Handlers {
   /** Folds or opens a category of the list; `foldAll` does it for every category. */
   toggleFold(id: string): void;
   foldAll(fold: boolean): void;
+  /** A click on a column's header: the list is ordered by that column, or the order turns round. */
+  sortBy(column: string): void;
+  /** Opens or closes the details of the focused row (Smooth; ONI MODE always shows them). */
+  toggleDetails(): void;
   /** The menu of the categories: scrolls the list to one of them (opening it if it was folded). */
   goToGroup(id: string): void;
   /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
@@ -164,22 +168,36 @@ export function renderShell(screen: Screen, on: Handlers): void {
   // The job's progress bar.
   renderJob(byId('job'), view);
 
-  // Sections bar.
-  fill(byId('sections'),
-    h('div', { class: 'hd' }, h('h2', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
-    ...SECTION_ORDER.map((id, index) => h('button', {
-      type: 'button', class: id === view.section ? 'nv on' : 'nv', 'data-section': id, 'data-key': `section:${id}`,
-      'aria-current': id === view.section ? 'page' : null, onClick: () => on.openSection(id),
-    }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))),
-    h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'About'), kbd('?')));
+  // Sections bar: built once and then only marked, so that the bar under the open tab (Smooth) can slide to the next one.
+  const sections = byId('sections');
+  if (sections.childElementCount === 0) {
+    fill(sections,
+      h('div', { class: 'hd' }, h('h2', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
+      ...SECTION_ORDER.map((id, index) => h('button', {
+        type: 'button', class: 'nv', 'data-section': id, 'data-key': `section:${id}`, onClick: () => on.openSection(id),
+      }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))),
+      h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'Settings'), kbd('?')));
+  }
+  for (const tab of sections.querySelectorAll<HTMLElement>('.nv[data-section]')) {
+    const here = tab.dataset.section === view.section;
+    tab.classList.toggle('on', here);
+    tab.removeAttribute('aria-busy');
+    if (here) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+  }
 
   // Bar 2: categories and options.
   renderBar2(byId('bar2'), view, ui, on);
 
-  // List header: title and subtitle (the master check box is the first cell of the list's own column header).
+  // List header: title, subtitle and the switch of the details (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
     h('h1', { class: 'hd-title', 'data-fit': '' }, view.title),
-    h('span', { class: 'hd-right' }, h('span', { class: 'sub' }, ellipsis(view.subtitle))));
+    h('span', { class: 'hd-right' }, h('span', { class: 'sub' }, ellipsis(view.subtitle)),
+      view.report === null ? h('button', {
+        type: 'button', class: 'btn sm details-toggle', 'data-key': 'details', 'aria-expanded': String(ui.details), 'aria-controls': 'detail',
+        title: ui.details ? 'Hide the details of the selected row' : 'Show the details of the selected row: paths, files in use, why',
+        onClick: () => on.toggleDetails(),
+      }, h('span', { 'data-fit': '' }, ui.details ? 'Hide details' : 'Details'), kbd('i')) : null));
+  byId('main').classList.toggle('details-open', ui.details);
 
   // Notices, then the list and the detail of the focused row.
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
@@ -197,8 +215,8 @@ export function renderShell(screen: Screen, on: Handlers): void {
     renderList(rowsArea, view, ui, on);
     const focus = currentFocus(ui, view);
     const focused = shownRows(ui, view).find((r) => r.id === focus) ?? null;
-    // A category header has nothing to add to its own line (its note is on it).
-    renderDetail(byId('detail'), focused?.kind === 'group' ? null : focused);
+    // A category or a sub-heading has nothing to add to its own line (its note is on it).
+    renderDetail(byId('detail'), focused?.kind === 'group' || focused?.kind === 'header' ? null : focused);
   }
 
   // Footer.

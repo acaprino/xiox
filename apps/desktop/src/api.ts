@@ -5,6 +5,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AboutView, AnyIntent, AppInfo, CmdError, SectionId, SectionView } from './types.ts';
+import type { Theme } from './skin.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 
@@ -42,7 +43,12 @@ export const api = {
   /** The first frame is drawn: Rust shows the window, which opens hidden so that the page is the first thing seen. */
   ready: () => invoke<void>('window_ready'),
   /** The open section (its name goes in the window title) and the running job's percent, if any (the taskbar button shows it). */
-  chrome: (section: SectionId, job: number | null) => invoke<void>('window_chrome', { section, job }),
+  /**
+   * `theme`: what the window asks Windows for (ONI MODE: dark; Smooth: its theme switch, `system` by default); `glass`: the
+   * palette Smooth's acrylic is tinted for, none in ONI MODE (which also gets the system frame back).
+   */
+  chrome: (section: SectionId, job: number | null, theme: Theme, glass: 'light' | 'dark' | null) =>
+    invoke<void>('window_chrome', { section, job, theme, glass }),
 };
 
 /** Views pushed by the core (`xiox:view` in Tauri, the mock's emitter outside). */

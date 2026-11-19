@@ -103,7 +103,7 @@
 - Si lavora sempre su `develop`, o su un ramo breve che parte da `develop`, torna in `develop` e poi si
   cancella. Mai merge o push in `main`, e nessun altro ramo, né locale né su GitHub.
 - Una release è la pull request `develop` → `main`, aperta e unita dal proprietario: ogni merge in `main` è
-  una release (`.github/workflows/release.yml`, lo stesso in Shinatama, Mukade, Xiox, Muro, Ethel, Qemille e
+  una release (`.github/workflows/release.yml`, lo stesso in Shinatama, Mukade, Xiox, Muro, Ethel e
   artcraft-web).
   La versione sale di una patch, o di una minor o major se la pull request ha l'etichetta `release:minor` o
   `release:major`; `build-release.bat` costruisce su Windows; si pubblicano il tag `v<versione>` e la GitHub

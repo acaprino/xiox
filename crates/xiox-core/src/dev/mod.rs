@@ -204,6 +204,7 @@ pub const NOTHING_SELECTED: &str = "Nothing is selected in this list.";
 pub const NOTHING_TO_CANCEL: &str = "Nothing can be cancelled right now.";
 pub const NO_ROOT_SELECTED: &str = "Pick a folder in the list first.";
 pub const NO_FOLDERS: &str = "This project has no folders to choose.";
+pub const NOTHING_UNDER_HEADING: &str = "Nothing under this heading can be chosen.";
 pub const NO_WARNINGS: &str = "This confirmation has no warnings to read.";
 pub const NOTHING_TO_RUN: &str = "This confirmation has nothing to clean: close it and analyze again.";
 pub const PERMANENT_NOT_OFFERED: &str = "Permanent deletion is not offered here: the Recycle Bin has room.";
@@ -568,8 +569,10 @@ impl DevState {
     }
 
     /// A row id of the contract: `p:` a project, `a:` one of its folders, `w:` a worktree,
-    /// `s:<agent>:<id>` a session. The others (`o:` worktrees nobody manages, the `h:` header) and
-    /// anything unknown are not choosable. A row the table shows disabled is refused here too.
+    /// `s:<agent>:<id>` a session, `h:` a sub-heading (its box ticks the rows under it: the sessions
+    /// of a project, the worktrees of a repository). The others (`o:` worktrees nobody manages, the
+    /// heading over them) and anything unknown are not choosable. A row the table shows disabled is
+    /// refused here too.
     pub fn toggle(&mut self, row: &str) -> Result<(), String> {
         self.editable()?;
         let scan = self.analysis()?;
@@ -602,18 +605,30 @@ impl DevState {
             }
             let on = self.sel_worktrees.get(i).copied().unwrap_or(false);
             *self.sel_worktrees.get_mut(i).ok_or_else(|| unknown_row(row))? = !on;
-        } else if let Some(rest) = row.strip_prefix("s:") {
-            let (agent, id) = rest.split_once(':').ok_or_else(|| unknown_row(row))?;
-            let i = scan
-                .archived
-                .iter()
-                .position(|s| session_agent_id(s.agent) == agent && s.id == id)
-                .ok_or_else(|| unknown_row(row))?;
+        } else if row.starts_with("s:") {
+            let i = session_index(&scan.archived, row).ok_or_else(|| unknown_row(row))?;
             if let Some(why) = &scan.archived[i].blocked {
                 return Err(why.clone());
             }
             let on = self.sel_sessions.get(i).copied().unwrap_or(false);
             *self.sel_sessions.get_mut(i).ok_or_else(|| unknown_row(row))? = !on;
+        } else if row.starts_with("h:") {
+            let (ids, on) = crate::view::header_toggle(&self.rows(), row).ok_or_else(|| unknown_row(row))?;
+            if ids.is_empty() {
+                return Err(NOTHING_UNDER_HEADING.into());
+            }
+            // The rows under a heading are the free projects of a folder, worktrees or sessions the list lets you tick.
+            for id in &ids {
+                if let Some(r) = id.strip_prefix("p:").and_then(|p| scan.projects.iter().find(|r| r.id == p)) {
+                    for a in &r.artifacts {
+                        set_artifact(&mut self.sel_artifacts, a, on);
+                    }
+                } else if let Some(i) = id.strip_prefix("w:").and_then(|w| scan.worktrees.iter().position(|r| r.id == w)) {
+                    self.sel_worktrees[i] = on;
+                } else if let Some(i) = session_index(&scan.archived, id) {
+                    self.sel_sessions[i] = on;
+                }
+            }
         } else {
             return Err(unknown_row(row));
         }
@@ -784,6 +799,12 @@ impl DevState {
 
 fn unknown_row(row: &str) -> String {
     format!("“{row}” is not a row that can be chosen.")
+}
+
+/// The archived session of a row id `s:<agent>:<id>`.
+fn session_index(archived: &[ArchivedSession], row: &str) -> Option<usize> {
+    let (agent, id) = row.strip_prefix("s:")?.split_once(':')?;
+    archived.iter().position(|s| session_agent_id(s.agent) == agent && s.id == id)
 }
 
 /// The agent as it appears in a row id: `claude` | `codex` | `opencode` | `pi`.

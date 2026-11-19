@@ -911,7 +911,7 @@ fn winapp2_search_matches_section_cleaner_or_option() {
         ("w_beta/logs", RowKind::Item, "Beta Tool – Logs"),
         ("w_beta/temp", RowKind::Item, "Beta Tool – Temp"),
     ]);
-    assert_eq!(row(&v, "section:Utilities").check, Check::None);
+    assert_ne!(row(&v, "section:Utilities").check, Check::None, "a section of options that can be ticked has a box");
     let (text, why) = rules::status_line(st.rules.as_ref().unwrap(), st.winapp2_update.as_ref());
     let status = v.options.iter().find_map(|o| match o {
         OptionView::Text { text, hint, .. } => Some((text.clone(), hint.clone())),
@@ -924,8 +924,18 @@ fn winapp2_search_matches_section_cleaner_or_option() {
     assert_eq!(v.search.as_ref().unwrap().value, "beta");
     assert_eq!(v.rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["winapp2", "section:Utilities", "w_beta/logs", "w_beta/temp"]);
     assert_eq!(row(&v, "section:Utilities").name, "Utilities (1)");
-    // Sub-headings are not choosable, rows are, and a search that finds nothing says so.
-    assert!(st.toggle("section:Utilities").is_err());
+    // A section's box ticks the rows the search shows, and clears them once they are all ticked; a section the search
+    // hides cannot be ticked.
+    let alpha = st.rule_sel.contains("w_alpha/cache");
+    st.toggle("section:Utilities").unwrap();
+    assert!(st.rule_sel.contains("w_beta/logs") && st.rule_sel.contains("w_beta/temp"));
+    assert_eq!(st.rule_sel.contains("w_alpha/cache"), alpha, "hidden by the search: left as it was");
+    assert_eq!(row(&view(&st, false), "section:Utilities").check, Check::On);
+    st.toggle("section:Utilities").unwrap();
+    assert!(!st.rule_sel.contains("w_beta/logs") && !st.rule_sel.contains("w_beta/temp"));
+    assert_eq!(row(&view(&st, false), "section:Utilities").check, Check::Off);
+    assert_eq!(err(st.toggle("section:Browsers")), CATEGORY_HIDDEN);
+    // Rows are choosable one by one too, and a search that finds nothing says so.
     st.toggle("w_beta/logs").unwrap();
     assert_eq!(row(&view(&st, false), "w_beta/logs").check, Check::On);
     st.set_search("zzz");

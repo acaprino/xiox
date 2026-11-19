@@ -7,7 +7,7 @@
 //! A VIEW is a fixture state (`cleanup:analyzed`...). The model holds, per section, the name of the
 //! current state, a revision counter and a few memories. Fixture states are fixed copies: a toggle,
 //! a `selectAll` or an ack changes the view it was made in and nothing else (but the check of the
-//! `group` rows, which are counted again from the rows they cover).
+//! box rows, `group` and `header`, which are counted again from the rows they cover).
 
 use crate::backend::Backend;
 use crate::error::CmdResult;
@@ -170,10 +170,33 @@ fn eligible(r: &RowView) -> bool {
     matches!(r.kind, RowKind::Item | RowKind::Child) && r.enabled && r.check != Check::None && r.level != Some(LevelView::Caution)
 }
 
-/// The indexes of the rows after the `group` row at `at`, up to the next group row, that it may change.
-fn group_rows(rows: &[RowView], at: usize) -> Vec<usize> {
+/// A row with a box over other rows: a category (`group`) or a sub-heading (`header`).
+fn is_box(r: &RowView) -> bool {
+    matches!(r.kind, RowKind::Group | RowKind::Header)
+}
+
+/// The indexes of the rows the box row at `at` may change: after it, up to the next group row (a sub-heading: also
+/// the next sub-heading that is not inside it, as a folder of the projects' tree is inside the folder its `parent` names).
+fn box_rows(rows: &[RowView], at: usize) -> Vec<usize> {
+    let header = rows[at].kind == RowKind::Header;
+    let mut inside = vec![rows[at].id.as_str()];
     let after = &rows[at + 1..];
-    let end = after.iter().position(|r| r.kind == RowKind::Group).unwrap_or(after.len());
+    let end = after
+        .iter()
+        .position(|r| {
+            if r.kind == RowKind::Group {
+                return true;
+            }
+            if !(header && r.kind == RowKind::Header) {
+                return false;
+            }
+            let nested = r.parent.as_deref().is_some_and(|p| inside.contains(&p));
+            if nested {
+                inside.push(&r.id);
+            }
+            !nested
+        })
+        .unwrap_or(after.len());
     (at + 1..at + 1 + end).filter(|&i| eligible(&rows[i])).collect()
 }
 
@@ -189,12 +212,12 @@ fn tally(checks: &[Check]) -> Check {
     }
 }
 
-/// The check of every group row, counted again from the rows it covers (a parent row is not recounted:
+/// The check of every box row, counted again from the rows it covers (a parent row is not recounted:
 /// the engine's own figures stay).
 fn recount(rows: &mut [RowView]) {
     for at in 0..rows.len() {
-        if rows[at].kind == RowKind::Group {
-            let checks: Vec<Check> = group_rows(rows, at).iter().map(|&i| rows[i].check).collect();
+        if is_box(&rows[at]) {
+            let checks: Vec<Check> = box_rows(rows, at).iter().map(|&i| rows[i].check).collect();
             rows[at].check = tally(&checks);
         }
     }
@@ -456,17 +479,17 @@ impl FakeModel {
         }
     }
 
-    /// A row's check goes on <-> off (mixed -> on). A `group` row ticks (or, when it was on, clears) the
-    /// eligible rows it covers. Afterwards the group rows are counted again.
+    /// A row's check goes on <-> off (mixed -> on). A box row (`group`, `header`) ticks (or, when it was on, clears)
+    /// the eligible rows it covers. Afterwards the box rows are counted again.
     fn toggle(&mut self, s: SectionId, id: &str) {
         let rows = &mut self.current_mut(s).rows;
         let Some(at) = rows.iter().position(|r| r.id == id) else { return };
         if !rows[at].enabled || rows[at].check == Check::None {
             return;
         }
-        if rows[at].kind == RowKind::Group {
+        if is_box(&rows[at]) {
             let to = if rows[at].check == Check::On { Check::Off } else { Check::On };
-            for i in group_rows(rows, at) {
+            for i in box_rows(rows, at) {
                 rows[i].check = to;
             }
         } else {

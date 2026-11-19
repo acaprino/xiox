@@ -22,7 +22,7 @@ uses.
 - [Confirmations, cancel and the report](#confirmations-cancel-and-the-report)
 - [Safety](#safety)
 - [Keyboard](#keyboard)
-- [About](#about)
+- [Settings](#settings)
 - [Where things are stored](#where-things-are-stored)
 - [Troubleshooting](#troubleshooting)
 - [The command line and the observer](#the-command-line-and-the-observer)
@@ -52,32 +52,48 @@ the Winapp2 rules are neither loaded nor downloaded. The argument needs a folder
 the app prints a message and exits with code 2, instead of falling back to your real profile.
 
 At start the app also loads the cleaning rules (and updates Winapp2 in the background, see
-[About](#about)) and removes the leftovers of a free-space wipe that a power cut or a crash
+[Settings](#settings)) and removes the leftovers of a free-space wipe that a power cut or a crash
 interrupted (see [Cleanup](#cleanup)).
 
 ## The window
 
+The window has two looks. **Smooth** is the default: modern and clean, in the manner of Qamille, with
+the amber of Xiox as its only accent, the sections as tabs at the top and the buttons of the section
+under the list. Its title bar is the app's own: drag it to move the window, double-click it to
+maximize, and use its minimize, maximize and close buttons (hovering maximize offers the Windows 11
+snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is the look of the first version, three
+columns in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
+`Smooth` there to go back); the choice is kept for the next start. Everything else (the lists, the boxes, the
+keys, what each button does) is the same in both.
+
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ XIOX  0.1.0                                      [ Analyze a ] [ Clean … ↵ ]│  top bar
+│ XIOX        CLEANUP 1  REGISTRY 2  SERVICES & RAM 3  DEVELOPERS 4  ABOUT ? ◯ONI│  top bar: sections as tabs
 │ ANALYSIS DONE   13.48 GB to delete (46,999 files)  administrator · RAM 32 GB │  status row
 │ Cleaning…  ████████░░░░  64%  Windows temporary files                        │  progress (while a job runs)
 │ Xiox is cleaning the profile of “…”, not that of “…” …                       │  profile strip (when it applies)
-├──────────┬────────────┬─────────────────────────────────────────────────────┤
-│ SECTIONS │ CATEGORIES │ title ....................................         │
-│ Cleanup 1│ System     │ ☐  Item         Level          Files        Size    │  list
-│ Registry2│ Explorer   │ ☑  …                                                │
-│ Services3│ …          │                                                     │
-│ Develop.4│ OPTIONS    ├─────────────────────────────────────────────────────┤
-│ About   ?│ …          │ item … files … size … level … mode … why …          │  detail
-├──────────┴────────────┴─────────────────────────────────────────────────────┤
-│ ● ↑↓ move · space toggle · a analyze · ↵ clean                               │  footer
+├────────────┬───────────────────────────────────────────────────────────────┤
+│ CATEGORIES │ title ...............................................  Details i│
+│ System     │ ☐  ITEM ▲          LEVEL        FILES        SIZE ▼            │  list
+│ Explorer   │ ☑  SYSTEM                       30,389     11.29 GB            │
+│ …          │   ☑ Windows temporary files     18,204      4.10 GB            │
+│ OPTIONS    │                                                                │
+│ …          ├───────────────────────────────────────────────────────────────┤
+│            │ item … files … size … level … mode … why …  (on request)       │  detail
+│            │                              [ Analyze a ] [ Clean 8 items ↵ ] │  buttons
+├────────────┴───────────────────────────────────────────────────────────────┤
+│ ● ↑↓ move · space toggle · s sort · a analyze · ↵ clean                     │  footer
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Top bar.** The Xiox wordmark and the version, and on the right the buttons of the open
-section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...). A small key next to a label
-says which key presses it. A button that cannot be used right now is greyed out; the chapters
+In ONI MODE the window gets the Windows title bar back and no glass, the sections are the first of
+three columns, the buttons sit at the top right next to the version, and the detail is always shown
+under the list.
+
+**Top bar and buttons.** The Xiox wordmark, the sections and `Settings`. The buttons
+of the open section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...) sit under the list,
+the main one last and in the accent colour (in ONI MODE: at the top right). A small key next to a
+label says which key presses it. A button that cannot be used right now is greyed out; the chapters
 below say when. The style sheet writes the button labels in capitals; this guide names them as
 they are written in the sentences of the app.
 
@@ -96,10 +112,12 @@ approved with another administrator's password. "Your" Temp folder, browser data
 per-user locations are then those of account A, not of the person sitting at the screen. Close
 the app and start it again from the right account if that is not what you want.
 
-**Sections bar (the first sidebar).** Cleanup `1`, Registry `2`, Services & RAM `3`,
-Developers `4`, and `About` (`?`). The number is the key that opens the section.
+**Sections.** Cleanup `1`, Registry `2`, Services & RAM `3`, Developers `4`, and `Settings` (`?`):
+tabs at the top, with a bar under the open one (in ONI MODE: the first sidebar). The number is
+the key that opens the section.
 
-**Categories bar (the second sidebar).** The categories of the open section, each with its
+**Categories bar (the sidebar).** In Registry its heading is `Look for`: the kinds of issue a scan
+looks through. The categories of the open section, each with its
 item count and, after an analysis, its size (`System`, `Explorer`, ...; for Developers
 `Projects`, `Worktrees`, `Archived sessions`). Under them, `Options`: the choices that belong to
 the section. Registry and Services & RAM have no categories: for them this bar is only
@@ -109,8 +127,11 @@ category the list is at is highlighted as you scroll. A small box in front of ea
 at a glance how much of the category is ticked. In Developers each category is a list of its own
 and a click opens it.
 
-**List.** The rows of the section, largest first (rows without a size keep the order in which the
-engine found them, and rows inside a parent stay under it). Each row has a box (ticked, empty, or
+**List.** The rows of the section, largest first unless you choose another order: a click on a
+column title (`Item`, `Size`, `Date`, `Project`, ...) orders the list by that column, a second click
+turns the order round, and an arrow shows the column and the direction (`s` and `S` do the same
+from the keyboard). Rows without a value go last either way, rows inside a parent stay under it,
+the rows of a group stay under its heading, and the categories of Cleanup keep their place. Each row has a box (ticked, empty, or
 half-ticked when only some of its children are), a name with a second line that says what it is
 or, for a blocked row, why it cannot be chosen, and the columns of the section. The whole cell
 around the box is the button, so you do not have to aim at the square; a click on the rest of the
@@ -120,6 +141,14 @@ only some rows are on); items marked `caution` are never ticked by it, nor by a 
 only by their own box. A caret folds and unfolds the rows under a parent. Where a section has
 many rows (Cleanup, Services) a search box above the list filters them.
 
+**Groups of rows.** The rows that belong together sit under a heading with its own box, which
+ticks or clears every row under it that can be ticked (never a blocked one, never one marked
+`caution`) and is half-ticked when only some are: the sections of Winapp2 in Cleanup
+(`Internet`, `Utilities`, ...), the kinds of issue in Registry (`Missing shared DLLs`, ...), the
+archived sessions by project and the worktrees by repository in Developers. A heading also says
+how many rows it holds and what they add up to. The worktrees made by hand keep a heading without
+a box: Xiox does not remove them.
+
 **Categories in the list (Cleanup).** Each category starts with a header row that stays at the
 top while its rows scroll: its own box (ticks or clears the whole category), a caret (folds it),
 how many items are ticked, and the files and size found. A click on the header folds or opens
@@ -127,7 +156,8 @@ it. A category with more than 40 rows (`Applications`) starts folded; `Fold all`
 above the list does every category at once, and a search opens the categories it found
 something in.
 
-**Detail.** Under the list: what the selected row says about itself, as `item`, `files`,
+**Detail.** Under the list, when you ask for it with `Details` (above the list) or `i` (in ONI
+MODE it is always there): what the selected row says about itself, as `item`, `files`,
 `size`, `level`, `mode` (`permanently`, `empties the Recycle Bin`, `to the Recycle Bin`,
 `permanently (git)`), `why` and, when there is one, `warning`. A blocked row also gets a
 `blocked` line with the reason. Some rows add lines below, for example which browser profile
@@ -139,7 +169,7 @@ refusal. A strip that has more to say ends with a `+2 more` button: reach it wit
 only half worked (some keys not fixed, some services that failed) is shown in the warning colour,
 not as a success.
 
-**Footer.** The keys of the open section (`↑↓ move · space toggle · a analyze · ↵ clean`) and,
+**Footer.** The keys of the open section (`↑↓ move · space toggle · s sort · a analyze · ↵ clean`) and,
 in some sections, a line about the selection (`Selected in Projects: 6.80 GB · 2 folders`).
 
 While a job runs the lists are frozen: you cannot tick or untick anything, because the
@@ -153,7 +183,9 @@ larger than the work area of the screen it opens on (the saved size included), a
 Developers: a message asks `Add "<folder>" to the folders Developers analyzes?` and nothing is added
 until you answer `Add`; anything that is not a folder only gets a message saying so.
 
-**Theme.** The look is dark only, with a fixed accent: a deliberate choice, not a gap. The palette
+**Theme.** Smooth follows the Windows theme, light or dark, title bar included, unless you pick
+`Light` or `Dark` instead of `Auto` in the switch at the top right (the choice is kept for the next
+start); ONI MODE is dark whatever Windows says, and hides that switch. The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
 is part of the product's identity and its contrasts are tested (`tests/contrast.test.ts`), so the
 window does not follow the system's light theme or accent colour. What follows the system is what
 accessibility needs: the high-contrast (forced colours) themes, reduced motion and the text size.
@@ -353,7 +385,12 @@ acts on **the open category only**; what you ticked in the other two is not touc
 confirmation says so (*Also chosen in the other lists (not cleaned now): 2 worktrees · 2
 sessions.*). Dates are written `YYYY-MM-DD`.
 
-**Projects.** Each project has a box that ticks all its folders (half-ticked when only some are)
+**Projects.** The projects sit in a tree of the folders they are in, as in Explorer: `D:\` holds
+`Projects` and `Work`, `Projects` holds `acme-api`. A folder with no project of its own and a single
+folder inside it is one row (`D:\Projects`, not `D:\` then `Projects`). Each folder shows what its
+projects add up to, folds and opens with its arrow, a click or ←/→ (it starts open), and has a box
+that ticks every project inside it that is not in use. The sort works inside each folder.
+Each project has a box that ticks all its folders (half-ticked when only some are)
 and, under it, the folders themselves (`target`, `node_modules`, `.venv`, ...), each with its own
 box, level, size and reason (*Build output that cargo recreates.*, *Restored by npm install.*).
 The folders of an inactive project that the engine recommends start ticked; a recently used
@@ -521,15 +558,17 @@ that is greyed out ignores its key.
 | Key | What it does |
 |---|---|
 | `1` `2` `3` `4` | open Cleanup, Registry, Services & RAM, Developers |
-| `?` | open About (not while a confirmation is open) |
+| `?` | open Settings (not while a confirmation is open) |
 | `↑` `↓` | move the selection one row |
 | `PageUp` `PageDown` | move ten rows |
 | `Home` `End` | first and last row |
 | `→` `←` | unfold and fold the rows under a project or an entry |
-| `Space` | tick or untick the selected row (not while a job runs, not on a blocked row) |
+| `Space` | tick or untick the selected row, or every row under the selected heading (not while a job runs, not on a blocked row) |
+| `s` / `S` | order the list by the next column / turn the order round |
+| `i` | open or close the details of the selected row (Smooth) |
 | `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry, `Refresh` in Services & RAM |
 | `Enter` | the section's main button: `Clean`, `Fix selected` or `Disable`; it opens the confirmation |
-| `Esc` | in this order: close About or the confirmation; leave a text field; close the report; cancel the running job |
+| `Esc` | in this order: close Settings or the confirmation; leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
 
 A key held down does not repeat an action: one `Enter` is one press, so a held `Enter` cannot run
@@ -537,9 +576,9 @@ on past the confirmation it just opened. The arrows do repeat, that is how a lon
 The footer shows the keys of the open section, taken from the buttons themselves, so what it says
 and what the keys do agree.
 
-**Tab order.** The sections bar (the four sections and `About`), the categories and options of
-the second sidebar, then the main panel (the search box, the list with its top check box, the detail),
-and last the buttons of the top bar. The list is **one** Tab stop: once in it, move with the
+**Tab order.** The sections (the four sections and `Settings`), the categories and options of
+the sidebar, then the main panel (`Details`, the search box, the list with its top check box, the
+detail), and last the buttons of the section and Smooth's theme (`Auto`, `Light`, `Dark`). The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The detail
 panel can be reached too, so a long reason can be scrolled with the arrows. A visible ring shows
 where the focus is.
@@ -566,10 +605,12 @@ cannot be selected and keep the arrow pointer, the right button opens a menu onl
 can be selected with the mouse: the paths and reasons of the detail panel, the report, the notices
 and the text of a confirmation.
 
-## About
+## Settings
 
-Open it with the `About` entry of the sections bar or with `?`. It shows `Xiox`, the version
-(`Version 0.1.0`), the state of the cleaning rules and where they come from:
+Open it with the `Settings` entry of the sections bar or with `?`. At the top, `Look`: `Smooth`
+(the default) or `ONI mode (the original look)`; the window changes at once and keeps the choice
+for the next start. Under it, `About Xiox`: the version (`Version 0.1.0`), the state of the
+cleaning rules and where they come from:
 
 - `Winapp2: version 260915` when the rules are loaded, `Winapp2: loading` while they are being
   read, `Winapp2: not downloaded yet` when no copy is available.
@@ -577,7 +618,8 @@ Open it with the `About` entry of the sections bar or with `?`. It shows `Xiox`,
   from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every
   start.*
 
-`Close` or `Esc` closes it. About does not open while a confirmation is up.
+`Close` or `Esc` closes it; `Tab` goes between the chosen look and `Close`, the arrows change the
+look. Settings does not open while a confirmation is up.
 
 The Winapp2 rules are downloaded when the app starts and stored outside the executable (see the
 next chapter). Their licence stays their own.
@@ -647,7 +689,7 @@ the `Recycle Bin` entry of Cleanup, or choose `Permanently` next time.
 agent's sessions was not readable, so the projects only that agent knows are not in this
 analysis. The warning names what was missing; the rest of the analysis is valid.
 
-**`Winapp2: not downloaded yet` in About.** No copy of the Winapp2 rules is available yet. The
+**`Winapp2: not downloaded yet` in Settings.** No copy of the Winapp2 rules is available yet. The
 built-in entries still work; the Winapp2 entries of `Applications` appear once the rules are
 there.
 

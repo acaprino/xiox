@@ -1,14 +1,22 @@
-// The About window: the name, the version, the Winapp2 rules in use and where they come from (the
-// CC-BY-SA attribution Winapp2 asks for). A small modal over the dimmed page, like the confirmation
-// (render/dialog.ts) but not a section's own dialog: it is opened by the page (the About button or
-// `?`) and holds no intent. Escape or Close closes it and the focus goes back to where it was.
+// The Settings window: the look of the window (Smooth, or ONI MODE, the look of the approved mock-up), then
+// the name, the version, the Winapp2 rules in use and where they come from (the CC-BY-SA attribution
+// Winapp2 asks for). A small modal over the dimmed page, like the confirmation (render/dialog.ts) but
+// not a section's own dialog: it is opened by the page (the Settings button or `?`) and holds no
+// intent; the look is the page's (main.ts keeps it). Escape or Close closes it and the focus goes back
+// to where it was.
 
 import { button, fill, h } from '../dom.ts';
 import { cycleFocus } from '../keys.ts';
+import type { Skin } from '../skin.ts';
 import type { AboutView } from '../types.ts';
 
+/** The look on screen, and what to do when another one is chosen. */
+export interface LookChoice { skin: Skin; choose(skin: Skin): void }
+
+const LOOKS: [Skin, string][] = [['smooth', 'Smooth'], ['oni', 'ONI mode (the original look)']];
+
 const BACKGROUND = ['top', 'status', 'profile', 'job', 'body', 'foot'];
-/** The `data-key` of the About button of the sections bar. */
+/** The `data-key` of the Settings button of the sections bar. */
 export const ABOUT_KEY = 'about';
 const CLOSE_KEY = 'about:close';
 
@@ -28,13 +36,13 @@ function setInert(on: boolean): void {
 
 export const aboutOpen = (): boolean => shown;
 
-/** Tab never leaves the window: it has one control, so Tab and Shift+Tab stay on Close. */
+/** Tab never leaves the window: it goes from the chosen look to Close and back (the arrows move between the looks). */
 function wire(): void {
   if (wired) return;
   wired = true;
   host().addEventListener('keydown', (event) => {
     if (event.key !== 'Tab' || event.ctrlKey || event.altKey || event.metaKey) return;
-    const list = [...host().querySelectorAll<HTMLElement>('button:not([disabled])')];
+    const list = [...host().querySelectorAll<HTMLElement>('input[type="radio"]:checked, button:not([disabled])')];
     const to = cycleFocus(list.length, list.indexOf(document.activeElement as HTMLElement), event.shiftKey);
     event.preventDefault();
     if (to !== null) list[to]?.focus();
@@ -42,16 +50,22 @@ function wire(): void {
 }
 
 /** Opens the window over the page. `from`: the `data-key` of the control that had the focus, where Close gives it back. */
-export function showAbout(about: AboutView, from: string | null, onClose: () => void): void {
+export function showAbout(about: AboutView, from: string | null, look: LookChoice, onClose: () => void): void {
   if (shown) return;
   wire();
   opener = from;
   shown = true;
   const root = host();
+  const choice = ([skin, label]: [Skin, string]): HTMLElement => h('label', { class: 'radio' },
+    h('input', { type: 'radio', name: 'look', value: skin, checked: skin === look.skin, 'data-key': `look:${skin}`, onChange: () => look.choose(skin) }),
+    h('span', {}, label));
   fill(root, h('div', { class: 'scrim' },
     h('div', { class: 'dlg about frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'about-title', tabindex: -1 },
-      h('h2', { id: 'about-title', class: 'dlg-title' }, 'Xiox'),
+      h('h2', { id: 'about-title', class: 'dlg-title' }, 'Settings'),
       h('div', { class: 'dlg-body' },
+        h('div', { class: 'ctl ctl-choice', role: 'radiogroup', 'aria-label': 'Look' },
+          h('span', { class: 'ctl-title' }, 'Look'), h('div', { class: 'radios' }, ...LOOKS.map(choice))),
+        h('b', { class: 'dlg-sub' }, 'About Xiox'),
         h('p', { class: 'dlg-text' }, `Version ${about.version}`),
         h('p', { class: 'dlg-text' }, about.winapp2),
         h('p', { class: 'dlg-text' }, about.attribution)),
@@ -62,7 +76,7 @@ export function showAbout(about: AboutView, from: string | null, onClose: () => 
   root.querySelector<HTMLElement>(`[data-key="${CLOSE_KEY}"]`)?.focus();
 }
 
-/** Closes the window and puts the focus back: on the control that had it, else on the About button. */
+/** Closes the window and puts the focus back: on the control that had it, else on the Settings button. */
 export function closeAbout(): void {
   if (!shown) return;
   shown = false;
