@@ -204,7 +204,7 @@ Xiox sits next to the other tools built on the same ideas: local first, readable
 
 ## Status and license
 
-Early, in daily use by its author. Contributions are not open yet. License: not chosen yet, all rights reserved.
+Early, in daily use by its author. Contributions are not open yet. License: [Apache-2.0](LICENSE).
 
 ---
 
