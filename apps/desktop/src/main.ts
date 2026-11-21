@@ -75,10 +75,16 @@ mountApp(shell, registry, {
 const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers' };
 // The title bar's two buttons: the views (what the tabs are, when the window is too narrow for them) and the palette.
 const viewsButton = shell.querySelector<HTMLElement>('.im-views-menu');
-if (viewsButton) viewsButton.addEventListener('click', () => openMenu(viewsButton, [
-  ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => ui.section === id, run: () => { void open(id); } })),
-  { label: 'Settings', keys: '4', checked: () => ui.settings, run: () => { void openSettings(); } },
-]));
+if (viewsButton) {
+  viewsButton.addEventListener('click', () => {
+    // An item with `checked` is a radio item, which stays open: the menu is closed by the item itself, and the check, which the
+    // menu reads at once, is already the view that is being opened.
+    const close = openMenu(viewsButton, [
+      ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => !ui.settings && ui.section === id, run: () => { close(); void open(id); } })),
+      { label: 'Settings', keys: '4', checked: () => ui.settings, run: () => { close(); void openSettings(); } },
+    ]);
+  });
+}
 shell.querySelector<HTMLElement>('.im-titlebar-command')?.addEventListener('click', () => { void registry.get(PALETTE_COMMAND)?.run(); });
 
 // Escape closes the inspector in the package's own handler, behind the page's back: the page follows it.
@@ -466,14 +472,15 @@ async function start(): Promise<void> {
   look = readLook(safeStorage());
   theme = readTheme(safeStorage());
   drawLook();
-  await load();
-  focusList();
-  signalReady();
+  // The window buttons and Snap Layouts work from the first frame (the buttons exist from the frame), not when Rust has answered.
   const titlebar = document.getElementById('top');
   if (inTauri && titlebar !== null) {
     const onError = (action: string, failure: unknown): void => { fail(ui.section, `${action} failed: ${errorText(failure)}`); render(); };
     mountWindowControls(titlebar, tauriWindowApi(onError), { onError });
   }
+  await load();
+  focusList();
+  signalReady();
 }
 
 /** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */

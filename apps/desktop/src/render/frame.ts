@@ -3,7 +3,7 @@
 // views (render/shell.ts, sidebar.ts) fill them on each render without touching the frame. The content's header and tools sit
 // before its panel body, so that a panel state (render/list.ts) keeps them.
 
-import { shellFrameHtml, sidebarHtml, titlebarHtml } from '@acaprino/imago/ui';
+import { iconHtml, shellFrameHtml, sidebarHtml, titlebarHtml } from '@acaprino/imago/ui';
 import { fromHtml } from '../dom.ts';
 
 /** Names a region of the frame: the views find it by its id. */
@@ -52,5 +52,16 @@ export function buildFrame(doc: Document): HTMLElement {
   name(shell, '.im-actions', 'actions');
   name(shell, '.im-footer', 'foot');
   name(shell, '.im-sidebar > .im-panel-body', 'sidebar-list', 'xi-side');
+  // titlebarHtml writes the Views button and the command button as their words only; the package's steps at 620 (the command button is
+  // its icon) and 340 (the Views button is its chevron) are drawn for the markup of docs/using-imago.md section 4, so they are written so.
+  const views = shell.querySelector<HTMLElement>('.im-views-menu');
+  if (views) {
+    views.classList.add('im-btn--sm');
+    views.setAttribute('aria-haspopup', 'menu');
+    views.setAttribute('aria-expanded', 'false');
+    views.replaceChildren(doc.createTextNode('Views'), fromHtml(doc, iconHtml('chevron')));
+  }
+  const command = shell.querySelector<HTMLElement>('.im-titlebar-command');
+  if (command) command.replaceChildren(fromHtml(doc, iconHtml('search')), fromHtml(doc, '<b>Commands</b>'), fromHtml(doc, '<kbd class="im-key">Ctrl K</kbd>'));
   return shell;
 }
