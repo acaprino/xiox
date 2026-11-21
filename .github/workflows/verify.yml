@@ -57,9 +57,6 @@ jobs:
       - name: Smoke test the page
         run: npm run smoke
 
-      - name: Check the Rust formatting
-        run: cargo fmt --all --check
-
       # No cargo runs on a developer's machine, so nobody can write Cargo.lock there: this step resolves the
       # dependencies and, when the lock moved, keeps the lock it wrote as the artifact cargo-lock and fails. The
       # agent downloads it (gh run download -n cargo-lock) and commits it.
@@ -85,6 +82,12 @@ jobs:
       # xiox-core holds the drift test of fixtures/views.json.
       - name: Test the Rust
         run: cargo test -p xiox-ui -p xiox-core
+
+      # Last, so that a formatting difference does not hide the lock, the lint and the tests behind it. The Rust of this repository
+      # was never put through rustfmt (no rustfmt.toml, lines of 150 columns): the first run fails here until `cargo fmt --all` has
+      # been run once and committed, by someone who may run it (nobody runs cargo on this machine but `cargo fmt`).
+      - name: Check the Rust formatting
+        run: cargo fmt --all --check
 
   # The window is never built on a developer's machine: this job builds it, and keeps the debug program, which the
   # owner runs with XIOX_UI_FAKE=1 to look at the real window (a debug build has the fixtures).
