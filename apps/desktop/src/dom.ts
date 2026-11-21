@@ -1,3 +1,5 @@
+import { keyCaps as packageKeyCaps } from '@acaprino/imago/ui';
+
 // A small element builder: the views build their DOM with it, never with innerHTML, so text that
 // comes from a path or a project name is always text.
 
@@ -34,9 +36,9 @@ export function button(label: Child | Child[], attrs: Attrs = {}): HTMLButtonEle
   return h('button', { type: 'button', ...attrs }, ...(Array.isArray(label) ? label : [label]));
 }
 
-/** A key cap, as Imago draws it (`im-key`): the word of a key as it is written on it (`a`, `↵`, `Esc`). */
-export function keyCaps(text: string): HTMLElement {
-  return h('kbd', { class: 'im-key' }, text);
+/** The key caps of a binding, as Imago draws them everywhere (the footer, the menus, the palette): `a` is `A`, `Enter` the return symbol, `Esc` itself. */
+export function keyCaps(binding: string): HTMLElement {
+  return packageKeyCaps(document, binding);
 }
 
 /**

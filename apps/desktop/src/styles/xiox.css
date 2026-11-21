@@ -14,7 +14,6 @@ img { -webkit-user-drag: none; }
 .xi-job-detail { flex: 1; min-width: 0; color: var(--im-muted); font-size: var(--im-fs-meta); }
 #status-right { white-space: nowrap; }
 #foot .foot-left { flex: 0 1 auto; min-width: 0; }
-#foot .foot-right { margin-left: auto; }
 
 /* ---------- the content: its header, the notices in its tools row, then the list ---------- */
 #notices { flex: 1 1 auto; display: flex; flex-direction: column; gap: var(--im-s-1); }
@@ -31,7 +30,6 @@ img { -webkit-user-drag: none; }
 .xi-side { padding-block-end: var(--im-s-3); overflow-x: hidden; }
 .xi-row { width: 100%; min-width: 0; text-align: start; }
 .xi-row > span { min-width: 0; }
-.xi-subhead { margin: var(--im-s-3) var(--im-s-3) var(--im-s-1); color: var(--im-muted); font: 600 var(--im-fs-meta) var(--im-font-head); text-transform: var(--im-case); letter-spacing: var(--im-track); }
 .xi-options { display: grid; gap: var(--im-s-3); padding: var(--im-s-2) var(--im-s-3) 0; }
 .xi-folders .xi-pick { padding: 0; }
 .xi-opt { align-items: flex-start; white-space: normal; }
@@ -94,10 +92,10 @@ tr[aria-expanded="true"] .xi-caret::before, .xi-caret[aria-expanded="true"]::bef
 .rp-sum p { margin: 0; }
 .rp-sum b { color: var(--im-accent-text); }
 .rp-block { display: grid; gap: var(--im-s-1); }
-.rp-sub, .dlg-sub { margin: 0; color: var(--im-muted); font: 600 var(--im-fs-meta) var(--im-font-head); text-transform: var(--im-case); letter-spacing: var(--im-track); }
+.rp-sub { margin: 0; color: var(--im-muted); font: 600 var(--im-fs-meta) var(--im-font-head); text-transform: var(--im-case); letter-spacing: var(--im-track); }
 .rp-buttons { display: inline-flex; gap: var(--im-s-2); }
 .rp-n { white-space: nowrap; }
-.rp-table td, .rp-lines td, .rp-cats td, .rp-items td { max-width: 320px; } /* imago-check: allow literal-space — a long note or path is cut with an ellipsis; the full text is in the tooltip */
+.rp-lines td, .rp-cats td, .rp-items td { max-width: 320px; } /* imago-check: allow literal-space — a long note or path is cut with an ellipsis; the full text is in the tooltip */
 .rp-path { font-family: var(--im-font-code); }
 
 /* ---------- the confirmation and Settings ---------- */

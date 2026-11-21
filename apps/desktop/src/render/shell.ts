@@ -60,8 +60,6 @@ const SECTION_NAMES: Record<SectionId, string> = {
   cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers',
 };
 
-const KEY_LABELS: Record<string, string> = { Enter: '↵', Escape: 'Esc' };
-
 type NoteTone = 'ok' | 'warn' | 'err' | 'info';
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -84,7 +82,7 @@ function actionButton(view: SectionView, action: ActionView, on: Handlers): (HTM
   const reasonId = `why-${action.id}`;
   return [
     button(
-      [h('span', { 'data-fit': '' }, action.label), action.key ? keyCaps(KEY_LABELS[action.key] ?? action.key) : null],
+      [h('span', { 'data-fit': '' }, action.label), action.key ? keyCaps(action.key) : null],
       {
         class: action.primary ? 'im-btn im-btn--primary' : 'im-btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
         title: reason, 'aria-describedby': reason === null ? null : reasonId,

@@ -1,5 +1,5 @@
 // The keys of the window, as commands of Imago's registry and the list's own keys (src/commands.ts). Every binding of
-// docs/xiox-desktop.md "Keyboard" goes through `registry.match` with a key event of a US and of an Italian layout, in a field and out
+// docs/xiox-desktop.md "Keyboard" goes through `registry.match` with the key event a keyboard sends (the same on a US and an Italian layout for these keys), in a field and out
 // of one, with a confirmation up and without. Not run locally when written (the owner's rule: CI runs it).
 
 import { test } from 'node:test';
@@ -50,7 +50,7 @@ const press = (key: string, extra: { ctrlKey?: boolean; shiftKey?: boolean; altK
   ({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...extra });
 const field = { tagName: 'INPUT' };
 
-test('digits 1 to 4 switch views, in a US and an Italian layout, and not in a field or behind a confirmation', () => {
+test('digits 1 to 4 switch views, and not in a field or behind a confirmation', () => {
   const { registry, flags } = harness();
   assert.equal(registry.match(press('1'))?.id, 'xiox.section.cleanup');
   assert.equal(registry.match(press('2'))?.id, 'xiox.section.registry');
@@ -64,7 +64,7 @@ test('digits 1 to 4 switch views, in a US and an Italian layout, and not in a fi
   assert.equal(registry.match(press('1')), undefined, 'a confirmation keeps the keyboard');
 });
 
-test('the question mark opens Settings, with Shift as a keyboard types it (US and Italian), never in a field', () => {
+test('the question mark opens Settings, with Shift as a keyboard types it, never in a field', () => {
   const { registry } = harness();
   assert.equal(registry.match(press('?', { shiftKey: true }))?.id, COMMAND.settings);
   assert.equal(registry.match(press('?'))?.id, undefined, 'a binding of ? without Shift never matches: the key is bound as Shift+?');
