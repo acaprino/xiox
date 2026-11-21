@@ -597,8 +597,8 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.keyboard.press('Enter');
   await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter did not open the backup dialog`));
   check(await page.locator('[role=dialog] .dlg-buttons .im-btn').count() === 3, 'the backup dialog does not have its three buttons');
-  check(await focusKey(page) === 'dlg:backup', `the backup dialog opens with the focus on ${await focusKey(page)}, expected Yes, back up and fix`);
-  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.dataset.button).join()) === 'backup,nobackup,cancel', 'the backup dialog buttons are not primary first, then the others');
+  check(await focusKey(page) === 'dlg:cancel', `the backup dialog opens with the focus on ${await focusKey(page)}, expected Yes, back up and fix`);
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.dataset.button).join()) === 'cancel,nobackup,backup', 'the backup dialog buttons are not Cancel first, the confirming one last');
   await page.screenshot({ path: `${shot}registry-backup-keyboard-${size}.png` });
   await page.keyboard.press('Escape');
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
@@ -734,7 +734,7 @@ async function sectionFlows(page, size, shot) {
   await page.waitForTimeout(100);
   check(!(await page.locator('[data-button="clean"]').isDisabled()), 'Clean stayed disabled after the warnings were read');
   await goTo(page, 'developers', 'shortfall');
-  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.textContent).join()) === 'Permanently,Cancel', 'the shortfall dialog does not offer Permanently, Cancel');
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.textContent).join()) === 'Cancel,Clean 2 folders permanently', 'the shortfall dialog does not offer Cancel, then the verb and object with permanently');
   await page.screenshot({ path: `${shot}developers-shortfall-${size}.png` });
   // Cleaning: Escape sends cancel and lands on the cancelled report.
   await goTo(page, 'developers', 'cleaning');
@@ -830,7 +830,7 @@ async function sectionFlows(page, size, shot) {
   // The confirmation: three warnings, Continue first and primary.
   await goTo(page, 'cleanup', 'confirm');
   check(await page.locator('.dlg-warn li').count() === 3, 'the Cleanup confirmation does not show its three warnings');
-  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => `${n.textContent}:${n.classList.contains('im-btn--confirm-danger')}`).join()) === 'Continue:true,Cancel:false', 'the Cleanup dialog is not Continue (primary), Cancel');
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => `${n.textContent}:${n.classList.contains('im-btn--confirm-danger')}`).join()) === 'Cancel:false,Clean 8 items:true', 'the Cleanup dialog is not Cancel, Clean 8 items (confirming)');
   // The report: its notes, its skipped and failed lines, item lines; Save as text….
   await goTo(page, 'cleanup', 'report');
   check(await page.locator('#rows .report .rp-lines').count() === 2, 'the Cleanup report does not list Skipped and Failed');

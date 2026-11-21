@@ -15743,7 +15743,7 @@
           "buttons": [
             {
               "id": "continue",
-              "label": "Continue",
+              "label": "Clean 8 items",
               "enabled": true,
               "primary": true
             },
@@ -25714,13 +25714,13 @@
           "buttons": [
             {
               "id": "backup",
-              "label": "Yes, back up and fix",
+              "label": "Back up and fix 2 issues",
               "enabled": true,
               "primary": true
             },
             {
               "id": "nobackup",
-              "label": "Fix without backup",
+              "label": "Fix 2 issues without a backup",
               "enabled": true,
               "primary": false
             },
@@ -33213,7 +33213,7 @@
           "buttons": [
             {
               "id": "permanent",
-              "label": "Permanently",
+              "label": "Clean 2 folders permanently",
               "enabled": true,
               "primary": true
             },

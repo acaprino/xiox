@@ -498,7 +498,7 @@ fn cleanup_view_confirm_lists_the_warnings_of_the_open_dialog() {
     assert!(d.rows.is_empty() && d.cautions.is_empty() && d.caution_title.is_none() && d.ack.is_none() && d.error.is_none());
     // Primary first, as the old window's dialog had them.
     assert_eq!(d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary, b.enabled)).collect::<Vec<_>>(), [
-        ("continue", "Continue", true, true),
+        ("continue", clean.label.as_str(), true, true),
         ("cancel", "Cancel", false, true),
     ]);
     assert!(button(d, "continue").enabled);

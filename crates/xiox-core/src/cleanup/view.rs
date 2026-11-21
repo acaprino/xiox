@@ -526,7 +526,8 @@ impl CleanupState {
             cautions: Vec::new(),
             ack: None,
             error: None,
-            buttons: vec![button("continue", "Continue", true), button("cancel", "Cancel", false)],
+            // The confirming button says what it does and to what, as the action that opened the dialog does: "Clean 8 items".
+            buttons: vec![button("continue", &clean_label(self.clean_count()), true), button("cancel", "Cancel", false)],
         })
     }
 

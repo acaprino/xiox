@@ -61,3 +61,25 @@ test('the data files the page names are the English ones', () => {
   assert.match(text, /registry-backup-\d{8}_\d{6}\.reg/);
   assert.ok(text.includes('cookie-keep-list.txt'));
 });
+
+test('a button that confirms says its verb and what it acts on, never a bare "Continue", "Yes" or "Permanently"', () => {
+  let confirming = 0;
+  for (const [name, view] of views) {
+    const dialog = view.dialog;
+    if (dialog === null) continue;
+    for (const button of dialog.buttons.filter((b) => b.primary)) {
+      confirming += 1;
+      assert.doesNotMatch(button.label, /^(Continue|Yes\b.*|OK|Permanently|Fix without backup)$/, `${name}: ${button.label}`);
+      if (dialog.permanent) {
+        assert.match(button.label, /^(Clean|Delete|Remove) [\d,]+ \S+/, `${name}: a permanent delete names its verb and object: ${button.label}`);
+      }
+      if (button.id === 'permanent') assert.match(button.label, / permanently$/, `${name}: the way out of a full Recycle Bin says it is for good`);
+    }
+    if (dialog.id === 'backup') {
+      assert.deepEqual(dialog.buttons.map((b) => b.id), ['backup', 'nobackup', 'cancel']);
+      assert.match(dialog.buttons[0]?.label ?? '', /^Back up and fix [\d,]+ issues?$/);
+      assert.match(dialog.buttons[1]?.label ?? '', /^Fix [\d,]+ issues? without a backup$/);
+    }
+  }
+  assert.ok(confirming >= 3, 'the fixture holds the Cleanup, Registry and Developers confirmations');
+});

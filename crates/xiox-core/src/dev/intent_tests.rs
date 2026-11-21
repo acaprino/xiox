@@ -866,7 +866,9 @@ fn dev_view_dialog_shows_cautions_ack_and_shortfall() {
     let v = st.view(false);
     let d = v.dialog.as_ref().unwrap();
     assert_eq!(d.buttons.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["permanent", "cancel"]);
-    assert_eq!(button(d, "permanent").label, "Permanently");
+    let label = &button(d, "permanent").label;
+    assert!(label.ends_with(" permanently"), "the verb and the object, with permanently: {label}");
+    assert!(["Clean ", "Remove ", "Delete "].iter().any(|verb| label.starts_with(verb)), "the section's verb first: {label}");
     assert!(d.permanent, "the way out of a full Recycle Bin deletes for good");
     assert!(button(d, "permanent").enabled && button(d, "permanent").primary);
     assert!(d.text.last().unwrap().ends_with("Delete permanently this time?"));
