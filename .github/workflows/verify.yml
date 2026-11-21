@@ -1,0 +1,126 @@
+name: Verify
+
+# Every push to develop, and every pull request: the page (tests, build, smoke test on the mocked commands), the
+# desktop crate (format, lint, tests) and the lock. Rust is compiled, formatted, linted and tested here only: nobody
+# runs cargo on a developer's machine (AGENTS.md). release.yml stays the release's own.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The smoke test drives a browser.
+      - name: Install the browser
+        run: npx playwright install chromium
+
+      - name: Test the page
+        run: npm test
+
+      # tsc and Vite. The desktop crate embeds the built page, so this comes before the Rust steps.
+      - name: Build the page
+        run: npm run build
+
+      - name: Smoke test the page
+        run: npm run smoke
+
+      - name: Check the Rust formatting
+        run: cargo fmt --all --check
+
+      # No cargo runs on a developer's machine, so nobody can write Cargo.lock there: this step resolves the
+      # dependencies and, when the lock moved, keeps the lock it wrote as the artifact cargo-lock and fails. The
+      # agent downloads it (gh run download -n cargo-lock) and commits it.
+      - name: Check the lock
+        id: lock
+        run: |
+          cargo metadata --format-version 1 > $null
+          git diff --exit-code Cargo.lock
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Keep the lock cargo wrote
+        if: failure() && steps.lock.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Lint the Rust
+        run: cargo clippy -p xiox-ui --all-targets -- -D warnings
+
+      # xiox-core holds the drift test of fixtures/views.json.
+      - name: Test the Rust
+        run: cargo test -p xiox-ui -p xiox-core
+
+  # The window is never built on a developer's machine: this job builds it, and keeps the debug program, which the
+  # owner runs with XIOX_UI_FAKE=1 to look at the real window (a debug build has the fixtures).
+  desktop:
+    name: Desktop window (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the desktop window
+        run: npm run desktop:build
+
+      - name: Keep the desktop window to look at
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xiox-ui
+          path: target/debug/xiox-ui.exe
+          if-no-files-found: error
+          retention-days: 30
