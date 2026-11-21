@@ -50,8 +50,7 @@ test('space toggles and arrows move outside fields and dialogs', () => {
 test("Enter and a press the view's action with that key, and nothing when it is disabled", () => {
   assert.deepEqual(keyAction({ key: 'a' }, free), { kind: 'action', key: 'a' });
   assert.deepEqual(keyAction({ key: 'Enter' }, free), { kind: 'action', key: 'Enter' });
-  // `a` is also Registry's Find issues: there is no `s` and no `r` key (the old window had them).
-  assert.equal(keyAction({ key: 's' }, free), null);
+  // `a` is also Registry's Find issues: `s` is the sort, and there is no `r` key (the old window had it).
   assert.equal(keyAction({ key: 'r' }, free), null);
   const view = viewWith(action('analyze', 'a', true), action('clean', 'Enter', false), action('cancel', 'Escape', true));
   assert.equal(actionForKey(view, 'a')?.id, 'analyze');

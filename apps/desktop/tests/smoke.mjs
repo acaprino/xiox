@@ -151,7 +151,7 @@ async function checkToggle(page, label) {
   } catch {
     return [`${label}: clicking the check box of ${id} did not change aria-checked (still ${before})`];
   }
-  const after = await page.locator(`#rows [data-row="${id}"] [role=checkbox]`).getAttribute('aria-checked');
+  const after = await page.locator(`#rows [data-row="${esc(id)}"] [role=checkbox]`).getAttribute('aria-checked');
   return after === want ? [] : [`${label}: ${id} went ${before} -> ${after}, expected ${want}`];
 }
 
@@ -164,7 +164,7 @@ async function checkRows(page, label, view) {
   const failures = [];
   for (const row of view.rows) {
     if (row.kind === 'header') continue;
-    const node = page.locator(`#rows [data-row="${row.id}"]`);
+    const node = page.locator(`#rows [data-row="${esc(row.id)}"]`);
     if (await node.count() === 0) continue; // a child under a collapsed parent
     const box = node.locator('[role=checkbox]');
     if (row.check === 'none') continue;
@@ -215,6 +215,8 @@ function bytesText(n) {
   if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${n} B`;
 }
+/** A value inside a quoted attribute selector: the backslash of a Windows path and the quote are escaped. */
+const esc = (value) => value.replace(/[\\"]/g, (c) => '\\' + c);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
@@ -520,9 +522,9 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.waitForTimeout(80);
   const second = await selected();
   check(second === ids[1], `ArrowDown selected ${second}, expected ${ids[1]}`);
-  const tickBefore = await page.locator(`#rows [data-row="${second}"] [role=checkbox]`).getAttribute('aria-checked');
+  const tickBefore = await page.locator(`#rows [data-row="${esc(second)}"] [role=checkbox]`).getAttribute('aria-checked');
   await page.keyboard.press('Space');
-  await page.waitForFunction(([row, was]) => document.querySelector(`#rows [data-row="${row}"] [role=checkbox]`)?.getAttribute('aria-checked') !== was, [second, tickBefore], { timeout: 2000 })
+  await page.waitForFunction(([row, was]) => document.querySelector(`#rows [data-row="${CSS.escape(row)}"] [role=checkbox]`)?.getAttribute('aria-checked') !== was, [second, tickBefore], { timeout: 2000 })
     .catch(() => failures.push(`${size}: Space did not tick the selected row ${second}`));
   await page.keyboard.press('End');
   await page.waitForTimeout(80);
@@ -659,9 +661,9 @@ async function sectionFlows(page, size, shot) {
     .catch(() => failures.push(`${size}: Space on a project row did not tick it`));
   check(await page.locator('#rows [data-row="p:3"] [role=checkbox]').isDisabled(), 'the checkbox of the project in use is not disabled');
   const setOpen = async (id, open) => {
-    const caret = page.locator(`#rows [data-row="${id}"] .caret`);
+    const caret = page.locator(`#rows [data-row="${esc(id)}"] .caret`);
     // The state is the row's (aria-expanded), the caret is only the mouse's handle.
-    if ((await page.locator(`#rows [data-row="${id}"]`).getAttribute('aria-expanded')) !== String(open)) await caret.click();
+    if ((await page.locator(`#rows [data-row="${esc(id)}"]`).getAttribute('aria-expanded')) !== String(open)) await caret.click();
   };
   await setOpen('p:1', false);
   check(await page.locator('#rows [data-row="a:3"]').count() === 0, 'a collapsed parent shows its caution child');
@@ -669,8 +671,8 @@ async function sectionFlows(page, size, shot) {
   check(await page.locator('#rows [data-row="a:3"] .lv.caution').count() === 1, 'the caution child is not drawn at the caution level');
   await setOpen('p:3', true);
   check(await page.locator('#rows [data-row="a:5"] [role=checkbox]').isDisabled(), 'the child of the project in use is not disabled');
-  // The projects' tree: a folder folds everything inside it and opens again (its id holds a backslash, escaped for CSS).
-  const projectsFolder = 'h:folder:D:\\\\Projects';
+  // The projects' tree: a folder folds everything inside it and opens again (its id holds a backslash).
+  const projectsFolder = 'h:folder:D:\\Projects';
   await setOpen(projectsFolder, false);
   check(await page.locator('#rows [data-row="p:1"]').count() === 0 && await page.locator('#rows [data-row="a:3"]').count() === 0, 'a folded folder still shows what is inside it');
   check(await page.locator('#rows [data-row="p:3"]').count() === 1, 'folding a folder hid the projects of its sibling');
