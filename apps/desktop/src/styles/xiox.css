@@ -43,14 +43,10 @@ img { -webkit-user-drag: none; }
 .xi-empty-note { color: var(--im-muted); }
 .xi-option > div { margin: 0; }
 
-/* The details of the row the selection is on: closed, opened on request. */
-#main:not(.details-open) #detail { display: none; }
-#detail { flex: none; max-height: 40%; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: var(--im-s-2); padding: var(--im-s-2) var(--im-s-3) 0; border-top: 1px solid var(--im-line-soft); }
-#detail:empty { display: none; }
-.xi-detail-box { min-width: 0; padding: var(--im-s-2); border: 1px solid var(--im-line); border-radius: var(--im-r-control); background: var(--im-field); }
-.xi-wide { grid-column: 1 / -1; }
+/* The inspector: the details of a row, or the section's options. */
+.xi-hint { margin: var(--im-s-3); color: var(--im-muted); }
+.xi-detail-box { min-width: 0; margin: var(--im-s-2); padding: var(--im-s-2); border: 1px solid var(--im-line); border-radius: var(--im-r-control); background: var(--im-field); }
 .xi-lines { margin: 0; padding-inline-start: var(--im-s-4); }
-@container im-shell (width < 850px) { #detail { grid-template-columns: 1fr; } }
 
 /* ---------- the list: a table of Imago's, a treegrid ---------- */
 .xi-table { --xi-indent: var(--im-s-5); table-layout: auto; }

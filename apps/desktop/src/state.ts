@@ -19,12 +19,12 @@ export interface UiState {
   spy: Partial<Record<SectionId, string>>;
   /** The column and direction each section's list is ordered by; none: the default, by size from the largest. */
   sort: Partial<Record<SectionId, SortKey>>;
-  /** Whether the details of the focused row are open (Smooth: closed until asked for; ONI MODE always shows them). */
-  details: boolean;
+  /** What the inspector shows: the details of the focused row, the section's options, or nothing (closed until asked for). */
+  inspector: 'details' | 'options' | null;
 }
 
 export function createUi(): UiState {
-  return { section: 'cleanup', views: {}, focus: {}, expanded: new Set(), fold: new Map(), spy: {}, sort: {}, details: false };
+  return { section: 'cleanup', views: {}, focus: {}, expanded: new Set(), fold: new Map(), spy: {}, sort: {}, inspector: null };
 }
 
 /** Keeps `v` when it is newer than what is held; false for a stale or repeated revision. */

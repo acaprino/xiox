@@ -44,7 +44,7 @@ export function buildFrame(doc: Document): HTMLElement {
     contentLabel: 'Content',
     contentHeaderHtml: '<h4 class="im-panel-title"></h4><span class="im-panel-sub"></span><span class="im-spacer"></span>',
     contentToolsHtml: '<div id="notices" class="im-content-text"></div>',
-    contentHtml: '<div id="rows"></div><div id="detail" class="im-content-text im-scroll"></div>',
+    contentHtml: '<div id="rows"></div>',
     actionsHtml: '',
     footerHtml: '',
     skipLabel: 'Skip to content',

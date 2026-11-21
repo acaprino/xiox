@@ -14,7 +14,7 @@ export type ActionKey = 'a' | 'Enter' | 'Esc';
 export type KeyAction =
   | { kind: 'section'; section: SectionId } | { kind: 'move'; delta: number } | { kind: 'toggle' }
   | { kind: 'expand'; open: boolean } | { kind: 'action'; key: ActionKey } | { kind: 'closeDialog' } | { kind: 'about' }
-  | { kind: 'sort'; reverse: boolean } | { kind: 'details' };
+  | { kind: 'sort'; reverse: boolean } | { kind: 'details' } | { kind: 'options' };
 
 const ACTION_KEYS: ReadonlySet<string> = new Set(['a', 'Enter']);
 
@@ -46,6 +46,7 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
     case 's': return { kind: 'sort', reverse: false };
     case 'S': return { kind: 'sort', reverse: true };
     case 'i': return { kind: 'details' };
+    case 'o': return { kind: 'options' };
     case 'ArrowRight': return { kind: 'expand', open: true };
     case 'ArrowLeft': return { kind: 'expand', open: false };
     default: return ACTION_KEYS.has(e.key) && e.repeat !== true ? { kind: 'action', key: e.key as ActionKey } : null;
@@ -70,7 +71,7 @@ export function chordAction(e: KeyLike, ctx: { inField: boolean }): ChordAction 
  * anywhere else Ctrl+A selects nothing, as in a desktop list: the chrome is not text.
  */
 export const SELECTABLE: readonly (readonly [within: string, select: string])[] = [
-  ['#detail', '#detail'], ['.report', '.rp-body'], ['[role=dialog]', '.dlg-body'], ['#notices', '#notices'],
+  ['.im-inspector', '.im-content-text'], ['.report', '.rp-body'], ['[role=dialog]', '.dlg-body'], ['#notices', '#notices'],
 ];
 
 /** The Esc key as an action carries it: Rust writes `Esc`; `Escape` is accepted too (the key's own name). */

@@ -133,7 +133,7 @@ function textControl(o: OptionOf<'text'>): HTMLElement {
   return note;
 }
 
-function optionControl(s: SectionId, o: OptionView, on: Handlers): HTMLElement {
+export function optionControl(s: SectionId, o: OptionView, on: Handlers): HTMLElement {
   switch (o.kind) {
     case 'toggle': return toggleControl(s, o, on);
     case 'number': return numberControl(s, o, on);
@@ -167,11 +167,6 @@ export function renderSidebar(root: HTMLElement, view: SectionView, ui: UiState,
   if (!list) throw new Error('#sidebar-list is missing from the frame');
   list.setAttribute('aria-label', title);
   root.setAttribute('aria-label', title);
-  const parts: HTMLElement[] = [...rows];
-  // The section's other options stay under the rows until they move to the inspector.
-  if (options.length > 0) {
-    if (view.nav.length > 0) parts.push(h('h3', { class: 'xi-subhead' }, 'Options'));
-    parts.push(h('div', { class: 'xi-options' }, ...options.map((o) => optionControl(s, o, on))));
-  }
-  fill(list, ...parts);
+  // The section's options are in the inspector (render/inspector.ts), under the content header's `Options`.
+  fill(list, ...rows);
 }

@@ -11,6 +11,7 @@ import { LOOK_KEY, parseTheme, readLook, readTheme, THEME_KEY, type Look, type T
 import { createRegistry, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { buildFrame } from './render/frame.ts';
+import { inspectorOpen } from './render/inspector.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
 import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SECTION_ORDER, shownRows } from './state.ts';
@@ -52,6 +53,14 @@ viewsButton?.addEventListener('click', () => openMenu(viewsButton, [
   { label: 'Settings', keys: 'Shift+?', run: () => { void openAbout(); } },
 ]));
 shell.querySelector<HTMLElement>('.im-titlebar-command')?.addEventListener('click', () => { void registry.get(PALETTE_COMMAND)?.run(); });
+
+// Escape closes the inspector in the package's own handler, behind the page's back: the page follows it.
+const inspectorRegion = shell.querySelector<HTMLElement>('.im-inspector');
+if (inspectorRegion) {
+  new MutationObserver(() => {
+    if (inspectorRegion.hidden && ui.inspector !== null) { ui.inspector = null; render(); }
+  }).observe(inspectorRegion, { attributes: true, attributeFilter: ['hidden'] });
+}
 
 const SCROLLERS = ['#sidebar-list', '#rows .xi-list', '#rows .rp-body'];
 
@@ -217,8 +226,13 @@ const handlers: Handlers = {
     for (const row of view.rows) if (row.kind === 'group') ui.fold.set(row.id, fold);
     render();
   },
-  toggleDetails: () => {
-    ui.details = !ui.details;
+  toggleInspector: (kind) => {
+    // The inspector may have been closed by Escape since the last render: what is open now decides.
+    ui.inspector = ui.inspector === kind && inspectorOpen(shell) ? null : kind;
+    render();
+  },
+  closeInspector: () => {
+    ui.inspector = null;
     render();
   },
   sortBy: (column) => {
@@ -318,8 +332,9 @@ function onKey(event: KeyboardEvent): void {
       break;
     }
     case 'details':
+    case 'options':
       if (!listed) return;
-      handlers.toggleDetails();
+      handlers.toggleInspector(act.kind);
       break;
     case 'action': {
       if (act.key === 'Esc' && inField) { (target as HTMLElement).blur(); break; }

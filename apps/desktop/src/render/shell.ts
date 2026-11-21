@@ -10,10 +10,10 @@ import { actionIntent } from '../intents.ts';
 import { footerHint } from '../keys.ts';
 import { disabledReason } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
-import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
+import type { ActionView, AnyIntent, AppInfo, NoticeView, RowView, SectionId, SectionView } from '../types.ts';
 import { ABOUT_KEY } from './about.ts';
 import { renderSidebar } from './sidebar.ts';
-import { renderDetail } from './detail.ts';
+import { panelOptions, renderInspector } from './inspector.ts';
 import { renderDialog } from './dialog.ts';
 import { renderList } from './list.ts';
 import { renderReport } from './report.ts';
@@ -34,8 +34,10 @@ export interface Handlers {
   foldAll(fold: boolean): void;
   /** A click on a column's header: the list is ordered by that column, or the order turns round. */
   sortBy(column: string): void;
-  /** Opens or closes the details of the focused row. */
-  toggleDetails(): void;
+  /** Opens the inspector on the details of the focused row, or on the section's options; the same one again closes it. */
+  toggleInspector(kind: 'details' | 'options'): void;
+  /** Closes the inspector (its own button). */
+  closeInspector(): void;
   /** The menu of the categories: scrolls the list to one of them (opening it if it was folded). */
   goToGroup(id: string): void;
   /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
@@ -184,6 +186,15 @@ export function renderFailure(message: string): void {
   fill(byId('notices'), noticeNode({ tone: 'error', text: message, more: [] }));
 }
 
+/** A button of the content header that opens the inspector on `kind`, or closes it when it is open on it. */
+function inspectorButton(kind: 'details' | 'options', label: string, key: string, ui: UiState, hint: string, on: Handlers, disabledReason: string | null = null): HTMLElement {
+  const open = ui.inspector === kind;
+  return h('button', {
+    type: 'button', class: 'im-btn im-btn--ghost im-btn--sm', 'data-key': `inspect:${kind}`, 'aria-expanded': String(open), disabled: disabledReason !== null,
+    title: disabledReason ?? (open ? `Close the ${label.toLowerCase()}` : hint), onClick: () => on.toggleInspector(kind),
+  }, h('span', { 'data-fit': '' }, label), keyCaps(key));
+}
+
 export function renderShell(screen: Screen, on: Handlers): void {
   const { app, view, ui } = screen;
 
@@ -223,12 +234,8 @@ export function renderShell(screen: Screen, on: Handlers): void {
     h('h4', { class: 'im-panel-title', 'data-fit': '' }, view.title),
     h('span', { class: 'im-panel-sub' }, ellipsis(view.subtitle)),
     h('span', { class: 'im-spacer' }),
-    view.report === null ? h('button', {
-      type: 'button', class: 'im-btn im-btn--sm', 'data-key': 'details', 'aria-expanded': String(ui.details), 'aria-controls': 'detail',
-      title: ui.details ? 'Hide the details of the selected row' : 'Show the details of the selected row: paths, files in use, why',
-      onClick: () => on.toggleDetails(),
-    }, h('span', { 'data-fit': '' }, ui.details ? 'Hide details' : 'Details'), keyCaps('i')) : null);
-  byId('main').classList.toggle('details-open', ui.details);
+    view.report === null ? inspectorButton('details', 'Details', 'i', ui, 'The details of the selected row: paths, files in use, why', on) : null,
+    view.report === null ? inspectorButton('options', 'Options', 'o', ui, 'The options of this section', on, panelOptions(view).length === 0 ? 'This section has no options' : null) : null);
 
   // Notices, then the list and the detail of the focused row.
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
@@ -237,19 +244,20 @@ export function renderShell(screen: Screen, on: Handlers): void {
     ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
     ...view.notices.map((notice) => noticeNode(notice, noticeCtx)));
   const rowsArea = byId('rows');
+  let detailRow: RowView | null = null;
   if (view.report !== null) {
     // The report replaces the list (and its search box and detail) until it is closed.
     rowsArea.classList.add('is-report');
     renderReport(rowsArea, view.section, view.report, ui.expanded, on);
-    renderDetail(byId('detail'), null);
   } else {
     if (rowsArea.classList.contains('is-report')) { rowsArea.classList.remove('is-report'); fill(rowsArea); }
     renderList(rowsArea, view, ui, on);
     const focus = currentFocus(ui, view);
     const focused = shownRows(ui, view).find((r) => r.id === focus) ?? null;
     // A category or a sub-heading has nothing to add to its own line (its note is on it).
-    renderDetail(byId('detail'), focused?.kind === 'group' || focused?.kind === 'header' ? null : focused);
+    detailRow = focused?.kind === 'group' || focused?.kind === 'header' ? null : focused;
   }
+  renderInspector(byId('app'), view, ui, detailRow, on);
 
   // Footer.
   fill(byId('foot'),

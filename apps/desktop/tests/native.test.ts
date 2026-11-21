@@ -21,8 +21,8 @@ test('buttons, menu entries and rows keep the arrow cursor: no hand, no "not all
 
 test('the chrome is not selectable, and every place Ctrl+A selects is (im-content-text, the package\'s own opt-in)', () => {
   const places: Record<string, [string, RegExp]> = {
-    '#detail': ['index.html', /id="detail"[^>]*im-content-text/],
-    '#notices': ['index.html', /id="notices"[^>]*im-content-text/],
+    '.im-content-text': ['src/render/inspector.ts', /im-panel-body im-content-text/],
+    '#notices': ['src/render/frame.ts', /id="notices" class="im-content-text"/],
     '.rp-body': ['src/render/report.ts', /rp-body[^']*im-content-text/],
     '.dlg-body': ['src/render/dialog.ts', /im-content-text im-scroll dlg-body/],
   };
@@ -202,8 +202,7 @@ test('the title says the section, and the single-instance lookup does not need t
 });
 
 test('every scroll container gets the thin themed scrollbar from Imago: it is an im-panel-body or an im-scroll', () => {
-  const index = file('index.html');
-  assert.match(index, /id="detail"[^>]*im-scroll/, 'the details scroll in an im-scroll');
+  assert.match(file('src/render/inspector.ts'), /class: 'im-panel-body im-content-text'/, 'the details scroll in the inspector panel body');
   assert.match(file('src/render/dialog.ts'), /im-scroll dlg-rows|dlg-rows[^\n]*im-scroll/, 'the items of a confirmation too');
   assert.match(file('src/render/list.ts'), /im-panel-body xi-list/, 'the list');
   assert.match(file('src/render/bar2.ts'), /im-panel-body xi-side/, 'and the sidebar');
