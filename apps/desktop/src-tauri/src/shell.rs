@@ -10,9 +10,10 @@ use std::sync::Mutex;
 use tauri::State;
 
 /// The smallest window the app is designed for, in logical pixels (the same as `minWidth` and `minHeight` in
-/// `tauri.conf.json`): it fits a 1366x768 laptop at 125 %: 1093 x 574 logical once the 48 px Windows 11 taskbar is out, and
-/// the page plus the title bar and borders (about 31 logical pixels high) must fit in that.
-pub const MIN_WIDTH: f64 = 960.0;
+/// `tauri.conf.json`): 500 wide, the canon's minimum (the snap zones need it, and the three breakpoints of the page, 1000, 850 and
+/// 620, are for the widths between), and it fits a 1366x768 laptop at 125 %: 1093 x 574 logical once the 48 px Windows 11
+/// taskbar is out, and the page plus the title bar and borders (about 31 logical pixels high) must fit in that.
+pub const MIN_WIDTH: f64 = 500.0;
 pub const MIN_HEIGHT: f64 = 540.0;
 
 /// The folder the shell keeps the window theme (`window-theme`) and the window's place (`window.json`) in: next to the
@@ -145,7 +146,7 @@ mod tests {
     #[test]
     fn a_saved_place_is_never_under_the_minimum_times_the_scale() {
         let placed = place(Some(state(10, 10, 400, 300)), (1280, 800), &[SCREEN], 1.5, FRAME);
-        assert_eq!((placed.state.width, placed.state.height), (1440, 810), "960 x 540 at 150 %");
+        assert_eq!((placed.state.width, placed.state.height), (750, 810), "500 x 540 at 150 %");
     }
 
     #[test]

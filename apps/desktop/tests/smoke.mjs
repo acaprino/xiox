@@ -18,6 +18,7 @@ const fixture = JSON.parse(readFileSync(`${here}../fixtures/views.json`, 'utf8')
 export const SECTIONS = Object.entries(fixture.views).flatMap(([section, states]) => Object.keys(states).map((state) => [section, state]));
 const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
 const VIEWPORTS = [[1000, 640], [1440, 900]];
+// The narrow sizes of the breakpoints are checked on their own (narrowChecks).
 
 /** What the root says per look (Imago's `applyLook`): the app, the look and the theme drawn, whatever Windows says. */
 const LOOKS = {
@@ -136,6 +137,42 @@ export async function checkFit(page, label) {
     }
     return bad;
   }, label);
+}
+
+/**
+ * The window at its narrow sizes, the three breakpoints of the shell (1000, 850 and 620) and the minimum of 500 and under it
+ * (200 % zoom on a small screen): nothing scrolls sideways, and the window buttons, the sidebar toggle, the Views menu and the
+ * primary action are all inside the shell.
+ */
+async function narrowChecks(browser, url, out) {
+  const failures = [];
+  for (const width of [1160, 900, 700, 500, 250]) {
+    const page = await browser.newPage({ viewport: { width, height: 700 } });
+    await page.goto(url);
+    await page.locator('#sections [data-section="cleanup"][aria-selected="true"]').waitFor();
+    await page.evaluate(() => window.__xioxMock.go('cleanup', 'analyzed'));
+    await page.waitForTimeout(250);
+    const found = await page.evaluate(() => {
+      const shell = document.getElementById('app').getBoundingClientRect();
+      const inside = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return `${selector} is missing`;
+        const r = node.getBoundingClientRect();
+        const shown = r.width > 0 && getComputedStyle(node).visibility !== 'hidden';
+        if (!shown) return null;
+        return r.left >= shell.left - 0.5 && r.right <= shell.right + 0.5 && r.top >= shell.top - 0.5 && r.bottom <= shell.bottom + 0.5 ? null : `${selector} sticks out of the shell`;
+      };
+      const bad = ['[data-im-window="minimize"]', '[data-im-window="maximize"]', '[data-im-window="close"]', '.im-sidebar-toggle', '.im-views-menu', '#actions .im-btn--primary'].map(inside).filter(Boolean);
+      if (document.documentElement.scrollWidth > innerWidth) bad.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${innerWidth})`);
+      const content = document.getElementById('main');
+      if (content && content.scrollWidth > content.clientWidth + 1) bad.push('the content scrolls sideways');
+      return bad;
+    });
+    for (const line of found) failures.push(`${width}: ${line}`);
+    await page.screenshot({ path: `${out}narrow-${width}.png` });
+    await page.close();
+  }
+  return failures;
 }
 
 /** Every section back on a state without a dialog or a report (a dimmed page cannot be clicked). */
@@ -1279,6 +1316,7 @@ try {
     failures.push(...await motionFlows(page, size));
     await page.close();
   }
+  failures.push(...await narrowChecks(browser, url, out));
 } finally {
   await browser.close();
   await server.close();

@@ -17,7 +17,7 @@
         "title": "Xiox",
         "width": 1280,
         "height": 800,
-        "minWidth": 960,
+        "minWidth": 500,
         "minHeight": 540,
         "decorations": false,
         "transparent": true,

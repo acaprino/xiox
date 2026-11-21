@@ -63,7 +63,7 @@ function masterCheck(view: SectionView, on: Handlers): HTMLElement {
 /** The line under the name: the path or reason, or, for a blocked row (muted and disabled), why it cannot be chosen. */
 function subLine(row: RowView): HTMLElement | null {
   if (row.muted && !row.enabled && row.why) return h('span', { class: 'im-cell-sub im-text-warn', title: row.why, 'data-blocked': '' }, row.why);
-  return row.sub ? h('span', { class: 'im-cell-sub', title: row.sub }, row.sub) : null;
+  return row.sub ? h('span', { class: 'im-cell-sub xi-sub', title: row.sub }, row.sub) : null;
 }
 
 /** The id of a row's element: what the table's `aria-activedescendant` names. */
@@ -99,7 +99,7 @@ function headerNode(row: RowView, view: SectionView, checks: boolean, open: bool
   }
   const sized = view.columns[view.columns.length - 1]?.kind === 'size';
   const bytes = sized ? headerBytes(view.rows, row.id) : null;
-  const text = h('span', { class: 'xi-name-text' }, h('span', { class: 'im-cell-title xi-title', title: row.name }, row.name), row.sub ? h('span', { class: 'im-cell-sub', title: row.sub }, row.sub) : null);
+  const text = h('span', { class: 'xi-name-text' }, h('span', { class: 'im-cell-title xi-title', title: row.name }, row.name), row.sub ? h('span', { class: 'im-cell-sub xi-sub', title: row.sub }, row.sub) : null);
   const name = h('td', { class: 'xi-name', colspan: sized ? columns - (checks ? 2 : 1) : columns - (checks ? 1 : 0) },
     h('div', { class: 'xi-nm' }, folder ? caret(row, 'show or hide the folders and projects inside', `fold:${row.id}`, () => on.toggleFold(row.id)) : null, text));
   return h('tr', {
@@ -127,7 +127,7 @@ function rowNode(row: RowView, view: SectionView, ui: UiState, checks: boolean, 
       const note = group ? [view.nav.find((n) => n.id === row.id)?.note, row.why].filter(Boolean).join(' · ') : null;
       parts.push(h('td', { class: 'xi-name' }, h('div', { class: 'xi-nm' }, handle,
         h('span', { class: 'xi-name-text' }, h('span', { class: 'im-cell-title xi-title', title: row.name }, row.name),
-          note ? h('span', { class: 'im-cell-sub', title: note }, note) : subLine(row)))));
+          note ? h('span', { class: 'im-cell-sub xi-sub', title: note }, note) : subLine(row)))));
     } else if (column.kind === 'cell') {
       const text = cells.shift() ?? '';
       parts.push(h('td', { class: 'im-num xi-cell', title: text }, text));

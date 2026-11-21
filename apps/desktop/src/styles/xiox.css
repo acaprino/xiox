@@ -87,8 +87,10 @@ img { -webkit-user-drag: none; }
 tr[aria-expanded="true"] .xi-caret::before, .xi-caret[aria-expanded="true"]::before { transform: translate(0, -2px) rotate(45deg); }
 .xi-caret:hover { color: var(--im-text-hi); background: var(--im-hover); }
 .xi-caret:active { background: var(--im-press); }
+/* The breakpoints follow the shell, not the screen: under 1000 the list drops its count column, under 850 its level, under 620 the line under each name. */
+@container im-shell (width < 1000px) { .xi-table [data-col="cell"], .xi-table td.xi-cell { display: none; } }
 @container im-shell (width < 850px) { .xi-table [data-col="level"], .xi-table td.xi-level { display: none; } }
-@container im-shell (width < 620px) { .xi-table [data-col="cell"], .xi-table td.xi-cell { display: none; } }
+@container im-shell (width < 620px) { .xi-table .xi-sub { display: none; } }
 
 /* ---------- the report ---------- */
 .report { flex: 1 1 auto; min-height: 0; }
