@@ -92,7 +92,15 @@ const inspectorRegion = shell.querySelector<HTMLElement>('.im-inspector');
 if (inspectorRegion) {
   new MutationObserver(() => {
     if (inspectorRegion.hidden && ui.inspector !== null) { ui.inspector = null; render(); }
+    if (inspectorRegion.hidden) focusAfterInspector();
   }).observe(inspectorRegion, { attributes: true, attributeFilter: ['hidden'] });
+}
+
+/** The inspector has closed: a focus that was inside it (a closed region drops it to the body) goes back to the list. */
+function focusAfterInspector(): void {
+  const active = document.activeElement;
+  if (active !== null && active !== document.body && !inspectorRegion?.contains(active)) return;
+  (document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 
 const SCROLLERS = ['#sidebar-list', '#rows .xi-list', '#rows .rp-body'];
@@ -320,6 +328,7 @@ const handlers: Handlers = {
   closeInspector: () => {
     ui.inspector = null;
     render();
+    focusAfterInspector();
   },
   sortBy: (column) => {
     const view = ui.views[ui.section];

@@ -91,12 +91,10 @@ export function renderInspector(shell: HTMLElement, view: SectionView, ui: UiSta
   const region = shell.querySelector('.im-inspector');
   const before = kept(region);
   const body = content(kind, view, row, on);
-  if (panel.isOpen()) {
-    panel.open(body);
-  } else {
-    // A button of the content header, else the list, takes the focus back when the inspector closes.
-    panel.open(body, shell.querySelector<HTMLElement>(`[data-key="inspect:${kind}"]`) ?? shell.querySelector<HTMLElement>('#rows .xi-table') ?? undefined);
-  }
+  // Opened without an opener: the focus stays where it is (on the list, after `i`, so the arrows keep moving the selection the details
+  // follow; on the button that was pressed). The header is built again at every render, so an opener would be a detached button by
+  // the time the inspector closes; the page gives the focus back itself (`focusAfterInspector`, main.ts). F6 moves into the inspector.
+  panel.open(body);
   if (before === null) return;
   const again = region?.querySelector<HTMLElement>(`[data-key="${CSS.escape(before.key)}"]`);
   if (!again) return;
