@@ -188,9 +188,10 @@ let cancelLoading: (() => void) | null = null;
  * yet is its loading state, shown only after `LOADING_DELAY_MS` so a quick answer never flashes; a list or a report is `ready`. The panel
  * keeps its header and its frame, and `setPanelState` hides the list under the state's layer.
  */
-function syncPanelState(view: SectionView, on: Handlers): void {
+function syncPanelState(view: SectionView, ui: UiState, on: Handlers): void {
   const content = byId('main');
-  const empty = view.report === null && (view.rows.length === 0 || view.empty !== null);
+  // Settings draws its own page in the panel: the section's empty or loading layer must not hide it.
+  const empty = !ui.settings && view.report === null && (view.rows.length === 0 || view.empty !== null);
   const kind = !empty ? 'ready' : view.job !== null ? 'loading' : 'empty';
   const start = kind === 'empty' ? emptyAction(view) : null;
   const key = `${view.section}|${kind}|${view.empty?.title ?? ''}|${view.empty?.text ?? ''}|${start?.id ?? ''}|${start?.label ?? ''}`;
@@ -292,7 +293,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
     // A category or a sub-heading has nothing to add to its own line (its note is on it).
     detailRow = focused?.kind === 'group' || focused?.kind === 'header' ? null : focused;
   }
-  syncPanelState(view, on);
+  syncPanelState(view, ui, on);
   renderInspector(byId('app'), view, ui, detailRow, on);
 
   // Footer.

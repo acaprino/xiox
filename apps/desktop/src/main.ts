@@ -75,7 +75,7 @@ mountApp(shell, registry, {
 const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers' };
 // The title bar's two buttons: the views (what the tabs are, when the window is too narrow for them) and the palette.
 const viewsButton = shell.querySelector<HTMLElement>('.im-views-menu');
-viewsButton?.addEventListener('click', () => openMenu(viewsButton, [
+if (viewsButton) viewsButton.addEventListener('click', () => openMenu(viewsButton, [
   ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => ui.section === id, run: () => { void open(id); } })),
   { label: 'Settings', keys: '4', checked: () => ui.settings, run: () => { void openSettings(); } },
 ]));
