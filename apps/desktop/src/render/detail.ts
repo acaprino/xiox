@@ -1,15 +1,15 @@
-// The panel under the list: what the focused row's `detail` says (item, files, size, level, mode),
-// and in a second box the reason (`why`) and any free lines. Nothing focused: nothing drawn.
+// The panel under the list: what the focused row's `detail` says (item, files, size, level, mode), as Imago's facts,
+// and in a second block the reason (`why`) and any free lines. Nothing focused: nothing drawn.
 
 import { fill, h } from '../dom.ts';
 import type { RowView } from '../types.ts';
 
-const MONO_KEYS = new Set(['files', 'size']);
+const NUMBER_KEYS = new Set(['files', 'size']);
 
-function pairs(list: [string, string][]): HTMLElement {
-  return h('div', { class: 'kv' }, ...list.flatMap(([key, value]) => [
-    h('span', {}, key),
-    h('b', { class: MONO_KEYS.has(key) ? 'num' : null }, value),
+function facts(list: [string, string][]): HTMLElement {
+  return h('dl', { class: 'im-facts' }, ...list.flatMap(([key, value]) => [
+    h('dt', {}, key),
+    h('dd', { class: NUMBER_KEYS.has(key) ? 'im-num' : null }, value),
   ]));
 }
 
@@ -25,12 +25,12 @@ export function renderDetail(root: HTMLElement, row: RowView | null): void {
   // A blocked row says why it cannot be chosen, even when its detail already has a description under `why`.
   if (row.muted && !row.enabled && row.why && !reason.some(([, value]) => value === row.why)) reason.unshift(['blocked', row.why]);
   const second = reason.length > 0 || row.lines.length > 0;
-  const boxes: HTMLElement[] = [];
-  if (main.length > 0) boxes.push(h('div', { class: second ? 'box' : 'box wide' }, pairs(main)));
+  const blocks: HTMLElement[] = [];
+  if (main.length > 0) blocks.push(h('div', { class: second ? 'xi-detail-box' : 'xi-detail-box xi-wide' }, facts(main)));
   if (second) {
-    boxes.push(h('div', { class: main.length > 0 ? 'box' : 'box wide' },
-      reason.length > 0 ? pairs(reason) : null,
-      row.lines.length > 0 ? h('ul', { class: 'lines' }, ...row.lines.map((line) => h('li', {}, line))) : null));
+    blocks.push(h('div', { class: main.length > 0 ? 'xi-detail-box' : 'xi-detail-box xi-wide' },
+      reason.length > 0 ? facts(reason) : null,
+      row.lines.length > 0 ? h('ul', { class: 'xi-lines' }, ...row.lines.map((line) => h('li', {}, line))) : null));
   }
-  fill(root, ...boxes);
+  fill(root, ...blocks);
 }

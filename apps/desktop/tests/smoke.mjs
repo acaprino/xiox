@@ -66,7 +66,7 @@ export async function checkFit(page, label) {
       }
     }
     if (document.documentElement.scrollWidth > innerWidth) bad.push(`${where}: page scrolls sideways (${document.documentElement.scrollWidth} > ${innerWidth})`);
-    for (const sel of ['#rows .grid', '#bar2 .items', '#detail']) {
+    for (const sel of ['#rows .xi-list', '#bar2 .xi-side', '#detail']) {
       const node = document.querySelector(sel);
       if (node && node.scrollWidth > node.clientWidth + 1) bad.push(`${where}: ${sel} scrolls sideways (${node.scrollWidth} > ${node.clientWidth})`);
     }
@@ -102,7 +102,7 @@ export async function checkFit(page, label) {
     // A running job: the bar is wide enough to read and its pieces do not collide.
     const job = document.getElementById('job');
     if (job && !job.hidden) {
-      const track = job.querySelector('.track');
+      const track = job.querySelector('.im-progress');
       if (!track || track.getBoundingClientRect().width < 100) bad.push(`${where}: the progress bar is narrower than 100 px`);
       if (job.scrollWidth > job.clientWidth + 1) bad.push(`${where}: the job row overflows`);
       overlaps([...job.children]);
@@ -125,11 +125,11 @@ export async function checkFit(page, label) {
       for (const row of report.querySelectorAll('.rp-row')) overlaps([...row.children].filter((n) => !n.classList.contains('caret-gap')));
     }
     // Inside a row: name, cells, level and size each keep their own column.
-    for (const row of document.querySelectorAll('#rows .r:not(.h):not(.sec)')) {
-      overlaps([...row.querySelectorAll(':scope > .nm, :scope > .cell, :scope > .lv, :scope > .sz, :scope > .ckcell')]);
+    for (const row of document.querySelectorAll('#rows tbody tr[data-row]:not(.xi-section)')) {
+      overlaps([...row.querySelectorAll(':scope > td')]);
     }
     // The list never runs under the detail panel.
-    const grid = document.querySelector('#rows .grid');
+    const grid = document.querySelector('#rows .xi-list');
     const detail = document.getElementById('detail');
     if (grid && detail && detail.children.length && grid.getBoundingClientRect().bottom > detail.getBoundingClientRect().top + 1) {
       bad.push(`${where}: the list runs under the detail panel`);
@@ -145,7 +145,7 @@ const resetAll = (page) => page.evaluate(() => {
 
 /** One click on the first enabled check box must come back flipped from the mock model. */
 async function checkToggle(page, label) {
-  const box = page.locator('#rows .r[data-row] [role=checkbox]:not([disabled])').first();
+  const box = page.locator('#rows tbody tr[data-row] [role=checkbox]:not([aria-disabled="true"])').first();
   if (await box.count() === 0) return [`${label}: no enabled check box to click`];
   const id = await box.evaluate((node) => node.closest('[data-row]').dataset.row);
   const before = await box.getAttribute('aria-checked');
@@ -180,14 +180,11 @@ async function checkRows(page, label, view) {
     const frozen = view.job !== null; // Rust never greys a row for a job: the page does not offer the tick
     if (disabled !== (!row.enabled || frozen)) failures.push(`${label}: ${row.id} check box disabled=${disabled}, row enabled=${row.enabled}, job=${frozen}`);
     if (!row.enabled && row.why && !(await box.getAttribute('title'))) failures.push(`${label}: disabled ${row.id} has no title`);
-    if (row.muted) {
-      const opacity = await node.locator('.nm-text .t').evaluate((n) => Number(getComputedStyle(n).opacity));
-      if (!(opacity < 1)) failures.push(`${label}: muted ${row.id} is not dimmed (opacity ${opacity})`);
-    }
+    if (row.muted && !row.enabled && (await node.getAttribute('aria-disabled')) !== 'true') failures.push(`${label}: blocked ${row.id} is not aria-disabled`);
     if (row.muted && !row.enabled && row.why && view.dialog === null) {
-      const shown = await node.locator('.s.blocked').textContent();
+      const shown = await node.locator('[data-blocked]').textContent();
       if (shown !== row.why) failures.push(`${label}: blocked ${row.id} does not show its reason on the row`);
-      await node.locator('.nm').click();
+      await node.locator('td.xi-name').click({ force: true });
       await page.waitForTimeout(80);
       const detail = await page.locator('#detail').textContent();
       if (!detail.includes(row.why)) failures.push(`${label}: the detail of blocked ${row.id} does not give the reason`);
@@ -202,10 +199,10 @@ async function checkRows(page, label, view) {
 /** The selected row is highlighted, marked and described by the detail panel. */
 async function checkSelection(page, label) {
   const failures = [];
-  const selected = await page.locator('#rows .r.sel').count();
+  const selected = await page.locator('#rows tr[aria-selected="true"]').count();
   if (selected !== 1) failures.push(`${label}: ${selected} selected rows, expected 1`);
-  if (await page.locator('#detail .kv').count() === 0) failures.push(`${label}: the detail panel is empty`);
-  if (await page.locator('#rows .r.sel[aria-selected="true"]').count() !== 1) failures.push(`${label}: the selected row has no aria-selected`);
+  if (await page.locator('#detail .im-facts').count() === 0) failures.push(`${label}: the detail panel is empty`);
+  if (await page.locator('#rows tr[aria-selected="true"]').count() !== 1) failures.push(`${label}: the selected row has no aria-selected`);
   return failures;
 }
 
@@ -239,19 +236,18 @@ async function checkCopy(page, label, section, view) {
     const rowsBox = dlg?.querySelector('.dlg-rows');
     const ack = dlg?.querySelector('.ack');
     const report = document.querySelector('#rows .report');
-    const track = document.querySelector('#job .track');
+    const track = document.querySelector('#job .im-progress');
     return {
       badge: text('#badge'),
-      actions: all('#actions .btn').map((b) => [b.querySelector('[data-fit]')?.textContent ?? '', b.querySelector('kbd')?.textContent ?? null, b.disabled]),
-      sections: all('#sections .nv[data-section]').map((b) => [b.dataset.section, b.querySelector('[data-fit]')?.textContent, b.querySelector('kbd')?.textContent]),
-      sectionsHead: text('#sections .hd-title'),
-      about: [text('#sections .nv.about [data-fit]'), text('#sections .nv.about kbd')],
-      hint: text('#foot .foot-right'), footLeft: text('#foot .foot-left'), title: text('#list-head .hd-title'),
-      notices: all('#notices .notice').map((n) => n.querySelector('.ellipsis')?.textContent),
-      empty: document.querySelector('#rows .empty') ? [text('#rows .empty-title'), text('#rows .empty span')] : null,
+      actions: all('#actions .im-btn').map((b) => [b.querySelector('[data-fit]')?.textContent ?? '', b.querySelector('.im-key')?.textContent ?? null, b.disabled]),
+      sections: all('#sections .im-tab[data-section]').map((b) => [b.dataset.section, b.textContent]),
+      about: [text('#settings [data-fit]'), text('#settings .im-key')],
+      hint: text('#foot .foot-right'), footLeft: text('#foot .foot-left'), title: text('#list-head .im-panel-title'),
+      notices: all('#notices .im-note').map((n) => n.querySelector('.ellipsis, b')?.textContent),
+      empty: document.querySelector('#rows .xi-empty') ? [text('#rows .xi-empty .empty-title'), text('#rows .xi-empty span')] : null,
       job: document.getElementById('job').hidden ? null : {
-        label: text('#job .job-label'), now: track?.getAttribute('aria-valuenow'), pct: text('#job .job-pct'),
-        width: track?.firstElementChild?.style.width, detail: text('#job .job-detail'),
+        label: text('#job .xi-job-label'), now: track?.getAttribute('aria-valuenow'), pct: text('#job .im-progress-value'),
+        width: track?.style.getPropertyValue('--im-progress'), detail: text('#job .xi-job-detail'),
       },
       dialog: dlg ? {
         modal: dlg.getAttribute('aria-modal'), title: document.getElementById(dlg.getAttribute('aria-labelledby'))?.textContent,
@@ -260,12 +256,12 @@ async function checkCopy(page, label, section, view) {
         summary: [...dlg.querySelectorAll('.dlg-sum')].map((n) => n.textContent),
         rows: [...dlg.querySelectorAll('.dr')].map((r) => [r.children[0].textContent, r.children[1].textContent]),
         rowsMax: rowsBox ? getComputedStyle(rowsBox).maxHeight : null, rowsOverflow: rowsBox ? getComputedStyle(rowsBox).overflowY : null,
-        warnTitle: dlg.querySelector('.dlg-warn .dlg-sub')?.textContent ?? null, warnings: [...dlg.querySelectorAll('.dlg-warn li')].map((n) => n.textContent),
-        cautionTitle: dlg.querySelector('.dlg-caut .dlg-sub')?.textContent ?? null,
+        warnTitle: dlg.querySelector('.dlg-warn b')?.textContent ?? null, warnings: [...dlg.querySelectorAll('.dlg-warn li')].map((n) => n.textContent),
+        cautionTitle: dlg.querySelector('.dlg-caut > b')?.textContent ?? null,
         cautions: [...dlg.querySelectorAll('.dlg-caut li')].map((li) => [li.querySelector('.cl').textContent, li.querySelector('small').textContent]),
-        ack: ack ? [ack.getAttribute('aria-checked'), ack.textContent, ack.getAttribute('role')] : null,
-        buttons: [...dlg.querySelectorAll('.dlg-buttons .btn')].map((b) => [b.dataset.button, b.querySelector('[data-fit]').textContent, !b.disabled, b.classList.contains('primary')]),
-        behind: ['top', 'status', 'body', 'foot'].every((id) => document.getElementById(id).inert),
+        ack: ack ? [String(ack.querySelector('input').checked), ack.textContent, ack.querySelector('input').type] : null,
+        buttons: [...dlg.querySelectorAll('.dlg-buttons .im-btn')].map((b) => [b.dataset.button, b.querySelector('[data-fit]').textContent, !b.disabled, b.classList.contains('im-btn--primary') || b.classList.contains('im-btn--confirm-danger')]),
+        behind: ['status', 'body', 'actions', 'foot'].every((id) => document.getElementById(id).inert),
       } : null,
       report: report ? {
         title: text('#rp-title'), freed: text('.rp-freed'), lines: [...report.querySelectorAll('.rp-sum p')].map((p) => p.textContent),
@@ -273,9 +269,9 @@ async function checkCopy(page, label, section, view) {
         skipped: [...report.querySelectorAll('.rp-lines')].map((t) => [...t.querySelectorAll('.rp-row')].map((r) => [r.children[0].textContent, r.children[1].textContent, r.querySelector('.rp-path')?.textContent ?? ''])),
         cats: [...report.querySelectorAll('.rp-cats .rp-row')].map((r) => [r.children[0].textContent, r.children[1].textContent]),
         items: [...report.querySelectorAll('.rp-items .rp-item')].map((r) => [...r.children].map((c) => c.textContent)),
-        buttons: [...report.querySelectorAll('.rp-buttons .btn')].map((b) => b.textContent),
-        saved: report.querySelector('.rp-saved')?.textContent ?? null, grid: document.querySelector('#rows .grid') !== null,
-        notices: [...report.querySelectorAll('.notice .ellipsis')].map((n) => n.textContent),
+        buttons: [...report.querySelectorAll('.rp-buttons .im-btn')].map((b) => b.textContent),
+        saved: report.querySelector('.rp-saved')?.textContent ?? null, grid: document.querySelector('#rows .xi-table') !== null,
+        notices: [...report.querySelectorAll('.im-note .ellipsis, .im-note b')].map((n) => n.textContent),
       } : null,
     };
   });
@@ -283,8 +279,7 @@ async function checkCopy(page, label, section, view) {
   const want = (what, got, expected) => { if (!same(got, expected)) bad.push(`${label}: ${what} is ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`); };
   want('badge', found.badge, view.status.badge);
   want('actions', found.actions, view.actions.map((a) => [a.label, a.key === null ? null : (KEY_LABELS[a.key] ?? a.key), !a.enabled]));
-  want('section bar', found.sections, SECTION_NAMES.map(([id, name], i) => [id, name, String(i + 1)]));
-  want('section bar heading', found.sectionsHead, 'Sections');
+  want('section tabs', found.sections, SECTION_NAMES.map(([id, name]) => [id, name]));
   want('Settings button', found.about, ['Settings', '?']);
   want('footer hint', found.hint, FOOTER[section]);
   want('footer text', found.footLeft, view.footer ?? '');
@@ -296,7 +291,7 @@ async function checkCopy(page, label, section, view) {
   if (view.job === null) want('job bar', found.job, null);
   else {
     const pct = Math.round(view.job.fraction * 100);
-    want('job bar', found.job, { label: view.job.label, now: String(pct), pct: `${pct}%`, width: `${pct}%`, detail: view.job.detail });
+    want('job bar', found.job, { label: view.job.label, now: String(pct), pct: `${pct}%`, width: String(pct), detail: view.job.detail });
   }
   if (view.dialog === null) want('dialog', found.dialog, null);
   else {
@@ -336,7 +331,7 @@ async function checkCopy(page, label, section, view) {
 
 const focusKey = (page) => page.evaluate(() => document.activeElement?.getAttribute('data-key') ?? null);
 const focusIn = (page, selector) => page.evaluate((s) => Boolean(document.activeElement?.closest(s)), selector);
-const ringOf = (page) => page.evaluate(() => (document.activeElement ? getComputedStyle(document.activeElement).boxShadow : 'none'));
+const ringOf = (page) => page.evaluate(() => (document.activeElement && getComputedStyle(document.activeElement).outlineStyle !== 'none' && parseFloat(getComputedStyle(document.activeElement).outlineWidth) > 0 ? 'outline' : 'none'));
 const badgeOf = (page) => page.locator('#badge').textContent();
 const blur = (page) => page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
 async function goTo(page, section, state) {
@@ -371,7 +366,7 @@ async function keyboardFlows(page, size, expect, shot) {
   const stops = [];
   for (let i = 0; i < 6; i += 1) {
     await page.keyboard.press('Tab');
-    const [tag, ring, isBody] = await page.evaluate(() => [document.activeElement?.tagName, document.activeElement ? getComputedStyle(document.activeElement).boxShadow : 'none', document.activeElement === document.body]);
+    const [tag, ring, isBody] = await page.evaluate(() => [document.activeElement?.tagName, document.activeElement ? (getComputedStyle(document.activeElement).outlineStyle !== 'none' ? 'outline' : 'none') : 'none', document.activeElement === document.body]);
     stops.push(tag);
     check(!isBody, `Tab ${i + 1} left the focus on the page body`);
     check(ring !== 'none', `Tab ${i + 1} (${tag}): the focus ring is not visible (box-shadow ${ring})`);
@@ -429,7 +424,7 @@ async function keyboardFlows(page, size, expect, shot) {
 
   // The opener gets the focus back when it is still there (the Clean button, opened with the mouse).
   await goTo(page, 'cleanup', 'analyzed');
-  await page.locator('#top [data-action="clean"]').click();
+  await page.locator('#actions [data-action="clean"]').click();
   await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the Clean button did not open the dialog`));
   await page.keyboard.press('Escape');
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
@@ -478,8 +473,8 @@ async function keyboardFlows(page, size, expect, shot) {
   check(await page.locator('[data-button="clean"]').isDisabled(), 'Clean is enabled before the warnings are read');
   await page.screenshot({ path: `${shot}developers-confirm-keyboard-${size}.png` });
   await page.waitForTimeout(350);
-  await page.keyboard.press('Enter'); // the ack box is a button: Enter presses it
-  await page.waitForFunction(() => document.querySelector('.ack')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 }).catch(() => failures.push(`${size}: the ack box did not tick`));
+  await page.keyboard.press('Space'); // the ack box is a native check box: Space ticks it
+  await page.waitForFunction(() => document.querySelector('.ack input')?.checked === true, null, { timeout: 2000 }).catch(() => failures.push(`${size}: the ack box did not tick`));
   check(!(await page.locator('[data-button="clean"]').isDisabled()), 'Clean stayed disabled after the warnings were read');
   check(await focusKey(page) === 'dlg:ack', `after ticking, the focus is on ${await focusKey(page)}, expected it to stay on the ack box`);
   await page.keyboard.press('Escape');
@@ -499,12 +494,12 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.keyboard.press('Escape');
   await page.locator('#badge', { hasText: 'Ready' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Escape did not close the report`));
   check(await page.locator('#rows .report').count() === 0, 'the report is still on screen after Escape');
-  check(await page.locator('#rows .grid .r[data-row]').count() > 0, 'the list did not come back after the report closed');
+  check(await page.locator('#rows tbody tr[data-row]').count() > 0, 'the list did not come back after the report closed');
   await page.evaluate(() => window.__xioxMock.pause(false));
 
   // Keys are ignored while typing; Escape leaves the field. (Cleanup's search box looks through every category.)
   await goTo(page, 'cleanup', 'analyzed');
-  const search = page.locator('#rows input.search');
+  const search = page.locator('#rows .xi-search input');
   await search.focus();
   await page.keyboard.type('a1 ');
   await page.waitForTimeout(450);
@@ -512,14 +507,14 @@ async function keyboardFlows(page, size, expect, shot) {
   check(await badgeOf(page) === 'Analysis done' && await page.locator('#sections [data-section="cleanup"][aria-current="page"]').count() === 1, 'typing in the search box acted as a shortcut');
   check(await page.locator('#rows [data-row]').count() > 0 && await page.locator('[role=dialog]').count() === 0, 'typing in the search box opened or closed something');
   await page.keyboard.press('Escape');
-  check(!(await page.evaluate(() => document.activeElement?.classList.contains('search'))), 'Escape did not leave the search box');
+  check(!(await page.evaluate(() => document.activeElement?.closest('.xi-search') != null)), 'Escape did not leave the search box');
   await search.fill('');
   await page.waitForTimeout(300);
 
   // Arrows move the selection, Space ticks the selected row.
   await goTo(page, 'cleanup', 'analyzed');
-  const selected = () => page.evaluate(() => document.querySelector('#rows .r.sel')?.dataset.row ?? null);
-  const ids = await page.locator('#rows .grid .r[data-row]:not(.sec)').evaluateAll((nodes) => nodes.map((n) => n.dataset.row));
+  const selected = () => page.evaluate(() => document.querySelector('#rows tr[aria-selected="true"]')?.dataset.row ?? null);
+  const ids = await page.locator('#rows tbody tr[data-row]:not(.xi-section)').evaluateAll((nodes) => nodes.map((n) => n.dataset.row));
   await page.keyboard.press('Home');
   await page.waitForTimeout(80);
   check(await selected() === ids[0], `Home selected ${await selected()}, expected the first row ${ids[0]}`);
@@ -549,7 +544,7 @@ async function keyboardFlows(page, size, expect, shot) {
 
   // Developers: the right and left arrows open and close the selected parent.
   await goTo(page, 'developers', 'projects');
-  await page.locator('#rows [data-row="p:1"] .nm').click();
+  await page.locator('#rows [data-row="p:1"] td.xi-name').click();
   await page.keyboard.press('ArrowLeft');
   await page.waitForTimeout(80);
   check(await page.locator('#rows [data-row="a:1"]').count() === 0, 'ArrowLeft did not close the selected parent');
@@ -564,9 +559,9 @@ async function keyboardFlows(page, size, expect, shot) {
   await page.locator('#badge', { hasText: 'Scan done' }).waitFor({ timeout: 4000 }).catch(() => failures.push(`${size}: the scan did not land`));
   await page.keyboard.press('Enter');
   await page.locator('[role=dialog]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter did not open the backup dialog`));
-  check(await page.locator('[role=dialog] .dlg-buttons .btn').count() === 3, 'the backup dialog does not have its three buttons');
+  check(await page.locator('[role=dialog] .dlg-buttons .im-btn').count() === 3, 'the backup dialog does not have its three buttons');
   check(await focusKey(page) === 'dlg:backup', `the backup dialog opens with the focus on ${await focusKey(page)}, expected Yes, back up and fix`);
-  check(await page.locator('.dlg-buttons .btn').evaluateAll((b) => b.map((n) => n.dataset.button).join()) === 'backup,nobackup,cancel', 'the backup dialog buttons are not primary first, then the others');
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.dataset.button).join()) === 'backup,nobackup,cancel', 'the backup dialog buttons are not primary first, then the others');
   await page.screenshot({ path: `${shot}registry-backup-keyboard-${size}.png` });
   await page.keyboard.press('Escape');
   await page.locator('[role=dialog]').waitFor({ state: 'detached', timeout: 2000 }).catch(() => {});
@@ -580,16 +575,16 @@ async function reportFlows(page, size, shot) {
   const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
   await page.evaluate(() => window.__xioxMock.pause(true));
   await goTo(page, 'cleanup', 'report');
-  const caret = page.locator('#rows .report .caret').first();
+  const caret = page.locator('#rows .report .xi-caret').first();
   await caret.click();
   await page.waitForTimeout(100);
   check(await page.locator('#rows .report .rp-open li').count() === 2, `the first item's lines did not open (${await page.locator('#rows .report .rp-open li').count()})`);
-  check(await page.locator('#rows .report .caret').first().getAttribute('aria-expanded') === 'true', 'the caret does not say expanded');
+  check(await page.locator('#rows .report .xi-caret').first().getAttribute('aria-expanded') === 'true', 'the caret does not say expanded');
   failures.push(...await checkFit(page, `report-expanded-${size}`));
   await page.screenshot({ path: `${shot}cleanup-report-expanded-${size}.png` });
   await page.locator('#rows .report [data-key="report:save"]').click();
   await page.waitForTimeout(150);
-  check(await page.locator('#notices .tone-error').count() === 0, 'Save as text… ended in an error');
+  check(await page.locator('#notices .im-note[data-im-tone="err"]').count() === 0, 'Save as text… ended in an error');
   check(await page.locator('#rows .report').count() === 1, 'Save as text… closed the report');
   check((await page.locator('#rows .report .rp-saved').textContent().catch(() => null)) === 'Report saved.', 'the saved text is not shown after Save as text…');
   await page.locator('#rows .report [data-key="report:close"]').click();
@@ -598,11 +593,11 @@ async function reportFlows(page, size, shot) {
   // The progress bar of a running job: a fraction in the middle.
   await goTo(page, 'cleanup', 'analyzing');
   await page.evaluate(() => window.__xioxMock.pause(false));
-  await page.locator('#job .track[aria-valuenow="33"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the bar never showed a third`));
+  await page.locator('#job .im-progress[aria-valuenow="33"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the bar never showed a third`));
   await page.evaluate(() => window.__xioxMock.pause(true));
   const bar = await page.evaluate(() => {
-    const t = document.querySelector('#job .track');
-    return t ? { now: Number(t.getAttribute('aria-valuenow')), width: t.getBoundingClientRect().width, fill: t.firstElementChild.getBoundingClientRect().width, role: t.getAttribute('role') } : null;
+    const t = document.querySelector('#job .im-progress');
+    return t ? { now: Number(t.getAttribute('aria-valuenow')), width: t.getBoundingClientRect().width, fill: parseFloat(getComputedStyle(t, '::before').width), role: t.getAttribute('role') } : null;
   });
   check(bar !== null && bar.role === 'progressbar', 'no progress bar while a job runs');
   if (bar) check(Math.abs(bar.fill / bar.width * 100 - bar.now) < 8, `the bar is filled ${(bar.fill / bar.width * 100).toFixed(0)} % but says ${bar.now} %`);
@@ -649,7 +644,7 @@ async function sectionFlows(page, size, shot) {
   await page.waitForTimeout(100);
   check(await sent(page, 'developers', 'setInactiveDays', (a) => a.days === 60), 'Enter in the number field did not send setInactiveDays { days: 60 }');
   await clearCalls(page);
-  await page.locator('[data-key="opt:removeMode:permanent"]').click();
+  await page.locator('[data-key="opt:removeMode:permanent"]').click({ force: true });
   await page.locator('[data-key="opt:scanRoots"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'developers', 'setRemoveMode', (a) => a.mode === 'permanent') && await sent(page, 'developers', 'setScanRoots', (a) => a.on === false), 'the removal mode and the scan-folders box did not send their intents');
@@ -663,20 +658,20 @@ async function sectionFlows(page, size, shot) {
   check(await sent(page, 'developers', 'selectAll', (a) => a.on === true) && await sent(page, 'developers', 'selectAll', (a) => a.on === false), 'the top check box did not send selectAll on, then off');
   // A project row: Space ticks the parent (the mock changes that row only, as the script says), a blocked project and its child stay off.
   await goTo(page, 'developers', 'projects');
-  await page.locator('#rows [data-row="p:2"] .nm').click();
+  await page.locator('#rows [data-row="p:2"] td.xi-name').click();
   await page.keyboard.press('Space');
   await page.waitForFunction(() => document.querySelector('#rows [data-row="p:2"] [role=checkbox]')?.getAttribute('aria-checked') === 'true', null, { timeout: 2000 })
     .catch(() => failures.push(`${size}: Space on a project row did not tick it`));
   check(await page.locator('#rows [data-row="p:3"] [role=checkbox]').isDisabled(), 'the checkbox of the project in use is not disabled');
   const setOpen = async (id, open) => {
-    const caret = page.locator(`#rows [data-row="${esc(id)}"] .caret`);
+    const caret = page.locator(`#rows [data-row="${esc(id)}"] .xi-caret`);
     // The state is the row's (aria-expanded), the caret is only the mouse's handle.
-    if ((await page.locator(`#rows [data-row="${esc(id)}"]`).getAttribute('aria-expanded')) !== String(open)) await caret.click();
+    if ((await page.locator(`#rows [data-row="${esc(id)}"]`).getAttribute('aria-expanded')) !== String(open)) await caret.click({ force: true });
   };
   await setOpen('p:1', false);
   check(await page.locator('#rows [data-row="a:3"]').count() === 0, 'a collapsed parent shows its caution child');
   await setOpen('p:1', true);
-  check(await page.locator('#rows [data-row="a:3"] .lv.caution').count() === 1, 'the caution child is not drawn at the caution level');
+  check(await page.locator('#rows [data-row="a:3"]  [data-level="caution"]').count() === 1, 'the caution child is not drawn at the caution level');
   await setOpen('p:3', true);
   check(await page.locator('#rows [data-row="a:5"] [role=checkbox]').isDisabled(), 'the child of the project in use is not disabled');
   // The projects' tree: a folder folds everything inside it and opens again (its id holds a backslash).
@@ -694,7 +689,7 @@ async function sectionFlows(page, size, shot) {
   check(await page.locator('#rows [data-row="o:1"] [role=checkbox]').count() === 0, 'a worktree made by hand has a box');
   // Sessions: the database-only row says so instead of a size.
   await goTo(page, 'developers', 'sessions');
-  check((await page.locator('#rows [data-row="s:opencode:91d2a0"] .sz').textContent()) === 'database row only', 'the database-only session does not say so');
+  check((await page.locator('#rows [data-row="s:opencode:91d2a0"] .xi-size').textContent()) === 'database row only', 'the database-only session does not say so');
   // The dialogs: Clean waits for the warnings; the shortfall has Permanently first, then Cancel.
   await goTo(page, 'developers', 'confirm');
   check(await page.locator('[data-button="clean"]').isDisabled(), 'Clean is enabled before the warnings are read');
@@ -702,7 +697,7 @@ async function sectionFlows(page, size, shot) {
   await page.waitForTimeout(100);
   check(!(await page.locator('[data-button="clean"]').isDisabled()), 'Clean stayed disabled after the warnings were read');
   await goTo(page, 'developers', 'shortfall');
-  check(await page.locator('.dlg-buttons .btn').evaluateAll((b) => b.map((n) => n.textContent).join()) === 'Permanently,Cancel', 'the shortfall dialog does not offer Permanently, Cancel');
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => n.textContent).join()) === 'Permanently,Cancel', 'the shortfall dialog does not offer Permanently, Cancel');
   await page.screenshot({ path: `${shot}developers-shortfall-${size}.png` });
   // Cleaning: Escape sends cancel and lands on the cancelled report.
   await goTo(page, 'developers', 'cleaning');
@@ -718,8 +713,8 @@ async function sectionFlows(page, size, shot) {
 
   // ---- Cleanup: every category in one list (group rows, the menu scrolls, folding), Applications (search box, headers, blocked row, long lines), Browser (keep list, native lines), the partial analysis.
   await goTo(page, 'cleanup', 'analyzed');
-  check(await page.locator('#rows .r.grp').count() === 7, 'the Cleanup list does not hold its seven categories');
-  check(await page.locator('#rows .r.grp[data-row="winapp2"][aria-expanded="false"]').count() === 1, 'the long Applications category does not start folded');
+  check(await page.locator('#rows tr.xi-group').count() === 7, 'the Cleanup list does not hold its seven categories');
+  check(await page.locator('#rows tr.xi-group[data-row="winapp2"][aria-expanded="false"]').count() === 1, 'the long Applications category does not start folded');
   check(await page.locator('#rows [data-row="opera/cache"]').count() === 0, 'a folded category still draws its rows');
   check(await page.locator('#rows [data-row="cat:0"]').count() === 1 && await page.locator('#rows [data-row="npm/cache"]').count() === 1, 'the short categories are not open');
   // The menu scrolls to a category and marks the one the list is at.
@@ -727,15 +722,15 @@ async function sectionFlows(page, size, shot) {
   await page.locator('[data-key="nav:rules:Browser"]').click();
   await page.waitForTimeout(900);
   const atTop = await page.evaluate(() => {
-    const grid = document.querySelector('#rows .grid');
-    const anchor = document.querySelector('#rows .anchor[data-anchor="rules:Browser"]');
-    const head = grid.querySelector('.r.h').getBoundingClientRect().bottom;
+    const grid = document.querySelector('#rows .xi-list');
+    const anchor = document.querySelector('#rows .xi-anchor[data-anchor="rules:Browser"]');
+    const head = grid.querySelector('thead th').getBoundingClientRect().bottom;
     return Math.abs(anchor.getBoundingClientRect().top - head);
   });
   check(atTop < 4, `the menu did not scroll Browser to the top of the list (${atTop}px off)`);
-  check((await page.locator('#bar2 [data-key="nav:rules:Browser"][aria-current="true"]').count()) === 1 && await page.locator('#bar2 .it.menu[aria-current]').count() === 1, 'the menu does not mark Browser as the category the list is at');
+  check((await page.locator('#bar2 [data-key="nav:rules:Browser"][aria-current="true"]').count()) === 1 && await page.locator('#bar2 .xi-row[aria-current]').count() === 1, 'the menu does not mark Browser as the category the list is at');
   // Scrolling by hand moves the mark.
-  await page.locator('#rows .grid').evaluate((n) => { n.scrollTop = 0; });
+  await page.locator('#rows .xi-list').evaluate((n) => { n.scrollTop = 0; });
   await page.waitForTimeout(250);
   check((await page.locator('#bar2 [data-key="nav:builtin:System"][aria-current="true"]').count()) === 1, 'the menu did not follow the list back to System');
   // A group box ticks what it may: System is mixed (4 of 6), one click ticks all six, another clears them.
@@ -746,18 +741,18 @@ async function sectionFlows(page, size, shot) {
   check(await sent(page, 'cleanup', 'toggle', (a) => a.row === 'builtin:System'), 'the group box did not send toggle { row: builtin:System }');
   check(await page.locator('#rows [data-row="cat:5"] [role=checkbox]').getAttribute('aria-checked') === 'true', 'the group box did not tick the rows of its category');
   // The caret and a click on the header fold it; Fold all / Open all do every category.
-  await page.locator('#rows .r.grp[data-row="builtin:System"] .caret').click();
+  await page.locator('#rows tr.xi-group[data-row="builtin:System"] .xi-caret').click();
   check(await page.locator('#rows [data-row="cat:0"]').count() === 0, 'the caret of a category did not fold it');
-  await page.locator('#rows .r.grp[data-row="builtin:System"] .nm').click();
+  await page.locator('#rows tr.xi-group[data-row="builtin:System"] td.xi-name').click();
   check(await page.locator('#rows [data-row="cat:0"]').count() === 1, 'a click on the category header did not open it again');
   await page.locator('[data-key="fold:all"]').click();
-  check(await page.locator('#rows .r[data-row]:not(.grp):not(.sec)').count() === 0 && (await page.locator('[data-key="fold:all"]').textContent()) === 'Open all', 'Fold all did not fold every category');
+  check(await page.locator('#rows tbody tr[data-row]:not(.xi-group):not(.xi-section)').count() === 0 && (await page.locator('[data-key="fold:all"]').textContent()) === 'Open all', 'Fold all did not fold every category');
   await page.locator('[data-key="fold:all"]').click();
   check(await page.locator('#rows [data-row="opera/cache"]').count() === 1, 'Open all did not open Applications');
   await page.locator('[data-key="nav:winapp2"]').click();
   check((await page.locator('#bar2 [data-key="nav:winapp2"]').count()) === 1, 'the Applications entry is gone from the menu');
-  check(await page.locator('#rows .r.sec').count() === 6, 'Applications does not list its six Winapp2 sections');
-  const search = page.locator('#rows input.search');
+  check(await page.locator('#rows tr.xi-section, #rows tr.xi-heading').count() === 6, 'Applications does not list its six Winapp2 sections');
+  const search = page.locator('#rows .xi-search input');
   await clearCalls(page);
   await search.click();
   await page.keyboard.type('chrome', { delay: 20 });
@@ -769,12 +764,12 @@ async function sectionFlows(page, size, shot) {
   check(await search.inputValue() === 'chrome', 'the search box lost its text when the next view came back');
   check(await search.evaluate((n) => [n.selectionStart, n.selectionEnd, document.activeElement === n].join()) === '2,2,true', 'the search box lost its caret or focus when the next view came back');
   await page.keyboard.press('Escape');
-  check(!(await page.evaluate(() => document.activeElement?.classList.contains('search'))), 'Escape did not leave the search box');
+  check(!(await page.evaluate(() => document.activeElement?.closest('.xi-search') != null)), 'Escape did not leave the search box');
   await search.fill('');
   // A blocked row, and a row whose long list of lines scrolls inside the detail box.
-  await page.locator('#rows [data-row="spotify/cache"] .nm').click();
+  await page.locator('#rows [data-row="spotify/cache"] td.xi-name').click();
   await page.waitForTimeout(100);
-  const scroll = await page.locator('#detail').evaluate((n) => { n.scrollTop = 40; return [n.scrollHeight > n.clientHeight, getComputedStyle(n).overflowY, n.scrollTop > 0, n.querySelectorAll('.lines li').length]; });
+  const scroll = await page.locator('#detail').evaluate((n) => { n.scrollTop = 40; return [n.scrollHeight > n.clientHeight, getComputedStyle(n).overflowY, n.scrollTop > 0, n.querySelectorAll('.xi-lines li').length]; });
   check(scroll[0] && scroll[1] === 'auto' && scroll[2] && scroll[3] === 31, `the detail box does not scroll its lines natively (${JSON.stringify(scroll)})`);
   failures.push(...await checkFit(page, `cleanup-applications-lines-${size}`));
   await page.screenshot({ path: `${shot}cleanup-applications-lines-${size}.png` });
@@ -787,18 +782,18 @@ async function sectionFlows(page, size, shot) {
   await page.locator('[data-key="opt:keepList"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'cleanup', 'openKeepList'), 'the keep list button did not send openKeepList');
-  await page.locator('#rows [data-row="native:cookies"] .nm').click();
-  check(await page.locator('#detail .lines li').count() === 36, 'the cookies row does not show its 36 lines in the detail box');
+  await page.locator('#rows [data-row="native:cookies"] td.xi-name').click();
+  check(await page.locator('#detail .xi-lines li').count() === 36, 'the cookies row does not show its 36 lines in the detail box');
   await page.screenshot({ path: `${shot}cleanup-browser-${size}.png` });
   // The badge is capitals by CSS and sentence case in the copy; the partial analysis keeps Clean on.
   await goTo(page, 'cleanup', 'interrupted');
   check(await page.locator('#badge').evaluate((n) => getComputedStyle(n).textTransform) === 'uppercase', 'the badge is not set in capitals by CSS');
-  check(await page.locator('#notices .tone-error').count() === 1 && await page.locator('[data-key="action:clean"]').isEnabled(), 'the cancelled analysis does not show its notice with Clean enabled');
+  check(await page.locator('#notices .im-note[data-im-tone="err"]').count() === 1 && await page.locator('[data-key="action:clean"]').isEnabled(), 'the cancelled analysis does not show its notice with Clean enabled');
   await page.screenshot({ path: `${shot}cleanup-interrupted-${size}.png` });
   // The confirmation: three warnings, Continue first and primary.
   await goTo(page, 'cleanup', 'confirm');
   check(await page.locator('.dlg-warn li').count() === 3, 'the Cleanup confirmation does not show its three warnings');
-  check(await page.locator('.dlg-buttons .btn').evaluateAll((b) => b.map((n) => `${n.textContent}:${n.classList.contains('primary')}`).join()) === 'Continue:true,Cancel:false', 'the Cleanup dialog is not Continue (primary), Cancel');
+  check(await page.locator('.dlg-buttons .im-btn').evaluateAll((b) => b.map((n) => `${n.textContent}:${n.classList.contains('im-btn--confirm-danger')}`).join()) === 'Continue:true,Cancel:false', 'the Cleanup dialog is not Continue (primary), Cancel');
   // The report: its notes, its skipped and failed lines, item lines; Save as text….
   await goTo(page, 'cleanup', 'report');
   check(await page.locator('#rows .report .rp-lines').count() === 2, 'the Cleanup report does not list Skipped and Failed');
@@ -815,9 +810,9 @@ async function sectionFlows(page, size, shot) {
   await page.locator('[data-key="opt:cat:10"]').click();
   await page.waitForTimeout(100);
   check(await sent(page, 'registry', 'toggleCategory', (a) => a.index === 10), 'a category box did not send toggleCategory { index: 10 }');
-  check(await page.locator('#rows [data-row="i:39"]').count() === 1 || (await page.locator('#rows .grid').evaluate((n) => n.scrollHeight > n.clientHeight)), 'the 40 issues are not all reachable in the list');
+  check(await page.locator('#rows [data-row="i:39"]').count() === 1 || (await page.locator('#rows .xi-list').evaluate((n) => n.scrollHeight > n.clientHeight)), 'the 40 issues are not all reachable in the list');
   await goTo(page, 'registry', 'fixed');
-  check((await page.locator('#notices .notice .more').textContent().catch(() => '')) === '+1 more', 'the fixed notice does not say it has one more line');
+  check((await page.locator('#notices [data-key^="more:"]').textContent().catch(() => '')) === 'Show 1 more line', 'the fixed notice does not say it has one more line');
   await page.screenshot({ path: `${shot}registry-fixed-${size}.png` });
   await page.evaluate(() => window.__xioxMock.pause(false));
   return failures;
@@ -835,8 +830,8 @@ async function fixWaveFlows(page, size, shot) {
 
   // The extra lines of a notice: a button, reached with Tab, opened with Enter, closed with Space; the focus stays on it.
   await goTo(page, 'registry', 'fixed');
-  const more = page.locator('#notices .notice .more');
-  check(await more.count() === 1 && await more.getAttribute('aria-expanded') === 'false' && await page.locator('#notices .notice-more').count() === 0, 'the fixed notice does not start closed with a +1 more button');
+  const more = page.locator('#notices [data-key^="more:"]');
+  check(await more.count() === 1 && await more.getAttribute('aria-expanded') === 'false' && await page.locator('#notices .xi-more').count() === 0, 'the fixed notice does not start closed with a +1 more button');
   check(await more.evaluate((n) => n.tagName === 'BUTTON' && !n.closest('[title]')), 'the extra lines are behind something that is not a plain button (a tooltip is not reachable)');
   let reached = false;
   for (let i = 0; i < 80 && !reached; i += 1) {
@@ -845,25 +840,25 @@ async function fixWaveFlows(page, size, shot) {
   }
   check(reached, 'Tab never reaches the +1 more button');
   await page.keyboard.press('Enter');
-  await page.locator('#notices .notice-more li').first().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter on +1 more did not open the line`));
-  check((await page.locator('#notices .notice-more').innerText().catch(() => '')).includes('registry-backup-'), 'the opened line does not show the backup path');
-  check(((await focusKey(page)) ?? '').startsWith('more:') && await page.locator('#notices .notice .more').getAttribute('aria-expanded') === 'true', 'the button lost the focus or does not say expanded after Enter');
+  await page.locator('#notices .xi-more li').first().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Enter on +1 more did not open the line`));
+  check((await page.locator('#notices .xi-more').innerText().catch(() => '')).includes('registry-backup-'), 'the opened line does not show the backup path');
+  check(((await focusKey(page)) ?? '').startsWith('more:') && await page.locator('#notices [data-key^="more:"]').getAttribute('aria-expanded') === 'true', 'the button lost the focus or does not say expanded after Enter');
   failures.push(...await checkFit(page, `registry-fixed-open-${size}`));
   await page.screenshot({ path: `${shot}registry-fixed-notice-open-${size}.png` });
   await page.keyboard.press('Space');
-  await page.locator('#notices .notice-more').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Space on the open notice did not close it`));
-  check(await page.locator('#notices .notice .more').getAttribute('aria-expanded') === 'false', 'the button does not say collapsed after Space');
+  await page.locator('#notices .xi-more').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Space on the open notice did not close it`));
+  check(await page.locator('#notices [data-key^="more:"]').getAttribute('aria-expanded') === 'false', 'the button does not say collapsed after Space');
   // A partial failure is a warning, not a success.
   await goTo(page, 'registry', 'partial');
-  check(await page.locator('#notices .notice.tone-warn').count() === 1 && await page.locator('#notices .tone-ok').count() === 0, 'the partial fix is not shown as a warning');
+  check(await page.locator('#notices .im-note[data-im-tone="warn"]').count() === 1 && await page.locator('#notices .im-note[data-im-tone="ok"]').count() === 0, 'the partial fix is not shown as a warning');
   await page.screenshot({ path: `${shot}registry-partial-${size}.png` });
 
   // Skipped / failed: the full path is on the page (a line of its own), not in a tooltip.
   await goTo(page, 'cleanup', 'report');
   const paths = await page.locator('#rows .report .rp-lines .rp-path').allInnerTexts();
-  check(paths.length > 0 && paths.every((p) => p.length > 8), `the skipped / failed paths are not on the page (${JSON.stringify(paths)})`);
+  check(paths.filter(Boolean).length > 0 && paths.filter(Boolean).every((p) => p.length > 8), `the skipped / failed paths are not on the page (${JSON.stringify(paths)})`);
   check(await page.locator('#rows .report .rp-lines .rp-row[title]').count() === 0, 'a report row still hides its path in a tooltip');
-  check(await page.locator('#rows .report [role=table] [role=row] > [role=cell], #rows .report [role=table] [role=row] > [role=columnheader]').count() > 0, 'the report tables have no cells');
+  check(await page.locator('#rows .report table td, #rows .report table th').count() > 0, 'the report tables have no cells');
   await page.screenshot({ path: `${shot}cleanup-report-paths-${size}.png` });
 
   // The top check box waits while a job runs (checked on a view Rust would not send: bulk with a job).
@@ -887,20 +882,20 @@ async function fixWaveFlows(page, size, shot) {
   await page.waitForTimeout(200);
   const confirms = (await callsOf(page)).filter(([c, k]) => c === 'cleanup' && k === 'confirm').length;
   check(confirms === 1, `a double click sent confirm ${confirms} times`);
-  check(await page.locator('#notices .tone-error').count() === 0, 'a double click on Continue left an error strip');
+  check(await page.locator('#notices .im-note[data-im-tone="err"]').count() === 0, 'a double click on Continue left an error strip');
 
   // The report closing does not leave the focus on nothing.
   await goTo(page, 'cleanup', 'report');
   await page.locator('#rows .report [data-key="report:close"]').focus();
   await page.keyboard.press('Enter');
   await page.locator('#rows .report').waitFor({ state: 'detached', timeout: 2000 }).catch(() => failures.push(`${size}: Close did not leave the report`));
-  check(await page.evaluate(() => document.activeElement?.classList.contains('grid') ?? false), `after the report closed the focus is on ${await focusKey(page)}, expected the list`);
+  check(await page.evaluate(() => document.activeElement?.classList.contains('xi-table') ?? false), `after the report closed the focus is on ${await focusKey(page)}, expected the list`);
 
   // Bar 2 of Developers: the folder buttons are inside the bar (it is also what the window is tall enough for), and if
   // the bar ever scrolls it says so with its glow.
   await goTo(page, 'developers', 'projects');
   const bar = await page.evaluate(() => {
-    const items = document.querySelector('#bar2 .items');
+    const items = document.querySelector('#bar2 .xi-side');
     const box = items.getBoundingClientRect();
     const buttons = ['add', 'remove'].map((id) => document.querySelector(`[data-key^="opt:"][data-key$=":${id}"]`)?.getBoundingClientRect() ?? null);
     return {
@@ -923,12 +918,12 @@ async function aboutFlows(page, size, shot) {
   const about = fixture.about;
   const open = () => page.locator('#about:not([hidden]) [role=dialog]');
   await goTo(page, 'cleanup', 'analyzed');
-  await page.locator('#sections .nv.about').click();
+  await page.locator('#settings').click();
   await open().waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the About button did not open About`));
   const text = (await open().innerText()).replace(/\s+/g, ' ');
   for (const part of ['Settings', 'Look', 'Smooth', 'ONI mode', 'About Xiox', `Version ${about.version}`, about.winapp2, about.attribution, 'Close']) check(text.toLowerCase().includes(part.toLowerCase()), `About does not show ${JSON.stringify(part)}: ${text}`);
   check(await focusKey(page) === 'about:close', `About opens with the focus on ${await focusKey(page)}, expected Close`);
-  check(await page.evaluate(() => document.getElementById('body').inert && document.getElementById('top').inert), 'the page behind About is not inert');
+  check(await page.evaluate(() => document.getElementById('body').inert && !document.getElementById('top').inert), 'the page behind About is not inert');
   failures.push(...await checkFit(page, `about-${size}`));
   await page.screenshot({ path: `${shot}about-${size}.png` });
   // Tab never leaves it (the chosen look and Close), Escape closes it and the focus goes back to the button that opened it.
@@ -951,7 +946,7 @@ async function aboutFlows(page, size, shot) {
   await page.locator('[data-key="about:close"]').click();
   await page.locator('#about[hidden]').waitFor({ state: 'attached', timeout: 2000 }).catch(() => failures.push(`${size}: Close did not close About`));
   // A question mark typed in the search box is typing.
-  const search = page.locator('input.search');
+  const search = page.locator('.xi-search input');
   if (await search.count() > 0) {
     await search.focus();
     await page.keyboard.type('?');
@@ -976,7 +971,7 @@ async function aboutFlows(page, size, shot) {
 async function profileFlows(page, size, shot) {
   const failures = [];
   const check = (condition, message) => { if (!condition) failures.push(`${size}: ${message}`); };
-  const ready = () => page.locator('#sections [data-section="cleanup"].on').waitFor();
+  const ready = () => page.locator('#sections [data-section="cleanup"][aria-selected="true"]').waitFor();
   check(await page.locator('#profile[hidden]').count() === 1, 'the profile strip shows without a mismatch');
   const message = 'Xiox is cleaning the profile of “Alfio”, not that of “Administrator”, who opened this Windows session.';
   const long = `Xiox is cleaning the profile of “${'Averylongusername'.repeat(8)}”, not that of “${'Anotherlongname'.repeat(8)}”, who opened this Windows session.`;
@@ -1010,7 +1005,7 @@ async function profileFlows(page, size, shot) {
 /** Tab from the top of the page visits, in order: the sections, About, bar 2, the list header and search, the list (one stop), the detail, then the top-bar actions. Every stop has a visible ring that the cut corners cannot hide. */
 async function tabAudit(page, size, shot) {
   const failures = [];
-  const REGIONS = ['#sections', '#bar2', '#notices', '#list-head', '#rows .tools', '#rows .grid', '#detail', '#actions'];
+  const REGIONS = ['#sections', '#bar2', '#notices', '#list-head', '#rows .xi-tools', '#rows .xi-table', '#detail', '#actions'];
   const [GRID, DETAIL, ACTIONS] = [5, 6, 7];
   for (const [section, state] of [['cleanup', 'analyzed'], ['developers', 'projects'], ['registry', 'analyzed']]) {
     const label = `${size} Tab audit ${section}:${state}`;
@@ -1057,15 +1052,15 @@ async function tabAudit(page, size, shot) {
     if (stops.length === 0 || stops[stops.length - 1].region !== ACTIONS) failures.push(`${label}: Tab does not end on the top-bar actions: ${names}`);
     // Arrows move inside the list once it has the focus, and the stop does not change.
     if (state === 'analyzed' || state === 'projects') {
-      await page.locator('#rows .grid').focus();
+      await page.locator('#rows .xi-table').focus();
       await page.keyboard.press('Home');
       await page.waitForTimeout(80);
-      const before = await page.locator('#rows .r.sel').getAttribute('data-row');
+      const before = await page.locator('#rows tr[aria-selected="true"]').getAttribute('data-row');
       await page.keyboard.press('ArrowDown');
       await page.waitForTimeout(80);
-      const after = await page.locator('#rows .r.sel').getAttribute('data-row');
+      const after = await page.locator('#rows tr[aria-selected="true"]').getAttribute('data-row');
       if (before === after) failures.push(`${label}: ArrowDown in the list did not move the selection (${before} -> ${after}; rows ${await page.locator('#rows .r[data-row]').count()}; focus ${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))})`);
-      if (!await focusIn(page, '#rows .grid')) failures.push(`${label}: the focus left the list on ArrowDown`);
+      if (!await focusIn(page, '#rows .xi-table')) failures.push(`${label}: the focus left the list on ArrowDown`);
     }
     if (section === 'cleanup') console.log(`${label}: ${names}`);
   }
@@ -1127,7 +1122,7 @@ try {
       window.__TAURI_INTERNALS__ = { invoke: () => Promise.reject({ kind: 'failed', message: 'the core did not answer' }), transformCallback: () => 0 };
     });
     await page.goto(url);
-    await page.locator('#notices .notice.tone-error').waitFor({ timeout: 3000 }).catch(() => failures.push('failure page: no error notice in the window'));
+    await page.locator('#notices .im-note[data-im-tone="err"]').waitFor({ timeout: 3000 }).catch(() => failures.push('failure page: no error notice in the window'));
     expect((await page.locator('#badge').textContent()) === 'Error', 'failure page: the badge does not say Error');
     await page.screenshot({ path: `${out}failure-1000x640.png` });
     await page.close();
@@ -1141,7 +1136,7 @@ try {
     page.on('pageerror', (error) => failures.push(`${size}: page error ${error}`));
     page.on('console', (message) => { if (message.type() === 'error') failures.push(`${size}: console error ${message.text()}`); });
     await page.goto(url);
-    await page.locator('#sections [data-section="cleanup"].on').waitFor();
+    await page.locator('#sections [data-section="cleanup"][aria-selected="true"]').waitFor();
     failures.push(...await checkTokens(page));
     await page.emulateMedia({ colorScheme: 'light' });
     // The page follows Windows' colours through the media query's change event.
@@ -1181,7 +1176,7 @@ try {
     await page.locator('#sections [data-section="registry"]').click();
     await page.evaluate(() => window.__xioxMock.go('registry', 'analyzed'));
     await page.locator('#rows [data-key="sort:Issue"]').click();
-    expect(await page.locator('#rows [role=columnheader][aria-sort="ascending"] [data-key="sort:Issue"]').count() === 1, `${size}: the clicked column header is not marked ascending`);
+    expect(await page.locator('#rows th[aria-sort="ascending"] [data-key="sort:Issue"]').count() === 1, `${size}: the clicked column header is not marked ascending`);
     await page.evaluate(() => window.__xioxMock.clearCalls());
     await page.locator('#rows [data-key="ck:t:2"]').click();
     await page.waitForTimeout(100);
@@ -1190,18 +1185,18 @@ try {
 
     // ONI MODE: chosen in Settings, it turns the look, the choice outlives a reload, and every state is drawn and fit-checked in it too.
     const chooseLook = async (skin) => {
-      await page.locator('#sections .nv.about').click();
-      await page.locator(`#about [data-key="look:${skin}"]`).check();
+      await page.locator('#settings').click();
+      await page.locator(`#about [data-key="look:${skin}"]`).check({ force: true });
       await page.locator('[data-key="about:close"]').click();
     };
     expect(await page.locator('#skin').count() === 0, `${size}: the top bar still has an ONI MODE switch`);
     await chooseLook('oni');
     expect(await page.evaluate(() => document.documentElement.getAttribute('data-im-look')) === 'oni', `${size}: Settings did not turn ONI MODE on`);
     await page.reload();
-    await page.locator('#sections .nv.about').click();
+    await page.locator('#settings').click();
     expect(await page.locator('#about [data-key="look:oni"]:checked').count() === 1, `${size}: Settings does not say ONI MODE is on after a reload`);
     await page.locator('[data-key="about:close"]').click();
-    await page.locator('#sections [data-section="cleanup"].on').waitFor();
+    await page.locator('#sections [data-section="cleanup"][aria-selected="true"]').waitFor();
     failures.push(...await checkTokens(page, 'oni'));
     await page.evaluate(() => window.__xioxMock.pause(true));
     for (const [section, stateName] of SECTIONS) {
@@ -1217,7 +1212,7 @@ try {
     await chooseLook('smooth');
     expect(await page.evaluate(() => document.documentElement.getAttribute('data-im-look')) === 'smooth', `${size}: Settings did not turn ONI MODE off`);
     await page.reload();
-    await page.locator('#sections [data-section="cleanup"].on').waitFor();
+    await page.locator('#sections [data-section="cleanup"][aria-selected="true"]').waitFor();
 
     await page.evaluate(() => window.__xioxMock.pause(false));
     await resetAll(page);
@@ -1228,12 +1223,12 @@ try {
     await page.locator('#bar2 [data-key="nav:rules:Development & AI"]').click();
     try {
       await page.locator('#bar2 [data-key="nav:rules:Development & AI"][aria-current="true"]').waitFor({ timeout: 2000 });
-      expect(await page.locator('#bar2 .it[aria-current]').count() === 1, `${size}: more than one category is marked current`);
+      expect(await page.locator('#bar2 .xi-row[aria-current]').count() === 1, `${size}: more than one category is marked current`);
     } catch { failures.push(`${size}: the clicked category did not become current`); }
     await page.waitForTimeout(900);
-    await page.locator('#rows [data-row="cat:3"] .nm').click();
-    await page.locator('#rows [data-row="cat:3"].sel').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the clicked row is not selected`));
-    expect((await page.locator('#detail .kv b').first().textContent()) === 'Memory dumps', `${size}: the detail does not describe the clicked row`);
+    await page.locator('#rows [data-row="cat:3"] td.xi-name').click();
+    await page.locator('#rows [data-row="cat:3"][aria-selected="true"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the clicked row is not selected`));
+    expect((await page.locator('#detail .im-facts dd').first().textContent()) === 'Memory dumps', `${size}: the detail does not describe the clicked row`);
     await page.screenshot({ path: `${out}cleanup-row-selected-${size}.png` });
     shots += 1;
 
@@ -1248,7 +1243,7 @@ try {
 
     // Analyze: the busy state shows, then the list lands on analyzed after the model's ticks.
     await page.evaluate(() => window.__xioxMock.go('cleanup', 'idle'));
-    await page.locator('#top [data-action="analyze"]').click();
+    await page.locator('#actions [data-action="analyze"]').click();
     await page.locator('#badge', { hasText: 'Analyzing' }).waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: Analyze did not show the busy state`));
     await page.locator('#badge', { hasText: 'Analysis done' }).waitFor({ timeout: 4000 }).catch(() => failures.push(`${size}: Analyze did not land on analyzed`));
 
@@ -1257,7 +1252,7 @@ try {
     await page.evaluate(() => window.__xioxMock.go('developers', 'projects'));
     await page.locator('#rows [data-row="p:1"]').waitFor();
     expect(await page.locator('#rows [data-row="a:1"]').count() === 0, `${size}: a child shows under a collapsed parent`);
-    await page.locator('#rows [data-row="p:1"] .caret').click();
+    await page.locator('#rows [data-row="p:1"] .xi-caret').click();
     await page.locator('#rows [data-row="a:1"]').waitFor({ timeout: 2000 }).catch(() => failures.push(`${size}: the caret did not show the children`));
     failures.push(...await checkFit(page, `developers-expanded-${size}`));
     await page.screenshot({ path: `${out}developers-projects-expanded-${size}.png` });

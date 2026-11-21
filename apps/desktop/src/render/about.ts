@@ -3,7 +3,7 @@
 // Winapp2 asks for). A small modal over the dimmed page, like the confirmation (render/dialog.ts) but
 // not a section's own dialog: it is opened by the page (the Settings button or `?`) and holds no
 // intent; the look is the page's (main.ts keeps it). Escape or Close closes it and the focus goes back
-// to where it was.
+// to where it was. The title bar stays free, so the window can be moved and closed while it is open.
 
 import { button, fill, h } from '../dom.ts';
 import { cycleFocus } from '../keys.ts';
@@ -15,8 +15,8 @@ export interface LookChoice { skin: Look; choose(skin: Look): void }
 
 const LOOKS: [Look, string][] = [['smooth', 'Smooth'], ['oni', 'ONI mode (the original look)']];
 
-const BACKGROUND = ['top', 'status', 'profile', 'job', 'body', 'foot'];
-/** The `data-key` of the Settings button of the sections bar. */
+const BACKGROUND = ['status', 'profile', 'job', 'body', 'actions', 'foot'];
+/** The `data-key` of the Settings button after the tabs. */
 export const ABOUT_KEY = 'about';
 const CLOSE_KEY = 'about:close';
 
@@ -56,21 +56,21 @@ export function showAbout(about: AboutView, from: string | null, look: LookChoic
   opener = from;
   shown = true;
   const root = host();
-  const choice = ([skin, label]: [Look, string]): HTMLElement => h('label', { class: 'radio' },
+  const choice = ([skin, label]: [Look, string]): HTMLElement => h('label', {},
     h('input', { type: 'radio', name: 'look', value: skin, checked: skin === look.skin, 'data-key': `look:${skin}`, onChange: () => look.choose(skin) }),
     h('span', {}, label));
-  fill(root, h('div', { class: 'scrim' },
-    h('div', { class: 'dlg about frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'about-title', tabindex: -1 },
-      h('h2', { id: 'about-title', class: 'dlg-title' }, 'Settings'),
-      h('div', { class: 'dlg-body' },
-        h('div', { class: 'ctl ctl-choice', role: 'radiogroup', 'aria-label': 'Look' },
-          h('span', { class: 'ctl-title' }, 'Look'), h('div', { class: 'radios' }, ...LOOKS.map(choice))),
+  fill(root, h('div', { class: 'im-scrim' },
+    h('div', { class: 'im-dialog im-float dlg about', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'about-title', tabindex: -1 },
+      h('h2', { id: 'about-title', class: 'im-dialog-title dlg-title' }, 'Settings'),
+      h('div', { class: 'im-dialog-body im-content-text dlg-body' },
+        h('div', { class: 'im-field' }, h('span', { class: 'im-field-label' }, 'Look'),
+          h('div', { class: 'im-seg', role: 'radiogroup', 'aria-label': 'Look' }, ...LOOKS.map(choice))),
         h('b', { class: 'dlg-sub' }, 'About Xiox'),
         h('p', { class: 'dlg-text' }, `Version ${about.version}`),
         h('p', { class: 'dlg-text' }, about.winapp2),
         h('p', { class: 'dlg-text' }, about.attribution)),
-      h('div', { class: 'dlg-buttons' },
-        button(h('span', { 'data-fit': '' }, 'Close'), { class: 'btn primary', 'data-key': CLOSE_KEY, onClick: onClose })))));
+      h('div', { class: 'im-dialog-actions dlg-buttons' },
+        button(h('span', { 'data-fit': '' }, 'Close'), { class: 'im-btn im-btn--primary', 'data-key': CLOSE_KEY, onClick: onClose })))));
   root.hidden = false;
   setInert(true);
   root.querySelector<HTMLElement>(`[data-key="${CLOSE_KEY}"]`)?.focus();

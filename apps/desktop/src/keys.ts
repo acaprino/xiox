@@ -5,7 +5,6 @@
 
 import { SECTION_ORDER } from './state.ts';
 import type { ActionView, SectionId, SectionView } from './types.ts';
-import type { ZoomStep } from './zoom.ts';
 
 export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; repeat?: boolean }
 
@@ -54,22 +53,15 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
 }
 
 /**
- * The chords that are the app's own: the zoom commands and Ctrl+A. They hold in fields and dialogs too, before
- * `keyAction` (which leaves every chord alone). Ctrl+A in a field is the field's: it gives null there, so the
- * browser selects the field's text. By `key`, so `+` works on layouts where it has its own key (Italian) and `=`
- * where it shares one (US); the numeric keypad gives the same keys.
+ * The chord that is the app's own: Ctrl+A, which selects the copyable text of the place the focus is in. It holds in dialogs too,
+ * before `keyAction` (which leaves every chord alone). In a field it is the field's: it gives null there, so the browser selects
+ * the field's text. The zoom chords are Imago's (`mountZoom`), not the app's.
  */
-export type ChordAction = { kind: 'zoom'; step: ZoomStep } | { kind: 'selectAll' };
+export type ChordAction = { kind: 'selectAll' };
 
 export function chordAction(e: KeyLike, ctx: { inField: boolean }): ChordAction | null {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
-  switch (e.key) {
-    case '=': case '+': return { kind: 'zoom', step: 'in' };
-    case '-': case '_': return { kind: 'zoom', step: 'out' };
-    case '0': return e.shiftKey ? null : { kind: 'zoom', step: 'reset' };
-    case 'a': case 'A': return e.shiftKey || ctx.inField ? null : { kind: 'selectAll' };
-    default: return null;
-  }
+  return (e.key === 'a' || e.key === 'A') && !e.shiftKey && !ctx.inField ? { kind: 'selectAll' } : null;
 }
 
 /**

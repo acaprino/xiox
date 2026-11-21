@@ -222,34 +222,6 @@ export function groupSizes(rows: RowView[]): Map<string, number> {
   return sizes;
 }
 
-/**
- * A cell column is as wide as its widest cell up to 260 px (a registry key is longer than the window: it is cut with an
- * ellipsis and the full text is in the tooltip) and the size column grows for a size written in words («database row only»).
- */
-const COLUMN_WIDTH: Record<ColumnView['kind'], string> = {
-  name: 'minmax(12ch,1fr)', cell: 'fit-content(260px)', level: '96px', size: 'minmax(74px,max-content)',
-};
-
-/** The check column is a 34 px target, not the 14 px box: a click anywhere in it ticks the row. */
-const CHECK_COLUMN = '34px';
-
-/**
- * The `grid-template-columns` of the header and every row: a check column first when rows have checks. `drop` leaves kinds of
- * column out (the narrow layouts of list.css hide the same ones, so the columns that stay keep the room).
- */
-export function gridTemplate(columns: ColumnView[], checks: boolean, drop: ReadonlyArray<ColumnView['kind']> = []): string {
-  return [...(checks ? [CHECK_COLUMN] : []), ...columns.filter((c) => !drop.includes(c.kind)).map((c) => COLUMN_WIDTH[c.kind])].join(' ');
-}
-
-/** The three templates the list switches between as its pane narrows: all columns, without the level, without level and cells. */
-export function gridVars(columns: ColumnView[], checks: boolean): Record<'--cols' | '--cols-l' | '--cols-ls', string> {
-  return {
-    '--cols': gridTemplate(columns, checks),
-    '--cols-l': gridTemplate(columns, checks, ['level']),
-    '--cols-ls': gridTemplate(columns, checks, ['level', 'cell']),
-  };
-}
-
 /** The ids of the rows that have children (they get a caret). */
 export function rowParents(rows: RowView[]): Set<string> {
   return new Set(rows.flatMap((r) => (r.parent === null ? [] : [r.parent])));

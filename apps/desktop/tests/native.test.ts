@@ -10,22 +10,27 @@ import { SELECTABLE } from '../src/keys.ts';
 const file = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const styles = readdirSync(new URL('../src/styles/', import.meta.url)).filter((name) => name.endsWith('.css')).map((name) => [name, file(`src/styles/${name}`)] as const);
 const sources = readdirSync(new URL('../src/render/', import.meta.url)).map((name) => [name, file(`src/render/${name}`)] as const);
-const tokens = file('src/styles/tokens.css');
 
 test('buttons, menu entries and rows keep the arrow cursor: no hand, no "not allowed"', () => {
   for (const [name, text] of [...styles, ...sources, ['index.html', file('index.html')] as const]) {
     assert.doesNotMatch(text, /cursor:\s*(pointer|not-allowed)|cursor-pointer/, `${name} sets a web cursor`);
   }
-  assert.match(tokens, /html\s*\{[^}]*cursor:\s*default/, 'the window starts from the arrow');
+  // The arrow and the chrome that is not text are Imago's base, which the shell carries: the app is an im-shell.
+  assert.match(file('index.html'), /id="app"[^>]*class="im-shell"/, 'the arrow cursor comes from the im-shell base');
 });
 
-test('the chrome is not selectable, and every place Ctrl+A selects is', () => {
-  assert.match(tokens, /html\s*\{[^}]*(?<!-)user-select:\s*none/, 'html is not selectable');
-  const rule = /([^{}]+)\{[^}]*(?<!-)user-select:\s*text/.exec(tokens);
-  assert.ok(rule, 'tokens.css has the selectable opt-in');
-  const selectors = (rule[1] as string).split(',').map((s) => s.trim());
-  for (const [, select] of SELECTABLE) assert.ok(selectors.includes(select), `${select} (Ctrl+A) is selectable in tokens.css`);
-  assert.ok(selectors.includes('input'), 'fields stay selectable');
+test('the chrome is not selectable, and every place Ctrl+A selects is (im-content-text, the package\'s own opt-in)', () => {
+  const places: Record<string, [string, RegExp]> = {
+    '#detail': ['index.html', /id="detail"[^>]*im-content-text/],
+    '#notices': ['index.html', /id="notices"[^>]*im-content-text/],
+    '.rp-body': ['src/render/report.ts', /rp-body[^']*im-content-text/],
+    '.dlg-body': ['src/render/dialog.ts', /im-content-text im-scroll dlg-body/],
+  };
+  for (const [, select] of SELECTABLE) {
+    const place = places[select];
+    assert.ok(place, `${select} (Ctrl+A) has a place in this test`);
+    assert.match(file(place[0]), place[1], `${select} (Ctrl+A) is selectable: it carries im-content-text`);
+  }
 });
 
 test('the first frame is the page: a transparent glass window, hidden until drawn, the colours Imago\'s (no inline style, no scheme meta)', () => {
@@ -48,10 +53,8 @@ test('the window is shown by the page\'s first frame, with a fallback, never str
   assert.match(file('src-tauri/src/desktop.rs'), /const SHOW_ANYWAY: Duration/);
 });
 
-test('focus ring and selection survive contrast themes (forced colors drop box-shadow and backgrounds)', () => {
-  const forced = /@media \(forced-colors: active\) \{([\s\S]*?)\n\}/.exec(tokens)?.[1] ?? '';
-  assert.match(forced, /:focus-visible\s*\{[^}]*outline:\s*2px solid Highlight/);
-  for (const selected of ['.r.sel', '.nv.on', '.it.on']) assert.ok(forced.includes(selected), `${selected} has an outline`);
+test('focus ring and selection survive contrast themes: the focus ring is Imago\'s outline, and the app draws none with box-shadow', () => {
+  for (const [name, text] of styles) assert.doesNotMatch(text, /:focus-visible[^{]*\{[^}]*box-shadow/, `${name} draws a focus ring a contrast theme drops`);
 });
 
 test('every webview gets the desktop policy from one plugin, registered on the builder', () => {
@@ -113,7 +116,7 @@ test('the ready signal does not depend on requestAnimationFrame alone (a hidden 
 
 test('the first focus is the list, and a native dialog gives the focus back to the page', () => {
   assert.match(file('src/main.ts'), /async function start[\s\S]*?focusList\(\);\s*signalReady\(\)/, 'the page focuses the list after the first render');
-  assert.match(file('src/main.ts'), /function focusList[\s\S]*?gridNode\(\)/, 'the list is #rows .grid');
+  assert.match(file('src/main.ts'), /function focusList[\s\S]*?#rows \.xi-table/, 'the list is the table of #rows');
   assert.match(file('src/render/dialog.ts'), /d\.permanent/, 'the danger variant comes from the view\'s flag');
   assert.doesNotMatch(file('src/render/policy.ts'), /permanent\|cannot be undone|IRREVERSIBLE/, 'no reading of the dialog\'s English');
   assert.match(file('src/main.ts'), /addEventListener\('focus'/, 'the window regaining the focus puts it back in the page');
@@ -131,19 +134,17 @@ test('every button of the page has a name: a text or an aria-label, icon-only on
     for (const m of text.matchAll(/h\('button'|(?<![\w.])button\(/g)) {
       const call = callAt(text, m.index + m[0].length - 1);
       buttons++;
-      const named = /aria-label|aria-labelledby|h\('span'|, '[^']|`[^`]+`\)|\bkbd\(/.test(call) || /^\(\s*h\('(?!i')/.test(call);
+      const named = /aria-label|aria-labelledby|h\('span'|, '[^']|`[^`]+`\)|\bkeyCaps\(/.test(call) || /^\(\s*h\('(?!i')/.test(call);
       assert.ok(named, `${name}: a button without text or aria-label: ${call.slice(0, 80)}`);
     }
   }
   assert.ok(buttons > 10, 'the scan found the buttons');
 });
 
-test('colour is never the only signal of the bar state: the pip has a shape and a spoken name', () => {
+test('the tick state of a category is said in words, not by a picture', () => {
   const bar = file('src/render/bar2.ts');
-  assert.match(bar, /class: `pip [^`]*`, role: 'img', 'aria-label'/);
-  const list = styles.find(([name]) => name === 'list.css')?.[1] ?? '';
-  assert.match(list, /\.pip\.mixed\s*\{[^}]*linear-gradient/, 'a dash for partly ticked');
-  assert.match(list, /\.pip\.none\s*\{[^}]*dotted/, 'a dotted box for none');
+  for (const words of ['all ticked', 'some ticked', 'none ticked']) assert.ok(bar.includes(words), words);
+  assert.doesNotMatch(bar, /pip/, 'no picture of the state is left');
 });
 
 test('dragging a folder onto the window is an explicit choice: Rust takes the drop and asks first', () => {
@@ -163,10 +164,13 @@ test('the title says the section, and the single-instance lookup does not need t
   assert.match(file('src/main.ts'), /api\.chrome\(/, 'the page tells Rust the section and the job');
 });
 
-test('every scroll container gets the thin themed scrollbar from one rule', () => {
-  const rules = styles.flatMap(([name, text]) => [...text.matchAll(/scrollbar-width:\s*thin/g)].map(() => name));
-  assert.deepEqual(rules, ['tokens.css'], 'one rule sets scrollbar-width: thin, not one per container');
-  assert.match(tokens, /\n\* \{[^}]*scrollbar-width: thin; scrollbar-color: var\(--line\)/, 'on *, with scrollbar-color');
+test('every scroll container gets the thin themed scrollbar from Imago: it is an im-panel-body or an im-scroll', () => {
+  const index = file('index.html');
+  assert.match(index, /id="detail"[^>]*im-scroll/, 'the details scroll in an im-scroll');
+  assert.match(file('src/render/dialog.ts'), /im-scroll dlg-rows|dlg-rows[^\n]*im-scroll/, 'the items of a confirmation too');
+  assert.match(file('src/render/list.ts'), /im-panel-body xi-list/, 'the list');
+  assert.match(file('src/render/bar2.ts'), /im-panel-body xi-side/, 'and the sidebar');
+  for (const [name, text] of styles) assert.doesNotMatch(text, /scrollbar-width/, `${name} sets a scrollbar of its own`);
 });
 
 test('the reason an action is disabled is read as its description, never as part of its name', () => {
@@ -183,11 +187,13 @@ test('the reason an action is disabled is read as its description, never as part
 test('the list is announced as a grid only when it has rows, and its helpers are out of the accessibility tree', () => {
   const list = file('src/render/list.ts');
   assert.match(list, /role: 'presentation', 'data-anchor'/, 'the empty anchor between rows has no role');
-  assert.match(list, /if \(empty\) grid\.removeAttribute\('role'\); else grid\.setAttribute\('role', 'treegrid'\)/, 'an empty grid drops treegrid');
-  const carets = [...list.matchAll(/class: 'caret'[^\n]*/g)].map((m) => m[0]);
-  assert.ok(carets.length >= 2);
+  assert.match(list, /role: 'treegrid'/, 'the table is a treegrid');
+  assert.match(list, /if \(empty\) \{[\s\S]*?return;/, 'an empty list draws no table at all');
+  const carets = [...list.matchAll(/class: 'xi-caret'[^\n]*/g)].map((m) => m[0]);
+  assert.ok(carets.length >= 1);
   for (const caret of carets) {
     assert.match(caret, /'aria-hidden': 'true'/, 'a caret is the mouse\'s: the row carries the state');
+    assert.match(caret, /title:/, 'and says what it does in its tooltip');
     assert.doesNotMatch(caret, /aria-expanded/, 'aria-expanded is on the row only');
   }
   assert.match(list, /'aria-expanded': expandable \? String\(expanded\) : null/, 'the row has it');

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { activeSort, cycleSort, gridTemplate, gridVars, groupSizes, headerBytes, nextSort, orderFor, rowDepths, rowParents, sortRows, visibleRows } from '../src/rows.ts';
+import { activeSort, cycleSort, groupSizes, headerBytes, nextSort, orderFor, rowDepths, rowParents, sortRows, visibleRows } from '../src/rows.ts';
 import type { ColumnView, RowView } from '../src/types.ts';
 
 function row(id: string, bytes: number | null, extra: Partial<RowView> = {}): RowView {
@@ -43,24 +43,6 @@ test('headers keep their rows', () => {
 test('rows without a size follow the sized ones in engine order', () => {
   const rows = [row('n1', null), row('s', 7), row('n2', null)];
   assert.deepEqual(ids(sortRows(rows)), ['s', 'n1', 'n2']);
-});
-
-test('gridTemplate adds the check column only when rows have checks', () => {
-  const columns: ColumnView[] = [
-    { title: 'Item', kind: 'name' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
-  ];
-  assert.equal(gridTemplate(columns, true), '34px minmax(12ch,1fr) 96px minmax(74px,max-content)');
-  assert.equal(gridTemplate(columns, false), 'minmax(12ch,1fr) 96px minmax(74px,max-content)');
-});
-
-test('gridVars drops the level first, then the cells, and never the name or the size', () => {
-  const columns: ColumnView[] = [
-    { title: 'Item', kind: 'name' }, { title: 'Files', kind: 'cell' }, { title: 'Level', kind: 'level' }, { title: 'Size', kind: 'size' },
-  ];
-  const vars = gridVars(columns, true);
-  assert.equal(vars['--cols'], '34px minmax(12ch,1fr) fit-content(260px) 96px minmax(74px,max-content)');
-  assert.equal(vars['--cols-l'], '34px minmax(12ch,1fr) fit-content(260px) minmax(74px,max-content)');
-  assert.equal(vars['--cols-ls'], '34px minmax(12ch,1fr) minmax(74px,max-content)');
 });
 
 test('children of a collapsed parent are not visible', () => {

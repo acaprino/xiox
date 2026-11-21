@@ -7,52 +7,48 @@
 </head>
 <body>
   <main id="app" class="im-shell">
-    <div id="status"><span id="badge"></span><span id="status-text" role="status" aria-atomic="true"></span><span id="status-right"></span></div>
-    <div id="job" hidden></div>
+    <div id="status" class="im-status"><span id="badge" class="im-chip"></span><span id="status-text" class="im-status-text" role="status" aria-atomic="true"></span><span class="im-spacer"></span><span id="status-right" class="im-status-end"></span></div>
+    <div id="job" class="im-progress-row" hidden></div>
     <div id="profile" hidden></div>
     <div id="body">
-      <nav id="sections" class="frame" aria-label="Sections"></nav>
-      <aside id="bar2" class="frame"></aside>
-      <section id="main" class="frame">
-        <div id="notices"></div>
-        <div id="list-head" class="hd"></div>
+      <aside id="bar2" class="im-panel"></aside>
+      <section id="main" class="im-panel im-content" aria-label="Content">
+        <div id="notices" class="im-content-text"></div>
+        <div id="list-head" class="im-panel-header"></div>
         <div id="rows"></div>
-        <div id="detail"></div>
+        <div id="detail" class="im-content-text im-scroll"></div>
       </section>
     </div>
-    <!-- After the panes in the DOM so that Tab reaches the sections, the bars, the list and the detail first and the top-bar actions last; the grid rows of shell.css keep it on top. -->
-    <header id="top">
-      <!-- Smooth's title bar (the window has no system frame then): this strip drags the window and its double click maximizes;
-           what sits on it (the brand, the tabs, the switches, the window buttons) is above it. ONI MODE hides it, its frame is the system's. -->
-      <div id="titlebar" data-tauri-drag-region></div>
-      <span id="brand" aria-hidden="true"><i class="brand-mark"></i>Xiox</span>
-      <span id="version"></span>
-      <span class="spring"></span>
-      <div id="actions"></div>
-      <!-- Smooth's theme (src/skin.ts), after the actions in the Tab order: Windows, light, dark (main.ts keeps aria-pressed
-           in step; ONI MODE, chosen in Settings, hides it: it is always dark). -->
-      <div id="look">
-        <div id="theme" role="group" aria-label="Theme">
-          <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="true" data-key="theme:system" title="Follow the Windows theme">Auto</button>
-          <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false" data-key="theme:light" title="Always light">Light</button>
-          <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false" data-key="theme:dark" title="Always dark">Dark</button>
-        </div>
+    <!-- The action bar, under the content. After the panes in the DOM so that Tab reaches the sections, the sidebar, the list and the
+         detail first and the actions last; the grid areas of shell.css put the bar on top. -->
+    <div id="actions" class="im-actions"></div>
+    <!-- The window drags from the bar, its spacer and the brand with everything inside it (Tauri starts a drag only on an element that
+         carries the attribute): the tabs, the theme switch and the window buttons stay unmarked. -->
+    <header id="top" class="im-titlebar" data-tauri-drag-region>
+      <div class="im-brand" data-tauri-drag-region><span class="im-mark" aria-hidden="true" data-tauri-drag-region>X</span><span class="im-wordmark" data-tauri-drag-region>Xiox</span></div>
+      <nav id="sections" class="im-tabs" role="tablist" aria-label="Sections"></nav>
+      <span class="im-spacer" data-tauri-drag-region></span>
+      <!-- The theme: Windows, light, dark (main.ts keeps the radios in step with the choice). -->
+      <div id="theme" class="im-seg" role="radiogroup" aria-label="Theme">
+        <label title="Follow the Windows theme"><input type="radio" name="theme" value="system" data-theme-choice="system" data-key="theme:system" checked><span>Auto</span></label>
+        <label title="Always light"><input type="radio" name="theme" value="light" data-theme-choice="light" data-key="theme:light"><span>Light</span></label>
+        <label title="Always dark"><input type="radio" name="theme" value="dark" data-theme-choice="dark" data-key="theme:dark"><span>Dark</span></label>
       </div>
-      <!-- The window buttons of Smooth's title bar (src/window-controls.ts); Windows' snap layouts sit over the maximize one. -->
-      <div id="caption" role="group" aria-label="Window controls">
-        <button id="window-minimize" type="button" aria-label="Minimize window" title="Minimize" data-key="window:minimize">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10"/></svg>
+      <!-- The window buttons (Imago's mountWindowControls finds them by data-im-window); Windows' snap layouts sit over the maximize one. -->
+      <div class="im-window-buttons">
+        <button type="button" class="im-window-button" data-im-window="minimize" aria-label="Minimize window" title="Minimize">
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5h10"/></svg>
         </button>
-        <button id="window-maximize" type="button" aria-label="Maximize window" title="Maximize" data-key="window:maximize">
-          <svg class="maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg>
-          <svg class="restore-icon" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M5.5 5.5v-3h8v8h-3"/><rect x="2.5" y="5.5" width="8" height="8"/></svg>
+        <button type="button" class="im-window-button" data-im-window="maximize" aria-label="Maximize window" title="Maximize">
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9"/></svg>
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5v-3h8v8h-3"/><rect x="2.5" y="5.5" width="8" height="8"/></svg>
         </button>
-        <button id="window-close" type="button" aria-label="Close window" title="Close" data-key="window:close">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+        <button type="button" class="im-window-button" data-im-window="close" aria-label="Close window" title="Close">
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
         </button>
       </div>
     </header>
-    <footer id="foot"></footer>
+    <footer id="foot" class="im-footer"></footer>
     <div id="modal" hidden></div>
     <div id="about" hidden></div>
   </main>

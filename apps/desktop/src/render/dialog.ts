@@ -1,15 +1,16 @@
-// The modal confirmation: a cut-corner frame over a dimmed page. The page behind it is `inert`, so
-// nothing outside can be clicked or reached with Tab; Tab and Shift+Tab also cycle inside (the
-// browser alone would leave the page). The dialog is rebuilt from the view on every render, so the
-// focused control is found again by its `data-key`. Everything it says comes from the DialogView.
+// The modal confirmation: Imago's dialog over its scrim, which leaves the title bar free so the window can be moved and closed
+// while a confirmation is open. The page under it is `inert`, so nothing outside can be clicked or reached with Tab; Tab and
+// Shift+Tab also cycle inside (the browser alone would leave the page). The dialog is rebuilt from the view on every render, so
+// the focused control is found again by its `data-key`. Everything it says comes from the DialogView.
 
-import { button, fill, h } from '../dom.ts';
+import { noteHtml } from '@acaprino/imago/ui';
+import { button, fill, fromHtml, h } from '../dom.ts';
 import { buttonIntent } from '../intents.ts';
 import { cycleFocus, dialogKeySwallowed } from '../keys.ts';
 import type { ButtonView, DialogView, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
 
-const BACKGROUND = ['top', 'status', 'profile', 'job', 'body', 'foot'];
+const BACKGROUND = ['status', 'profile', 'job', 'body', 'actions', 'foot'];
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** What was open on the last render, and who had the focus before it opened. */
@@ -49,42 +50,52 @@ function wire(): void {
   });
 }
 
-/** The primary button of a permanent delete is the danger variant of the primary look (frame.css): still the one primary action. */
+/** The confirming button of a permanent delete is Imago's confirming danger button: still the one primary action of the dialog. */
 function dialogButton(view: SectionView, b: ButtonView, danger: boolean, on: Handlers): HTMLButtonElement {
   return button(h('span', { 'data-fit': '' }, b.label), {
-    class: b.primary ? (danger ? 'btn primary danger' : 'btn primary') : 'btn', 'data-button': b.id, 'data-key': `dlg:${b.id}`, disabled: !b.enabled,
+    class: b.primary ? (danger ? 'im-btn im-btn--confirm-danger' : 'im-btn im-btn--primary') : 'im-btn',
+    'data-button': b.id, 'data-key': `dlg:${b.id}`, disabled: !b.enabled,
     onClick: () => on.send(view.section, buttonIntent(view.section, b.id)),
   });
 }
 
 function ackBox(view: SectionView, dialog: DialogView, on: Handlers): HTMLElement {
   const checked = dialog.ack === true;
-  return h('button', {
-    type: 'button', class: 'ack', role: 'checkbox', 'aria-checked': String(checked), 'data-key': 'dlg:ack',
-    onClick: () => on.send(view.section, { kind: 'setAck', on: !checked }),
-  }, h('i', { class: 'ckbox', 'aria-hidden': 'true' }), h('span', {}, 'I have read the warnings'));
+  const box = h('input', { type: 'checkbox', class: 'im-check', checked, 'data-key': 'dlg:ack' });
+  box.addEventListener('change', () => on.send(view.section, { kind: 'setAck', on: !checked }));
+  return h('label', { class: 'im-option ack' }, box, 'I have read the warnings');
+}
+
+/** A note of the dialog with a title and plain lines under it: the warnings and the cautions are notes of their tone. */
+function listNote(title: string | null, tone: 'warn', items: HTMLElement[], cls: string): HTMLElement {
+  const note = fromHtml(document, noteHtml({ title: title ?? undefined, tone, actionsHtml: '<span data-slot></span>' })).firstElementChild as HTMLElement;
+  note.classList.add(cls);
+  const slot = note.querySelector('[data-slot]');
+  const row = slot?.parentElement;
+  slot?.remove();
+  row?.replaceWith(h('ul', { class: 'xi-lines' }, ...items));
+  return note;
 }
 
 function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement {
   const body: (HTMLElement | null)[] = [
     ...d.text.map((line) => h('p', { class: 'dlg-text' }, line)),
-    d.error === null ? null : h('p', { class: 'dlg-error', role: 'alert' }, d.error),
+    d.error === null ? null : h('div', { class: 'dlg-error' }, fromHtml(document, noteHtml({ message: d.error, tone: 'err' }))),
     ...d.summary.map((line) => h('p', { class: 'dlg-sum' }, line)),
-    d.rows.length === 0 ? null : h('div', { class: 'dlg-rows', role: 'list', tabindex: 0, 'aria-label': 'Items', 'data-key': 'dlg:rows' },
-      ...d.rows.map(([label, size]) => h('div', { class: 'dr', role: 'listitem' },
-        h('span', { class: 'ellipsis', title: label }, label), h('span', { class: 'num dr-size' }, size)))),
-    d.warnings.length === 0 && d.warningsTitle === null ? null : h('div', { class: 'dlg-warn' },
-      d.warningsTitle === null ? null : h('b', { class: 'dlg-sub' }, d.warningsTitle),
-      h('ul', {}, ...d.warnings.map((w) => h('li', {}, w)))),
-    d.cautions.length === 0 && d.cautionTitle === null ? null : h('div', { class: 'dlg-caut' },
-      d.cautionTitle === null ? null : h('b', { class: 'dlg-sub' }, d.cautionTitle),
-      h('ul', {}, ...d.cautions.map(([label, note]) => h('li', {}, h('span', { class: 'cl' }, label), h('small', {}, note))))),
+    d.rows.length === 0 ? null : h('div', { class: 'im-scroll dlg-rows', role: 'region', tabindex: 0, 'aria-label': 'Items', 'data-key': 'dlg:rows' },
+      h('table', { class: 'im-table' }, h('tbody', {},
+        ...d.rows.map(([label, size]) => h('tr', { class: 'dr' },
+          h('td', { title: label }, h('span', { class: 'ellipsis' }, label)), h('td', { class: 'im-num dr-size' }, size)))))),
+    d.warnings.length === 0 && d.warningsTitle === null ? null
+      : listNote(d.warningsTitle, 'warn', d.warnings.map((w) => h('li', {}, w)), 'dlg-warn'),
+    d.cautions.length === 0 && d.cautionTitle === null ? null
+      : listNote(d.cautionTitle, 'warn', d.cautions.map(([label, note]) => h('li', {}, h('b', { class: 'cl' }, label), ': ', h('small', {}, note))), 'dlg-caut'),
     d.ack === null ? null : ackBox(view, d, on),
   ];
-  return h('div', { class: 'dlg frame', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-title', tabindex: -1 },
-    h('h2', { id: 'dlg-title', class: 'dlg-title' }, d.title),
-    h('div', { class: 'dlg-body' }, ...body),
-    h('div', { class: 'dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, d.permanent, on))));
+  return h('div', { class: 'im-dialog im-float dlg', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'dlg-title', tabindex: -1 },
+    h('h2', { id: 'dlg-title', class: 'im-dialog-title dlg-title' }, d.title),
+    h('div', { class: 'im-dialog-body im-content-text im-scroll dlg-body' }, ...body),
+    h('div', { class: 'im-dialog-actions dlg-buttons' }, ...d.buttons.map((b) => dialogButton(view, b, d.permanent, on))));
 }
 
 /**
@@ -95,7 +106,7 @@ function firstFocus(root: HTMLElement, d: DialogView): HTMLElement | null {
   const primary = d.permanent ? undefined : d.buttons.find((b) => b.primary && b.enabled);
   const key = primary ? `dlg:${primary.id}` : d.permanent ? 'dlg:cancel' : d.ack !== null ? 'dlg:ack' : 'dlg:cancel';
   return root.querySelector<HTMLElement>(`[data-key="${key}"]`)
-    ?? controls(root).find((n) => n.matches('.btn')) ?? root.querySelector<HTMLElement>('[role=dialog]');
+    ?? controls(root).find((n) => n.matches('.im-btn')) ?? root.querySelector<HTMLElement>('[role=dialog]');
 }
 
 function setInert(on: boolean): void {
@@ -105,7 +116,7 @@ function setInert(on: boolean): void {
 /** Where the focus goes when the dialog closes: where it was before, else the list. */
 function restoreFocus(opener: string | null): void {
   const back = opener === null ? null : document.querySelector<HTMLElement>(`[data-key="${CSS.escape(opener)}"]`);
-  const target = back && !(back as HTMLButtonElement).disabled ? back : document.querySelector<HTMLElement>('#rows .grid') ?? document.getElementById('rows');
+  const target = back && !(back as HTMLButtonElement).disabled ? back : document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows');
   target?.focus();
 }
 
@@ -129,7 +140,7 @@ export function renderDialog(view: SectionView, on: Handlers, focusedBefore: str
   const keptKey = same && active !== null && root.contains(active) ? active.dataset.key ?? null : null;
   const scroll = root.querySelector('.dlg-body')?.scrollTop ?? 0;
   const opener = same && shown !== null ? shown.opener : (focusedBefore ?? active?.dataset.key ?? null);
-  fill(root, h('div', { class: 'scrim' }, content(view, d, on)));
+  fill(root, h('div', { class: 'im-scrim' }, content(view, d, on)));
   root.hidden = false;
   setInert(true);
   if (!same) openedAt = performance.now();

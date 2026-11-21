@@ -1,16 +1,12 @@
 import '@acaprino/imago/css/imago.css';
-import './styles/tokens.css';
-import './styles/frame.css';
 import './styles/shell.css';
-import './styles/list.css';
-import './styles/dialog.css';
-import './styles/smooth.css';
+import './styles/xiox.css';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { guardDesktop, mountWindowControls, mountZoom } from '@acaprino/imago/shell';
+import { tauriWindowApi } from '@acaprino/imago/tauri';
 import { api, errorText, inTauri, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
-import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
-import { initializeWindowControls } from './window-controls.ts';
 import { applyLook } from '@acaprino/imago/shell';
 import { LOOK_KEY, parseTheme, readLook, readTheme, resolveTheme, THEME_KEY, windowThemeFor, type Look, type ThemeChoice } from './look.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
@@ -28,7 +24,7 @@ const opening = createGate();
 /** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
 const inflight = createInflight();
 
-const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
+const SCROLLERS = ['#bar2 .xi-side', '#rows .xi-list', '#rows .rp-body'];
 
 /**
  * Where the list of categories is scrolled to, for the menu beside it. Each category header is preceded by an empty `.anchor`
@@ -37,8 +33,8 @@ const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
 const SPY_PIN_MS = 900;
 /** After a click on the menu the marked entry is the one clicked, however far the scroll gets (the last categories cannot reach the top). */
 let spyPinUntil = 0;
-const gridNode = (): HTMLElement | null => document.querySelector<HTMLElement>('#rows .grid');
-const headHeight = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('.r.h')?.offsetHeight ?? 24;
+const gridNode = (): HTMLElement | null => document.querySelector<HTMLElement>('#rows .xi-list');
+const headHeight = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('thead')?.offsetHeight ?? 24;
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function anchorTop(grid: HTMLElement, anchor: HTMLElement): number {
@@ -47,7 +43,7 @@ function anchorTop(grid: HTMLElement, anchor: HTMLElement): number {
 
 function scrollToGroup(id: string): void {
   const grid = gridNode();
-  const anchor = grid?.querySelector<HTMLElement>(`.anchor[data-anchor="${CSS.escape(id)}"]`);
+  const anchor = grid?.querySelector<HTMLElement>(`.xi-anchor[data-anchor="${CSS.escape(id)}"]`);
   if (!grid || !anchor) return;
   grid.scrollTo({ top: Math.max(0, anchorTop(grid, anchor) - headHeight(grid)), behavior: reducedMotion() ? 'auto' : 'smooth' });
 }
@@ -57,7 +53,7 @@ function updateSpy(): void {
   const view = ui.views[ui.section];
   const grid = gridNode();
   if (!view || !grid) return;
-  const anchors = [...grid.querySelectorAll<HTMLElement>('.anchor')];
+  const anchors = [...grid.querySelectorAll<HTMLElement>('.xi-anchor')];
   if (anchors.length === 0) return;
   let id = ui.spy[ui.section];
   if (performance.now() >= spyPinUntil || id === undefined) {
@@ -71,9 +67,9 @@ function updateSpy(): void {
   // The menu follows the list into view only when the category changed: a render must not pull the bar back from the options the user scrolled to.
   const moved = ui.spy[ui.section] !== id;
   ui.spy[ui.section] = id;
-  for (const entry of document.querySelectorAll<HTMLElement>('#bar2 .it.menu')) {
+  for (const entry of document.querySelectorAll<HTMLElement>('#bar2 .im-row[data-group]')) {
     const here = entry.dataset.group === id;
-    entry.classList.toggle('on', here);
+    entry.setAttribute('aria-selected', String(here));
     if (here) { entry.setAttribute('aria-current', 'true'); if (moved) entry.scrollIntoView({ block: 'nearest' }); } else entry.removeAttribute('aria-current');
   }
 }
@@ -116,7 +112,7 @@ function render(): void {
   if (reporting !== reportShown) {
     reportShown = reporting;
     const lost = document.activeElement === null || document.activeElement === document.body;
-    if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .grid')?.focus();
+    if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .xi-table')?.focus();
   }
   syncChrome();
 }
@@ -223,12 +219,12 @@ const handlers: Handlers = {
 
 /** The row the selection is on, after a move: the page scrolls to keep it in view. */
 function showSelected(): void {
-  document.querySelector<HTMLElement>('#rows .r.sel')?.scrollIntoView({ block: 'nearest' });
+  document.querySelector<HTMLElement>('#rows tr[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
 const FIELD = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
 /** Enter and Space on these belong to the control (the browser presses it), never to the global keys. */
-const PRESSABLE = 'button, a[href], summary, [role="checkbox"], [role="button"]';
+const PRESSABLE = 'button, a[href], summary, input[type="checkbox"], input[type="radio"], [role="button"]';
 
 /**
  * The global keys (keys.ts decides what a key means). Arrows move the selection, Space ticks the focused
@@ -330,15 +326,13 @@ let theme: ThemeChoice = 'system';
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 function drawLook(): void {
   applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri });
-  for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-    choice.setAttribute('aria-pressed', String(choice.dataset.themeChoice === theme));
-  }
+  for (const choice of document.querySelectorAll<HTMLInputElement>('input[data-theme-choice]')) choice.checked = choice.dataset.themeChoice === theme;
   syncChrome();
 }
 systemDark.addEventListener('change', () => { if (theme === 'system') drawLook(); });
 
-for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-  choice.addEventListener('click', () => {
+for (const choice of document.querySelectorAll<HTMLElement>('input[data-theme-choice]')) {
+  choice.addEventListener('change', () => {
     theme = parseTheme(choice.dataset.themeChoice ?? null);
     drawLook();
     try { localStorage.setItem(THEME_KEY, theme); } catch { /* no storage: the theme lasts until the window closes */ }
@@ -352,52 +346,14 @@ function chooseLook(next: Look): void {
   try { localStorage.setItem(LOOK_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
 }
 
-/** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
-const ZOOM_KEY = 'xiox.zoom';
-let zoom = 1;
-
-function readZoom(): number {
-  try { return storedZoom(localStorage.getItem(ZOOM_KEY)); } catch { return 1; }
-}
-
-function applyZoom(factor: number): void {
-  zoom = factor;
-  try { localStorage.setItem(ZOOM_KEY, String(factor)); } catch { /* no storage: the zoom lasts until the window closes */ }
-  // Outside Tauri (Vite, the smoke test) the browser's own zoom is the stand-in. The zoom is never worth a
-  // broken start: a webview that cannot be reached (it throws, it rejects) leaves the page at its size.
-  if (!inTauri) return;
-  try {
-    void getCurrentWebview().setZoom(factor).catch(() => undefined);
-  } catch { /* the page draws anyway, unzoomed */ }
-}
-
-function stepZoom(step: ZoomStep): void {
-  const next = nextZoom(zoom, step);
-  if (next !== zoom) applyZoom(next);
-}
-
-/** The app's own chords, in fields and dialogs too (keys.ts `chordAction`); the browser's are off in Rust. */
+/** The app's own chord, in a field or not (keys.ts `chordAction`): Ctrl+A selects the copyable text. Zoom is Imago's (`mountZoom`, in `start`). */
 document.addEventListener('keydown', (event) => {
   const target = event.target instanceof Element ? event.target : null;
   const chord = chordAction(event, { inField: target?.closest(FIELD) != null });
   if (chord === null) return;
   event.preventDefault();
-  if (chord.kind === 'zoom') stepZoom(chord.step); else selectAll(target);
+  selectAll(target);
 });
-
-/** Ctrl+wheel (and a touchpad pinch, which arrives as one) zooms by whole steps: small deltas add up to a notch. */
-let wheelTravel = 0;
-document.addEventListener('wheel', (event) => {
-  if (!event.ctrlKey) { wheelTravel = 0; return; }
-  event.preventDefault();
-  wheelTravel += wheelPixels(event.deltaY, event.deltaMode, zoom);
-  if (Math.abs(wheelTravel) < WHEEL_NOTCH) return;
-  stepZoom(wheelTravel < 0 ? 'in' : 'out');
-  wheelTravel = 0;
-}, { passive: false });
-
-// The mouse's back and forward buttons belong to a browser: the window has no pages to go back to.
-window.addEventListener('mouseup', (event) => { if (event.button === 3 || event.button === 4) event.preventDefault(); });
 
 /** The webview's storage, or null when it refuses it (a blocked profile). */
 function safeStorage(): Storage | null {
@@ -405,8 +361,13 @@ function safeStorage(): Storage | null {
 }
 
 async function start(): Promise<void> {
-  // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.
-  applyZoom(readZoom());
+  // Imago's window code. The guard takes away the browser's keys, its menu and the mouse's back and forward buttons (it also takes
+  // reload and DevTools, so not under `tauri dev`); the zoom is 50 to 200 % in steps of 10, saved, applied at every start (a reload
+  // after a crash keeps the webview's last factor); the window buttons report their failures as a notice.
+  if (!import.meta.env.DEV) guardDesktop(document);
+  if (inTauri) {
+    mountZoom(document, { apply: (level) => getCurrentWebview().setZoom(level), storageKey: 'xiox.zoom' });
+  }
   look = readLook(safeStorage());
   theme = readTheme(safeStorage());
   drawLook();
@@ -425,13 +386,17 @@ async function start(): Promise<void> {
   }
   focusList();
   signalReady();
-  void initializeWindowControls((failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
+  const titlebar = document.getElementById('top');
+  if (inTauri && titlebar !== null) {
+    const onError = (action: string, failure: unknown): void => { error = { section: ui.section, text: `${action} failed: ${errorText(failure)}` }; render(); };
+    mountWindowControls(titlebar, tauriWindowApi(onError), { onError });
+  }
 }
 
 /** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */
 function focusList(): void {
   const dialog = document.querySelector<HTMLElement>('#modal:not([hidden]) [role=dialog]');
-  (dialog ?? gridNode() ?? document.getElementById('rows'))?.focus();
+  (dialog ?? document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 
 // A native dialog (folder, save, the recovery message) closing gives the window back, but WebView2 does not always put the

@@ -34,6 +34,17 @@ export function button(label: Child | Child[], attrs: Attrs = {}): HTMLButtonEle
   return h('button', { type: 'button', ...attrs }, ...(Array.isArray(label) ? label : [label]));
 }
 
-export function kbd(text: string): HTMLElement {
-  return h('kbd', {}, text);
+/** A key cap, as Imago draws it (`im-key`): the word of a key as it is written on it (`a`, `↵`, `Esc`). */
+export function keyCaps(text: string): HTMLElement {
+  return h('kbd', { class: 'im-key' }, text);
+}
+
+/**
+ * The nodes of a string the package wrote (`noteHtml`, `chipHtml` ...): the one way this app turns a package string into
+ * elements. Only the package's own markup goes in, with the app's text escaped by the package, never a string of the app's.
+ */
+export function fromHtml(doc: Document, html: string): DocumentFragment {
+  const template = doc.createElement('template');
+  template.innerHTML = html;
+  return template.content;
 }
