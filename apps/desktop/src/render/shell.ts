@@ -3,12 +3,12 @@
 // the static headings, key hints and number formatting. The list, the detail panel and bar 2
 // are drawn by their own modules.
 
-import { footerKeys, noteHtml, type Registry } from '@acaprino/imago/ui';
+import { footerKeys, LOADING_DELAY_MS, noteHtml, setPanelState, showAfter, type Registry } from '@acaprino/imago/ui';
 import { button, fill, fromHtml, h, keyCaps } from '../dom.ts';
 import { ramText } from '../format.ts';
 import { actionIntent } from '../intents.ts';
 import { footerEntries } from '../commands.ts';
-import { disabledReason } from './policy.ts';
+import { disabledReason, emptyAction } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, RowView, SectionId, SectionView } from '../types.ts';
 import { renderSidebar } from './sidebar.ts';
@@ -178,11 +178,49 @@ function renderJob(root: HTMLElement, view: SectionView): void {
     job.detail === null ? null : h('span', { class: 'xi-job-detail im-num' }, ellipsis(job.detail)));
 }
 
-/** The window when nothing can be drawn (the first command failed): the message, in the notice area. */
-export function renderFailure(message: string): void {
+/** The panel state on screen (`ready`, `empty`, `loading` or `error`, with what it says), so that a render that changes nothing leaves it alone. */
+let panelState = 'ready';
+/** Cancels a loading state that is waiting for its delay. */
+let cancelLoading: (() => void) | null = null;
+
+/**
+ * The content panel's state: a list with nothing in it is the panel's empty state (with the section's start action), a job with no row
+ * yet is its loading state, shown only after `LOADING_DELAY_MS` so a quick answer never flashes; a list or a report is `ready`. The panel
+ * keeps its header and its frame, and `setPanelState` hides the list under the state's layer.
+ */
+function syncPanelState(view: SectionView, on: Handlers): void {
+  const content = byId('main');
+  const empty = view.report === null && (view.rows.length === 0 || view.empty !== null);
+  const kind = !empty ? 'ready' : view.job !== null ? 'loading' : 'empty';
+  const start = kind === 'empty' ? emptyAction(view) : null;
+  const key = `${view.section}|${kind}|${view.empty?.title ?? ''}|${view.empty?.text ?? ''}|${start?.id ?? ''}|${start?.label ?? ''}`;
+  if (key === panelState) return;
+  panelState = key;
+  cancelLoading?.();
+  cancelLoading = null;
+  if (kind === 'ready') {
+    setPanelState(content, { kind: 'ready' });
+  } else if (kind === 'loading') {
+    cancelLoading = showAfter(LOADING_DELAY_MS, () => {
+      setPanelState(content, { kind: 'loading', rows: 3 });
+      content.setAttribute('aria-busy', 'true');
+    });
+  } else {
+    setPanelState(content, {
+      kind: 'empty', title: view.empty?.title, text: view.empty?.text ?? 'Nothing to show.',
+      action: start === null ? undefined : { label: start.label, run: () => on.send(view.section, actionIntent(view.section, start.id)) },
+    });
+  }
+}
+
+/** The window when nothing can be drawn (the first command failed): the content panel's error state, with a Retry that asks again. */
+export function renderFailure(message: string, retry: () => void): void {
   setBadge('Error', 'err');
   setStatus('Error', message);
-  fill(byId('notices'), noticeNode({ tone: 'error', text: message, more: [] }));
+  cancelLoading?.();
+  cancelLoading = null;
+  panelState = 'error';
+  setPanelState(byId('main'), { kind: 'error', text: message, retry: { label: 'Retry', run: retry } });
 }
 
 /** A button of the content header that opens the inspector on `kind`, or closes it when it is open on it. */
@@ -254,6 +292,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
     // A category or a sub-heading has nothing to add to its own line (its note is on it).
     detailRow = focused?.kind === 'group' || focused?.kind === 'header' ? null : focused;
   }
+  syncPanelState(view, on);
   renderInspector(byId('app'), view, ui, detailRow, on);
 
   // Footer.

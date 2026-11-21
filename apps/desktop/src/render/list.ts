@@ -6,11 +6,10 @@
 import { iconHtml } from '@acaprino/imago/ui';
 import { fill, fromHtml, h } from '../dom.ts';
 import { formatBytes } from '../format.ts';
-import { actionIntent, bulkIntent, searchIntent } from '../intents.ts';
+import { bulkIntent, searchIntent } from '../intents.ts';
 import { activeSort, headerBytes, rowDepths, rowParents, type SortKey } from '../rows.ts';
 import { bulkCheck, bulkLocked, currentFocus, focusable, foldedGroups, searching, shownRows, type UiState } from '../state.ts';
 import type { Check, ColumnView, RowView, SectionView } from '../types.ts';
-import { emptyAction } from './policy.ts';
 import type { Handlers } from './shell.ts';
 
 const SEARCH_DELAY_MS = 150;
@@ -230,15 +229,9 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   scroller.classList.toggle('is-empty', empty);
   scroller.setAttribute('aria-busy', String(view.job !== null));
   if (empty) {
-    // Nothing for the arrows to move over, so no table (a treegrid with no rows would be announced as one) and no Tab stop; the
-    // action the empty state offers is one.
-    const start = emptyAction(view);
-    fill(scroller, h('div', { class: view.job !== null ? 'im-empty xi-empty busy' : 'im-empty xi-empty', 'data-state-layer': 'empty' },
-      view.empty ? h('strong', { class: 'empty-title' }, view.empty.title) : null,
-      view.empty ? h('span', {}, view.empty.text) : null,
-      start === null ? null : h('button', {
-        type: 'button', class: 'im-btn im-btn--primary', 'data-key': `empty:${start.id}`, onClick: () => on.send(view.section, actionIntent(view.section, start.id)),
-      }, h('span', { 'data-fit': '' }, start.label))));
+    // No table (a treegrid with no rows would be announced as one) and no Tab stop: the empty and the loading state are the content
+    // panel's own (`setPanelState`, render/shell.ts), which also hides this list while one shows.
+    fill(scroller);
     return;
   }
   const checks = view.rows.some((r) => r.check !== 'none');

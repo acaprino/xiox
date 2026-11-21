@@ -21,11 +21,14 @@ const ui = createUi();
 let app: AppInfo | null = null;
 /** The last failed command and the section it concerns: shown only while that section is open; any later success, a section switch or a push for another section clears it. */
 let errorSection: SectionId | null = null;
+/** The words of the last failed command: the error state of the panel says them when there is no view to draw. */
+let lastFailure = '';
 /** Closes the notice of the failed command on screen. */
 let dismissError: (() => void) | null = null;
 
 /** A command failed: an error notice that stays until it is dismissed, or until the next command of that section succeeds. */
 function fail(section: SectionId, text: string): void {
+  lastFailure = text;
   clearError();
   errorSection = section;
   dismissError = notify(shell, text, { tone: 'err' });
@@ -424,6 +427,34 @@ function safeStorage(): Storage | null {
   try { return localStorage; } catch { return null; }
 }
 
+/** Whether the page already listens to the views Rust pushes (a Retry must not listen twice). */
+let listening = false;
+
+/** The first views: the app's facts, then Cleanup. A failure leaves the content panel in its error state, with a Retry that asks again. */
+async function load(): Promise<void> {
+  try {
+    app = await api.appInfo();
+    if (!listening) {
+      listening = true;
+      onView((view) => {
+        // News about another section ends an error that was about this one.
+        if (errorSection !== null && errorSection !== view.section) clearError();
+        if (acceptView(ui, view) && view.section === ui.section) render();
+        syncChrome();
+      });
+    }
+    await open('cleanup');
+  } catch (failure) {
+    renderFailure(errorText(failure), () => { void load(); });
+    return;
+  }
+  // `open` reports its own failure as a notice; with no view there is nothing to draw but the error state.
+  if (ui.views[ui.section] === undefined) {
+    clearError();
+    renderFailure(lastFailure || 'The first command did not answer.', () => { void load(); });
+  }
+}
+
 async function start(): Promise<void> {
   // Imago's window code. The guard takes away the browser's keys, its menu and the mouse's back and forward buttons (it also takes
   // reload and DevTools, so not under `tauri dev`); the zoom is 50 to 200 % in steps of 10, saved, applied at every start (a reload
@@ -435,19 +466,7 @@ async function start(): Promise<void> {
   look = readLook(safeStorage());
   theme = readTheme(safeStorage());
   drawLook();
-  try {
-    app = await api.appInfo();
-    onView((view) => {
-      // News about another section ends an error that was about this one.
-      if (errorSection !== null && errorSection !== view.section) clearError();
-      if (acceptView(ui, view) && view.section === ui.section) render();
-      syncChrome();
-    });
-    await open('cleanup');
-  } catch (failure) {
-    // No window state to draw: say what happened instead of leaving a blank window.
-    renderFailure(errorText(failure));
-  }
+  await load();
   focusList();
   signalReady();
   const titlebar = document.getElementById('top');
