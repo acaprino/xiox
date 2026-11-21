@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
-import { SELECTABLE } from '../src/keys.ts';
+import { SELECTABLE } from '../src/commands.ts';
 
 const file = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const styles = readdirSync(new URL('../src/styles/', import.meta.url)).filter((name) => name.endsWith('.css')).map((name) => [name, file(`src/styles/${name}`)] as const);

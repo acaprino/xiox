@@ -6,7 +6,7 @@
 import { noteHtml } from '@acaprino/imago/ui';
 import { button, fill, fromHtml, h } from '../dom.ts';
 import { buttonIntent } from '../intents.ts';
-import { cycleFocus, dialogKeySwallowed } from '../keys.ts';
+import { cycleFocus, dialogKeySwallowed } from '../commands.ts';
 import type { ButtonView, DialogView, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
 

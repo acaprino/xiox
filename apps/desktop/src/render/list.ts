@@ -262,6 +262,7 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   let table = scroller.querySelector<HTMLTableElement>(':scope > table');
   if (!table) {
     table = h('table', { class: 'im-table xi-table', role: 'treegrid', tabindex: 0 });
+    table.addEventListener('keydown', (event) => on.listKey(event));
     scroller.replaceChildren(table);
   }
   table.setAttribute('aria-label', view.title);

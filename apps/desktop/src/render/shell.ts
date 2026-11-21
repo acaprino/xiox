@@ -3,11 +3,11 @@
 // the static headings, key hints and number formatting. The list, the detail panel and bar 2
 // are drawn by their own modules.
 
-import { noteHtml } from '@acaprino/imago/ui';
+import { footerKeys, noteHtml, type Registry } from '@acaprino/imago/ui';
 import { button, fill, fromHtml, h, keyCaps } from '../dom.ts';
 import { ramText } from '../format.ts';
 import { actionIntent } from '../intents.ts';
-import { footerHint } from '../keys.ts';
+import { footerEntries } from '../commands.ts';
 import { disabledReason } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, RowView, SectionId, SectionView } from '../types.ts';
@@ -35,6 +35,8 @@ export interface Handlers {
   sortBy(column: string): void;
   /** Opens the inspector on the details of the focused row, or on the section's options; the same one again closes it. */
   toggleInspector(kind: 'details' | 'options'): void;
+  /** A key pressed on the list: it moves, ticks, folds, or presses the primary action (commands.ts `listKey`). */
+  listKey(event: KeyboardEvent): void;
   /** Closes the inspector (its own button). */
   closeInspector(): void;
   /** The menu of the categories: scrolls the list to one of them (opening it if it was folded). */
@@ -50,6 +52,8 @@ export interface Screen {
   app: AppInfo;
   view: SectionView;
   ui: UiState;
+  /** The commands, for the footer's key list. */
+  registry: Registry;
   /** The `data-key` of the control that had the keyboard focus before this render (the redraw replaces it): where a dialog returns the focus to. */
   focused: string | null;
   /** The message of the last failed command, shown above the list until the next one succeeds. */
@@ -262,7 +266,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
     h('span', { class: 'im-dot', 'data-im-tone': 'ok' }),
     h('span', { class: 'im-footer-text foot-left' }, ellipsis(view.footer ?? '')),
     h('span', { class: 'im-spacer' }),
-    h('span', { class: 'im-footer-keys foot-right', 'data-fit': '' }, footerHint(view)));
+    footerKeys(document, screen.registry, footerEntries(view, (id) => screen.registry.get(id) !== undefined)));
 
   // The confirmation, last: it takes the focus when it opens and gives it back when it closes.
   renderDialog(view, on, screen.focused);

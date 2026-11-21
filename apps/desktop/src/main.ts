@@ -4,11 +4,11 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { guardDesktop, mountWindowControls, mountZoom } from '@acaprino/imago/shell';
 import { tauriWindowApi } from '@acaprino/imago/tauri';
 import { api, errorText, inTauri, onView } from './api.ts';
+import { actionCommands, actionForKey, listKey, registerCommands, SELECTABLE, type CommandApp } from './commands.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
-import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { applyLook } from '@acaprino/imago/shell';
 import { LOOK_KEY, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
-import { createRegistry, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
+import { claimKey, createRegistry, isTextTarget, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
 import { buildFrame } from './render/frame.ts';
 import { inspectorOpen } from './render/inspector.ts';
 import { renderSettings } from './render/settings.ts';
@@ -140,9 +140,10 @@ function render(): void {
     if (error !== null) renderFailure(error.text);
     return;
   }
+  viewActions.sync(view);
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
+  renderShell({ app, view, ui, registry, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
   // Settings is drawn over the section's sidebar, header, content and action bar; the status row, the footer and the window title stay the section's.
   if (ui.settings && about !== null) renderSettings(about, { look, theme }, applyAppearance);
   SCROLLERS.forEach((selector, i) => {
@@ -241,6 +242,53 @@ const handlers: Handlers = {
     for (const row of view.rows) if (row.kind === 'group') ui.fold.set(row.id, fold);
     render();
   },
+  listKey: (event) => {
+    const view = ui.views[ui.section];
+    const act = listKey(event);
+    if (!view || act === null || !commandApp.listed()) return;
+    const target = event.target instanceof Element ? event.target : null;
+    // Enter and Space on a button, a box or a field of the list belong to it (the browser presses it).
+    if ((act.kind === 'primary' || act.kind === 'toggle') && target?.closest('button, a[href], input, select, textarea') != null) return;
+    const section = view.section;
+    const rows = shownRows(ui, view);
+    switch (act.kind) {
+      case 'move': {
+        const next = moveFocus(rows, currentFocus(ui, view), act.delta, rowParents(view.rows));
+        if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
+        break;
+      }
+      case 'toggle': {
+        const row = rows.find((r) => r.id === currentFocus(ui, view));
+        if (!row || row.check === 'none' || !row.enabled || view.job !== null) return;
+        handlers.send(section, toggleIntent(section, row.id));
+        break;
+      }
+      case 'expand': {
+        const id = currentFocus(ui, view);
+        if (id === null) return;
+        const parents = rowParents(view.rows);
+        // A category, and a folder of the projects' tree (a sub-heading with rows under it), fold; a parent row expands.
+        const kind = rows.find((r) => r.id === id)?.kind;
+        if (kind === 'group' || (kind === 'header' && parents.has(id))) {
+          ui.fold.set(id, !act.open);
+          render();
+          break;
+        }
+        if (!parents.has(id)) return;
+        if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
+        render();
+        break;
+      }
+      case 'primary': {
+        const action = actionForKey(view, 'Enter');
+        if (action === null) return;
+        handlers.send(section, actionIntent(section, action.id));
+        break;
+      }
+    }
+    claimKey(event);
+    event.preventDefault();
+  },
   toggleInspector: (kind) => {
     // The inspector may have been closed by Escape since the last render: what is open now decides.
     ui.inspector = ui.inspector === kind && inspectorOpen(shell) ? null : kind;
@@ -280,90 +328,43 @@ function showSelected(): void {
   document.querySelector<HTMLElement>('#rows tr[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
-const FIELD = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
-/** Enter and Space on these belong to the control (the browser presses it), never to the global keys. */
-const PRESSABLE = 'button, a[href], summary, input[type="checkbox"], input[type="radio"], [role="button"]';
-
 /**
- * The global keys (keys.ts decides what a key means). Arrows move the selection, Space ticks the focused
- * row, Enter / a press the view's action that carries that key, Esc closes the dialog or the
- * report, else cancels the job. The page presses only what the view offers enabled; Rust still decides.
+ * What the commands act on (commands.ts): the page's own state and the handlers below. Imago's registry answers the keys of the window
+ * (Escape included) and the list answers its own (`handlers.listKey`); there is no `keydown` of the page's own on the document.
  */
-function onKey(event: KeyboardEvent): void {
-  const view = ui.views[ui.section];
-  if (!view || event.defaultPrevented) return;
-  const target = event.target instanceof Element ? event.target : null;
-  const inField = target?.closest(FIELD) != null;
-  const act = keyAction(event, { inField, dialog: view.dialog !== null });
-  if (act === null) return;
-  if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
-  const section = view.section;
-  const rows = shownRows(ui, view);
-  const listed = view.report === null && !ui.settings;
-  switch (act.kind) {
-    case 'section':
-      if (act.section !== section) void open(act.section);
-      break;
-    case 'closeDialog':
-      handlers.send(section, { kind: 'closeDialog' });
-      break;
-    case 'about':
-      void openSettings();
-      break;
-    case 'move': {
-      if (!listed) return;
-      const next = moveFocus(rows, currentFocus(ui, view), act.delta, rowParents(view.rows));
-      if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
-      break;
-    }
-    case 'toggle': {
-      const row = rows.find((r) => r.id === currentFocus(ui, view));
-      if (!listed || !row || row.check === 'none' || !row.enabled || view.job !== null) return;
-      handlers.send(section, toggleIntent(section, row.id));
-      break;
-    }
-    case 'expand': {
-      const id = currentFocus(ui, view);
-      if (!listed || id === null) return;
-      const parents = rowParents(view.rows);
-      // A category, and a folder of the projects' tree (a sub-heading with rows under it), fold; a parent row expands.
-      const kind = rows.find((r) => r.id === id)?.kind;
-      if (kind === 'group' || (kind === 'header' && parents.has(id))) {
-        ui.fold.set(id, !act.open);
-        render();
-        break;
-      }
-      if (!parents.has(id)) return;
-      if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
-      render();
-      break;
-    }
-    case 'sort': {
-      if (!listed) return;
-      const key = cycleSort(view.columns, ui.sort[section] ?? null, act.reverse);
-      if (key === null) delete ui.sort[section]; else ui.sort[section] = key;
-      render();
-      showSelected();
-      break;
-    }
-    case 'details':
-    case 'options':
-      if (!listed) return;
-      handlers.toggleInspector(act.kind);
-      break;
-    case 'action': {
-      if (act.key === 'Esc' && inField) { (target as HTMLElement).blur(); break; }
-      if (act.key === 'Esc' && view.report !== null) { handlers.send(section, { kind: 'closeDialog' }); break; }
-      const action = actionForKey(view, act.key);
-      if (action === null) return;
-      handlers.send(section, actionIntent(section, action.id));
-      break;
-    }
-  }
-  event.preventDefault();
-}
-
-document.addEventListener('keydown', onKey);
+const commandApp: CommandApp = {
+  view: () => ui.views[ui.section],
+  idle: () => app !== null && ui.views[ui.section] !== undefined && ui.views[ui.section]?.dialog === null,
+  listed: () => commandApp.idle() && ui.views[ui.section]?.report === null && !ui.settings,
+  inTextField: () => isTextTarget(document.activeElement),
+  openSection: (id) => { if (id !== ui.section || ui.settings) void open(id); },
+  openSettings: () => { void openSettings(); },
+  send: (section, intent) => handlers.send(section, intent),
+  sort: (reverse) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    const key = cycleSort(view.columns, ui.sort[view.section] ?? null, reverse);
+    if (key === null) delete ui.sort[view.section]; else ui.sort[view.section] = key;
+    render();
+    showSelected();
+  },
+  toggleInspector: (kind) => handlers.toggleInspector(kind),
+  selectAll: () => selectAll(document.activeElement),
+  escape: () => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    const active = document.activeElement;
+    // A confirmation's Escape is its Cancel; in a field it leaves the field; a report closes; else the view's Esc action (it cancels a job).
+    if (view.dialog !== null) { handlers.send(view.section, { kind: 'closeDialog' }); return; }
+    if (isTextTarget(active) && active instanceof HTMLElement) { active.blur(); return; }
+    if (view.report !== null) { handlers.send(view.section, { kind: 'closeDialog' }); return; }
+    const action = actionForKey(view, 'Esc');
+    if (action !== null) handlers.send(view.section, actionIntent(view.section, action.id));
+  },
+};
+registerCommands(registry, commandApp);
+/** The commands of the open view's actions: registered again when the view's actions change (render). */
+const viewActions = actionCommands(registry, commandApp);
 
 /** Ctrl+A selects the copyable text of the region the focus is in (keys.ts `SELECTABLE`), else nothing. */
 function selectAll(target: Element | null): void {
@@ -403,15 +404,6 @@ function applyAppearance(next: { look: Look; theme: ThemeChoice }): void {
   } catch { /* no storage: the look and the theme last until the window closes */ }
   if (ui.settings) render();
 }
-
-/** The app's own chord, in a field or not (keys.ts `chordAction`): Ctrl+A selects the copyable text. Zoom is Imago's (`mountZoom`, in `start`). */
-document.addEventListener('keydown', (event) => {
-  const target = event.target instanceof Element ? event.target : null;
-  const chord = chordAction(event, { inField: target?.closest(FIELD) != null });
-  if (chord === null) return;
-  event.preventDefault();
-  selectAll(target);
-});
 
 /** The webview's storage, or null when it refuses it (a blocked profile). */
 function safeStorage(): Storage | null {

@@ -279,7 +279,7 @@ async function checkCopy(page, label, section, view) {
       actions: all('#actions .im-btn').map((b) => [b.querySelector('[data-fit]')?.textContent ?? '', b.querySelector('.im-key')?.textContent ?? null, b.disabled]),
       sections: all('#sections .im-tab[data-section]').map((b) => [b.dataset.section, b.textContent]),
       about: [text('#settings [data-fit]'), text('#settings .im-key')],
-      hint: text('#foot .foot-right'), footLeft: text('#foot .foot-left'), title: text('#list-head .im-panel-title'),
+      hint: all('#foot .im-footer-keys > span').map((n) => n.textContent), footLeft: text('#foot .foot-left'), title: text('#list-head .im-panel-title'),
       notices: all('#notices .im-note').map((n) => n.querySelector('.ellipsis, b')?.textContent),
       empty: document.querySelector('#rows .xi-empty') ? [text('#rows .xi-empty .empty-title'), text('#rows .xi-empty span')] : null,
       job: document.getElementById('job').hidden ? null : {
@@ -318,7 +318,7 @@ async function checkCopy(page, label, section, view) {
   want('actions', found.actions, view.actions.map((a) => [a.label, a.key === null ? null : (KEY_LABELS[a.key] ?? a.key), !a.enabled]));
   want('section tabs', found.sections, SECTION_NAMES.map(([id, name]) => [id, name]));
   want('Settings button', found.about, ['Settings', '?']);
-  want('footer hint', found.hint, FOOTER[section]);
+  want('footer hint', found.hint, ['↑↓Move', 'SpaceToggle', 'SOrder by the next column', ...view.actions.filter((a) => a.key !== null && !['Esc', 'Escape'].includes(a.key)).map((a) => (a.key === 'Enter' ? '↵' : a.key.toUpperCase()) + a.label)]);
   want('footer text', found.footLeft, view.footer ?? '');
   want('list title', found.title, view.title);
   want('notices', found.notices, view.notices.map((n) => n.text));
