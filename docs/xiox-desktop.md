@@ -59,10 +59,11 @@ The window has two looks. **Smooth** is the default: modern and clean, in the ma
 the amber of Xiox as its only accent, the sections as tabs at the top and the buttons of the section
 under the list. Its title bar is the app's own: drag it to move the window, double-click it to
 maximize, and use its minimize, maximize and close buttons (hovering maximize offers the Windows 11
-snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is the look of the first version, three
-columns in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
-`Smooth` there to go back); the choice is kept for the next start. Everything else (the lists, the boxes, the
-keys, what each button does) is the same in both.
+snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is Imago's other look, with
+squared corners and capitals in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
+`Smooth` there to go back); the choice is kept for the next start. The window is Imago's (the design system of the suite):
+both looks have the same layout, the same title bar and window buttons, the same light and dark themes and the same glass. Everything
+else (the lists, the boxes, the keys, what each button does) is the same in both.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -84,13 +85,13 @@ keys, what each button does) is the same in both.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-In ONI MODE the window gets the Windows title bar back and no glass, the sections are the first of
-three columns, the buttons sit at the top right next to the version, and the detail is always shown
-under the list.
+Both looks draw this layout: ONI MODE has the same title bar (with the window buttons and the snap layouts), the same glass and the
+same Auto, Light and Dark switch as Smooth. The title bar's mark is the initial of the name on the amber of Xiox, and the executables'
+icons are the same mark. Open the window menu (`Alt`+`Space`) for `Reload interface`, which reloads the page when it hangs.
 
 **Top bar and buttons.** The Xiox wordmark, the sections and `Settings`. The buttons
 of the open section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...) sit under the list,
-the main one last and in the accent colour (in ONI MODE: at the top right). A small key next to a
+the main one last and in the accent colour. A small key next to a
 label says which key presses it. A button that cannot be used right now is greyed out; the chapters
 below say when. The style sheet writes the button labels in capitals; this guide names them as
 they are written in the sentences of the app.
@@ -183,9 +184,9 @@ until you answer `Add`; anything that is not a folder only gets a message saying
 
 **Theme.** Smooth follows the Windows theme, light or dark, title bar included, unless you pick
 `Light` or `Dark` instead of `Auto` in the switch at the top right (the choice is kept for the next
-start); ONI MODE is dark whatever Windows says, and hides that switch. The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
-is part of the product's identity and its contrasts are tested (`tests/contrast.test.ts`), so the
-window does not follow the system's light theme or accent colour. What follows the system is what
+start); the same switch serves ONI MODE, which has a light theme too (with `Auto` it is dark, as ONI is a dark look). The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
+is Imago's (its contrasts are tested in the package), so the
+window does not follow the system's accent colour. What follows the system is what
 accessibility needs: the high-contrast (forced colours) themes, reduced motion and the text size.
 
 ## Cleanup
@@ -538,13 +539,13 @@ and while the key is held down. When it closes, the focus goes back to where it 
 
 | Key | What it does |
 |---|---|
-| `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 67 % to 200 % |
+| `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 50 % to 200 % in steps of 10 % |
 | `Ctrl`+wheel | the same, one step per notch |
 | `Ctrl`+`0` | back to 100 % |
 | `Ctrl`+`A` | in a text field, its text; in the detail panel, a confirmation or the report, the text you can copy; anywhere else, nothing |
 | `Ctrl`+`C` | copy what is selected |
 
-The zoom is remembered for the next start. The window is not a web page: buttons, rows and titles
+The zoom is remembered for the next start (a level saved by an earlier version, 67 %, 125 % or 175 %, reads as the nearest step: 70 %, 130 %, 180 %). The window is not a web page: buttons, rows and titles
 cannot be selected and keep the arrow pointer, the right button opens a menu only on selected text
 (`Copy`) and in a text field (the editing commands), and the browser keys (`F5`, `Ctrl`+`R`,
 `Ctrl`+`P`, `Ctrl`+`F`, `F12`, `Alt`+`←`, the mouse's back button) do nothing. What is worth copying
@@ -576,6 +577,7 @@ next chapter). Their licence stays their own.
 |---|---|
 | Developers options (`Days of inactivity`, `Deletion`, extra folders) | `%APPDATA%\Xiox\settings.json` |
 | The window's size and position | `%APPDATA%\Xiox\window.json` (next to the settings file) |
+| The window's theme (`system`, `light` or `dark`), for the first frame of the next start | `%APPDATA%\Xiox\window-theme` |
 | Registry backups | `Documents\Xiox\registry-backup-<date>_<time>.reg` |
 | Backup of the registry keys an `Applications` rule is about to delete | `Documents\Xiox\rules-backup-<date>_<time>.reg` |
 | The cookie keep list | `Documents\Xiox\cookie-keep-list.txt` |
@@ -585,7 +587,8 @@ next chapter). Their licence stays their own.
 | Reports | nowhere, unless you press `Save as text…` and choose a place |
 
 `Documents` is your Documents folder (`%USERPROFILE%\Documents`). The app writes nothing else
-outside the places you choose. A window position that no longer fits is ignored; a settings file
+outside the places you choose. A window saved on a monitor that is gone comes back inside the monitors there are now; the fixtures window
+and `--only-root` keep neither the position nor the theme; a settings file
 that cannot be written is reported in the window (`Settings not saved: ...`).
 
 ## Troubleshooting
