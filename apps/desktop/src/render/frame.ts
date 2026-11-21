@@ -6,13 +6,6 @@
 import { shellFrameHtml, sidebarHtml, titlebarHtml } from '@acaprino/imago/ui';
 import { fromHtml } from '../dom.ts';
 
-/** The theme switch of the title bar (Settings takes it over, see render/settings.ts). */
-const THEME_SWITCH = `<div id="theme" class="im-seg" role="radiogroup" aria-label="Theme">
-  <label title="Follow the Windows theme"><input type="radio" name="theme" value="system" data-theme-choice="system" data-key="theme:system" checked><span>Auto</span></label>
-  <label title="Always light"><input type="radio" name="theme" value="light" data-theme-choice="light" data-key="theme:light"><span>Light</span></label>
-  <label title="Always dark"><input type="radio" name="theme" value="dark" data-theme-choice="dark" data-key="theme:dark"><span>Dark</span></label>
-</div>`;
-
 /** Names a region of the frame: the views find it by its id. */
 function name(shell: HTMLElement, selector: string, id: string, ...classes: string[]): HTMLElement {
   const node = shell.querySelector<HTMLElement>(selector);
@@ -34,7 +27,6 @@ export function buildFrame(doc: Document): HTMLElement {
       sidebarToggle: { label: 'Categories', controls: 'sidebar' },
       navigationHtml: '<nav id="sections" class="im-tabs" role="tablist" aria-label="Sections"></nav>',
       views: { label: 'Views', action: 'views' },
-      statusHtml: THEME_SWITCH,
       commands: { label: 'Commands', action: 'commands', shortcut: 'Ctrl K' },
       windowControls: true,
     }),

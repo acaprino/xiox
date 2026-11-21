@@ -32,6 +32,7 @@ export function keyAction(e: KeyLike, ctx: { inField: boolean; dialog: boolean }
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
   if (e.key === 'Escape') return ctx.dialog ? { kind: 'closeDialog' } : { kind: 'action', key: 'Esc' };
   if (ctx.inField || ctx.dialog) return null;
+  if (e.key === '4') return { kind: 'about' };
   const digit = /^[1-3]$/.test(e.key) ? SECTION_ORDER[Number(e.key) - 1] : undefined;
   if (digit !== undefined) return { kind: 'section', section: digit };
   switch (e.key) {

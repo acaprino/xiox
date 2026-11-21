@@ -16,7 +16,7 @@ test('buttons, menu entries and rows keep the arrow cursor: no hand, no "not all
     assert.doesNotMatch(text, /cursor:\s*(pointer|not-allowed)|cursor-pointer/, `${name} sets a web cursor`);
   }
   // The arrow and the chrome that is not text are Imago's base, which the shell carries: the app is an im-shell.
-  assert.match(file('index.html'), /id="app"[^>]*class="im-shell"/, 'the arrow cursor comes from the im-shell base');
+  assert.match(file('src/render/frame.ts'), /shell\.className = 'im-shell'/, 'the arrow cursor comes from the im-shell base');
 });
 
 test('the chrome is not selectable, and every place Ctrl+A selects is (im-content-text, the package\'s own opt-in)', () => {
@@ -179,7 +179,7 @@ test('every button of the page has a name: a text or an aria-label, icon-only on
 });
 
 test('the tick state of a category is said in words, not by a picture', () => {
-  const bar = file('src/render/bar2.ts');
+  const bar = file('src/render/sidebar.ts');
   for (const words of ['all ticked', 'some ticked', 'none ticked']) assert.ok(bar.includes(words), words);
   assert.doesNotMatch(bar, /pip/, 'no picture of the state is left');
 });
@@ -205,7 +205,7 @@ test('every scroll container gets the thin themed scrollbar from Imago: it is an
   assert.match(file('src/render/inspector.ts'), /class: 'im-panel-body im-content-text'/, 'the details scroll in the inspector panel body');
   assert.match(file('src/render/dialog.ts'), /im-scroll dlg-rows|dlg-rows[^\n]*im-scroll/, 'the items of a confirmation too');
   assert.match(file('src/render/list.ts'), /im-panel-body xi-list/, 'the list');
-  assert.match(file('src/render/bar2.ts'), /im-panel-body xi-side/, 'and the sidebar');
+  assert.match(file('src/render/frame.ts'), /'xi-side'/, 'and the sidebar (an im-panel-body)');
   for (const [name, text] of styles) assert.doesNotMatch(text, /scrollbar-width/, `${name} sets a scrollbar of its own`);
 });
 

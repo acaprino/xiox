@@ -34,7 +34,7 @@ test("the window is asked for the theme the user chose in both looks (ONI MODE h
 test('the first frame is the page: the root carries no look of its own, Imago writes it before the first paint', () => {
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.doesNotMatch(html, /data-skin|data-theme=|name="color-scheme"|<style>/, 'no look, no colour-scheme meta and no inline stage colour in the page');
-  assert.match(html, /id="app"[^>]*class="im-shell"/, 'the app is an im-shell, so the package\'s base applies');
+  assert.match(readFileSync(new URL('../src/render/frame.ts', import.meta.url), 'utf8'), /shell\.id = 'app';\s*shell\.className = 'im-shell'/, 'the app is an im-shell, so the package base applies');
   const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
   assert.match(main, /import '@acaprino\/imago\/css\/imago\.css';\r?\nimport '\.\/styles/, 'the package stylesheet is imported first');
   assert.match(main, /applyLook\(document\.documentElement,\s*\{\s*app: 'xiox'/, 'the look is written on the root');

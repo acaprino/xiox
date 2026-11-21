@@ -7,15 +7,15 @@ import { api, errorText, inTauri, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { applyLook } from '@acaprino/imago/shell';
-import { LOOK_KEY, parseTheme, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
+import { LOOK_KEY, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
 import { createRegistry, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
-import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { buildFrame } from './render/frame.ts';
 import { inspectorOpen } from './render/inspector.ts';
+import { renderSettings } from './render/settings.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
 import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SECTION_ORDER, shownRows } from './state.ts';
-import type { AnyIntent, AppInfo, SectionId } from './types.ts';
+import type { AboutView, AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
 let app: AppInfo | null = null;
@@ -25,6 +25,12 @@ let error: { section: SectionId; text: string } | null = null;
 const opening = createGate();
 /** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
 const inflight = createInflight();
+
+/** The look and the theme the user chose (look.ts); `drawLook` writes them on the root. Declared first: the commands of the look read them. */
+let look: Look = 'smooth';
+let theme: ThemeChoice = 'system';
+/** What Rust says of the app, read when Settings opens. */
+let about: AboutView | null = null;
 
 /** The frame of the window (render/frame.ts), written once; the views fill its regions. */
 const shell = buildFrame(document);
@@ -43,6 +49,8 @@ mountApp(shell, registry, {
     collapsed: readFold(),
     onChange: (collapsed) => { try { localStorage.setItem(FOLD_KEY, collapsed ? '1' : '0'); } catch { /* no storage: the fold lasts until the window closes */ } },
   },
+  // The look and the theme from the palette (Smooth, ONI, follow Windows, light, dark): the same five commands in every app.
+  appearance: { get: () => ({ look, theme }), set: (next) => applyAppearance(next) },
 });
 
 const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers' };
@@ -50,7 +58,7 @@ const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry
 const viewsButton = shell.querySelector<HTMLElement>('.im-views-menu');
 viewsButton?.addEventListener('click', () => openMenu(viewsButton, [
   ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => ui.section === id, run: () => { void open(id); } })),
-  { label: 'Settings', keys: 'Shift+?', run: () => { void openAbout(); } },
+  { label: 'Settings', keys: '4', checked: () => ui.settings, run: () => { void openSettings(); } },
 ]));
 shell.querySelector<HTMLElement>('.im-titlebar-command')?.addEventListener('click', () => { void registry.get(PALETTE_COMMAND)?.run(); });
 
@@ -135,6 +143,8 @@ function render(): void {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
   renderShell({ app, view, ui, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
+  // Settings is drawn over the section's sidebar, header, content and action bar; the status row, the footer and the window title stay the section's.
+  if (ui.settings && about !== null) renderSettings(about, { look, theme }, applyAppearance);
   SCROLLERS.forEach((selector, i) => {
     const node = document.querySelector(selector);
     if (node) node.scrollTop = scrolls[i] ?? 0;
@@ -150,7 +160,7 @@ function render(): void {
   if (reporting !== reportShown) {
     reportShown = reporting;
     const lost = document.activeElement === null || document.activeElement === document.body;
-    if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .xi-table')?.focus();
+    if (lost && view.dialog === null && !ui.settings) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .xi-table')?.focus();
   }
   syncChrome();
 }
@@ -163,6 +173,7 @@ async function open(section: SectionId): Promise<void> {
     (view) => {
       acceptView(ui, view);
       ui.section = section;
+      ui.settings = false;
       error = null;
       render();
     },
@@ -188,21 +199,25 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
   render();
 }
 
-/** The Settings window: the page's own, with no intent. A confirmation that is open keeps the keyboard, so Settings waits. */
-async function openAbout(): Promise<void> {
-  if (aboutOpen() || ui.views[ui.section]?.dialog != null) return;
-  const from = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key ?? null : null;
+/** Settings, the fourth view: the page's own, with no intent. A confirmation that is open keeps the keyboard, so Settings waits. */
+async function openSettings(): Promise<void> {
+  if (ui.settings || ui.views[ui.section]?.dialog != null) return;
   try {
-    showAbout(await api.about(), from, { skin: look, choose: chooseLook }, closeAbout);
+    about = await api.about();
   } catch (failure) {
     error = { section: ui.section, text: errorText(failure) };
     render();
+    return;
   }
+  ui.settings = true;
+  ui.inspector = null;
+  render();
+  document.querySelector<HTMLElement>('#sidebar-list [data-key^="settings:"]')?.focus();
 }
 
 const handlers: Handlers = {
   openSection: (id) => { void open(id); },
-  openAbout: () => { void openAbout(); },
+  openSettings: () => { void openSettings(); },
   send: (section, intent) => { void send(section, intent); },
   focusRow: (id) => { ui.focus[ui.section] = id; render(); },
   toggleRow: (id, section) => {
@@ -279,21 +294,21 @@ function onKey(event: KeyboardEvent): void {
   if (!view || event.defaultPrevented) return;
   const target = event.target instanceof Element ? event.target : null;
   const inField = target?.closest(FIELD) != null;
-  const act = keyAction(event, { inField, dialog: view.dialog !== null || aboutOpen() });
+  const act = keyAction(event, { inField, dialog: view.dialog !== null });
   if (act === null) return;
   if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
   const section = view.section;
   const rows = shownRows(ui, view);
-  const listed = view.report === null;
+  const listed = view.report === null && !ui.settings;
   switch (act.kind) {
     case 'section':
       if (act.section !== section) void open(act.section);
       break;
     case 'closeDialog':
-      if (aboutOpen()) closeAbout(); else handlers.send(section, { kind: 'closeDialog' });
+      handlers.send(section, { kind: 'closeDialog' });
       break;
     case 'about':
-      void openAbout();
+      void openSettings();
       break;
     case 'move': {
       if (!listed) return;
@@ -365,8 +380,6 @@ function selectAll(target: Element | null): void {
  * every change, also when Windows changes its colours while the theme follows them. The window is asked for the same theme
  * (`syncChrome`), so its title bar and the page agree. Both looks are glass in the desktop window.
  */
-let look: Look = 'smooth';
-let theme: ThemeChoice = 'system';
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 function drawLook(): void {
   applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri }, {
@@ -379,19 +392,16 @@ function drawLook(): void {
 }
 systemDark.addEventListener('change', () => { if (theme === 'system') drawLook(); });
 
-for (const choice of document.querySelectorAll<HTMLElement>('input[data-theme-choice]')) {
-  choice.addEventListener('change', () => {
-    theme = parseTheme(choice.dataset.themeChoice ?? null);
-    drawLook();
-    try { localStorage.setItem(THEME_KEY, theme); } catch { /* no storage: the theme lasts until the window closes */ }
-  });
-}
-
-/** The look chosen in Settings (render/about.ts), kept for the next start. */
-function chooseLook(next: Look): void {
-  look = next;
+/** A new look or theme, from Settings or from the palette: drawn at once, kept for the next start, and Settings drawn again to say it. */
+function applyAppearance(next: { look: Look; theme: ThemeChoice }): void {
+  look = next.look;
+  theme = next.theme;
   drawLook();
-  try { localStorage.setItem(LOOK_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
+  try {
+    localStorage.setItem(LOOK_KEY, look);
+    localStorage.setItem(THEME_KEY, theme);
+  } catch { /* no storage: the look and the theme last until the window closes */ }
+  if (ui.settings) render();
 }
 
 /** The app's own chord, in a field or not (keys.ts `chordAction`): Ctrl+A selects the copyable text. Zoom is Imago's (`mountZoom`, in `start`). */

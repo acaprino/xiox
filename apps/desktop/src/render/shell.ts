@@ -11,7 +11,6 @@ import { footerHint } from '../keys.ts';
 import { disabledReason } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, RowView, SectionId, SectionView } from '../types.ts';
-import { ABOUT_KEY } from './about.ts';
 import { renderSidebar } from './sidebar.ts';
 import { panelOptions, renderInspector } from './inspector.ts';
 import { renderDialog } from './dialog.ts';
@@ -21,8 +20,8 @@ import { renderReport } from './report.ts';
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
   openSection(id: SectionId): void;
-  /** The Settings window, with the look and what About said (the button after the tabs; `?` opens it too). */
-  openAbout(): void;
+  /** Settings, the fourth view (its tab; `4` and `?` open it too). */
+  openSettings(): void;
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
   focusRow(id: string): void;
@@ -212,15 +211,14 @@ export function renderShell(screen: Screen, on: Handlers): void {
   // The tabs of the sections: built once and then only marked. Settings, which is no view yet, is a button after them.
   const sections = byId('sections');
   if (sections.childElementCount === 0) {
-    fill(sections, ...SECTION_ORDER.map((id) => h('button', {
-      type: 'button', role: 'tab', class: 'im-tab', 'aria-selected': 'false', 'data-section': id, 'data-key': `section:${id}`, onClick: () => on.openSection(id),
-    }, SECTION_NAMES[id])));
-    sections.after(h('button', {
-      type: 'button', class: 'im-btn im-btn--ghost im-btn--sm', id: 'settings', 'data-key': ABOUT_KEY, onClick: () => on.openAbout(),
-    }, h('span', { 'data-fit': '' }, 'Settings'), keyCaps('?')));
+    // The views of the app, and Settings last.
+    fill(sections, ...[...SECTION_ORDER, 'settings' as const].map((id) => h('button', {
+      type: 'button', role: 'tab', class: 'im-tab', 'aria-selected': 'false', 'data-section': id, 'data-key': `section:${id}`,
+      onClick: () => (id === 'settings' ? on.openSettings() : on.openSection(id)),
+    }, id === 'settings' ? 'Settings' : SECTION_NAMES[id])));
   }
   for (const tab of sections.querySelectorAll<HTMLElement>('.im-tab[data-section]')) {
-    const here = tab.dataset.section === view.section;
+    const here = tab.dataset.section === (ui.settings ? 'settings' : view.section);
     tab.removeAttribute('aria-busy');
     tab.setAttribute('aria-selected', String(here));
     if (here) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
