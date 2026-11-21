@@ -12,7 +12,7 @@ import { disabledReason } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
 import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
 import { ABOUT_KEY } from './about.ts';
-import { renderBar2 } from './bar2.ts';
+import { renderSidebar } from './sidebar.ts';
 import { renderDetail } from './detail.ts';
 import { renderDialog } from './dialog.ts';
 import { renderList } from './list.ts';
@@ -155,7 +155,14 @@ export function noticeNode(notice: NoticeView, ctx?: NoticeCtx): HTMLElement {
   return note;
 }
 
-/** The progress bar under the status row: the job's label, Imago's bar, its percentage and the detail. No animation. */
+/** Whose profile is cleaned, and whose session it is: both halves matter, so the note wraps instead of cutting. */
+function profileNote(text: string): HTMLElement {
+  const note = fromHtml(document, noteHtml({ message: text, tone: 'warn' })).firstElementChild as HTMLElement;
+  note.title = text;
+  return note;
+}
+
+/** The job's progress, in the status row: the job's label, Imago's bar, its percentage and the detail. No animation. */
 function renderJob(root: HTMLElement, view: SectionView): void {
   const job = view.job;
   root.hidden = job === null;
@@ -187,13 +194,6 @@ export function renderShell(screen: Screen, on: Handlers): void {
   setBadge(view.status.badge, null);
   setStatus(view.status.badge, view.status.text);
   byId('status-right').textContent = `${app.admin ? 'administrator' : 'standard user'} · ${ramText(app.ramTotalBytes)}`;
-  const profile = byId('profile');
-  profile.hidden = app.profileMismatch === null;
-  // Both halves of the sentence matter (whose profile is cleaned, and whose session it is): the note wraps instead of cutting.
-  if (app.profileMismatch !== null) {
-    profile.title = app.profileMismatch;
-    fill(profile, fromHtml(document, noteHtml({ message: app.profileMismatch, tone: 'warn' })));
-  }
 
   // The job's progress bar.
   renderJob(byId('job'), view);
@@ -215,8 +215,8 @@ export function renderShell(screen: Screen, on: Handlers): void {
     if (here) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
   }
 
-  // Bar 2: categories and options.
-  renderBar2(byId('bar2'), view, ui, on);
+  // The sidebar: categories and options.
+  renderSidebar(byId('sidebar'), view, ui, on);
 
   // List header: title, subtitle and the switch of the details (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
@@ -233,6 +233,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
   // Notices, then the list and the detail of the focused row.
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
   fill(byId('notices'),
+    ...(app.profileMismatch === null ? [] : [profileNote(app.profileMismatch)]),
     ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
     ...view.notices.map((notice) => noticeNode(notice, noticeCtx)));
   const rowsArea = byId('rows');

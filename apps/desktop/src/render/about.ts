@@ -15,7 +15,7 @@ export interface LookChoice { skin: Look; choose(skin: Look): void }
 
 const LOOKS: [Look, string][] = [['smooth', 'Smooth'], ['oni', 'ONI mode (the original look)']];
 
-const BACKGROUND = ['status', 'profile', 'job', 'body', 'actions', 'foot'];
+const BACKGROUND = ['body'];
 /** The `data-key` of the Settings button after the tabs. */
 export const ABOUT_KEY = 'about';
 const CLOSE_KEY = 'about:close';

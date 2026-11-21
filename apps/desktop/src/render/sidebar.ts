@@ -1,4 +1,5 @@
-// The sidebar: the section's categories (nav) with their count and size, then the section's options, in Imago's rows and fields.
+// The sidebar of the shell (`sidebarHtml`, written once by render/frame.ts): the section's categories (nav) with their count and size,
+// each row with its rail item (an avatar with the category's initials), then the section's options, in Imago's rows and fields.
 // Where the list shows every category one after another (Cleanup) the categories are a menu that scrolls the list to one of
 // them, and marks the one the list is at; where each category is a list of its own (Developers) a click asks Rust for it.
 // A control only reports what the user did through `optionIntent`; Rust decides what it means.
@@ -15,9 +16,18 @@ type OptionOf<K extends OptionView['kind']> = Extract<OptionView, { kind: K }>;
 
 const TICK_WORDS: Record<string, string> = { on: 'all ticked', mixed: 'some ticked', off: 'none ticked', none: 'nothing to tick' };
 
-/** A row of the sidebar: its name, a line under it, and what it adds up to on the right. */
-function row(attrs: Record<string, string | boolean | null>, title: string, sub: string | null, meta: string | null, click: () => void): HTMLElement {
+/** The initials of a name, for the avatar a row shows in the rail: the first letters of its first two words. */
+export function initials(name: string): string {
+  const letters = name.replace(/[^\p{L}\p{N} ]/gu, '').split(' ').filter(Boolean).slice(0, 2).map((word) => Array.from(word)[0] ?? '');
+  return letters.join('').toUpperCase();
+}
+
+const avatar = (name: string): HTMLElement => h('span', { class: 'im-avatar im-rail-item', 'aria-hidden': 'true' }, initials(name));
+
+/** A row of the sidebar: its rail item, its name, a line under it, and what it adds up to on the right. */
+function row(attrs: Record<string, string | boolean | null>, title: string, sub: string | null, meta: string | null, rail: HTMLElement, click: () => void): HTMLElement {
   return h('button', { type: 'button', class: 'im-row xi-row', role: 'option', onClick: click, ...attrs },
+    rail,
     h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title', title }, title), sub ? h('span', { class: 'im-row-sub', title: sub }, sub) : null),
     meta === null ? null : h('span', { class: 'im-row-meta im-num' }, meta));
 }
@@ -32,7 +42,7 @@ function menuRow(item: NavItem, view: SectionView, spy: string | null, on: Handl
   const entry = row({
     'data-key': `nav:${item.id}`, 'data-group': item.id, 'aria-selected': String(here), 'aria-current': here ? 'true' : null,
     disabled: group === undefined, title: group === undefined ? 'Nothing in this category matches the search' : `Go to ${item.name}: ${ticked}`,
-  }, item.name, sub, item.bytes === null ? null : formatBytes(item.bytes), () => on.goToGroup(item.id));
+  }, item.name, sub, item.bytes === null ? null : formatBytes(item.bytes), avatar(item.name), () => on.goToGroup(item.id));
   entry.querySelector('.im-row-text')?.append(h('span', { class: 'sr-only' }, `, ${ticked}`));
   return entry;
 }
@@ -40,7 +50,15 @@ function menuRow(item: NavItem, view: SectionView, spy: string | null, on: Handl
 function navRow(s: SectionId, item: NavItem, on: Handlers): HTMLElement {
   return row({
     'data-key': `nav:${item.id}`, 'aria-selected': String(item.active), 'aria-current': item.active ? 'true' : null,
-  }, item.name, item.note || null, item.bytes === null ? null : formatBytes(item.bytes), () => on.send(s, selectIntent(s, item.id)));
+  }, item.name, item.note || null, item.bytes === null ? null : formatBytes(item.bytes), avatar(item.name), () => on.send(s, selectIntent(s, item.id)));
+}
+
+/** A kind of issue Registry looks for: a row whose rail item is its check box, the whole row is the target. */
+function kindRow(s: SectionId, o: OptionOf<'toggle'>, on: Handlers): HTMLElement {
+  const check = h('span', { class: 'im-check im-rail-item', role: 'checkbox', 'aria-checked': String(o.on), 'aria-label': o.label });
+  return row({
+    'data-key': `opt:${o.id}`, 'aria-selected': 'false', disabled: !o.enabled, title: o.hint,
+  }, o.label, null, null, check, () => on.send(s, optionIntent(s, o, !o.on)));
 }
 
 function toggleControl(s: SectionId, o: OptionOf<'toggle'>, on: Handlers): HTMLElement {
@@ -126,19 +144,34 @@ function optionControl(s: SectionId, o: OptionView, on: Handlers): HTMLElement {
   }
 }
 
-export function renderBar2(root: HTMLElement, view: SectionView, ui: UiState, on: Handlers): void {
+export function renderSidebar(root: HTMLElement, view: SectionView, ui: UiState, on: Handlers): void {
   const s = view.section;
-  const parts: HTMLElement[] = [];
-  // Registry's options are the kinds of issue the scan looks for: the heading says so.
-  const title = view.nav.length > 0 ? 'Categories' : s === 'registry' ? 'Look for' : 'Options';
+  // Registry's options are the kinds of issue the scan looks for: they are its categories, rows with their check boxes.
+  const kinds = view.nav.length === 0 && s === 'registry';
+  const title = view.nav.length > 0 ? 'Categories' : kinds ? 'Look for' : 'Options';
+  const rows: HTMLElement[] = [];
+  let options = view.options;
   if (view.nav.length > 0) {
     const menu = view.rows.some((r) => r.kind === 'group');
     const spy = ui.spy[s] ?? view.rows.find((r) => r.kind === 'group')?.id ?? null;
-    parts.push(h('div', { class: 'im-list xi-cats', role: 'listbox', 'aria-label': title }, ...view.nav.map((item) => (menu ? menuRow(item, view, spy, on) : navRow(s, item, on)))));
-    if (view.options.length > 0) parts.push(h('h3', { class: 'xi-subhead' }, 'Options'));
+    rows.push(...view.nav.map((item) => (menu ? menuRow(item, view, spy, on) : navRow(s, item, on))));
+  } else if (kinds) {
+    rows.push(...view.options.filter((o): o is OptionOf<'toggle'> => o.kind === 'toggle').map((o) => kindRow(s, o, on)));
+    options = view.options.filter((o) => o.kind !== 'toggle');
   }
-  parts.push(h('div', { class: 'xi-options' }, ...view.options.map((o) => optionControl(s, o, on))));
-  fill(root,
-    h('header', { class: 'im-panel-header' }, h('h4', { class: 'im-panel-title' }, title), h('span', { class: 'im-count' }, view.nav.length > 0 ? view.nav.length : view.options.length)),
-    h('div', { class: 'im-panel-body xi-side' }, ...parts));
+  const heading = root.querySelector('.im-panel-title');
+  if (heading) heading.textContent = title;
+  const count = root.querySelector('.im-count');
+  if (count) count.textContent = String(view.nav.length > 0 || kinds ? rows.length : options.length);
+  const list = root.querySelector<HTMLElement>('#sidebar-list');
+  if (!list) throw new Error('#sidebar-list is missing from the frame');
+  list.setAttribute('aria-label', title);
+  root.setAttribute('aria-label', title);
+  const parts: HTMLElement[] = [...rows];
+  // The section's other options stay under the rows until they move to the inspector.
+  if (options.length > 0) {
+    if (view.nav.length > 0) parts.push(h('h3', { class: 'xi-subhead' }, 'Options'));
+    parts.push(h('div', { class: 'xi-options' }, ...options.map((o) => optionControl(s, o, on))));
+  }
+  fill(list, ...parts);
 }

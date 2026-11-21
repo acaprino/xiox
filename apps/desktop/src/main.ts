@@ -1,5 +1,4 @@
 import '@acaprino/imago/css/imago.css';
-import './styles/shell.css';
 import './styles/xiox.css';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { guardDesktop, mountWindowControls, mountZoom } from '@acaprino/imago/shell';
@@ -9,10 +8,12 @@ import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { applyLook } from '@acaprino/imago/shell';
 import { LOOK_KEY, parseTheme, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
+import { createRegistry, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
+import { buildFrame } from './render/frame.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
-import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, shownRows } from './state.ts';
+import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SECTION_ORDER, shownRows } from './state.ts';
 import type { AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
@@ -24,7 +25,35 @@ const opening = createGate();
 /** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
 const inflight = createInflight();
 
-const SCROLLERS = ['#bar2 .xi-side', '#rows .xi-list', '#rows .rp-body'];
+/** The frame of the window (render/frame.ts), written once; the views fill its regions. */
+const shell = buildFrame(document);
+
+/** Whether the sidebar is folded into its rail: kept for the next start, the package stores nothing. */
+const FOLD_KEY = 'xiox.sidebar';
+function readFold(): boolean {
+  try { return localStorage.getItem(FOLD_KEY) === '1'; } catch { return false; }
+}
+
+/** Escape and the press outside, the sidebar's drawer and fold, F6, Ctrl+K and Ctrl+F: Imago's, mounted before the page's own keys (below) so they answer first. */
+const registry = createRegistry();
+mountApp(shell, registry, {
+  search: () => document.querySelector<HTMLInputElement>('#rows .xi-search input')?.focus(),
+  sidebar: {
+    collapsed: readFold(),
+    onChange: (collapsed) => { try { localStorage.setItem(FOLD_KEY, collapsed ? '1' : '0'); } catch { /* no storage: the fold lasts until the window closes */ } },
+  },
+});
+
+const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers' };
+// The title bar's two buttons: the views (what the tabs are, when the window is too narrow for them) and the palette.
+const viewsButton = shell.querySelector<HTMLElement>('.im-views-menu');
+viewsButton?.addEventListener('click', () => openMenu(viewsButton, [
+  ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => ui.section === id, run: () => { void open(id); } })),
+  { label: 'Settings', keys: 'Shift+?', run: () => { void openAbout(); } },
+]));
+shell.querySelector<HTMLElement>('.im-titlebar-command')?.addEventListener('click', () => { void registry.get(PALETTE_COMMAND)?.run(); });
+
+const SCROLLERS = ['#sidebar-list', '#rows .xi-list', '#rows .rp-body'];
 
 /**
  * Where the list of categories is scrolled to, for the menu beside it. Each category header is preceded by an empty `.anchor`
@@ -67,7 +96,7 @@ function updateSpy(): void {
   // The menu follows the list into view only when the category changed: a render must not pull the bar back from the options the user scrolled to.
   const moved = ui.spy[ui.section] !== id;
   ui.spy[ui.section] = id;
-  for (const entry of document.querySelectorAll<HTMLElement>('#bar2 .im-row[data-group]')) {
+  for (const entry of document.querySelectorAll<HTMLElement>('#sidebar .im-row[data-group]')) {
     const here = entry.dataset.group === id;
     entry.setAttribute('aria-selected', String(here));
     if (here) { entry.setAttribute('aria-current', 'true'); if (moved) entry.scrollIntoView({ block: 'nearest' }); } else entry.removeAttribute('aria-current');

@@ -9,22 +9,19 @@
 img { -webkit-user-drag: none; }
 
 /* ---------- the window's rows ---------- */
-#status, #job, #profile, #notices { padding-inline: var(--im-pane-pad); }
-#job { padding-block-end: var(--im-s-2); }
-#profile { padding-block-end: var(--im-s-2); }
-#profile > div { align-items: flex-start; }
-#status-right { white-space: nowrap; }
+.xi-job { flex: 1 1 auto; }
 .xi-job-label { flex: none; color: var(--im-text-2); font: 600 var(--im-fs-meta) var(--im-font-head); }
 .xi-job-detail { flex: 1; min-width: 0; color: var(--im-muted); font-size: var(--im-fs-meta); }
+#status-right { white-space: nowrap; }
 #foot .foot-left { flex: 0 1 auto; min-width: 0; }
 #foot .foot-right { margin-left: auto; }
+/* The two hosts of the confirmation and Settings are not cells of the shell: the scrim covers it under the title bar. */
+#modal, #about { display: contents; }
 
-/* ---------- the panes ---------- */
-#bar2, #main { min-height: 0; min-width: 0; }
-#main { display: flex; flex-direction: column; }
-#notices { flex: none; display: flex; flex-direction: column; gap: var(--im-s-1); }
-#notices:not(:empty) { padding-block-end: var(--im-s-2); }
-#list-head { flex: none; }
+/* ---------- the content: its header, the notices in its tools row, then the list ---------- */
+#notices { flex: 1 1 auto; display: flex; flex-direction: column; gap: var(--im-s-1); }
+#notices-row:has(> #notices:empty) { display: none; }
+.xi-body { display: flex; flex-direction: column; overflow: hidden; }
 #rows { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #rows.is-report { overflow: hidden; }
 #rows > .xi-tools { flex: none; }
@@ -35,15 +32,12 @@ img { -webkit-user-drag: none; }
 .xi-more { margin: 0; padding-inline-start: var(--im-s-4); }
 
 /* The sidebar: the categories, then the options. */
-#bar2 { display: flex; flex-direction: column; }
 .xi-side { padding-block-end: var(--im-s-3); overflow-x: hidden; }
-.xi-cats { padding-inline: var(--im-list-pad); }
-.xi-cats .xi-row { width: 100%; min-width: 0; text-align: start; }
-.xi-cats .xi-row > span { min-width: 0; }
+.xi-row { width: 100%; min-width: 0; text-align: start; }
+.xi-row > span { min-width: 0; }
 .xi-subhead { margin: var(--im-s-3) var(--im-s-3) var(--im-s-1); color: var(--im-muted); font: 600 var(--im-fs-meta) var(--im-font-head); text-transform: var(--im-case); letter-spacing: var(--im-track); }
 .xi-options { display: grid; gap: var(--im-s-3); padding: var(--im-s-2) var(--im-s-3) 0; }
 .xi-folders .xi-pick { padding: 0; }
-.xi-folders .xi-row { width: 100%; text-align: start; }
 .xi-opt { align-items: flex-start; white-space: normal; }
 .xi-pick-buttons { display: flex; flex-wrap: wrap; gap: var(--im-s-2); margin-top: var(--im-s-2); }
 .xi-empty-note { color: var(--im-muted); }

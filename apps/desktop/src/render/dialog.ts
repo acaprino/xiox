@@ -10,7 +10,8 @@ import { cycleFocus, dialogKeySwallowed } from '../keys.ts';
 import type { ButtonView, DialogView, SectionView } from '../types.ts';
 import type { Handlers } from './shell.ts';
 
-const BACKGROUND = ['status', 'profile', 'job', 'body', 'actions', 'foot'];
+/** What a confirmation makes inert: the sidebar and the work area. The title bar stays free, so the window can be moved and closed. */
+const BACKGROUND = ['body'];
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** What was open on the last render, and who had the focus before it opened. */
