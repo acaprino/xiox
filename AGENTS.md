@@ -124,3 +124,11 @@
   built here.
 - This holds for every agent and every subagent. A plan, a skill or a brief that says to run cargo locally is
   wrong on that point: write the code and the tests, do not run them, and say they wait for CI.
+
+## UI: Imago
+
+Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
+Apply its tokens and confirmed design choices within the requested scope.
+Use the package's im- classes and --im- tokens. Build a control of your own from the tokens, never from literal colours or sizes.
+Report conflicts and keep unresolved choices explicit.
+Run npx imago-check before you say UI work is done.
