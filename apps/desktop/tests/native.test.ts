@@ -57,12 +57,46 @@ test('focus ring and selection survive contrast themes: the focus ring is Imago\
   for (const [name, text] of styles) assert.doesNotMatch(text, /:focus-visible[^{]*\{[^}]*box-shadow/, `${name} draws a focus ring a contrast theme drops`);
 });
 
-test('every webview gets the desktop policy from one plugin, registered on the builder', () => {
+test('the window is built from the glass config of imago-shell, hidden, with the guard on its builder and the crate\'s wiring after it', () => {
+  const config = JSON.parse(file('src-tauri/tauri.conf.json')) as { app: { windows: { label: string; create?: boolean; visible: boolean }[] } };
+  const main = config.app.windows.find((window) => window.label === 'main');
+  assert.equal(main?.create, false, 'the window is built in setup, once every service is managed');
+  assert.equal(main?.visible, false, 'and opens hidden');
+  const rust = file('src-tauri/src/main.rs');
+  assert.match(rust, /glass_window_config\(base, data_dir\.and_then\(saved_theme\)\)/, 'the config of the glass window with the theme of last time');
+  assert.match(rust, /guard_navigation_with_scheme\(WebviewWindowBuilder::from_config\(app, &config\)\?/, 'the navigation guard on the builder');
+  assert.match(rust, /desktop::wire\(app, &window\)\?/, 'the wiring of the window right after it is built');
+  assert.match(rust, /\.plugin\(tauri_plugin_dialog::init\(\)\)/);
+  assert.doesNotMatch(rust, /desktop::plugin|native_frame|window_state::/, 'no policy plugin, frame or place of the app\'s own is left');
   const desktop = file('src-tauri/src/desktop.rs');
-  for (const call of ['SetAreBrowserAcceleratorKeysEnabled(false)', 'SetIsBuiltInErrorPageEnabled(false)', 'add_ContextMenuRequested', 'add_ProcessFailed', 'add_NavigationCompleted', '.on_navigation(', '.on_webview_ready(']) {
+  for (const call of ['disable_browser_accelerators(window)', 'trim_context_menu(window)', 'watch_process_failures(', 'install_snap_layouts(window)', 'install_reload_menu(window, "Reload interface"', 'recovery_action(']) {
     assert.ok(desktop.includes(call), `desktop.rs: ${call}`);
   }
-  assert.match(file('src-tauri/src/main.rs'), /\.plugin\(desktop::plugin\(\)\)/);
+  assert.match(desktop, /if !tauri::is_dev\(\) \{\s*disable_browser_accelerators\(window\)\?;\s*trim_context_menu\(window\)\?;/, 'both in a release build only: a development build keeps reload, DevTools and the whole menu');
+  assert.match(desktop, /Mutex<HashMap<String, Recovery>>/, 'a Recovery for each window label');
+  assert.match(file('src-tauri/src/shell.rs'), /Mutex<HashMap<String, SnapLayouts>>/, 'and a Snap Layouts overlay for each label');
+  assert.doesNotMatch(desktop, /menu_keep|add_ContextMenuRequested|webview2/, 'the context menu and WebView2 settings are the crate\'s');
+});
+
+test('a failure while the application or the window closes asks nothing: every Recovery is closed on exit and on close', () => {
+  const desktop = file('src-tauri/src/desktop.rs');
+  assert.match(desktop, /RunEvent::ExitRequested \{ \.\. \} \| RunEvent::Exit => close_recoveries\(app, None\)/);
+  assert.match(desktop, /WindowEvent::CloseRequested \{ \.\. \} \| WindowEvent::Destroyed/);
+  assert.match(file('src-tauri/src/main.rs'), /\.run\(\|app, event\| desktop::on_run_event\(app, event\)\)/, 'the run loop hands the events to it');
+});
+
+test('the window theme is asked of the crate with the look and the theme drawn, kept only when the run remembers', () => {
+  const shell = file('src-tauri/src/shell.rs');
+  assert.match(shell, /fn set_window_theme\(window: tauri::WebviewWindow, dir: State<'_, DataDir>, theme: String, look: Option<String>, resolved: Option<String>\)/);
+  assert.match(shell, /drawn_by_page\(theme, look\.as_deref\(\), resolved\.as_deref\(\)\)/);
+  assert.match(shell, /apply_theme\(&window, theme, look, resolved\)/);
+  assert.match(shell, /fn data_dir\(fake: bool, only_root: bool\) -> Option<PathBuf>/, 'no data folder for the fixtures window and for --only-root');
+  assert.match(shell, /Some\(dir\) => save_theme\(dir, theme\)/);
+  const page = file('src/main.ts');
+  assert.match(page, /setWindowTheme: inTauri \? \(word, detail\) => api\.setWindowTheme\(word, detail\.look, detail\.resolved\)/, 'applyLook tells the window');
+  assert.match(file('src/api.ts'), /invoke<void>\('set_window_theme', \{ theme, look, resolved \}\)/);
+  assert.match(file('src/api.ts'), /invoke<void>\('window_chrome', \{ section, job \}\)/, 'the section and the job are all the chrome command takes');
+  assert.match(file('src-tauri/src/main.rs'), /shell::set_window_theme,\s*shell::window_caption_maximize,/, 'both commands are registered');
 });
 
 test('native dialogs are owned by the window that opens them', () => {
@@ -90,18 +124,21 @@ function callAt(text: string, from: number): string {
   return text.slice(from);
 }
 
-test('the window is clamped to the work area of its monitor, and its minimum fits a 1366x768 laptop at 125 %', () => {
-  const main = file('src-tauri/src/main.rs');
-  assert.match(main, /work_area\(\)/, 'main.rs reads the work area, not the monitor size');
-  assert.match(main, /window_state::clamp\(/, 'the restored and the first-launch size go through the clamp');
+test('the window is placed through the crate, inside the work area of its monitor, and its minimum fits a 1366x768 laptop at 125 %', () => {
+  const rust = file('src-tauri/src/main.rs');
+  const shell = file('src-tauri/src/shell.rs');
+  assert.match(shell, /work_area\(\)/, 'shell.rs reads the work area, not the monitor size');
+  assert.match(shell, /clamp_to_screens\(/, 'the restored and the first-launch size go through the clamp of the crate');
+  assert.match(rust, /shell::place\(saved, size, &shell::screens\(window\), scale, frame_of\(window\)\)/);
+  assert.match(rust, /state_to_save\(/, 'what is remembered of the window is the crate\'s too');
+  assert.match(rust, /save_state\(dir, &state\)/);
   const config = JSON.parse(file('src-tauri/tauri.conf.json')) as { app: { windows: { minWidth: number; minHeight: number }[] } };
   const main0 = config.app.windows[0];
   assert.ok(main0);
   // 1366x768 at 125 %: 1093 logical wide and, less the 48 px taskbar, 574 high, of which the title bar and borders take about 31.
   assert.ok(main0.minWidth <= 1093 - 14 && main0.minHeight + 31 <= 574, `${main0.minWidth}x${main0.minHeight}`);
-  const state = file('src-tauri/src/window_state.rs');
-  assert.equal(Number(/const MIN_WIDTH: u32 = (\d+)/.exec(state)?.[1]), main0.minWidth, 'window_state MIN_WIDTH follows tauri.conf.json');
-  assert.equal(Number(/const MIN_HEIGHT: u32 = (\d+)/.exec(state)?.[1]), main0.minHeight, 'window_state MIN_HEIGHT follows tauri.conf.json');
+  assert.equal(Number(/pub const MIN_WIDTH: f64 = (\d+)/.exec(shell)?.[1]), main0.minWidth, 'shell.rs MIN_WIDTH, which place() passes to the clamp, follows tauri.conf.json');
+  assert.equal(Number(/pub const MIN_HEIGHT: f64 = (\d+)/.exec(shell)?.[1]), main0.minHeight, 'shell.rs MIN_HEIGHT follows tauri.conf.json');
 });
 
 test('the ready signal does not depend on requestAnimationFrame alone (a hidden window may never run one)', () => {

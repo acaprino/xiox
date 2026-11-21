@@ -8,7 +8,7 @@ import { api, errorText, inTauri, onView } from './api.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { applyLook } from '@acaprino/imago/shell';
-import { LOOK_KEY, parseTheme, readLook, readTheme, resolveTheme, THEME_KEY, windowThemeFor, type Look, type ThemeChoice } from './look.ts';
+import { LOOK_KEY, parseTheme, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
@@ -325,7 +325,11 @@ let look: Look = 'smooth';
 let theme: ThemeChoice = 'system';
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 function drawLook(): void {
-  applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri });
+  applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri }, {
+    // The window is told the theme of the look, with the look and the theme drawn, and keeps the theme for the first frame of the next
+    // start; outside the window (Vite, the smoke test) there is nobody to tell.
+    setWindowTheme: inTauri ? (word, detail) => api.setWindowTheme(word, detail.look, detail.resolved).catch(() => undefined) : undefined,
+  });
   for (const choice of document.querySelectorAll<HTMLInputElement>('input[data-theme-choice]')) choice.checked = choice.dataset.themeChoice === theme;
   syncChrome();
 }
@@ -427,16 +431,11 @@ function signalReady(): void {
 let chromeSent = '';
 function syncChrome(): void {
   const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
-  const next = {
-    section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))),
-    theme: windowThemeFor(look, theme),
-    // The glass of both looks, tinted for the palette on screen.
-    glass: resolveTheme(theme, systemDark.matches),
-  };
+  const next = { section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))) };
   const key = JSON.stringify(next);
   if (key === chromeSent) return;
   chromeSent = key;
-  void api.chrome(next.section, next.job, next.theme, next.glass).catch(() => undefined);
+  void api.chrome(next.section, next.job).catch(() => undefined);
 }
 
 void start();

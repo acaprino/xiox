@@ -4938,8 +4938,6 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
- "webview2-com",
- "windows-core",
  "windows-sys 0.61.2",
  "xiox-app",
  "xiox-core",

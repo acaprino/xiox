@@ -25,12 +25,8 @@ imago-shell = { git = "https://github.com/acaprino/imago", tag = "v0.2.0" }
 tauri-plugin-dialog = "=2.8.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Win32_Graphics_Gdi, Win32_System_LibraryLoader, Win32_UI_HiDpi, Win32_UI_Input_KeyboardAndMouse: the snap layouts overlay of
-# the page's maximize button (src/native_frame.rs).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse"] }
-# The WebView2 settings and events Tauri does not expose (src/desktop.rs): the versions tauri-runtime-wry already resolves.
-webview2-com = "=0.39.1"
-windows-core = "=0.62.2"
+# The single instance (src/single_instance.rs). The Snap Layouts overlay and the WebView2 settings and events are imago-shell's.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
