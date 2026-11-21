@@ -234,3 +234,13 @@ test('the list is announced as a grid only when it has rows, and its helpers are
   }
   assert.match(list, /'aria-expanded': expandable \? String\(expanded\) : null/, 'the row has it');
 });
+
+test('a search that matches nothing keeps its box: the empty state is the list\'s, not the whole content\'s', () => {
+  const shell = file('src/render/shell.ts');
+  const sync = /function syncPanelState[\s\S]*?\n\}/.exec(shell)?.[0] ?? '';
+  assert.match(sync, /const content = byId\('rows'\)/, 'the layer goes in #rows, whose tools row holds the search box');
+  assert.doesNotMatch(sync, /byId\('main'\), \{ kind: '(empty|loading)'/, 'never on the content panel, which would hide #rows with the search box');
+  const list = file('src/render/list.ts');
+  assert.match(list, /scroller\.querySelector\(':scope > table'\)\?\.remove\(\)/, 'an empty list removes its table, not the state layer that is a child of its body');
+  assert.match(list, /root\.replaceChildren\(tools, scroller\)/, 'the tools row (search, fold all) and the body are children of #rows');
+});

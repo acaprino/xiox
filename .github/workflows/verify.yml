@@ -17,8 +17,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The page: the design check, the node tests, tsc and Vite, then the smoke test on the mocked commands.
   verify:
-    name: Verify (Windows x64)
+    name: Verify the page (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Imago's design check: no literal colour, size or space, no class of the package restyled, the mount, the keys, the icons.
+      - name: Check the design
+        run: npx imago-check
+
+      - name: Test the page
+        run: npm test
+
+      - name: Build the page
+        run: npm run build
+
+      # Last: the smoke test drives a browser, and it is the one step known to be red until it is repaired for the new page. It
+      # does not hide the Rust job, which is its own.
+      - name: Install the browser
+        run: npx playwright install chromium
+
+      - name: Smoke test the page
+        run: npm run smoke
+
+  # The desktop crate: the lock, the lint, the tests and, last, the format. Its own job, so that nothing red in the page (the smoke
+  # test, a type error) or in the format hides what nobody could compile before. The crate embeds the built page, so Vite builds
+  # it first (without tsc: a type error must not stop the Rust from being looked at).
+  rust:
+    name: Verify the desktop crate (Windows x64)
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -43,23 +89,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Imago's design check: no literal colour, size or space, no class of the package restyled, the mount, the keys, the icons.
-      - name: Check the design
-        run: npx imago-check
-
-      # The smoke test drives a browser.
-      - name: Install the browser
-        run: npx playwright install chromium
-
-      - name: Test the page
-        run: npm test
-
-      # tsc and Vite. The desktop crate embeds the built page, so this comes before the Rust steps.
-      - name: Build the page
-        run: npm run build
-
-      - name: Smoke test the page
-        run: npm run smoke
+      - name: Build the page the crate embeds
+        run: npx vite build --config apps/desktop/vite.config.ts
 
       # No cargo runs on a developer's machine, so nobody can write Cargo.lock there: this step resolves the
       # dependencies and, when the lock moved, keeps the lock it wrote as the artifact cargo-lock and fails. The

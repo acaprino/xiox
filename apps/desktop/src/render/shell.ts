@@ -189,7 +189,20 @@ let cancelLoading: (() => void) | null = null;
  * keeps its header and its frame, and `setPanelState` hides the list under the state's layer.
  */
 function syncPanelState(view: SectionView, ui: UiState, on: Handlers): void {
-  const content = byId('main');
+  // The list is the panel of the state, not the whole content: its tools row (the search box, which Rust sends with "No matches") stays
+  // above the layer, where the user can clear it. A report or Settings has no list body to hold a layer.
+  const content = byId('rows');
+  if (panelState === 'error') {
+    // The error state was the content's; a view has come, so it goes.
+    setPanelState(byId('main'), { kind: 'ready' });
+    panelState = 'ready';
+  }
+  if (content.querySelector(':scope > .im-panel-body') === null) {
+    cancelLoading?.();
+    cancelLoading = null;
+    panelState = 'ready';
+    return;
+  }
   // Settings draws its own page in the panel: the section's empty or loading layer must not hide it.
   const empty = !ui.settings && view.report === null && (view.rows.length === 0 || view.empty !== null);
   const kind = !empty ? 'ready' : view.job !== null ? 'loading' : 'empty';

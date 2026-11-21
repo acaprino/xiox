@@ -229,9 +229,9 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   scroller.classList.toggle('is-empty', empty);
   scroller.setAttribute('aria-busy', String(view.job !== null));
   if (empty) {
-    // No table (a treegrid with no rows would be announced as one) and no Tab stop: the empty and the loading state are the content
-    // panel's own (`setPanelState`, render/shell.ts), which also hides this list while one shows.
-    fill(scroller);
+    // No table (a treegrid with no rows would be announced as one) and no Tab stop. The state layer (`setPanelState` on `#rows`,
+    // render/shell.ts) is a child of this body and must stay: only the table goes. The search box stays above it, in the tools.
+    scroller.querySelector(':scope > table')?.remove();
     return;
   }
   const checks = view.rows.some((r) => r.check !== 'none');
@@ -256,7 +256,7 @@ export function renderList(root: HTMLElement, view: SectionView, ui: UiState, on
   if (!table) {
     table = h('table', { class: 'im-table xi-table', role: 'treegrid', tabindex: 0 });
     table.addEventListener('keydown', (event) => on.listKey(event));
-    scroller.replaceChildren(table);
+    scroller.append(table);
   }
   table.setAttribute('aria-label', view.title);
   table.classList.toggle('xi-grouped', view.rows.some((r) => r.kind === 'group'));
