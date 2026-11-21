@@ -192,10 +192,10 @@ fn ask(app: &AppHandle, label: &str, failure: ProcessFailure) {
             (ProcessFailure::Unresponsive, false) => {}
             (_, true) => {
                 // The person chose to reload: the page has a fresh minute.
-                if let Ok(mut recoveries) = app.state::<Failures>().recoveries.lock() {
-                    if let Some(recovery) = recoveries.get_mut(&label) {
-                        recovery.reset();
-                    }
+                if let Ok(mut recoveries) = app.state::<Failures>().recoveries.lock()
+                    && let Some(recovery) = recoveries.get_mut(&label)
+                {
+                    recovery.reset();
                 }
                 let _ = webview.reload();
             }

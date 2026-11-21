@@ -82,7 +82,7 @@ test('a failure while the application or the window closes asks nothing: every R
   const desktop = file('src-tauri/src/desktop.rs');
   assert.match(desktop, /RunEvent::ExitRequested \{ \.\. \} \| RunEvent::Exit => close_recoveries\(app, None\)/);
   assert.match(desktop, /WindowEvent::CloseRequested \{ \.\. \} \| WindowEvent::Destroyed/);
-  assert.match(file('src-tauri/src/main.rs'), /\.run\(\|app, event\| desktop::on_run_event\(app, event\)\)/, 'the run loop hands the events to it');
+  assert.match(file('src-tauri/src/main.rs'), /\.run\(desktop::on_run_event\)/, 'the run loop hands the events to it');
 });
 
 test('the window theme is asked of the crate with the look and the theme drawn, kept only when the run remembers', () => {

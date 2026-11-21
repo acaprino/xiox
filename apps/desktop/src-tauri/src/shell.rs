@@ -63,10 +63,10 @@ pub fn window_caption_maximize(window: tauri::WebviewWindow, overlays: State<'_,
 /// no monitor goes to the first).
 pub fn screens(window: &tauri::WebviewWindow) -> Vec<Screen> {
     let mut monitors = window.available_monitors().unwrap_or_default();
-    if let Some(primary) = window.primary_monitor().ok().flatten() {
-        if let Some(at) = monitors.iter().position(|m| m.position() == primary.position() && m.size() == primary.size()) {
-            monitors.swap(0, at);
-        }
+    if let Some(primary) = window.primary_monitor().ok().flatten()
+        && let Some(at) = monitors.iter().position(|m| m.position() == primary.position() && m.size() == primary.size())
+    {
+        monitors.swap(0, at);
     }
     monitors
         .iter()

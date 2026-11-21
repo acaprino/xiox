@@ -201,10 +201,11 @@ fn main() {
             let Some(window) = window.app_handle().get_webview_window(window.label()) else { return };
             match event {
                 WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                    if !window.is_maximized().unwrap_or(true) && !window.is_minimized().unwrap_or(true) {
-                        if let Some(state) = measure(&window) {
-                            *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
-                        }
+                    if !window.is_maximized().unwrap_or(true)
+                        && !window.is_minimized().unwrap_or(true)
+                        && let Some(state) = measure(&window)
+                    {
+                        *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
                     }
                 }
                 WindowEvent::CloseRequested { .. } => {
@@ -254,7 +255,7 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("the Xiox window failed to start")
-        .run(|app, event| desktop::on_run_event(app, event));
+        .run(desktop::on_run_event);
 }
 
 #[cfg(test)]
