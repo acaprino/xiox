@@ -7,13 +7,13 @@
 
 import { button, fill, h } from '../dom.ts';
 import { cycleFocus } from '../keys.ts';
-import type { Skin } from '../skin.ts';
+import type { Look } from '../look.ts';
 import type { AboutView } from '../types.ts';
 
 /** The look on screen, and what to do when another one is chosen. */
-export interface LookChoice { skin: Skin; choose(skin: Skin): void }
+export interface LookChoice { skin: Look; choose(skin: Look): void }
 
-const LOOKS: [Skin, string][] = [['smooth', 'Smooth'], ['oni', 'ONI mode (the original look)']];
+const LOOKS: [Look, string][] = [['smooth', 'Smooth'], ['oni', 'ONI mode (the original look)']];
 
 const BACKGROUND = ['top', 'status', 'profile', 'job', 'body', 'foot'];
 /** The `data-key` of the Settings button of the sections bar. */
@@ -56,7 +56,7 @@ export function showAbout(about: AboutView, from: string | null, look: LookChoic
   opener = from;
   shown = true;
   const root = host();
-  const choice = ([skin, label]: [Skin, string]): HTMLElement => h('label', { class: 'radio' },
+  const choice = ([skin, label]: [Look, string]): HTMLElement => h('label', { class: 'radio' },
     h('input', { type: 'radio', name: 'look', value: skin, checked: skin === look.skin, 'data-key': `look:${skin}`, onChange: () => look.choose(skin) }),
     h('span', {}, label));
   fill(root, h('div', { class: 'scrim' },

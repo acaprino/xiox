@@ -1,3 +1,4 @@
+import '@acaprino/imago/css/imago.css';
 import './styles/tokens.css';
 import './styles/frame.css';
 import './styles/shell.css';
@@ -10,7 +11,8 @@ import { actionIntent, toggleIntent } from './intents.ts';
 import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
 import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
 import { initializeWindowControls } from './window-controls.ts';
-import { effectiveTheme, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowTheme, type Skin, type Theme } from './skin.ts';
+import { applyLook } from '@acaprino/imago/shell';
+import { LOOK_KEY, parseTheme, readLook, readTheme, resolveTheme, THEME_KEY, windowThemeFor, type Look, type ThemeChoice } from './look.ts';
 import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
@@ -157,7 +159,7 @@ async function openAbout(): Promise<void> {
   if (aboutOpen() || ui.views[ui.section]?.dialog != null) return;
   const from = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key ?? null : null;
   try {
-    showAbout(await api.about(), from, { skin: storedSkin(document.documentElement.dataset.skin ?? null), choose: chooseSkin }, closeAbout);
+    showAbout(await api.about(), from, { skin: look, choose: chooseLook }, closeAbout);
   } catch (failure) {
     error = { section: ui.section, text: errorText(failure) };
     render();
@@ -318,51 +320,36 @@ function selectAll(target: Element | null): void {
   window.getSelection()?.removeAllRanges();
 }
 
-/** The look (skin.ts): Smooth unless ONI MODE was chosen; on the root before the first view is drawn, kept like the zoom. */
-function applySkin(skin: Skin): void {
-  document.documentElement.dataset.skin = skin;
-  // In the desktop window Smooth is glass: the page lets Windows' acrylic through (smooth.css `.native-glass`, chrome.rs).
-  document.documentElement.classList.toggle('native-glass', inTauri && skin === 'smooth');
-  // ONI MODE is dark whatever the system says; Smooth follows its theme (the window's theme decides the page's prefers-color-scheme).
-  syncChrome();
-}
-
-function readSkin(): Skin {
-  try { return storedSkin(localStorage.getItem(SKIN_KEY)); } catch { return storedSkin(null); }
-}
-
 /**
- * Smooth's theme (skin.ts). The page draws it itself (`data-theme` on the root: the chosen one, or the Windows one for Auto,
- * followed as it changes) and asks the window for the same (chrome.rs), so the title bar agrees.
+ * The look and the theme (look.ts), Imago's: written on the root by `applyLook` before the first view is drawn, and again at
+ * every change, also when Windows changes its colours while the theme follows them. The window is asked for the same theme
+ * (`syncChrome`), so its title bar and the page agree. Both looks are glass in the desktop window.
  */
-let theme: Theme = 'system';
-const systemLight = window.matchMedia('(prefers-color-scheme: light)');
-function drawTheme(): void {
-  document.documentElement.dataset.theme = effectiveTheme(theme, systemLight.matches);
-}
-systemLight.addEventListener('change', () => { drawTheme(); syncChrome(); });
-
-function applyTheme(next: Theme): void {
-  theme = next;
+let look: Look = 'smooth';
+let theme: ThemeChoice = 'system';
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+function drawLook(): void {
+  applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri });
   for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-    choice.setAttribute('aria-pressed', String(choice.dataset.themeChoice === next));
+    choice.setAttribute('aria-pressed', String(choice.dataset.themeChoice === theme));
   }
-  drawTheme();
   syncChrome();
 }
+systemDark.addEventListener('change', () => { if (theme === 'system') drawLook(); });
 
 for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
   choice.addEventListener('click', () => {
-    const next = storedTheme(choice.dataset.themeChoice ?? null);
-    applyTheme(next);
-    try { localStorage.setItem(THEME_KEY, next); } catch { /* no storage: the theme lasts until the window closes */ }
+    theme = parseTheme(choice.dataset.themeChoice ?? null);
+    drawLook();
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* no storage: the theme lasts until the window closes */ }
   });
 }
 
 /** The look chosen in Settings (render/about.ts), kept for the next start. */
-function chooseSkin(next: Skin): void {
-  applySkin(next);
-  try { localStorage.setItem(SKIN_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
+function chooseLook(next: Look): void {
+  look = next;
+  drawLook();
+  try { localStorage.setItem(LOOK_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
 }
 
 /** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
@@ -412,11 +399,17 @@ document.addEventListener('wheel', (event) => {
 // The mouse's back and forward buttons belong to a browser: the window has no pages to go back to.
 window.addEventListener('mouseup', (event) => { if (event.button === 3 || event.button === 4) event.preventDefault(); });
 
+/** The webview's storage, or null when it refuses it (a blocked profile). */
+function safeStorage(): Storage | null {
+  try { return localStorage; } catch { return null; }
+}
+
 async function start(): Promise<void> {
   // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.
   applyZoom(readZoom());
-  applySkin(readSkin());
-  try { applyTheme(storedTheme(localStorage.getItem(THEME_KEY))); } catch { applyTheme('system'); }
+  look = readLook(safeStorage());
+  theme = readTheme(safeStorage());
+  drawLook();
   try {
     app = await api.appInfo();
     onView((view) => {
@@ -471,9 +464,9 @@ function syncChrome(): void {
   const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
   const next = {
     section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))),
-    theme: windowTheme(storedSkin(document.documentElement.dataset.skin ?? null), theme),
-    // Smooth's glass, tinted for the palette on screen; ONI MODE has none (and the system frame).
-    glass: storedSkin(document.documentElement.dataset.skin ?? null) === 'smooth' ? effectiveTheme(theme, systemLight.matches) : null,
+    theme: windowThemeFor(look, theme),
+    // The glass of both looks, tinted for the palette on screen.
+    glass: resolveTheme(theme, systemDark.matches),
   };
   const key = JSON.stringify(next);
   if (key === chromeSent) return;

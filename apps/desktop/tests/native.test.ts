@@ -28,18 +28,15 @@ test('the chrome is not selectable, and every place Ctrl+A selects is', () => {
   assert.ok(selectors.includes('input'), 'fields stay selectable');
 });
 
-test('the first frame is the page: a transparent glass window, hidden until drawn, the inline style on the stage colour', () => {
-  const stage = /--stage:\s*(#[0-9a-f]{6})/i.exec(tokens)?.[1]?.toLowerCase();
+test('the first frame is the page: a transparent glass window, hidden until drawn, the colours Imago\'s (no inline style, no scheme meta)', () => {
   const config = JSON.parse(file('src-tauri/tauri.conf.json')) as { app: { windows: { backgroundColor: string; visible: boolean; transparent: boolean }[] } };
-  const inline = /<style>[^<]*background:\s*(#[0-9a-f]{6})/i.exec(file('index.html'))?.[1]?.toLowerCase();
   const main = config.app.windows[0];
-  assert.ok(stage && main);
+  assert.ok(main);
   // Smooth is glass over Windows' acrylic: the window paints nothing of its own, and it is shown once the page has drawn.
   assert.equal(main.transparent, true, 'tauri.conf.json transparent');
   assert.equal(main.backgroundColor.toLowerCase(), '#00000000', 'tauri.conf.json backgroundColor');
   assert.equal(main.visible, false, 'tauri.conf.json visible');
-  assert.equal(inline, stage, 'the inline style in index.html, before any stylesheet');
-  assert.match(file('index.html'), /<meta name="color-scheme" content="dark">/);
+  assert.doesNotMatch(file('index.html'), /<style>|name="color-scheme"/, 'the look is written on the root by applyLook, not by the page');
 });
 
 test('the window is shown by the page\'s first frame, with a fallback, never straight from setup', () => {

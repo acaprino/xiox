@@ -1,26 +1,28 @@
-/* Oni palette of the approved mock-up (docs/design/oni-xiox-2barre-en.html). Dark only. */
+/* The names this app's stylesheets still use, mapped to Imago's tokens (css/tokens.css). The one place the app's own
+   vocabulary meets the package's, for the rules the next steps of the migration delete family by family; it holds no
+   literal colour, size of text or space. The look, the theme and the glass are Imago's: `applyLook` writes them on the root. */
 :root {
-  color-scheme: dark;
-  --stage: #0b0416; --chrome: #10081f; --surface: #1b2c52; --pane: #0d0a22; --pane-fill: #0d0a22cc;
-  --line: #3f6fb5; --line-strong: #6aa0e6; --line-soft: #3f6fb555; --ice: #9cc4f5; --live: #8fd6ff;
-  --text: #ffb21e; --text-2: #f0a020; --text-hi: #ffd257; --muted: #7f9fd0; --warn: #ff6a3a; --ok: #7fe0a0; --err: #ff6b6b;
-  --sel: #2a4f8f; --sel-soft: #2a4f8f99; --button: #24457a; --button-primary: #2f5aa0;
-  --band: #15234c; --band-hi: #1b2e60; --band-sel: #234483; --hover: #2a4f8f33;
-  --grid: #2a4a8018; --glow: #2b4f9a40; --inner: #6aa0e633; --box: #1b2c5266; --box-line: #3f6fb588;
-  --font-display: Bahnschrift, 'Segoe UI', sans-serif; --font-body: 'Segoe UI', sans-serif;
-  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace; --text-size: 13px;
-
-  /* Added by the polish pass; no value above changed. Scales: type 12 / 13 / 15 px (12 is the floor), one caps tracking,
-     one disabled opacity, one transition time, the 24 px pointer-target floor (WCAG 2.2 AA 2.5.8: a dense desktop UI, not
-     the 44 px of a touch one). */
-  --fs-sm: 12px; --fs-md: var(--text-size); --fs-lg: 15px; --ls-caps: .06em;
-  --op-disabled: .45; --dur: .16s; --hit: 24px; --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
-  /* Tints of existing tokens: a hover darkens the fill a little (the text keeps its contrast) and lights the border,
-     a press darkens more. tests/contrast.test.ts computes the same mixes. */
-  --hover-btn: color-mix(in srgb, var(--button) 88%, var(--stage)); --press-btn: color-mix(in srgb, var(--button) 70%, var(--stage));
-  --hover-primary: color-mix(in srgb, var(--button-primary) 88%, var(--stage)); --press-primary: color-mix(in srgb, var(--button-primary) 70%, var(--stage));
-  --danger-bg: color-mix(in srgb, var(--warn) 25%, var(--pane)); --danger-hover: color-mix(in srgb, var(--warn) 32%, var(--pane)); --danger-press: color-mix(in srgb, var(--warn) 18%, var(--pane));
-  --press: color-mix(in srgb, var(--sel) 60%, transparent); --scrim: #05020cc7;
+  --stage: var(--im-ground); --chrome: var(--im-ground); --sidebar: var(--im-ground);
+  --pane: var(--im-sheet); --pane-fill: var(--im-sheet); --surface: var(--im-sheet); --box: var(--im-field); --box-line: var(--im-line);
+  --line: var(--im-line); --line-soft: var(--im-line-soft); --line-strong: var(--im-line-strong);
+  --text: var(--im-text); --text-2: var(--im-text-2); --text-hi: var(--im-text-hi); --muted: var(--im-muted); --ice: var(--im-text-2);
+  --live: var(--im-accent-text); --amber: var(--im-accent); --amber-ink: var(--im-accent-text); --on-amber: var(--im-accent-on);
+  --warn: var(--im-warn); --err: var(--im-err); --ok: var(--im-ok);
+  --sel: var(--im-selected); --sel-soft: var(--im-selected); --band: var(--im-hover); --band-hi: var(--im-hover); --band-sel: var(--im-selected);
+  --hover: var(--im-hover); --press: var(--im-press);
+  --button: var(--im-button); --hover-btn: var(--im-hover); --press-btn: var(--im-press);
+  --button-primary: var(--im-accent); --hover-primary: var(--im-accent-hover); --press-primary: var(--im-accent-hover);
+  --chip: var(--im-chip); --chip-text: var(--im-chip-text);
+  --danger-fill: var(--im-danger); --on-danger: var(--im-danger-on); --danger-bg: color-mix(in srgb, var(--im-err) 15%, transparent);
+  --danger-line: var(--im-err); --danger-hover: var(--im-err); --danger-press: var(--im-err); --window-close: var(--im-danger);
+  --shadow-dlg: var(--im-shadow); --scrim: var(--im-scrim); --grid: transparent; --glow: transparent; --inner: transparent;
+  --radius: var(--im-r-sheet); --radius-sm: var(--im-r-control); --radius-xs: var(--im-r-chip);
+  --control: var(--im-h-control); --side: clamp(160px, 26vw, var(--im-w-sidebar)); --bar: var(--im-h-titlebar); --hit: var(--im-h-control-sm);
+  --font-body: var(--im-font-text); --font-display: var(--im-font-head); --font-mono: var(--im-font-code);
+  --text-size: var(--im-fs-body); --fs-sm: var(--im-fs-meta); --fs-md: var(--im-fs-body); --fs-lg: var(--im-fs-title);
+  --ls-caps: var(--im-track); --dur: var(--im-t-fast); --ease: var(--im-ease);
+  --sp-1: var(--im-s-1); --sp-2: var(--im-s-2); --sp-3: var(--im-s-3); --sp-4: var(--im-s-4);
+  --op-disabled: .45;
 }
 
 /* The scrollbar of every scroll container (grid, detail, menus, dialog lists, pickers) is set here once. */
@@ -35,16 +37,6 @@ input, textarea, #detail, #notices, .rp-body, .dlg-body { -webkit-user-select: t
 #notices button, .rp-body button, .dlg-body button { -webkit-user-select: none; user-select: none; cursor: default; }
 img { -webkit-user-drag: none; }
 
-body {
-  margin: 0; background: var(--stage); color: var(--text);
-  font: 600 var(--text-size)/1.45 var(--font-body);
-}
-
-button { font: inherit; color: inherit; }
-kbd { font: var(--fs-sm) var(--font-mono); letter-spacing: 0; text-transform: none; }
-
-/* clip-path cuts outlines, so the focus ring is drawn inside the box. */
-:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--live); }
 
 /* Contrast themes (forced colors) drop box-shadow and repaint backgrounds: the focus ring and the selected row,
    section and menu entry would vanish. Outlines survive in system colors; drawn inside the box, clip-path keeps them. */

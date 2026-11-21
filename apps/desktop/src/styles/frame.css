@@ -23,12 +23,3 @@
 .btn.danger:hover:not(:disabled) { background: var(--danger-hover); border-color: var(--warn); }
 .btn.danger:active:not(:disabled) { background: var(--danger-press); }
 .btn:disabled { opacity: var(--op-disabled); cursor: default; }
-
-/* The grid behind everything. */
-#app::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background:
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 22px 22px,
-    linear-gradient(0deg, var(--grid) 1px, transparent 1px) 0 0 / 22px 22px,
-    radial-gradient(700px 360px at 80% 60%, var(--glow), transparent 70%);
-}

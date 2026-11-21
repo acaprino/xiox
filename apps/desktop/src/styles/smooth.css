@@ -1,46 +1,9 @@
-/* The Smooth look, the default (docs/superpowers/specs/2026-11-18-desktop-ux-rework-design.md): modern and clean, as close
-   as it can be to Qamille (D:\Projects\qamille\desktop\src\ds: its tokens, light and dark, its type, its structure) and to
-   Shinatama's Smooth (its glass, its title bar), with Xiox's amber where they have their own accent. It is a layer over the
-   ONI stylesheets, which stay what they were and are ONI MODE: every rule here is scoped to :root[data-skin="smooth"].
+/* The arrangement of the window, for both looks: the title bar with its brand, tabs and window buttons, the sidebar, the status
+   row, the work and the footer. The colours, the type and the glass are Imago's (tokens.css maps the names this file still
+   uses to its tokens); the copies of controls that follow go family by family (docs/using-imago.md, section 8). */
 
-   As in Qamille: two depths (the ground of the title bar and of the sidebar, and one sheet a step lighter that carries the
-   work), hairline borders, corners of 4, 6 and 10px, outlined secondary buttons and one filled primary, underlined tabs,
-   sentence case, IBM Plex Sans. In the light palette the sidebar stays a dark column. In the desktop window the ground is
-   glass over Windows' acrylic (`.native-glass`, as in Shinatama). The amber marks what is chosen or is the thing to press:
-   the open tab, the active menu entry, the selected row, a ticked box, the sort arrow, a category's total, the primary
-   button. Contrast: tests/contrast.test.ts. */
-
-@font-face {
-  font-family: 'IBM Plex Sans';
-  src: url('/fonts/ibm-plex-sans/IBMPlexSans-latin-ext-wght.woff2') format('woff2-variations');
-  font-style: normal; font-weight: 100 700; font-display: swap;
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  src: url('/fonts/ibm-plex-sans/IBMPlexSans-latin-wght.woff2') format('woff2-variations');
-  font-style: normal; font-weight: 100 700; font-display: swap;
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-:root[data-skin="smooth"] {
-  /* Qamille's dark tokens, under the names the shared ONI rules read. */
-  --stage: #12161e; --chrome: #12161e; --sidebar: #12161e; --pane: #1a202c; --pane-fill: #1a202c; --surface: #1a202c;
-  --line: #2a3240; --line-soft: #242b38; --line-strong: #7a8396; --box: #1e2533; --box-line: #2a3240; --inner: transparent;
-  --text: #e8ecf3; --text-2: #c0c8d6; --text-hi: #ffffff; --muted: #9aa5b8; --ice: #c0c8d6; --live: #ffb21e;
-  --warn: #ef9ba1; --err: #ef9ba1; --ok: #a3cfb8;
-  --sel: #272f40; --sel-soft: #382f1f; --band: #1d2331; --band-hi: #222a38; --band-sel: #382f1f; --hover: #222a38; --press: #2a3240;
-  --button: #1a202c; --hover-btn: #222a38; --press-btn: #2a3240; --button-primary: #ffb21e; --grid: transparent; --glow: transparent;
-  --scrim: #00000080;
-  /* Smooth's own. --amber fills and marks; --amber-ink is amber as text (darker on the light sheet). */
-  --amber: #ffb21e; --amber-ink: #ffb21e; --on-amber: #1a1104; --hover-primary: #ffc04a; --press-primary: #e89d0c;
-  --chip: #303b4d; --chip-text: #a8b3c6; --danger-fill: #ef9ba1; --on-danger: #1a1104; --danger-bg: #402b35; --danger-line: #74404c;
-  --window-close: #c42b1c; --shadow-dlg: 0 10px 40px #0005;
-  --radius: 10px; --radius-sm: 6px; --radius-xs: 4px; --control: 32px; --side: clamp(208px, 18vw, 232px); --bar: 46px;
-  --font-body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; --font-display: var(--font-body);
-  --fs-sm: 12.5px; --fs-md: 13.5px; --fs-lg: 15px; --ls-caps: .06em; --dur: .15s; --indent: 28px;
-  --ease: cubic-bezier(.16, 1, .3, 1);
-
+:root {
+  --indent: 28px;
   & body { font: 400 var(--fs-md)/1.5 var(--font-body); background: var(--stage); -webkit-font-smoothing: antialiased; }
   & kbd { display: inline-block; padding: 0 5px; border: 1px solid var(--line); border-radius: var(--radius-xs); color: var(--muted); font: 500 12px/16px var(--font-body); }
 
@@ -53,7 +16,7 @@
   }
   /* The sheet: drawn by the grid itself, right of the sidebar and under the title bar. */
   & #app::before {
-    position: static; inset: auto; grid-row: 2 / -1; grid-column: 2;
+    content: ""; position: static; inset: auto; grid-row: 2 / -1; grid-column: 2;
     background: var(--surface); border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: var(--radius);
   }
   & #top, & #body { display: contents; }
@@ -310,38 +273,6 @@
   & .rp-sum b { color: var(--amber-ink); }
   & .rp-path { font-family: var(--font-body); }
 
-  /* ---------- glass: in the desktop window the ground lets Windows' acrylic through (chrome.rs tints it) ---------- */
-  &.native-glass, &.native-glass body { background: transparent; }
-  &.native-glass #app {
-    background: linear-gradient(90deg, color-mix(in srgb, var(--sidebar) 74%, transparent) 0 var(--side), color-mix(in srgb, var(--stage) 62%, transparent) var(--side));
-  }
-  &.native-glass #app::before { background: color-mix(in srgb, var(--surface) 94%, transparent); }
-  &.native-glass .r.h { background: color-mix(in srgb, var(--surface) 98%, transparent); }
-
-  /* ---------- light: Qamille's light tokens; the sidebar stays a dark column, as in Qamille ---------- */
-  &[data-theme="light"] {
-    color-scheme: light;
-    --stage: #f6f7f9; --chrome: #f6f7f9; --pane: #ffffff; --pane-fill: #ffffff; --surface: #ffffff;
-    --line: #e3e6ea; --line-soft: #eef0f3; --line-strong: #767e8b; --box: #f7f8fa; --box-line: #e3e6ea;
-    --text: #111827; --text-2: #4b5563; --text-hi: #0b1220; --muted: #5b6472; --ice: #4b5563; --live: #9a5b00;
-    --warn: #b03f49; --err: #b03f49; --ok: #3f7560;
-    --sel-soft: #fdf1df; --band: #f9fafb; --band-hi: #f4f5f8; --band-sel: #fdf1df; --hover: #f4f5f8; --press: #eceef2;
-    --button: #ffffff; --hover-btn: #f4f5f8; --press-btn: #eceef2; --scrim: #0f183055;
-    --amber-ink: #8a4a06; --chip: #eef0f5; --chip-text: #4a5363; --danger-fill: #b03f49; --on-danger: #ffffff; --danger-bg: #fff2f3; --danger-line: #ebc3c7;
-    --shadow-dlg: 0 10px 40px #15274a26;
-
-    /* The dark column: the sidebar and the brand above it read the column's own colours. */
-    & #bar2, & #brand {
-      color-scheme: dark;
-      --text: #d3d7de; --text-2: #c2c8d2; --text-hi: #ffffff; --muted: #a3aab7; --ice: #c2c8d2; --live: #ffb21e; --warn: #ef9ba1;
-      --sel: #2a2e38; --hover: #22262e; --press: #2a2e38; --line: #2c313b; --line-soft: #23272f; --line-strong: #8a929f;
-      --box: #1f232b; --surface: #1f232b; --button: #22262e; --hover-btn: #2a2e38; --press-btn: #1b1e24; --chip: #2c313b; --chip-text: #c2c8d2;
-    }
-    /* A blocked row is dimmed less on white, so its words keep 4.5:1. */
-    & .r.muted > :not(.nm), & .r.muted .nm-text .t, & .r.muted .caret { opacity: .85; }
-  }
-  &[data-theme="light"] { --sidebar: #16181d; }
-
   /* Contrast themes repaint the fills: the tick, the bars and the switch say their state in system colours. */
   @media (forced-colors: active) {
     & [role="checkbox"][aria-checked="true"] > .ckbox::after { forced-color-adjust: none; background: none; border-color: Highlight; }
@@ -350,12 +281,5 @@
     & #app::before { border-color: CanvasText; }
     & .theme-choice[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
     & .r.sec.folder .sec-name .t::before { forced-color-adjust: none; background: CanvasText; }
-  }
-
-  /* Narrow (a half-width window, or 200 % zoom): a narrower sidebar. */
-  @media (max-width: 760px) {
-    & #app { --side: clamp(150px, 28vw, 196px); }
-    & .nv { padding: 0 7px; }
-    & .nv::after { left: 7px; right: 7px; }
   }
 }

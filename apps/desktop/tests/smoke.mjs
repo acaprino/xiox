@@ -19,27 +19,35 @@ export const SECTIONS = Object.entries(fixture.views).flatMap(([section, states]
 const ANALYZED = new Set(['cleanup:analyzed', 'cleanup:interrupted', 'registry:analyzed', 'developers:projects', 'developers:worktrees', 'developers:sessions']);
 const VIEWPORTS = [[1000, 640], [1440, 900]];
 
-/** Tokens the whole look rests on, per look: a wrong value here means the palette drifted (ONI MODE: from the mock-up). */
-const TOKENS = {
-  smooth: { '--stage': '#12161e', '--line': '#2a3240', '--text': '#e8ecf3', '--ice': '#c0c8d6', body: 'rgb(18, 22, 30)' },
-  'smooth-light': { '--stage': '#f6f7f9', '--line': '#e3e6ea', '--text': '#111827', '--ice': '#4b5563', body: 'rgb(246, 247, 249)' },
-  oni: { '--stage': '#0b0416', '--line': '#3f6fb5', '--text': '#ffb21e', '--ice': '#9cc4f5', body: 'rgb(11, 4, 22)' },
+/** What the root says per look (Imago's `applyLook`): the app, the look and the theme drawn, whatever Windows says. */
+const LOOKS = {
+  smooth: { look: 'smooth', theme: 'dark' },
+  'smooth-light': { look: 'smooth', theme: 'light' },
+  oni: { look: 'oni', theme: 'dark' },
 };
 
 export async function checkTokens(page, skin = 'smooth') {
   const found = await page.evaluate(() => {
     const root = getComputedStyle(document.documentElement);
     const token = (name) => root.getPropertyValue(name).trim().toLowerCase();
+    const attr = (name) => document.documentElement.getAttribute(name);
     return {
-      '--stage': token('--stage'), '--line': token('--line'), '--text': token('--text'), '--ice': token('--ice'),
-      body: getComputedStyle(document.body).backgroundColor, skin: document.documentElement.dataset.skin,
+      app: attr('data-im-app'), look: attr('data-im-look'), theme: attr('data-im-theme'), scheme: document.documentElement.style.colorScheme,
+      ground: token('--im-ground'), text: token('--im-text'), accent: token('--im-accent'), hue: token('--im-hue'),
+      oldSkin: document.documentElement.hasAttribute('data-skin'),
     };
   });
-  const want = TOKENS[skin];
-  const bad = Object.entries(want).filter(([key, value]) => found[key] !== value)
-    .map(([key, value]) => `tokens (${skin}): ${key} is ${JSON.stringify(found[key])}, expected ${value}`);
-  const root = skin.startsWith('smooth') ? 'smooth' : skin;
-  return found.skin === root ? bad : [`the root says data-skin=${found.skin}, expected ${root}`, ...bad];
+  const want = LOOKS[skin];
+  const bad = [];
+  if (found.app !== 'xiox') bad.push(`tokens (${skin}): data-im-app is ${found.app}, expected xiox`);
+  if (found.look !== want.look) bad.push(`tokens (${skin}): data-im-look is ${found.look}, expected ${want.look}`);
+  if (found.theme !== want.theme) bad.push(`tokens (${skin}): data-im-theme is ${found.theme}, expected ${want.theme}`);
+  if (found.scheme !== want.theme) bad.push(`tokens (${skin}): color-scheme is ${found.scheme}, expected ${want.theme}`);
+  if (found.hue !== '75') bad.push(`tokens (${skin}): --im-hue is ${found.hue}, expected 75 (Xiox's amber)`);
+  if (!found.accent.includes(' 75)') && !found.accent.startsWith('#')) bad.push(`tokens (${skin}): --im-accent is ${found.accent}, not of hue 75`);
+  if (found.ground === '' || found.text === '') bad.push(`tokens (${skin}): --im-ground or --im-text is empty (Imago's stylesheet is not loaded)`);
+  if (found.oldSkin) bad.push(`tokens (${skin}): the root still carries data-skin`);
+  return bad;
 }
 
 /** Nothing clipped, nothing overlapping: the failures as text lines. */
@@ -1136,6 +1144,8 @@ try {
     await page.locator('#sections [data-section="cleanup"].on').waitFor();
     failures.push(...await checkTokens(page));
     await page.emulateMedia({ colorScheme: 'light' });
+    // The page follows Windows' colours through the media query's change event.
+    await page.waitForFunction(() => document.documentElement.getAttribute('data-im-theme') === 'light', null, { timeout: 2000 }).catch(() => undefined);
     failures.push(...await checkTokens(page, 'smooth-light'));
     await page.screenshot({ path: `${out}smooth-light-${size}.png` });
     await page.emulateMedia({ colorScheme: 'dark' });
@@ -1186,7 +1196,7 @@ try {
     };
     expect(await page.locator('#skin').count() === 0, `${size}: the top bar still has an ONI MODE switch`);
     await chooseLook('oni');
-    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'oni', `${size}: Settings did not turn ONI MODE on`);
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-im-look')) === 'oni', `${size}: Settings did not turn ONI MODE on`);
     await page.reload();
     await page.locator('#sections .nv.about').click();
     expect(await page.locator('#about [data-key="look:oni"]:checked').count() === 1, `${size}: Settings does not say ONI MODE is on after a reload`);
@@ -1205,7 +1215,7 @@ try {
       shots += 1;
     }
     await chooseLook('smooth');
-    expect(await page.evaluate(() => document.documentElement.dataset.skin) === 'smooth', `${size}: Settings did not turn ONI MODE off`);
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-im-look')) === 'smooth', `${size}: Settings did not turn ONI MODE off`);
     await page.reload();
     await page.locator('#sections [data-section="cleanup"].on').waitFor();
 

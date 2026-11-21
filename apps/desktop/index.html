@@ -1,15 +1,12 @@
 <!doctype html>
-<html lang="en" data-skin="smooth">
+<html lang="en">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark"><link rel="icon" href="data:,">
+  <link rel="icon" href="data:,">
   <title>Xiox</title>
-  <!-- The stage colour before any stylesheet or script: the first frame is the window's own background
-       (tauri.conf.json backgroundColor, tokens.css --stage), never white or the engine's dark grey. -->
-  <style>html, body { background: #0b0416; }</style>
 </head>
 <body>
-  <main id="app">
+  <main id="app" class="im-shell">
     <div id="status"><span id="badge"></span><span id="status-text" role="status" aria-atomic="true"></span><span id="status-right"></span></div>
     <div id="job" hidden></div>
     <div id="profile" hidden></div>
@@ -28,7 +25,6 @@
       <!-- Smooth's title bar (the window has no system frame then): this strip drags the window and its double click maximizes;
            what sits on it (the brand, the tabs, the switches, the window buttons) is above it. ONI MODE hides it, its frame is the system's. -->
       <div id="titlebar" data-tauri-drag-region></div>
-      <img id="wordmark" src="/xiox-wordmark.png" alt="Xiox" draggable="false">
       <span id="brand" aria-hidden="true"><i class="brand-mark"></i>Xiox</span>
       <span id="version"></span>
       <span class="spring"></span>

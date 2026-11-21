@@ -5,7 +5,7 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AboutView, AnyIntent, AppInfo, CmdError, SectionId, SectionView } from './types.ts';
-import type { Theme } from './skin.ts';
+import type { WindowTheme } from './look.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
 
@@ -43,10 +43,10 @@ export const api = {
   ready: () => invoke<void>('window_ready'),
   /** The open section (its name goes in the window title) and the running job's percent, if any (the taskbar button shows it). */
   /**
-   * `theme`: what the window asks Windows for (ONI MODE: dark; Smooth: its theme switch, `system` by default); `glass`: the
+   * `theme`: what the window asks Windows for (the user's theme in both looks, `system` by default); `glass`: the
    * palette Smooth's acrylic is tinted for, none in ONI MODE (which also gets the system frame back).
    */
-  chrome: (section: SectionId, job: number | null, theme: Theme, glass: 'light' | 'dark' | null) =>
+  chrome: (section: SectionId, job: number | null, theme: WindowTheme, glass: 'light' | 'dark' | null) =>
     invoke<void>('window_chrome', { section, job, theme, glass }),
 };
 
