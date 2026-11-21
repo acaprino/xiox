@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRegistry } from '@acaprino/imago/ui';
 import {
-  actionCommandId, actionCommands, actionForKey, actionKeys, COMMAND, cycleFocus, DIALOG_ARM_MS, dialogKeySwallowed, footerEntries, listKey,
+  actionCommandId, actionCommands, actionForKey, actionKeys, COMMAND, DIALOG_ARM_MS, dialogKeySwallowed, footerEntries, listKey,
   registerCommands, type CommandApp,
 } from '../src/commands.ts';
 import type { ActionView, AnyIntent, SectionId, SectionView } from '../src/types.ts';
@@ -164,15 +164,6 @@ test('the footer lists the list\'s keys, the sort and each action with its key, 
   assert.equal(entries('cleanup', 'analyzed'), `ArrowUp ArrowDown:Move Space:Toggle ${COMMAND.sort} ${actionCommandId(analyze)} Enter:${clean.label}`);
   assert.ok(!entries('cleanup', 'cleaning').includes('Esc'), 'Esc is not in the footer, busy or not');
   assert.equal(footerEntries(viewWith('cleanup'), () => false).length, 2, 'without a sort command only the list\'s keys');
-});
-
-test('Tab cycles inside a dialog and never leaves it', () => {
-  assert.equal(cycleFocus(0, -1, false), null, 'nothing to focus');
-  assert.equal(cycleFocus(3, -1, false), 0);
-  assert.equal(cycleFocus(3, -1, true), 2);
-  assert.equal(cycleFocus(3, 2, false), 0);
-  assert.equal(cycleFocus(3, 0, true), 2);
-  assert.equal(cycleFocus(3, 1, false), 2);
 });
 
 test('a dialog button ignores held keys and keys within 300 ms of the dialog opening, never Escape or Tab', () => {

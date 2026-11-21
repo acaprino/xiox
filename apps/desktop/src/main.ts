@@ -8,7 +8,7 @@ import { actionCommands, actionForKey, listKey, registerCommands, SELECTABLE, ty
 import { actionIntent, toggleIntent } from './intents.ts';
 import { applyLook } from '@acaprino/imago/shell';
 import { LOOK_KEY, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
-import { claimKey, createRegistry, isTextTarget, mountApp, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
+import { claimKey, createRegistry, isTextTarget, mountApp, notify, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
 import { buildFrame } from './render/frame.ts';
 import { inspectorOpen } from './render/inspector.ts';
 import { renderSettings } from './render/settings.ts';
@@ -20,7 +20,23 @@ import type { AboutView, AnyIntent, AppInfo, SectionId } from './types.ts';
 const ui = createUi();
 let app: AppInfo | null = null;
 /** The last failed command and the section it concerns: shown only while that section is open; any later success, a section switch or a push for another section clears it. */
-let error: { section: SectionId; text: string } | null = null;
+let errorSection: SectionId | null = null;
+/** Closes the notice of the failed command on screen. */
+let dismissError: (() => void) | null = null;
+
+/** A command failed: an error notice that stays until it is dismissed, or until the next command of that section succeeds. */
+function fail(section: SectionId, text: string): void {
+  clearError();
+  errorSection = section;
+  dismissError = notify(shell, text, { tone: 'err' });
+}
+
+/** The next command succeeded, or the section changed: the notice of the failure goes. */
+function clearError(): void {
+  dismissError?.();
+  dismissError = null;
+  errorSection = null;
+}
 /** Rapid clicks on the section bar: only the answer to the last one is drawn. */
 const opening = createGate();
 /** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
@@ -136,14 +152,12 @@ let reportShown = false;
 function render(): void {
   const view = ui.views[ui.section];
   if (!app || !view) {
-    // Nothing to draw yet and a command failed: say so rather than leave a blank window.
-    if (error !== null) renderFailure(error.text);
     return;
   }
   viewActions.sync(view);
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, registry, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
+  renderShell({ app, view, ui, registry }, handlers);
   // Settings is drawn over the section's sidebar, header, content and action bar; the status row, the footer and the window title stay the section's.
   if (ui.settings && about !== null) renderSettings(about, { look, theme }, applyAppearance);
   SCROLLERS.forEach((selector, i) => {
@@ -175,12 +189,12 @@ async function open(section: SectionId): Promise<void> {
       acceptView(ui, view);
       ui.section = section;
       ui.settings = false;
-      error = null;
+      clearError();
       render();
     },
     (failure) => {
       // The section stays as it was: the error belongs to the one on screen.
-      error = { section: ui.section, text: errorText(failure) };
+      fail(ui.section, errorText(failure));
       render();
     },
   );
@@ -190,10 +204,10 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
   if (intent === null || !inflight.begin(section, intent)) return;
   try {
     const view = await api.intent(section, intent);
-    error = null;
+    clearError();
     acceptView(ui, view);
   } catch (failure) {
-    error = { section, text: errorText(failure) };
+    fail(section, errorText(failure));
   } finally {
     inflight.end(section, intent);
   }
@@ -206,7 +220,7 @@ async function openSettings(): Promise<void> {
   try {
     about = await api.about();
   } catch (failure) {
-    error = { section: ui.section, text: errorText(failure) };
+    fail(ui.section, errorText(failure));
     render();
     return;
   }
@@ -316,10 +330,10 @@ const handlers: Handlers = {
     scrollToGroup(id);
   },
   saveReport: (section) => {
-    void api.saveReport(section).then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section, text: errorText(failure) }; render(); });
+    void api.saveReport(section).then((view) => { clearError(); acceptView(ui, view); render(); }, (failure) => { fail(section, errorText(failure)); render(); });
   },
   addRoot: () => {
-    void api.addRoot().then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
+    void api.addRoot().then((view) => { clearError(); acceptView(ui, view); render(); }, (failure) => { fail(ui.section, errorText(failure)); render(); });
   },
 };
 
@@ -425,7 +439,7 @@ async function start(): Promise<void> {
     app = await api.appInfo();
     onView((view) => {
       // News about another section ends an error that was about this one.
-      if (error !== null && error.section !== view.section) error = null;
+      if (errorSection !== null && errorSection !== view.section) clearError();
       if (acceptView(ui, view) && view.section === ui.section) render();
       syncChrome();
     });
@@ -438,14 +452,14 @@ async function start(): Promise<void> {
   signalReady();
   const titlebar = document.getElementById('top');
   if (inTauri && titlebar !== null) {
-    const onError = (action: string, failure: unknown): void => { error = { section: ui.section, text: `${action} failed: ${errorText(failure)}` }; render(); };
+    const onError = (action: string, failure: unknown): void => { fail(ui.section, `${action} failed: ${errorText(failure)}`); render(); };
     mountWindowControls(titlebar, tauriWindowApi(onError), { onError });
   }
 }
 
 /** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */
 function focusList(): void {
-  const dialog = document.querySelector<HTMLElement>('#modal:not([hidden]) [role=dialog]');
+  const dialog = document.querySelector<HTMLElement>('dialog[open]');
   (dialog ?? document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 

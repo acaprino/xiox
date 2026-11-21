@@ -162,17 +162,6 @@ export const SELECTABLE: readonly (readonly [within: string, select: string])[] 
   ['.im-inspector', '.im-content-text'], ['.report', '.rp-body'], ['[role=dialog]', '.dlg-body'], ['#notices', '#notices'],
 ];
 
-/**
- * Where Tab goes inside an open dialog: the index among its `count` focusable controls, wrapping at
- * both ends. `current` is the focused one's index, or -1 when the focus is outside the dialog (then
- * Tab lands on the first control and Shift+Tab on the last). Null when there is nothing to focus.
- */
-export function cycleFocus(count: number, current: number, backwards: boolean): number | null {
-  if (count <= 0) return null;
-  if (current < 0 || current >= count) return backwards ? count - 1 : 0;
-  return (current + (backwards ? count - 1 : 1)) % count;
-}
-
 /** How long after a confirmation opens its buttons ignore Enter and Space (a mouse click is never held back). */
 export const DIALOG_ARM_MS = 300;
 

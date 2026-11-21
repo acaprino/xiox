@@ -15,8 +15,6 @@ img { -webkit-user-drag: none; }
 #status-right { white-space: nowrap; }
 #foot .foot-left { flex: 0 1 auto; min-width: 0; }
 #foot .foot-right { margin-left: auto; }
-/* The two hosts of the confirmation and Settings are not cells of the shell: the scrim covers it under the title bar. */
-#modal, #about { display: contents; }
 
 /* ---------- the content: its header, the notices in its tools row, then the list ---------- */
 #notices { flex: 1 1 auto; display: flex; flex-direction: column; gap: var(--im-s-1); }
@@ -105,7 +103,7 @@ tr[aria-expanded="true"] .xi-caret::before, .xi-caret[aria-expanded="true"]::bef
 .rp-path { font-family: var(--im-font-code); }
 
 /* ---------- the confirmation and Settings ---------- */
-.dlg { width: min(560px, calc(100% - var(--im-s-5))); } /* imago-check: allow literal-space — a confirmation holds a table of items and its notes, wider than the package's 420 */
+dialog.dlg { padding: var(--im-s-4); width: min(560px, calc(100% - var(--im-s-5))); } /* imago-check: allow literal-space — a confirmation holds a table of items and its notes, wider than the package's 420 */
 .dlg-body { display: grid; gap: var(--im-s-3); max-height: 60vh; overflow: auto; }
 .dlg-text, .dlg-sum { margin: 0; }
 .dlg-sum { color: var(--im-text-hi); font-weight: 600; }

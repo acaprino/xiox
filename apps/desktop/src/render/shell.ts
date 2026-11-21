@@ -54,10 +54,6 @@ export interface Screen {
   ui: UiState;
   /** The commands, for the footer's key list. */
   registry: Registry;
-  /** The `data-key` of the control that had the keyboard focus before this render (the redraw replaces it): where a dialog returns the focus to. */
-  focused: string | null;
-  /** The message of the last failed command, shown above the list until the next one succeeds. */
-  error: string | null;
 }
 
 const SECTION_NAMES: Record<SectionId, string> = {
@@ -243,7 +239,6 @@ export function renderShell(screen: Screen, on: Handlers): void {
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
   fill(byId('notices'),
     ...(app.profileMismatch === null ? [] : [profileNote(app.profileMismatch)]),
-    ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
     ...view.notices.map((notice) => noticeNode(notice, noticeCtx)));
   const rowsArea = byId('rows');
   let detailRow: RowView | null = null;
@@ -269,5 +264,5 @@ export function renderShell(screen: Screen, on: Handlers): void {
     footerKeys(document, screen.registry, footerEntries(view, (id) => screen.registry.get(id) !== undefined)));
 
   // The confirmation, last: it takes the focus when it opens and gives it back when it closes.
-  renderDialog(view, on, screen.focused);
+  renderDialog(view, on);
 }

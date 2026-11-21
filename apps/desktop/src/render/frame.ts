@@ -42,7 +42,6 @@ export function buildFrame(doc: Document): HTMLElement {
     skipLabel: 'Skip to content',
     inspectorLabel: 'Details and options',
   })));
-  shell.append(fromHtml(doc, '<div id="modal" hidden></div><div id="about" hidden></div>'));
   doc.body.append(shell);
   name(shell, '.im-titlebar', 'top');
   name(shell, '.im-body', 'body');
