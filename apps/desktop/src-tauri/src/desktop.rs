@@ -167,11 +167,10 @@ fn ask(app: &AppHandle, label: &str, failure: ProcessFailure) {
     };
     let (app, label) = (app.clone(), label.to_owned());
     std::thread::spawn(move || {
-        let Some(webview) = app.get_webview(&label) else {
+        let Some(window) = app.get_webview_window(&label) else {
             ASKING.store(false, Ordering::SeqCst);
             return;
         };
-        let window = webview.window();
         // A page that failed before its first frame left the window hidden: the message needs it on screen.
         if !window.is_visible().unwrap_or(true) {
             let _ = window.show();
@@ -185,7 +184,7 @@ fn ask(app: &AppHandle, label: &str, failure: ProcessFailure) {
             .buttons(MessageDialogButtons::OkCancelCustom(yes.to_string(), no.to_string()))
             .blocking_show();
         ASKING.store(false, Ordering::SeqCst);
-        give_back_focus(&webview);
+        give_back_focus(window.as_ref());
         match (failure, yes_pressed) {
             (ProcessFailure::Browser, true) => restart(&app),
             (ProcessFailure::Browser, false) => app.exit(0),
@@ -197,7 +196,7 @@ fn ask(app: &AppHandle, label: &str, failure: ProcessFailure) {
                 {
                     recovery.reset();
                 }
-                let _ = webview.reload();
+                let _ = window.reload();
             }
             (_, false) => app.exit(0),
         }
