@@ -10,6 +10,7 @@
 [data-fit] { white-space: nowrap; line-height: normal; }
 /* The content header: the two buttons that open the inspector keep their words; the subtitle gives way (it ends in an ellipsis). */
 .xi-toggle { flex: none; }
+.xi-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .xi-head-sub { min-width: 0; overflow: hidden; }
 /* The warning of a profile that is not the user's: a name with no space in it wraps instead of running out of the note. */
 .xi-profile { overflow-wrap: anywhere; }
@@ -30,7 +31,10 @@ img { -webkit-user-drag: none; }
 #rows { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #rows.is-report { overflow: hidden; }
 #rows > .xi-tools { flex: none; }
-.xi-search { flex: 1 1 auto; }
+.xi-search { flex: 1 1 auto; min-width: 0; }
+.xi-search input { min-width: 0; }
+/* At 250 px the search box and Fold all do not fit side by side: the second goes under the first instead of out of the panel. */
+.xi-tools { flex-wrap: wrap; }
 .xi-list { flex: 1 1 auto; min-height: 0; padding: 0 var(--im-s-2); }
 .xi-more { margin: 0; padding-inline-start: var(--im-s-4); }
 

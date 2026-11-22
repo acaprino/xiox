@@ -282,7 +282,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
 
   // List header: title, subtitle and the switch of the details (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
-    h('h4', { class: 'im-panel-title', 'data-fit': '' }, view.title),
+    h('h4', { class: 'im-panel-title xi-head-title', 'data-fit': '' }, view.title),
     h('span', { class: 'im-panel-sub xi-head-sub' }, ellipsis(view.subtitle)),
     h('span', { class: 'im-spacer' }),
     view.report === null ? inspectorButton('details', 'Details', 'i', ui, 'The details of the selected row: paths, files in use, why', on) : null,
