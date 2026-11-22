@@ -161,7 +161,7 @@ test('the first focus is the list, and a native dialog gives the focus back to t
   assert.match(desktop, /pub fn give_back_focus/);
   const commands = file('src-tauri/src/commands.rs');
   assert.equal(commands.match(/blocking_(pick_folder|save_file)/g)?.length, commands.match(/give_back_focus\(/g)?.length, 'every blocking dialog of commands.rs hands the focus back');
-  assert.match(desktop, /give_back_focus\(&webview\)/, 'so does the recovery message');
+  assert.match(desktop, /\.blocking_show\(\);[\s\S]*?give_back_focus\(window\.as_ref\(\)\)/, 'so does the recovery message, once its question is answered');
   assert.match(file('src-tauri/src/dropped.rs'), /give_back_focus\(/, 'and the question about a dropped folder');
 });
 
