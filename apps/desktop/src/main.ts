@@ -12,6 +12,7 @@ import { claimKey, createRegistry, isTextTarget, mountApp, notify, openMenu, PAL
 import { buildFrame } from './render/frame.ts';
 import { inspectorOpen } from './render/inspector.ts';
 import { renderSettings } from './render/settings.ts';
+import { takeReturnFocus } from './render/dialog.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
 import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SECTION_ORDER, shownRows } from './state.ts';
@@ -184,6 +185,14 @@ function render(): void {
   // An open dialog manages its own focus (render/dialog.ts); the rest of the page is inert behind it.
   if (view.dialog === null && active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
     document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
+  }
+  // A confirmation that closed before its opener could take the focus back: the focus is on the list or nowhere, and goes where it was.
+  if (view.dialog === null) {
+    const back = takeReturnFocus();
+    const at = document.activeElement;
+    if (back !== null && (at === null || at === document.body || at.classList.contains('xi-table'))) {
+      document.querySelector<HTMLElement>(`[data-key="${CSS.escape(back)}"]:not([disabled])`)?.focus();
+    }
   }
   updateSpy();
   // A report opening or closing replaces the list: if the focus fell to the page, put it where the user is working

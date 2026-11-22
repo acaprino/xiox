@@ -21,6 +21,15 @@ let closingByView = false;
 let openedAt = 0;
 /** The `data-key` of the control the dialog was opened from (the Clean button, pressed with the mouse); null when it was the list or nothing. */
 let openerKey: string | null = null;
+/** The opener that could not take the focus yet (it was disabled while the dialog closed): the next draw without a dialog gives it back. */
+let returnKey: string | null = null;
+
+/** The `data-key` the focus still owes to the control a closed dialog was opened from, once; null when nothing is owed. */
+export function takeReturnFocus(): string | null {
+  const key = returnKey;
+  returnKey = null;
+  return key;
+}
 
 /** The dialog element, made once: its keys are guarded for its whole life. */
 function element(): HTMLDialogElement {
@@ -101,7 +110,11 @@ function focusList(): void {
   const active = document.activeElement;
   if (active !== null && active !== document.body) return;
   const opener = openerKey === null ? null : document.querySelector<HTMLElement>(`[data-key="${CSS.escape(openerKey)}"]`);
+  returnKey = null;
   if (opener !== null && !opener.hasAttribute('disabled') && !opener.closest('[inert]')) { opener.focus(); return; }
+  // While the dialog is open the actions are disabled (a close the user asked for, Escape, comes before Rust's answer): the focus waits on the
+  // list and goes to the opener when the view without the dialog is drawn (`takeReturnFocus`, main.ts).
+  returnKey = openerKey;
   (document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 
