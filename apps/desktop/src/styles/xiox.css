@@ -5,7 +5,12 @@
 /* Text for a screen reader only (the badge of the status row is read in front of its sentence). */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* imago-check: allow literal-space — a one-pixel box that is never seen */
 .ellipsis { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-[data-fit] { white-space: nowrap; }
+/* Imago gives a button a line height of 1 and clips its label: this font is taller than that, and the label (and the descender of a p or a y) was cut
+   by a pixel. A text that must fit takes its font's own line height; the button keeps its height. */
+[data-fit] { white-space: nowrap; line-height: normal; }
+/* The warning of a profile that is not the user's: a name with no space in it wraps instead of running out of the note. */
+.xi-profile { overflow-wrap: anywhere; }
+.xi-profile > div { min-width: 0; }
 img { -webkit-user-drag: none; }
 
 /* ---------- the window's rows ---------- */
