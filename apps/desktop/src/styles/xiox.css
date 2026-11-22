@@ -11,7 +11,8 @@
 /* The content header: the two buttons that open the inspector keep their words; the subtitle gives way (it ends in an ellipsis). */
 .xi-toggle { flex: none; }
 .xi-head-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.xi-head-sub { min-width: 0; overflow: hidden; }
+/* The subtitle gives way first, by far (a shrink factor of 1000): the title is cut only when the subtitle is gone (at 250 px). */
+.xi-head-sub { min-width: 0; overflow: hidden; flex: 0 1000 auto; }
 /* The warning of a profile that is not the user's: a name with no space in it wraps instead of running out of the note. */
 .xi-profile { overflow-wrap: anywhere; }
 .xi-profile > div { min-width: 0; }
