@@ -15,6 +15,8 @@ name: Release
 # Nothing is published when the build fails. Run by hand (Actions, Run workflow) it only builds, unless "publish"
 # is ticked. RELEASE_TOKEN (a token that reads the owner's other private repositories) is needed where the build
 # downloads from them; without it the workflow's own token is used.
+# Where the repository has a Cargo.lock, the build restores the compiled Rust dependencies (see "Cargo cache key"); the
+# two steps are skipped where it has none.
 
 on:
   push:
@@ -72,6 +74,8 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+      # No incremental state: the cached target stays smaller, and the same for the same inputs.
+      CARGO_INCREMENTAL: '0'
     defaults:
       run:
         shell: pwsh
@@ -83,6 +87,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -110,6 +116,41 @@ jobs:
             choco install innosetup -y --no-progress
             if ($LASTEXITCODE) { exit 1 }
           }
+
+      # The compiled dependencies are kept from release to release, and cargo compiles only what changed (the crates of the
+      # workspace, whose version this run has just bumped; the final link with LTO is done every time). A run on main reads only
+      # the caches main itself saved: the ones Verify saves on develop are not visible here. So this run restores and saves its
+      # own: the first release after this was added builds everything and saves it, the next ones start from it. It is saved by
+      # a run that succeeds, when none of the exact key exists.
+      # The key has two parts. The compiler: the image moves stable Rust from time to time, every artifact of the old one is
+      # then useless, and a key without it would still hit and never be saved again. The dependencies: the source and checksum
+      # lines of Cargo.lock, not the whole file, which also holds the version of every crate of this workspace, and the step
+      # "Next version" has just rewritten it: the whole file would give every release a cache of its own.
+      - name: Cargo cache key
+        id: cargo-key
+        if: ${{ hashFiles('Cargo.lock') != '' }}
+        run: |
+          $info = rustc -vV
+          if ($LASTEXITCODE) { exit 1 }
+          $release = ($info | Select-String '^release: (\S+)').Matches[0].Groups[1].Value
+          $commit = ($info | Select-String '^commit-hash: (\w{9})').Matches[0].Groups[1].Value
+          $pins = Select-String -Path Cargo.lock -Pattern '^(source|checksum) = ' | ForEach-Object Line
+          $lock = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($pins -join "`n"))).Substring(0, 20).ToLower()
+          "toolchain=$release-$commit" >> $env:GITHUB_OUTPUT
+          "lock=$lock" >> $env:GITHUB_OUTPUT
+
+      - name: Restore the compiled Rust dependencies
+        if: ${{ hashFiles('Cargo.lock') != '' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-${{ steps.cargo-key.outputs.toolchain }}-
 
       - name: Prepare and build
         run: |
