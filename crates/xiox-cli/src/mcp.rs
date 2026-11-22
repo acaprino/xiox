@@ -240,11 +240,9 @@ impl Server {
             Err(result) => return result,
         };
         let mut stale = false;
-        if !fresh {
-            if let Err(message) = check(observer, &deps) {
-                let _ = writeln!(err, "error: check failed: {message}");
-                stale = true;
-            }
+        if !fresh && let Err(message) = check(observer, &deps) {
+            let _ = writeln!(err, "error: check failed: {message}");
+            stale = true;
         }
         let report = observer.report(stale);
         let structured = match serde_json::to_value(&report) {

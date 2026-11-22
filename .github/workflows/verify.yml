@@ -1,0 +1,167 @@
+name: Verify
+
+# Every push to develop, and every pull request: the page (tests, build, smoke test on the mocked commands), the
+# desktop crate (format, lint, tests) and the lock. Rust is compiled, formatted, linted and tested here only: nobody
+# runs cargo on a developer's machine (AGENTS.md). release.yml stays the release's own.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The page: the design check, the node tests, tsc and Vite, then the smoke test on the mocked commands.
+  verify:
+    name: Verify the page (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Imago's design check: no literal colour, size or space, no class of the package restyled, the mount, the keys, the icons.
+      - name: Check the design
+        run: npx imago-check
+
+      - name: Test the page
+        run: npm test
+
+      - name: Build the page
+        run: npm run build
+
+      # Last: the smoke test drives a browser, and it is the one step known to be red until it is repaired for the new page. It
+      # does not hide the Rust job, which is its own.
+      - name: Install the browser
+        run: npx playwright install chromium
+
+      - name: Smoke test the page
+        run: npm run smoke
+
+  # The desktop crate: the lock, the lint, the tests and, last, the format. Its own job, so that nothing red in the page (the smoke
+  # test, a type error) or in the format hides what nobody could compile before. The crate embeds the built page, so Vite builds
+  # it first (without tsc: a type error must not stop the Rust from being looked at).
+  rust:
+    name: Verify the desktop crate (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the page the crate embeds
+        run: npx vite build --config apps/desktop/vite.config.ts
+
+      # No cargo runs on a developer's machine, so nobody can write Cargo.lock there: this step resolves the
+      # dependencies and, when the lock moved, keeps the lock it wrote as the artifact cargo-lock and fails. The
+      # agent downloads it (gh run download -n cargo-lock) and commits it.
+      - name: Check the lock
+        id: lock
+        run: |
+          cargo metadata --format-version 1 > $null
+          git diff --exit-code Cargo.lock
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Keep the lock cargo wrote
+        if: failure() && steps.lock.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Lint the Rust
+        run: cargo clippy -p xiox-ui --all-targets -- -D warnings
+
+      # xiox-core holds the drift test of fixtures/views.json.
+      # The runner's temporary folder is C:\Users\RUNNER~1\...: a path with an 8.3 short name, which the rules guard refuses ("cannot be
+      # compared with certainty"), so every test that cleans inside a temporary folder found nothing. The runner's own temp folder has none.
+      - name: Test the Rust
+        run: cargo test -p xiox-ui -p xiox-core
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+
+      # No rustfmt check: the Rust of this repository was never put through rustfmt (no rustfmt.toml, lines of 150 columns),
+      # so `cargo fmt --all --check` fails on about 3900 differences that are not part of this work. Run `cargo fmt --all` once,
+      # commit it, and then add the step `cargo fmt --all --check` here.
+
+  # The window is never built on a developer's machine: this job builds it, and keeps the debug program, which the
+  # owner runs with XIOX_UI_FAKE=1 to look at the real window (a debug build has the fixtures).
+  desktop:
+    name: Desktop window (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the desktop window
+        run: npm run desktop:build
+
+      - name: Keep the desktop window to look at
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xiox-ui
+          path: target/debug/xiox-ui.exe
+          if-no-files-found: error
+          retention-days: 30

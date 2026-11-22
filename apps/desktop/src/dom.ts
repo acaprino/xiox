@@ -1,3 +1,5 @@
+import { keyCaps as packageKeyCaps } from '@acaprino/imago/ui';
+
 // A small element builder: the views build their DOM with it, never with innerHTML, so text that
 // comes from a path or a project name is always text.
 
@@ -34,6 +36,17 @@ export function button(label: Child | Child[], attrs: Attrs = {}): HTMLButtonEle
   return h('button', { type: 'button', ...attrs }, ...(Array.isArray(label) ? label : [label]));
 }
 
-export function kbd(text: string): HTMLElement {
-  return h('kbd', {}, text);
+/** The key caps of a binding, as Imago draws them everywhere (the footer, the menus, the palette): `a` is `A`, `Enter` the return symbol, `Esc` itself. */
+export function keyCaps(binding: string): HTMLElement {
+  return packageKeyCaps(document, binding);
+}
+
+/**
+ * The nodes of a string the package wrote (`noteHtml`, `chipHtml` ...): the one way this app turns a package string into
+ * elements. Only the package's own markup goes in, with the app's text escaped by the package, never a string of the app's.
+ */
+export function fromHtml(doc: Document, html: string): DocumentFragment {
+  const template = doc.createElement('template');
+  template.innerHTML = html;
+  return template.content;
 }

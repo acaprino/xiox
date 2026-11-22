@@ -153,7 +153,7 @@ fn values(root: Root, path: &str) -> Vec<(String, String)> {
         .map(|(n, v)| {
             let text = match v.vtype {
                 REG_SZ | REG_EXPAND_SZ => {
-                    let words: Vec<u16> = v.bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                    let words: Vec<u16> = v.bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
                     String::from_utf16_lossy(&words).trim_end_matches('\0').to_string()
                 }
                 _ => String::new(),

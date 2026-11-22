@@ -1490,7 +1490,10 @@
    "note": "back to the Cleanup analysis, nothing ticked",
    "op": "go",
    "section": "cleanup",
-   "state": "analyzed"
+   "state": "analyzed",
+   "expect": {
+    "state": "analyzed"
+   }
   },
   {
    "note": "selectAll off clears every eligible row, so the box of a Winapp2 section is off",
@@ -1541,7 +1544,10 @@
    "note": "back to the Registry issues, nothing ticked",
    "op": "go",
    "section": "registry",
-   "state": "analyzed"
+   "state": "analyzed",
+   "expect": {
+    "state": "analyzed"
+   }
   },
   {
    "note": "selectAll off clears every issue, so the box of a kind is off",

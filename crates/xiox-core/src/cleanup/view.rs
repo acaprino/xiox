@@ -317,7 +317,7 @@ impl CleanupState {
         let found = self.native_found_of(&key);
         let mut detail = vec![("item".to_string(), item.label.to_string())];
         if let Some(f) = found {
-            detail.push(("files".into(), sys::fmt_count(f.files as u64)));
+            detail.push(("files".into(), sys::fmt_count(f.files)));
             detail.push(("size".into(), sys::fmt_size(f.bytes)));
         }
         detail.extend([("level".to_string(), level_text(level).to_string()), ("mode".into(), MODE.into()), ("why".into(), item.description.into())]);
@@ -331,7 +331,7 @@ impl CleanupState {
             sub: Some(item.description.into()),
             level: Some(level),
             // Channels, DNS and the clipboard are not files: the number is in the detail.
-            cells: found.map(|f| vec![if f.files > 0 { sys::fmt_count(f.files as u64) } else { "—".to_string() }]).unwrap_or_default(),
+            cells: found.map(|f| vec![if f.files > 0 { sys::fmt_count(f.files) } else { "—".to_string() }]).unwrap_or_default(),
             bytes: found.map(|f| f.bytes),
             muted: blocked.is_some(),
             why: blocked.or_else(|| item.warning.map(str::to_string)),
@@ -526,7 +526,8 @@ impl CleanupState {
             cautions: Vec::new(),
             ack: None,
             error: None,
-            buttons: vec![button("continue", "Continue", true), button("cancel", "Cancel", false)],
+            // The confirming button says what it does and to what, as the action that opened the dialog does: "Clean 8 items".
+            buttons: vec![button("continue", &clean_label(self.clean_count()), true), button("cancel", "Cancel", false)],
         })
     }
 

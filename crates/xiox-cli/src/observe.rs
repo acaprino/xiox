@@ -85,13 +85,8 @@ impl Deps {
         let path = cmd.project.clone().unwrap_or_else(|| PathBuf::from("."));
         let opts = observe_options(cmd);
         let mut interval = Duration::from_secs(cmd.interval_secs);
-        if cfg!(debug_assertions) {
-            if let Some(ms) = std::env::var("XIOX_OBSERVE_INTERVAL_MS")
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
-            {
-                interval = Duration::from_millis(ms.max(1));
-            }
+        if cfg!(debug_assertions) && let Some(ms) = std::env::var("XIOX_OBSERVE_INTERVAL_MS") .ok() .and_then(|v| v.trim().parse::<u64>().ok()) {
+            interval = Duration::from_millis(ms.max(1));
         }
         Deps {
             analyze: Box::new(move || scan_project(&path, &opts).map_err(|e| e.to_string())),
@@ -111,18 +106,16 @@ pub fn start(deps: &Deps, params: Params) -> Result<Observer, String> {
     let mut scan = (deps.analyze)()?;
     let mut partial = HashSet::new();
     for item in &mut scan.items {
-        if let Some(path) = &item.path {
-            if item.bytes.is_none() || item.category == Category::Builds {
-                item.bytes = match (deps.measure)(path) {
-                    Some(m) => {
-                        if !m.complete {
-                            partial.insert(item.key.clone());
-                        }
-                        Some(m.bytes)
+        if let Some(path) = &item.path && (item.bytes.is_none() || item.category == Category::Builds) {
+            item.bytes = match (deps.measure)(path) {
+                Some(m) => {
+                    if !m.complete {
+                        partial.insert(item.key.clone());
                     }
-                    None => None,
-                };
-            }
+                    Some(m.bytes)
+                }
+                None => None,
+            };
         }
     }
     Ok(Observer::new_measured(
@@ -578,7 +571,7 @@ pub(crate) fn observe_with(
     let mut emitter = Emitter {
         out: Tap::new(out),
         err,
-        now_ms: &*deps.now_ms,
+        now_ms: &deps.now_ms,
     };
     if let Err(code) = emitter.write(&first) {
         return code;
@@ -838,10 +831,8 @@ pub(crate) mod fakes {
     impl Drop for PanicHook {
         fn drop(&mut self) {
             // `set_hook` aborts the process when called from a panicking thread (a failed assert).
-            if let Some(previous) = self.previous.take() {
-                if !std::thread::panicking() {
-                    std::panic::set_hook(previous);
-                }
+            if let Some(previous) = self.previous.take() && !std::thread::panicking() {
+                std::panic::set_hook(previous);
             }
         }
     }

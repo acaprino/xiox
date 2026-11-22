@@ -2,12 +2,12 @@
 //! The Xiox window (Tauri). The page draws what Rust sends and sends intents back; this crate is the
 //! thin layer between the two: `Backend` (the engine behind `xiox_core::app::Core`, or the fixtures in
 //! debug builds), the ten commands and the `xiox:view` event the view pump emits. Around it: one
-//! instance at a time (`single_instance`), a window that remembers where it was (`window_state`) and
-//! the desktop policy every webview gets (`desktop`: navigation, browser keys, context menu, recovery).
+//! instance at a time (`single_instance`), and the window itself, which is `imago-shell`'s: built from the glass config with
+//! the navigation guard (`build_main`), placed where it was (`shell::place`), its theme, Snap Layouts, context menu and
+//! WebView2 recovery from the crate (`shell`, `desktop`).
 
 mod backend;
 mod chrome;
-mod native_frame;
 mod commands;
 mod desktop;
 mod dropped;
@@ -16,14 +16,14 @@ mod error;
 mod fake;
 mod files;
 mod real;
+mod shell;
 mod single_instance;
-mod window_state;
 
 use backend::{Backend, BackendState};
-use std::path::PathBuf;
+use imago_shell::{glass_window_config, guard_navigation_with_scheme, load_state, save_state, saved_theme, state_to_save, WindowState};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent};
-use window_state::Geometry;
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use xiox_core::app::{Core, CoreOptions};
 use xiox_core::pump::{pump_channel, spawn_pump, ViewSink};
 use xiox_core::view::SectionView;
@@ -109,24 +109,6 @@ fn real_backend(sink: Arc<dyn ViewSink>, only_root: Option<PathBuf>) -> Arc<dyn 
     Arc::new(real::RealBackend::new(core))
 }
 
-/// The monitors as `(x, y, width, height)` in physical pixels.
-fn monitor_rects(window: &WebviewWindow) -> Vec<(i32, i32, u32, u32)> {
-    let monitors = window.available_monitors().unwrap_or_default();
-    monitors.iter().map(|m| (m.position().x, m.position().y, m.size().width, m.size().height)).collect()
-}
-
-/// The monitors with their work areas (the screen without the taskbar), `(x, y, width, height)` in physical pixels.
-fn screens(window: &WebviewWindow) -> Vec<window_state::Screen> {
-    let monitors = window.available_monitors().unwrap_or_default();
-    monitors.iter().map(screen_of).collect()
-}
-
-fn screen_of(monitor: &tauri::Monitor) -> window_state::Screen {
-    let area = monitor.work_area();
-    let work = (area.position.x, area.position.y, area.size.width, area.size.height);
-    (work, (monitor.position().x, monitor.position().y, monitor.size().width, monitor.size().height))
-}
-
 /// The title bar and borders around the page: the window's outer size minus its inner size.
 fn frame_of(window: &WebviewWindow) -> (u32, u32) {
     match (window.outer_size(), window.inner_size()) {
@@ -135,43 +117,48 @@ fn frame_of(window: &WebviewWindow) -> (u32, u32) {
     }
 }
 
-/// The first launch (and a run that remembers nothing): the configured size may be larger than the screen it opens on, so
-/// it is brought inside that monitor's work area before the window is shown, and then centred.
-fn place_first(window: &WebviewWindow) {
-    if let (Some(monitor), Some(g)) = (window.current_monitor().ok().flatten(), measure(window)) {
-        let g = window_state::clamp(g, frame_of(window), &[screen_of(&monitor)]);
-        let _ = window.set_size(PhysicalSize::new(g.width, g.height));
-    }
-    let _ = window.center();
-}
-
-/// Puts the window where it was last closed when that still fits the screens, else in the centre. Either way the
-/// window is inside the work area it opens on: a saved size from a bigger screen is brought down to this one.
-fn restore_window(window: &WebviewWindow) {
-    match window_state::load(&window_state::path()) {
-        Some(g) if window_state::fits(&g, &monitor_rects(window)) => {
-            let g = window_state::clamp(g, frame_of(window), &screens(window));
-            let _ = window.set_size(PhysicalSize::new(g.width, g.height));
-            let _ = window.set_position(PhysicalPosition::new(g.x, g.y));
-            if g.maximized {
-                let _ = window.maximize();
-            }
-        }
-        _ => place_first(window),
-    }
-}
-
 /// The window as it is now, measured (only meaningful when it is neither maximized nor minimized).
-fn measure(window: &WebviewWindow) -> Option<Geometry> {
+fn measure(window: &WebviewWindow) -> Option<WindowState> {
     let (position, size) = (window.outer_position().ok()?, window.inner_size().ok()?);
-    Some(Geometry { x: position.x, y: position.y, width: size.width, height: size.height, maximized: false })
+    Some(WindowState { x: position.x, y: position.y, width: size.width, height: size.height, maximized: false })
 }
 
-/// What to remember of the window: see [`window_state::to_save`].
-fn current_geometry(window: &WebviewWindow, normal: Option<Geometry>) -> Option<Geometry> {
+/// What to remember of the window: see `imago_shell::state_to_save`.
+fn current_state(window: &WebviewWindow, normal: Option<WindowState>) -> Option<WindowState> {
     let maximized = window.is_maximized().unwrap_or(false);
     let minimized = window.is_minimized().unwrap_or(false);
-    window_state::to_save(maximized, minimized, normal, || measure(window))
+    state_to_save(maximized, minimized, normal, || measure(window))
+}
+
+/// Puts the window where it opens, before it is shown: the place saved when there is one, else a first-launch size inside the
+/// work area, centred (`shell::place`). Either way the window is inside the work area it opens on.
+fn place_window(window: &WebviewWindow, saved: Option<WindowState>) {
+    let size = window.inner_size().map_or((0, 0), |size| (size.width, size.height));
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let placed = shell::place(saved, size, &shell::screens(window), scale, frame_of(window));
+    let state = placed.state;
+    let _ = window.set_size(PhysicalSize::new(state.width, state.height));
+    if placed.centred {
+        let _ = window.center();
+    } else {
+        let _ = window.set_position(PhysicalPosition::new(state.x, state.y));
+    }
+    if state.maximized {
+        let _ = window.maximize();
+    }
+}
+
+/// Builds the main window, hidden: the glass config of the app's own (`tauri.conf.json` has `"create": false`) with the theme
+/// the window had last time, so the first frame has the right acrylic, and the navigation guard on the builder (in a
+/// development build also the dev server's origin). Then the native wiring (`desktop::wire`).
+fn build_main(app: &AppHandle, data_dir: Option<&Path>) -> tauri::Result<WebviewWindow> {
+    let base = app.config().app.windows.iter().find(|window| window.label == "main").cloned().ok_or(tauri::Error::WindowNotFound)?;
+    let config = glass_window_config(base, data_dir.and_then(saved_theme));
+    let dev_origin = if tauri::is_dev() { app.config().build.dev_url.as_ref().map(|url| url.origin().ascii_serialization()) } else { None };
+    let origins: Vec<&str> = dev_origin.iter().map(String::as_str).collect();
+    let window = guard_navigation_with_scheme(WebviewWindowBuilder::from_config(app, &config)?, &origins, config.use_https_scheme).build()?;
+    desktop::wire(app, &window)?;
+    Ok(window)
 }
 
 fn main() {
@@ -185,9 +172,9 @@ fn main() {
         }
     };
     let fake = fake_requested();
-    // Where the window is remembered at all: not on fixtures, and not under `--only-root` (the
-    // flag promises that no file outside its folder is written).
-    let remember = window_state::remembers(fake, only_root.is_some());
+    // Where the shell remembers the window theme and the window's place: not on fixtures, and not under `--only-root` (the flag
+    // promises that no file outside its folder is written).
+    let data_dir = shell::data_dir(fake, only_root.is_some());
     // A restart after the engine failed (`desktop`): the old process still holds the instance until it exits.
     if let Some(pid) = desktop::restarted_from(&args) {
         single_instance::wait_for_exit(pid, std::time::Duration::from_secs(10));
@@ -197,12 +184,12 @@ fn main() {
         single_instance::focus_existing(chrome::APP_NAME);
         return;
     };
-    // The last normal (neither maximized nor minimized) geometry, kept as the window moves.
-    let normal: Arc<Mutex<Option<Geometry>>> = Arc::new(Mutex::new(None));
+    // The last normal (neither maximized nor minimized) state, kept as the window moves.
+    let normal: Arc<Mutex<Option<WindowState>>> = Arc::new(Mutex::new(None));
     let tracked = normal.clone();
+    let remembered = data_dir.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(desktop::plugin())
         .on_window_event(move |window, event| {
             if let WindowEvent::DragDrop(drag) = event {
                 if let Some(window) = window.app_handle().get_webview_window(window.label()) {
@@ -210,23 +197,22 @@ fn main() {
                 }
                 return;
             }
-            if !remember {
-                return;
-            }
+            let Some(dir) = remembered.as_deref() else { return };
             let Some(window) = window.app_handle().get_webview_window(window.label()) else { return };
             match event {
                 WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                    if !window.is_maximized().unwrap_or(true) && !window.is_minimized().unwrap_or(true) {
-                        if let Some(g) = measure(&window) {
-                            *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(g);
-                        }
+                    if !window.is_maximized().unwrap_or(true)
+                        && !window.is_minimized().unwrap_or(true)
+                        && let Some(state) = measure(&window)
+                    {
+                        *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
                     }
                 }
                 WindowEvent::CloseRequested { .. } => {
                     let last = *tracked.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(g) = current_geometry(&window, last) {
+                    if let Some(state) = current_state(&window, last) {
                         // Failing to remember the window must never keep it from closing.
-                        let _ = window_state::save(&window_state::path(), &g);
+                        let _ = save_state(dir, &state);
                     }
                 }
                 _ => {}
@@ -239,16 +225,18 @@ fn main() {
                 None => real_backend(sink, only_root.clone()),
             };
             app.manage(BackendState(backend));
-            if let Some(window) = app.get_webview_window("main") {
-                if remember {
-                    restore_window(&window);
-                } else if !fake {
-                    // `--only-root`: not even the saved place is read (that would reach the real profile).
-                    place_first(&window);
-                }
-                // Hidden until the page has drawn (`desktop::window_ready`), so the first frame is the page.
-                desktop::show_when_drawn(&window);
+            // The state the wiring and the two commands of the shell read, before the window exists.
+            app.manage(shell::DataDir(data_dir.clone()));
+            app.manage(shell::Overlays::default());
+            app.manage(desktop::Failures::default());
+            let window = build_main(app.handle(), data_dir.as_deref())?;
+            // The fixtures window opens where its config says; every other run is placed: where it was last closed, or by the
+            // first-launch size (`--only-root` reads no saved place: that would reach the real profile).
+            if !fake {
+                place_window(&window, data_dir.as_deref().and_then(load_state));
             }
+            // Hidden until the page has drawn (`desktop::window_ready`), so the first frame is the page.
+            desktop::show_when_drawn(&window);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -262,10 +250,12 @@ fn main() {
             commands::save_report,
             desktop::window_ready,
             chrome::window_chrome,
-            native_frame::window_caption_maximize,
+            shell::set_window_theme,
+            shell::window_caption_maximize,
         ])
-        .run(tauri::generate_context!())
-        .expect("the Xiox window failed to start");
+        .build(tauri::generate_context!())
+        .expect("the Xiox window failed to start")
+        .run(desktop::on_run_event);
 }
 
 #[cfg(test)]

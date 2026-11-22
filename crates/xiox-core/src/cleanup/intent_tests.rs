@@ -185,7 +185,7 @@ fn rows_are_keyed_and_unknown_or_blocked_rows_are_refused() {
 
     // Unknown ids and headers change nothing.
     let before = (st.clean_sel.clone(), st.rule_sel.clone());
-    for id in ["", "cat:99", "cat:x", "native:nope", "t_tool/nope", "nope/history", "section:Utilities", "history"] {
+    for id in ["", "cat:99", "cat:x", "native:nope", "t_tool/nope", "nope/history", "section:Nope", "history"] {
         assert!(st.toggle(id).is_err(), "{id} must be refused");
     }
     // Blocked rows: an unsupported option, an option and a native whose program runs.
@@ -498,7 +498,7 @@ fn cleanup_view_confirm_lists_the_warnings_of_the_open_dialog() {
     assert!(d.rows.is_empty() && d.cautions.is_empty() && d.caution_title.is_none() && d.ack.is_none() && d.error.is_none());
     // Primary first, as the old window's dialog had them.
     assert_eq!(d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary, b.enabled)).collect::<Vec<_>>(), [
-        ("continue", "Continue", true, true),
+        ("continue", clean.label.as_str(), true, true),
         ("cancel", "Cancel", false, true),
     ]);
     assert!(button(d, "continue").enabled);
@@ -717,8 +717,8 @@ fn a_category_line_says_what_its_box_ticks() {
     let dev = row(&v, "rules:Development & AI");
     assert_eq!((dev.check, dev.enabled), (Check::None, false));
     assert!(dev.why.is_some());
-    // Winapp2's sub-headings have no box; its category does.
-    assert_eq!(row(&v, "section:Browsers").check, Check::None);
+    // Winapp2's sub-headings have a box over their own rows (nothing of theirs is ticked here); so does its category.
+    assert_eq!(row(&v, "section:Browsers").check, Check::Off);
     assert_eq!(row(&v, "winapp2").check, Check::Off);
 
     // Figures appear once the analysis has answered there: files and bytes of the rows.

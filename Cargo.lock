@@ -1536,6 +1536,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "imago-shell"
+version = "0.2.0"
+source = "git+https://github.com/acaprino/imago?tag=v0.2.0#8418ccac391ffb56dc1a997b996e7237b714b606"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "webview2-com",
+ "windows-core",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4918,14 +4931,13 @@ dependencies = [
 name = "xiox-ui"
 version = "0.2.2"
 dependencies = [
+ "imago-shell",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
- "webview2-com",
- "windows-core",
  "windows-sys 0.61.2",
  "xiox-app",
  "xiox-core",

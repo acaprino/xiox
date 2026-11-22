@@ -441,6 +441,8 @@ impl RegistryState {
             return None;
         }
         let button = |id: &str, label: &str, primary: bool| ButtonView { id: id.into(), label: label.into(), enabled: true, primary };
+        // The buttons say what they do and to how many issues, not "Yes".
+        let issues = plural(self.selected(), "issue", "issues");
         Some(DialogView {
             id: "backup".into(),
             title: "Save a registry backup?".into(),
@@ -455,8 +457,8 @@ impl RegistryState {
             ack: None,
             error: None,
             buttons: vec![
-                button("backup", "Yes, back up and fix", true),
-                button("nobackup", "Fix without backup", false),
+                button("backup", &format!("Back up and fix {issues}"), true),
+                button("nobackup", &format!("Fix {issues} without a backup"), false),
                 button("cancel", "Cancel", false),
             ],
         })
@@ -809,9 +811,11 @@ mod tests {
         assert_eq!(d.id, "backup");
         assert_eq!(d.title, "Save a registry backup?");
         assert_eq!(d.text, vec!["Recommended: before the changes a copy (.reg) is saved in the Documents\\Xiox folder.".to_string()]);
+        let issues = plural(st.selected(), "issue", "issues");
+        let (backup, without) = (format!("Back up and fix {issues}"), format!("Fix {issues} without a backup"));
         assert_eq!(
             d.buttons.iter().map(|b| (b.id.as_str(), b.label.as_str(), b.primary)).collect::<Vec<_>>(),
-            vec![("backup", "Yes, back up and fix", true), ("nobackup", "Fix without backup", false), ("cancel", "Cancel", false)]
+            vec![("backup", backup.as_str(), true), ("nobackup", without.as_str(), false), ("cancel", "Cancel", false)]
         );
         assert!(button(d, "backup").enabled && d.ack.is_none());
         st.close_confirm();

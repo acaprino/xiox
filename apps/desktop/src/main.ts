@@ -1,32 +1,110 @@
-import './styles/tokens.css';
-import './styles/frame.css';
-import './styles/shell.css';
-import './styles/list.css';
-import './styles/dialog.css';
-import './styles/smooth.css';
+import '@acaprino/imago/css/imago.css';
+import './styles/xiox.css';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { guardDesktop, mountWindowControls, mountZoom } from '@acaprino/imago/shell';
+import { tauriWindowApi } from '@acaprino/imago/tauri';
 import { api, errorText, inTauri, onView } from './api.ts';
+import { actionCommands, actionForKey, listKey, registerCommands, SELECTABLE, type CommandApp } from './commands.ts';
 import { actionIntent, toggleIntent } from './intents.ts';
-import { actionForKey, chordAction, keyAction, SELECTABLE } from './keys.ts';
-import { nextZoom, storedZoom, WHEEL_NOTCH, wheelPixels, type ZoomStep } from './zoom.ts';
-import { initializeWindowControls } from './window-controls.ts';
-import { effectiveTheme, SKIN_KEY, storedSkin, storedTheme, THEME_KEY, windowTheme, type Skin, type Theme } from './skin.ts';
-import { aboutOpen, closeAbout, showAbout } from './render/about.ts';
+import { applyLook } from '@acaprino/imago/shell';
+import { LOOK_KEY, readLook, readTheme, THEME_KEY, type Look, type ThemeChoice } from './look.ts';
+import { claimKey, createRegistry, isTextTarget, mountApp, notify, openMenu, PALETTE_COMMAND } from '@acaprino/imago/ui';
+import { buildFrame } from './render/frame.ts';
+import { inspectorOpen } from './render/inspector.ts';
+import { renderSettings } from './render/settings.ts';
+import { takeReturnFocus } from './render/dialog.ts';
 import { renderFailure, renderShell, type Handlers } from './render/shell.ts';
 import { cycleSort, nextSort, rowParents } from './rows.ts';
-import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, shownRows } from './state.ts';
-import type { AnyIntent, AppInfo, SectionId } from './types.ts';
+import { acceptView, createGate, createInflight, createUi, currentFocus, foldedGroups, moveFocus, SECTION_ORDER, shownRows } from './state.ts';
+import type { AboutView, AnyIntent, AppInfo, SectionId } from './types.ts';
 
 const ui = createUi();
 let app: AppInfo | null = null;
 /** The last failed command and the section it concerns: shown only while that section is open; any later success, a section switch or a push for another section clears it. */
-let error: { section: SectionId; text: string } | null = null;
+let errorSection: SectionId | null = null;
+/** The words of the last failed command: the error state of the panel says them when there is no view to draw. */
+let lastFailure = '';
+/** Closes the notice of the failed command on screen. */
+let dismissError: (() => void) | null = null;
+
+/** A command failed: an error notice that stays until it is dismissed, or until the next command of that section succeeds. */
+function fail(section: SectionId, text: string): void {
+  lastFailure = text;
+  clearError();
+  errorSection = section;
+  dismissError = notify(shell, text, { tone: 'err' });
+}
+
+/** The next command succeeded, or the section changed: the notice of the failure goes. */
+function clearError(): void {
+  dismissError?.();
+  dismissError = null;
+  errorSection = null;
+}
 /** Rapid clicks on the section bar: only the answer to the last one is drawn. */
 const opening = createGate();
 /** The intents waiting for Rust's answer: a repeat of one of them (a double click) is not sent. */
 const inflight = createInflight();
 
-const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
+/** The look and the theme the user chose (look.ts); `drawLook` writes them on the root. Declared first: the commands of the look read them. */
+let look: Look = 'smooth';
+let theme: ThemeChoice = 'system';
+/** What Rust says of the app, read when Settings opens. */
+let about: AboutView | null = null;
+
+/** The frame of the window (render/frame.ts), written once; the views fill its regions. */
+const shell = buildFrame(document);
+
+/** Whether the sidebar is folded into its rail: kept for the next start, the package stores nothing. */
+const FOLD_KEY = 'xiox.sidebar';
+function readFold(): boolean {
+  try { return localStorage.getItem(FOLD_KEY) === '1'; } catch { return false; }
+}
+
+/** Escape and the press outside, the sidebar's drawer and fold, F6, Ctrl+K and Ctrl+F: Imago's, mounted before the page's own keys (below) so they answer first. */
+const registry = createRegistry();
+mountApp(shell, registry, {
+  search: () => document.querySelector<HTMLInputElement>('#rows .xi-search input')?.focus(),
+  sidebar: {
+    collapsed: readFold(),
+    onChange: (collapsed) => { try { localStorage.setItem(FOLD_KEY, collapsed ? '1' : '0'); } catch { /* no storage: the fold lasts until the window closes */ } },
+  },
+  // The look and the theme from the palette (Smooth, ONI, follow Windows, light, dark): the same five commands in every app.
+  appearance: { get: () => ({ look, theme }), set: (next) => applyAppearance(next) },
+});
+
+const SECTION_TITLES: Record<SectionId, string> = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers' };
+// The title bar's two buttons: the views (what the tabs are, when the window is too narrow for them) and the palette.
+const viewsButton = shell.querySelector<HTMLElement>('.im-views-menu');
+if (viewsButton) {
+  viewsButton.addEventListener('click', () => {
+    // An item with `checked` is a radio item, which stays open: the menu is closed by the item itself, and the check, which the
+    // menu reads at once, is already the view that is being opened.
+    const close = openMenu(viewsButton, [
+      ...SECTION_ORDER.map((id, index) => ({ label: SECTION_TITLES[id], keys: String(index + 1), checked: () => !ui.settings && ui.section === id, run: () => { close(); void open(id); } })),
+      { label: 'Settings', keys: '4', checked: () => ui.settings, run: () => { close(); void openSettings(); } },
+    ]);
+  });
+}
+shell.querySelector<HTMLElement>('.im-titlebar-command')?.addEventListener('click', () => { void registry.get(PALETTE_COMMAND)?.run(); });
+
+// Escape closes the inspector in the package's own handler, behind the page's back: the page follows it.
+const inspectorRegion = shell.querySelector<HTMLElement>('.im-inspector');
+if (inspectorRegion) {
+  new MutationObserver(() => {
+    if (inspectorRegion.hidden && ui.inspector !== null) { ui.inspector = null; render(); }
+    if (inspectorRegion.hidden) focusAfterInspector();
+  }).observe(inspectorRegion, { attributes: true, attributeFilter: ['hidden'] });
+}
+
+/** The inspector has closed: a focus that was inside it (a closed region drops it to the body) goes back to the list. */
+function focusAfterInspector(): void {
+  const active = document.activeElement;
+  if (active !== null && active !== document.body && !inspectorRegion?.contains(active)) return;
+  (document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
+}
+
+const SCROLLERS = ['#sidebar-list', '#rows .xi-list', '#rows .rp-body'];
 
 /**
  * Where the list of categories is scrolled to, for the menu beside it. Each category header is preceded by an empty `.anchor`
@@ -35,8 +113,8 @@ const SCROLLERS = ['#bar2 .items', '#rows .grid', '#rows .rp-body'];
 const SPY_PIN_MS = 900;
 /** After a click on the menu the marked entry is the one clicked, however far the scroll gets (the last categories cannot reach the top). */
 let spyPinUntil = 0;
-const gridNode = (): HTMLElement | null => document.querySelector<HTMLElement>('#rows .grid');
-const headHeight = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('.r.h')?.offsetHeight ?? 24;
+const gridNode = (): HTMLElement | null => document.querySelector<HTMLElement>('#rows .xi-list');
+const headHeight = (grid: HTMLElement): number => grid.querySelector<HTMLElement>('thead')?.offsetHeight ?? 24;
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function anchorTop(grid: HTMLElement, anchor: HTMLElement): number {
@@ -45,7 +123,7 @@ function anchorTop(grid: HTMLElement, anchor: HTMLElement): number {
 
 function scrollToGroup(id: string): void {
   const grid = gridNode();
-  const anchor = grid?.querySelector<HTMLElement>(`.anchor[data-anchor="${CSS.escape(id)}"]`);
+  const anchor = grid?.querySelector<HTMLElement>(`.xi-anchor[data-anchor="${CSS.escape(id)}"]`);
   if (!grid || !anchor) return;
   grid.scrollTo({ top: Math.max(0, anchorTop(grid, anchor) - headHeight(grid)), behavior: reducedMotion() ? 'auto' : 'smooth' });
 }
@@ -55,7 +133,7 @@ function updateSpy(): void {
   const view = ui.views[ui.section];
   const grid = gridNode();
   if (!view || !grid) return;
-  const anchors = [...grid.querySelectorAll<HTMLElement>('.anchor')];
+  const anchors = [...grid.querySelectorAll<HTMLElement>('.xi-anchor')];
   if (anchors.length === 0) return;
   let id = ui.spy[ui.section];
   if (performance.now() >= spyPinUntil || id === undefined) {
@@ -69,9 +147,9 @@ function updateSpy(): void {
   // The menu follows the list into view only when the category changed: a render must not pull the bar back from the options the user scrolled to.
   const moved = ui.spy[ui.section] !== id;
   ui.spy[ui.section] = id;
-  for (const entry of document.querySelectorAll<HTMLElement>('#bar2 .it.menu')) {
+  for (const entry of document.querySelectorAll<HTMLElement>('#sidebar .im-row[data-group]')) {
     const here = entry.dataset.group === id;
-    entry.classList.toggle('on', here);
+    entry.setAttribute('aria-selected', String(here));
     if (here) { entry.setAttribute('aria-current', 'true'); if (moved) entry.scrollIntoView({ block: 'nearest' }); } else entry.removeAttribute('aria-current');
   }
 }
@@ -92,13 +170,14 @@ let reportShown = false;
 function render(): void {
   const view = ui.views[ui.section];
   if (!app || !view) {
-    // Nothing to draw yet and a command failed: say so rather than leave a blank window.
-    if (error !== null) renderFailure(error.text);
     return;
   }
+  viewActions.sync(view);
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, focused: active ?? null, error: error !== null && error.section === ui.section ? error.text : null }, handlers);
+  renderShell({ app, view, ui, registry, opener: active }, handlers);
+  // Settings is drawn over the section's sidebar, header, content and action bar; the status row, the footer and the window title stay the section's.
+  if (ui.settings && about !== null) renderSettings(about, { look, theme }, applyAppearance);
   SCROLLERS.forEach((selector, i) => {
     const node = document.querySelector(selector);
     if (node) node.scrollTop = scrolls[i] ?? 0;
@@ -107,6 +186,14 @@ function render(): void {
   if (view.dialog === null && active !== undefined && !(document.activeElement instanceof HTMLElement && document.activeElement.dataset.key === active)) {
     document.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
   }
+  // A confirmation that closed before its opener could take the focus back: the focus is on the list or nowhere, and goes where it was.
+  if (view.dialog === null) {
+    const back = takeReturnFocus();
+    const at = document.activeElement;
+    if (back !== null && (at === null || at === document.body || at.classList.contains('xi-table'))) {
+      document.querySelector<HTMLElement>(`[data-key="${CSS.escape(back)}"]:not([disabled])`)?.focus();
+    }
+  }
   updateSpy();
   // A report opening or closing replaces the list: if the focus fell to the page, put it where the user is working
   // (the report, then the list again) instead of leaving a screen reader on nothing.
@@ -114,7 +201,7 @@ function render(): void {
   if (reporting !== reportShown) {
     reportShown = reporting;
     const lost = document.activeElement === null || document.activeElement === document.body;
-    if (lost && view.dialog === null && !aboutOpen()) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .grid')?.focus();
+    if (lost && view.dialog === null && !ui.settings) document.querySelector<HTMLElement>(reporting ? '#rows .report' : '#rows .xi-table')?.focus();
   }
   syncChrome();
 }
@@ -127,12 +214,13 @@ async function open(section: SectionId): Promise<void> {
     (view) => {
       acceptView(ui, view);
       ui.section = section;
-      error = null;
+      ui.settings = false;
+      clearError();
       render();
     },
     (failure) => {
       // The section stays as it was: the error belongs to the one on screen.
-      error = { section: ui.section, text: errorText(failure) };
+      fail(ui.section, errorText(failure));
       render();
     },
   );
@@ -142,31 +230,35 @@ async function send(section: SectionId, intent: AnyIntent | null): Promise<void>
   if (intent === null || !inflight.begin(section, intent)) return;
   try {
     const view = await api.intent(section, intent);
-    error = null;
+    clearError();
     acceptView(ui, view);
   } catch (failure) {
-    error = { section, text: errorText(failure) };
+    fail(section, errorText(failure));
   } finally {
     inflight.end(section, intent);
   }
   render();
 }
 
-/** The Settings window: the page's own, with no intent. A confirmation that is open keeps the keyboard, so Settings waits. */
-async function openAbout(): Promise<void> {
-  if (aboutOpen() || ui.views[ui.section]?.dialog != null) return;
-  const from = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key ?? null : null;
+/** Settings, the fourth view: the page's own, with no intent. A confirmation that is open keeps the keyboard, so Settings waits. */
+async function openSettings(): Promise<void> {
+  if (ui.settings || ui.views[ui.section]?.dialog != null) return;
   try {
-    showAbout(await api.about(), from, { skin: storedSkin(document.documentElement.dataset.skin ?? null), choose: chooseSkin }, closeAbout);
+    about = await api.about();
   } catch (failure) {
-    error = { section: ui.section, text: errorText(failure) };
+    fail(ui.section, errorText(failure));
     render();
+    return;
   }
+  ui.settings = true;
+  ui.inspector = null;
+  render();
+  document.querySelector<HTMLElement>('#sidebar-list [data-key^="settings:"]')?.focus();
 }
 
 const handlers: Handlers = {
   openSection: (id) => { void open(id); },
-  openAbout: () => { void openAbout(); },
+  openSettings: () => { void openSettings(); },
   send: (section, intent) => { void send(section, intent); },
   focusRow: (id) => { ui.focus[ui.section] = id; render(); },
   toggleRow: (id, section) => {
@@ -190,9 +282,62 @@ const handlers: Handlers = {
     for (const row of view.rows) if (row.kind === 'group') ui.fold.set(row.id, fold);
     render();
   },
-  toggleDetails: () => {
-    ui.details = !ui.details;
+  listKey: (event) => {
+    const view = ui.views[ui.section];
+    const act = listKey(event);
+    if (!view || act === null || !commandApp.listed()) return;
+    const target = event.target instanceof Element ? event.target : null;
+    // Enter and Space on a button, a box or a field of the list belong to it (the browser presses it).
+    if ((act.kind === 'primary' || act.kind === 'toggle') && target?.closest('button, a[href], input, select, textarea') != null) return;
+    const section = view.section;
+    const rows = shownRows(ui, view);
+    switch (act.kind) {
+      case 'move': {
+        const next = moveFocus(rows, currentFocus(ui, view), act.delta, rowParents(view.rows));
+        if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
+        break;
+      }
+      case 'toggle': {
+        const row = rows.find((r) => r.id === currentFocus(ui, view));
+        if (!row || row.check === 'none' || !row.enabled || view.job !== null) return;
+        handlers.send(section, toggleIntent(section, row.id));
+        break;
+      }
+      case 'expand': {
+        const id = currentFocus(ui, view);
+        if (id === null) return;
+        const parents = rowParents(view.rows);
+        // A category, and a folder of the projects' tree (a sub-heading with rows under it), fold; a parent row expands.
+        const kind = rows.find((r) => r.id === id)?.kind;
+        if (kind === 'group' || (kind === 'header' && parents.has(id))) {
+          ui.fold.set(id, !act.open);
+          render();
+          break;
+        }
+        if (!parents.has(id)) return;
+        if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
+        render();
+        break;
+      }
+      case 'primary': {
+        const action = actionForKey(view, 'Enter');
+        if (action === null) return;
+        handlers.send(section, actionIntent(section, action.id));
+        break;
+      }
+    }
+    claimKey(event);
+    event.preventDefault();
+  },
+  toggleInspector: (kind) => {
+    // The inspector may have been closed by Escape since the last render: what is open now decides.
+    ui.inspector = ui.inspector === kind && inspectorOpen(shell) ? null : kind;
     render();
+  },
+  closeInspector: () => {
+    ui.inspector = null;
+    render();
+    focusAfterInspector();
   },
   sortBy: (column) => {
     const view = ui.views[ui.section];
@@ -212,101 +357,55 @@ const handlers: Handlers = {
     scrollToGroup(id);
   },
   saveReport: (section) => {
-    void api.saveReport(section).then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section, text: errorText(failure) }; render(); });
+    void api.saveReport(section).then((view) => { clearError(); acceptView(ui, view); render(); }, (failure) => { fail(section, errorText(failure)); render(); });
   },
   addRoot: () => {
-    void api.addRoot().then((view) => { error = null; acceptView(ui, view); render(); }, (failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
+    void api.addRoot().then((view) => { clearError(); acceptView(ui, view); render(); }, (failure) => { fail(ui.section, errorText(failure)); render(); });
   },
 };
 
 /** The row the selection is on, after a move: the page scrolls to keep it in view. */
 function showSelected(): void {
-  document.querySelector<HTMLElement>('#rows .r.sel')?.scrollIntoView({ block: 'nearest' });
+  document.querySelector<HTMLElement>('#rows tr[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
 }
-
-const FIELD = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
-/** Enter and Space on these belong to the control (the browser presses it), never to the global keys. */
-const PRESSABLE = 'button, a[href], summary, [role="checkbox"], [role="button"]';
 
 /**
- * The global keys (keys.ts decides what a key means). Arrows move the selection, Space ticks the focused
- * row, Enter / a press the view's action that carries that key, Esc closes the dialog or the
- * report, else cancels the job. The page presses only what the view offers enabled; Rust still decides.
+ * What the commands act on (commands.ts): the page's own state and the handlers below. Imago's registry answers the keys of the window
+ * (Escape included) and the list answers its own (`handlers.listKey`); there is no `keydown` of the page's own on the document.
  */
-function onKey(event: KeyboardEvent): void {
-  const view = ui.views[ui.section];
-  if (!view || event.defaultPrevented) return;
-  const target = event.target instanceof Element ? event.target : null;
-  const inField = target?.closest(FIELD) != null;
-  const act = keyAction(event, { inField, dialog: view.dialog !== null || aboutOpen() });
-  if (act === null) return;
-  if ((event.key === 'Enter' || event.key === ' ') && target?.closest(PRESSABLE) != null) return;
-  const section = view.section;
-  const rows = shownRows(ui, view);
-  const listed = view.report === null;
-  switch (act.kind) {
-    case 'section':
-      if (act.section !== section) void open(act.section);
-      break;
-    case 'closeDialog':
-      if (aboutOpen()) closeAbout(); else handlers.send(section, { kind: 'closeDialog' });
-      break;
-    case 'about':
-      void openAbout();
-      break;
-    case 'move': {
-      if (!listed) return;
-      const next = moveFocus(rows, currentFocus(ui, view), act.delta, rowParents(view.rows));
-      if (next !== null) { ui.focus[section] = next; render(); showSelected(); }
-      break;
-    }
-    case 'toggle': {
-      const row = rows.find((r) => r.id === currentFocus(ui, view));
-      if (!listed || !row || row.check === 'none' || !row.enabled || view.job !== null) return;
-      handlers.send(section, toggleIntent(section, row.id));
-      break;
-    }
-    case 'expand': {
-      const id = currentFocus(ui, view);
-      if (!listed || id === null) return;
-      const parents = rowParents(view.rows);
-      // A category, and a folder of the projects' tree (a sub-heading with rows under it), fold; a parent row expands.
-      const kind = rows.find((r) => r.id === id)?.kind;
-      if (kind === 'group' || (kind === 'header' && parents.has(id))) {
-        ui.fold.set(id, !act.open);
-        render();
-        break;
-      }
-      if (!parents.has(id)) return;
-      if (act.open) ui.expanded.add(id); else ui.expanded.delete(id);
-      render();
-      break;
-    }
-    case 'sort': {
-      if (!listed) return;
-      const key = cycleSort(view.columns, ui.sort[section] ?? null, act.reverse);
-      if (key === null) delete ui.sort[section]; else ui.sort[section] = key;
-      render();
-      showSelected();
-      break;
-    }
-    case 'details':
-      if (!listed) return;
-      handlers.toggleDetails();
-      break;
-    case 'action': {
-      if (act.key === 'Esc' && inField) { (target as HTMLElement).blur(); break; }
-      if (act.key === 'Esc' && view.report !== null) { handlers.send(section, { kind: 'closeDialog' }); break; }
-      const action = actionForKey(view, act.key);
-      if (action === null) return;
-      handlers.send(section, actionIntent(section, action.id));
-      break;
-    }
-  }
-  event.preventDefault();
-}
-
-document.addEventListener('keydown', onKey);
+const commandApp: CommandApp = {
+  view: () => ui.views[ui.section],
+  idle: () => app !== null && ui.views[ui.section] !== undefined && ui.views[ui.section]?.dialog === null,
+  listed: () => commandApp.idle() && ui.views[ui.section]?.report === null && !ui.settings,
+  inTextField: () => isTextTarget(document.activeElement),
+  openSection: (id) => { if (id !== ui.section || ui.settings) void open(id); },
+  openSettings: () => { void openSettings(); },
+  send: (section, intent) => handlers.send(section, intent),
+  sort: (reverse) => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    const key = cycleSort(view.columns, ui.sort[view.section] ?? null, reverse);
+    if (key === null) delete ui.sort[view.section]; else ui.sort[view.section] = key;
+    render();
+    showSelected();
+  },
+  toggleInspector: (kind) => handlers.toggleInspector(kind),
+  selectAll: () => selectAll(document.activeElement),
+  escape: () => {
+    const view = ui.views[ui.section];
+    if (!view) return;
+    const active = document.activeElement;
+    // A confirmation's Escape is its Cancel; in a field it leaves the field; a report closes; else the view's Esc action (it cancels a job).
+    if (view.dialog !== null) { handlers.send(view.section, { kind: 'closeDialog' }); return; }
+    if (isTextTarget(active) && active instanceof HTMLElement) { active.blur(); return; }
+    if (view.report !== null) { handlers.send(view.section, { kind: 'closeDialog' }); return; }
+    const action = actionForKey(view, 'Esc');
+    if (action !== null) handlers.send(view.section, actionIntent(view.section, action.id));
+  },
+};
+registerCommands(registry, commandApp);
+/** The commands of the open view's actions: registered again when the view's actions change (render). */
+const viewActions = actionCommands(registry, commandApp);
 
 /** Ctrl+A selects the copyable text of the region the focus is in (keys.ts `SELECTABLE`), else nothing. */
 function selectAll(target: Element | null): void {
@@ -318,127 +417,94 @@ function selectAll(target: Element | null): void {
   window.getSelection()?.removeAllRanges();
 }
 
-/** The look (skin.ts): Smooth unless ONI MODE was chosen; on the root before the first view is drawn, kept like the zoom. */
-function applySkin(skin: Skin): void {
-  document.documentElement.dataset.skin = skin;
-  // In the desktop window Smooth is glass: the page lets Windows' acrylic through (smooth.css `.native-glass`, chrome.rs).
-  document.documentElement.classList.toggle('native-glass', inTauri && skin === 'smooth');
-  // ONI MODE is dark whatever the system says; Smooth follows its theme (the window's theme decides the page's prefers-color-scheme).
-  syncChrome();
-}
-
-function readSkin(): Skin {
-  try { return storedSkin(localStorage.getItem(SKIN_KEY)); } catch { return storedSkin(null); }
-}
-
 /**
- * Smooth's theme (skin.ts). The page draws it itself (`data-theme` on the root: the chosen one, or the Windows one for Auto,
- * followed as it changes) and asks the window for the same (chrome.rs), so the title bar agrees.
+ * The look and the theme (look.ts), Imago's: written on the root by `applyLook` before the first view is drawn, and again at
+ * every change, also when Windows changes its colours while the theme follows them. The window is asked for the same theme
+ * (`syncChrome`), so its title bar and the page agree. Both looks are glass in the desktop window.
  */
-let theme: Theme = 'system';
-const systemLight = window.matchMedia('(prefers-color-scheme: light)');
-function drawTheme(): void {
-  document.documentElement.dataset.theme = effectiveTheme(theme, systemLight.matches);
-}
-systemLight.addEventListener('change', () => { drawTheme(); syncChrome(); });
-
-function applyTheme(next: Theme): void {
-  theme = next;
-  for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-    choice.setAttribute('aria-pressed', String(choice.dataset.themeChoice === next));
-  }
-  drawTheme();
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+function drawLook(): void {
+  applyLook(document.documentElement, { app: 'xiox', look, theme, glass: inTauri }, {
+    // The window is told the theme of the look, with the look and the theme drawn, and keeps the theme for the first frame of the next
+    // start; outside the window (Vite, the smoke test) there is nobody to tell.
+    setWindowTheme: inTauri ? (word, detail) => api.setWindowTheme(word, detail.look, detail.resolved).catch(() => undefined) : undefined,
+  });
+  for (const choice of document.querySelectorAll<HTMLInputElement>('input[data-theme-choice]')) choice.checked = choice.dataset.themeChoice === theme;
   syncChrome();
 }
+systemDark.addEventListener('change', () => { if (theme === 'system') drawLook(); });
 
-for (const choice of document.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-  choice.addEventListener('click', () => {
-    const next = storedTheme(choice.dataset.themeChoice ?? null);
-    applyTheme(next);
-    try { localStorage.setItem(THEME_KEY, next); } catch { /* no storage: the theme lasts until the window closes */ }
-  });
-}
-
-/** The look chosen in Settings (render/about.ts), kept for the next start. */
-function chooseSkin(next: Skin): void {
-  applySkin(next);
-  try { localStorage.setItem(SKIN_KEY, next); } catch { /* no storage: the look lasts until the window closes */ }
-}
-
-/** The page's zoom (zoom.ts): kept in the webview's own storage, applied before the first view is drawn. */
-const ZOOM_KEY = 'xiox.zoom';
-let zoom = 1;
-
-function readZoom(): number {
-  try { return storedZoom(localStorage.getItem(ZOOM_KEY)); } catch { return 1; }
-}
-
-function applyZoom(factor: number): void {
-  zoom = factor;
-  try { localStorage.setItem(ZOOM_KEY, String(factor)); } catch { /* no storage: the zoom lasts until the window closes */ }
-  // Outside Tauri (Vite, the smoke test) the browser's own zoom is the stand-in. The zoom is never worth a
-  // broken start: a webview that cannot be reached (it throws, it rejects) leaves the page at its size.
-  if (!inTauri) return;
+/** A new look or theme, from Settings or from the palette: drawn at once, kept for the next start, and Settings drawn again to say it. */
+function applyAppearance(next: { look: Look; theme: ThemeChoice }): void {
+  look = next.look;
+  theme = next.theme;
+  drawLook();
   try {
-    void getCurrentWebview().setZoom(factor).catch(() => undefined);
-  } catch { /* the page draws anyway, unzoomed */ }
+    localStorage.setItem(LOOK_KEY, look);
+    localStorage.setItem(THEME_KEY, theme);
+  } catch { /* no storage: the look and the theme last until the window closes */ }
+  if (ui.settings) render();
 }
 
-function stepZoom(step: ZoomStep): void {
-  const next = nextZoom(zoom, step);
-  if (next !== zoom) applyZoom(next);
+/** The webview's storage, or null when it refuses it (a blocked profile). */
+function safeStorage(): Storage | null {
+  try { return localStorage; } catch { return null; }
 }
 
-/** The app's own chords, in fields and dialogs too (keys.ts `chordAction`); the browser's are off in Rust. */
-document.addEventListener('keydown', (event) => {
-  const target = event.target instanceof Element ? event.target : null;
-  const chord = chordAction(event, { inField: target?.closest(FIELD) != null });
-  if (chord === null) return;
-  event.preventDefault();
-  if (chord.kind === 'zoom') stepZoom(chord.step); else selectAll(target);
-});
+/** Whether the page already listens to the views Rust pushes (a Retry must not listen twice). */
+let listening = false;
 
-/** Ctrl+wheel (and a touchpad pinch, which arrives as one) zooms by whole steps: small deltas add up to a notch. */
-let wheelTravel = 0;
-document.addEventListener('wheel', (event) => {
-  if (!event.ctrlKey) { wheelTravel = 0; return; }
-  event.preventDefault();
-  wheelTravel += wheelPixels(event.deltaY, event.deltaMode, zoom);
-  if (Math.abs(wheelTravel) < WHEEL_NOTCH) return;
-  stepZoom(wheelTravel < 0 ? 'in' : 'out');
-  wheelTravel = 0;
-}, { passive: false });
-
-// The mouse's back and forward buttons belong to a browser: the window has no pages to go back to.
-window.addEventListener('mouseup', (event) => { if (event.button === 3 || event.button === 4) event.preventDefault(); });
-
-async function start(): Promise<void> {
-  // Always, 100 % included: a reload after a crash (src-tauri desktop.rs) keeps the webview's last factor.
-  applyZoom(readZoom());
-  applySkin(readSkin());
-  try { applyTheme(storedTheme(localStorage.getItem(THEME_KEY))); } catch { applyTheme('system'); }
+/** The first views: the app's facts, then Cleanup. A failure leaves the content panel in its error state, with a Retry that asks again. */
+async function load(): Promise<void> {
   try {
     app = await api.appInfo();
-    onView((view) => {
-      // News about another section ends an error that was about this one.
-      if (error !== null && error.section !== view.section) error = null;
-      if (acceptView(ui, view) && view.section === ui.section) render();
-      syncChrome();
-    });
+    if (!listening) {
+      listening = true;
+      onView((view) => {
+        // News about another section ends an error that was about this one.
+        if (errorSection !== null && errorSection !== view.section) clearError();
+        if (acceptView(ui, view) && view.section === ui.section) render();
+        syncChrome();
+      });
+    }
     await open('cleanup');
   } catch (failure) {
-    // No window state to draw: say what happened instead of leaving a blank window.
-    renderFailure(errorText(failure));
+    renderFailure(errorText(failure), () => { void load(); });
+    return;
   }
+  // `open` reports its own failure as a notice; with no view there is nothing to draw but the error state.
+  if (ui.views[ui.section] === undefined) {
+    clearError();
+    renderFailure(lastFailure || 'The first command did not answer.', () => { void load(); });
+  }
+}
+
+async function start(): Promise<void> {
+  // Imago's window code. The guard takes away the browser's keys, its menu and the mouse's back and forward buttons (it also takes
+  // reload and DevTools, so not under `tauri dev`); the zoom is 50 to 200 % in steps of 10, saved, applied at every start (a reload
+  // after a crash keeps the webview's last factor); the window buttons report their failures as a notice.
+  if (!import.meta.env.DEV) guardDesktop(document);
+  if (inTauri) {
+    mountZoom(document, { apply: (level) => getCurrentWebview().setZoom(level), storageKey: 'xiox.zoom' });
+  }
+  look = readLook(safeStorage());
+  theme = readTheme(safeStorage());
+  drawLook();
+  // The window buttons and Snap Layouts work from the first frame (the buttons exist from the frame), not when Rust has answered.
+  const titlebar = document.getElementById('top');
+  if (inTauri && titlebar !== null) {
+    const onError = (action: string, failure: unknown): void => { fail(ui.section, `${action} failed: ${errorText(failure)}`); render(); };
+    mountWindowControls(titlebar, tauriWindowApi(onError), { onError });
+  }
+  await load();
   focusList();
   signalReady();
-  void initializeWindowControls((failure) => { error = { section: ui.section, text: errorText(failure) }; render(); });
 }
 
 /** The list is where the keys (arrows, Space, Enter) work: it takes the focus at the start and when the window gets it back. */
 function focusList(): void {
-  const dialog = document.querySelector<HTMLElement>('#modal:not([hidden]) [role=dialog]');
-  (dialog ?? gridNode() ?? document.getElementById('rows'))?.focus();
+  const dialog = document.querySelector<HTMLElement>('dialog[open]');
+  (dialog ?? document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 
 // A native dialog (folder, save, the recovery message) closing gives the window back, but WebView2 does not always put the
@@ -469,16 +535,11 @@ function signalReady(): void {
 let chromeSent = '';
 function syncChrome(): void {
   const job = Object.values(ui.views).find((view) => view?.job)?.job ?? null;
-  const next = {
-    section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))),
-    theme: windowTheme(storedSkin(document.documentElement.dataset.skin ?? null), theme),
-    // Smooth's glass, tinted for the palette on screen; ONI MODE has none (and the system frame).
-    glass: storedSkin(document.documentElement.dataset.skin ?? null) === 'smooth' ? effectiveTheme(theme, systemLight.matches) : null,
-  };
+  const next = { section: ui.section, job: job === null ? null : Math.min(100, Math.max(0, Math.round(job.fraction * 100))) };
   const key = JSON.stringify(next);
   if (key === chromeSent) return;
   chromeSent = key;
-  void api.chrome(next.section, next.job, next.theme, next.glass).catch(() => undefined);
+  void api.chrome(next.section, next.job).catch(() => undefined);
 }
 
 void start();

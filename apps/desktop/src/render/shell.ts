@@ -1,18 +1,18 @@
-// The frame of the window: top bar, status row, the two sidebars, the list header, the footer.
+// The frame of the window: title bar, status row, the two sidebars, the list header, the footer.
 // Everything here comes from the SectionView (Rust writes the sentences); the page adds only
 // the static headings, key hints and number formatting. The list, the detail panel and bar 2
 // are drawn by their own modules.
 
-import { button, fill, h, kbd } from '../dom.ts';
+import { footerKeys, LOADING_DELAY_MS, noteHtml, setPanelState, showAfter, type Registry } from '@acaprino/imago/ui';
+import { button, fill, fromHtml, h, keyCaps } from '../dom.ts';
 import { ramText } from '../format.ts';
 import { actionIntent } from '../intents.ts';
-import { footerHint } from '../keys.ts';
-import { disabledReason } from './policy.ts';
+import { footerEntries } from '../commands.ts';
+import { disabledReason, emptyAction } from './policy.ts';
 import { currentFocus, noticeKey, SECTION_ORDER, shownRows, type UiState } from '../state.ts';
-import type { ActionView, AnyIntent, AppInfo, NoticeView, SectionId, SectionView } from '../types.ts';
-import { ABOUT_KEY } from './about.ts';
-import { renderBar2 } from './bar2.ts';
-import { renderDetail } from './detail.ts';
+import type { ActionView, AnyIntent, AppInfo, NoticeView, RowView, SectionId, SectionView } from '../types.ts';
+import { renderSidebar } from './sidebar.ts';
+import { panelOptions, renderInspector } from './inspector.ts';
 import { renderDialog } from './dialog.ts';
 import { renderList } from './list.ts';
 import { renderReport } from './report.ts';
@@ -20,8 +20,8 @@ import { renderReport } from './report.ts';
 /** What a click or a keystroke can ask of the page; main.ts implements it. */
 export interface Handlers {
   openSection(id: SectionId): void;
-  /** The Settings window, with the look and what About said (the button of the sections bar; `?` opens it too). */
-  openAbout(): void;
+  /** Settings, the fourth view (its tab; `4` and `?` open it too). */
+  openSettings(): void;
   /** Sends an intent to a section's command; a null intent (an id the section does not send) is ignored. */
   send(section: SectionId, intent: AnyIntent | null): void;
   focusRow(id: string): void;
@@ -33,8 +33,12 @@ export interface Handlers {
   foldAll(fold: boolean): void;
   /** A click on a column's header: the list is ordered by that column, or the order turns round. */
   sortBy(column: string): void;
-  /** Opens or closes the details of the focused row (Smooth; ONI MODE always shows them). */
-  toggleDetails(): void;
+  /** Opens the inspector on the details of the focused row, or on the section's options; the same one again closes it. */
+  toggleInspector(kind: 'details' | 'options'): void;
+  /** A key pressed on the list: it moves, ticks, folds, or presses the primary action (commands.ts `listKey`). */
+  listKey(event: KeyboardEvent): void;
+  /** Closes the inspector (its own button). */
+  closeInspector(): void;
   /** The menu of the categories: scrolls the list to one of them (opening it if it was folded). */
   goToGroup(id: string): void;
   /** The folder picker of Developers: it opens in Rust and the page never sees a path. */
@@ -48,17 +52,17 @@ export interface Screen {
   app: AppInfo;
   view: SectionView;
   ui: UiState;
-  /** The `data-key` of the control that had the keyboard focus before this render (the redraw replaces it): where a dialog returns the focus to. */
-  focused: string | null;
-  /** The message of the last failed command, shown above the list until the next one succeeds. */
-  error: string | null;
+  /** The commands, for the footer's key list. */
+  registry: Registry;
+  /** The `data-key` of the control that had the focus before this render: the dialog that opens in it gives the focus back to it. */
+  opener?: string;
 }
 
 const SECTION_NAMES: Record<SectionId, string> = {
   cleanup: 'Cleanup', registry: 'Registry', developers: 'Developers',
 };
 
-const KEY_LABELS: Record<string, string> = { Enter: '↵', Escape: 'Esc' };
+type NoteTone = 'ok' | 'warn' | 'err' | 'info';
 
 function byId<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -80,15 +84,22 @@ function actionButton(view: SectionView, action: ActionView, on: Handlers): (HTM
   const reasonId = `why-${action.id}`;
   return [
     button(
-      [h('span', { 'data-fit': '' }, action.label), action.key ? kbd(KEY_LABELS[action.key] ?? action.key) : null],
+      [h('span', { 'data-fit': '' }, action.label), action.key ? keyCaps(action.key) : null],
       {
-        class: action.primary ? 'btn primary' : 'btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
+        class: action.primary ? 'im-btn im-btn--primary' : 'im-btn', 'data-action': action.id, 'data-key': `action:${action.id}`, disabled: !action.enabled,
         title: reason, 'aria-describedby': reason === null ? null : reasonId,
         onClick: () => on.send(view.section, actionIntent(view.section, action.id)),
       },
     ),
     reason === null ? null : h('span', { class: 'sr-only', id: reasonId }, reason),
   ];
+}
+
+/** The badge of the status row: Imago's chip, with its tone when it has one. */
+function setBadge(text: string, tone: NoteTone | null): void {
+  const badge = byId('badge');
+  badge.textContent = text;
+  if (tone === null) badge.removeAttribute('data-im-tone'); else badge.setAttribute('data-im-tone', tone);
 }
 
 /**
@@ -106,125 +117,206 @@ function setStatus(badge: string, text: string): void {
 /** What a notice needs to open its extra lines: which are open, and how to flip one (the click goes to the page, which redraws). */
 export interface NoticeCtx { expanded: ReadonlySet<string>; on: Handlers }
 
+/** Rust's tones are the page's four: its `error` is Imago's `err`. */
+export const noteTone = (tone: NoticeView['tone']): NoteTone => (tone === 'error' ? 'err' : tone);
+
 /**
- * A notice strip: one line in its tone colour. The extra lines (`more`: the backup path of a Registry fix, say) sit
- * behind a button that opens them under the strip: a real control, so the keyboard and a screen reader reach them (a
- * tooltip would not). Without a `ctx` the lines are simply shown. Errors are announced.
+ * A notice, in the panel it is about: Imago's note, one line in its tone. The extra lines (`more`: the backup path of a Registry
+ * fix, say) sit behind a button that opens them under the line, in the block form of the note: a real control, so the keyboard
+ * and a screen reader reach them (a tooltip would not). Without a `ctx` the lines are simply shown. Errors and warnings are
+ * announced (the note does it by its tone).
  */
 let noticeSeq = 0;
 export function noticeNode(notice: NoticeView, ctx?: NoticeCtx): HTMLElement {
   const key = noticeKey(notice.text);
   const extra = notice.more.length;
-  const open = extra > 0 && (ctx === undefined || ctx.expanded.has(key));
+  const tone = noteTone(notice.tone);
+  if (extra === 0) {
+    const note = fromHtml(document, noteHtml({ message: notice.text, tone })).firstElementChild as HTMLElement;
+    const line = note.querySelector('span');
+    line?.setAttribute('title', notice.text);
+    line?.classList.add('ellipsis');
+    return note;
+  }
+  const open = ctx === undefined || ctx.expanded.has(key);
   const listId = `notice-more-${(noticeSeq += 1)}`;
-  const toggle = extra === 0 || ctx === undefined ? null : h('button', {
-    type: 'button', class: 'more', 'aria-expanded': String(open), 'aria-controls': listId, 'data-key': `more:${key}`,
-    'aria-label': `${notice.text}: ${open ? 'hide' : 'show'} ${extra} more ${extra === 1 ? 'line' : 'lines'}`,
-    onClick: () => ctx.on.toggleExpanded(key),
-  }, open ? 'hide' : `+${extra} more`);
-  return h('div', { class: `notice tone-${notice.tone}`, role: notice.tone === 'error' ? 'alert' : null },
-    h('div', { class: 'notice-line' }, h('span', { class: 'ellipsis', title: notice.text }, notice.text), toggle),
-    open ? h('ul', { class: 'notice-more', id: listId }, ...notice.more.map((line) => h('li', {}, line))) : null);
+  // The block note: the line, the extra lines when they are open, and the button that opens or closes them.
+  const note = fromHtml(document, noteHtml({ title: notice.text, tone, actionsHtml: ctx === undefined ? undefined : '<span data-slot></span>' })).firstElementChild as HTMLElement;
+  note.querySelector('b')?.setAttribute('title', notice.text);
+  const lines = h('ul', { class: 'xi-more', id: listId }, ...notice.more.map((line) => h('li', {}, line)));
+  const slot = note.querySelector('[data-slot]');
+  if (open) (slot?.parentElement ?? note).before(lines);
+  if (ctx !== undefined && slot) {
+    slot.replaceWith(h('button', {
+      type: 'button', class: 'im-btn im-btn--sm im-btn--ghost', 'aria-expanded': String(open), 'aria-controls': listId, 'data-key': `more:${key}`,
+      'aria-label': `${notice.text}: ${open ? 'hide' : 'show'} ${extra} more ${extra === 1 ? 'line' : 'lines'}`,
+      onClick: () => ctx.on.toggleExpanded(key),
+    }, open ? 'Hide' : `Show ${extra} more ${extra === 1 ? 'line' : 'lines'}`));
+  }
+  return note;
 }
 
-/** The progress bar under the status row: the job's label, the bar, its percentage and the detail. No animation. */
+/** Whose profile is cleaned, and whose session it is: both halves matter, so the note wraps instead of cutting. */
+function profileNote(text: string): HTMLElement {
+  const note = fromHtml(document, noteHtml({ message: text, tone: 'warn' })).firstElementChild as HTMLElement;
+  note.title = text;
+  note.classList.add('xi-profile');
+  return note;
+}
+
+/** The job's progress, in the status row: the job's label, Imago's bar, its percentage and the detail. No animation. */
 function renderJob(root: HTMLElement, view: SectionView): void {
   const job = view.job;
   root.hidden = job === null;
   if (job === null) { fill(root); return; }
   const percent = Math.round(Math.min(1, Math.max(0, job.fraction)) * 100);
-  const fillBar = h('i', {});
-  fillBar.style.width = `${percent}%`;
+  const bar = h('div', { class: 'im-progress', role: 'progressbar', 'aria-label': job.label, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent });
+  bar.style.setProperty('--im-progress', String(percent));
   fill(root,
-    h('span', { class: 'job-label', 'data-fit': '' }, job.label),
-    h('div', { class: 'track', role: 'progressbar', 'aria-label': job.label, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent }, fillBar),
-    h('span', { class: 'job-pct num', 'data-fit': '' }, `${percent}%`),
-    job.detail === null ? null : h('span', { class: 'job-detail num' }, ellipsis(job.detail)));
+    h('span', { class: 'xi-job-label', 'data-fit': '' }, job.label),
+    bar,
+    h('span', { class: 'im-progress-value', 'data-fit': '' }, `${percent}%`),
+    job.detail === null ? null : h('span', { class: 'xi-job-detail im-num' }, ellipsis(job.detail)));
 }
 
-/** The window when nothing can be drawn (the first command failed): the message, in the notice area. */
-export function renderFailure(message: string): void {
-  byId('badge').textContent = 'Error';
+/** The panel state on screen (`ready`, `empty`, `loading` or `error`, with what it says), so that a render that changes nothing leaves it alone. */
+let panelState = 'ready';
+/** Cancels a loading state that is waiting for its delay. */
+let cancelLoading: (() => void) | null = null;
+
+/**
+ * The content panel's state: a list with nothing in it is the panel's empty state (with the section's start action), a job with no row
+ * yet is its loading state, shown only after `LOADING_DELAY_MS` so a quick answer never flashes; a list or a report is `ready`. The panel
+ * keeps its header and its frame, and `setPanelState` hides the list under the state's layer.
+ */
+function syncPanelState(view: SectionView, ui: UiState, on: Handlers): void {
+  // The list is the panel of the state, not the whole content: its tools row (the search box, which Rust sends with "No matches") stays
+  // above the layer, where the user can clear it. A report or Settings has no list body to hold a layer.
+  const content = byId('rows');
+  if (panelState === 'error') {
+    // The error state was the content's; a view has come, so it goes.
+    setPanelState(byId('main'), { kind: 'ready' });
+    panelState = 'ready';
+  }
+  if (content.querySelector(':scope > .im-panel-body') === null) {
+    cancelLoading?.();
+    cancelLoading = null;
+    panelState = 'ready';
+    return;
+  }
+  // Settings draws its own page in the panel: the section's empty or loading layer must not hide it.
+  const empty = !ui.settings && view.report === null && (view.rows.length === 0 || view.empty !== null);
+  const kind = !empty ? 'ready' : view.job !== null ? 'loading' : 'empty';
+  const start = kind === 'empty' ? emptyAction(view) : null;
+  const key = `${view.section}|${kind}|${view.empty?.title ?? ''}|${view.empty?.text ?? ''}|${start?.id ?? ''}|${start?.label ?? ''}`;
+  if (key === panelState) return;
+  panelState = key;
+  cancelLoading?.();
+  cancelLoading = null;
+  if (kind === 'ready') {
+    setPanelState(content, { kind: 'ready' });
+  } else if (kind === 'loading') {
+    cancelLoading = showAfter(LOADING_DELAY_MS, () => {
+      setPanelState(content, { kind: 'loading', rows: 3 });
+      content.setAttribute('aria-busy', 'true');
+    });
+  } else {
+    setPanelState(content, {
+      kind: 'empty', title: view.empty?.title, text: view.empty?.text ?? 'Nothing to show.',
+      action: start === null ? undefined : { label: start.label, run: () => on.send(view.section, actionIntent(view.section, start.id)) },
+    });
+  }
+}
+
+/** The window when nothing can be drawn (the first command failed): the content panel's error state, with a Retry that asks again. */
+export function renderFailure(message: string, retry: () => void): void {
+  setBadge('Error', 'err');
   setStatus('Error', message);
-  fill(byId('notices'), noticeNode({ tone: 'error', text: message, more: [] }));
+  cancelLoading?.();
+  cancelLoading = null;
+  panelState = 'error';
+  setPanelState(byId('main'), { kind: 'error', text: message, retry: { label: 'Retry', run: retry } });
+}
+
+/** A button of the content header that opens the inspector on `kind`, or closes it when it is open on it. */
+function inspectorButton(kind: 'details' | 'options', label: string, key: string, ui: UiState, hint: string, on: Handlers, disabledReason: string | null = null): HTMLElement {
+  const open = ui.inspector === kind;
+  return h('button', {
+    type: 'button', class: 'im-btn im-btn--ghost im-btn--sm xi-toggle', 'data-key': `inspect:${kind}`, 'aria-expanded': String(open), disabled: disabledReason !== null,
+    title: disabledReason ?? (open ? `Close the ${label.toLowerCase()}` : hint), onClick: () => on.toggleInspector(kind),
+  }, h('span', { 'data-fit': '' }, label), keyCaps(key));
 }
 
 export function renderShell(screen: Screen, on: Handlers): void {
   const { app, view, ui } = screen;
 
-  // Top bar.
-  byId('version').textContent = app.version;
+  // Action bar.
   fill(byId('actions'), ...view.actions.flatMap((a) => actionButton(view, a, on)));
 
   // Status row.
-  byId('badge').textContent = view.status.badge;
+  setBadge(view.status.badge, null);
   setStatus(view.status.badge, view.status.text);
   byId('status-right').textContent = `${app.admin ? 'administrator' : 'standard user'} · ${ramText(app.ramTotalBytes)}`;
-  const profile = byId('profile');
-  profile.hidden = app.profileMismatch === null;
-  // Both halves of the sentence matter (whose profile is cleaned, and whose session it is): it wraps instead of cutting.
-  if (app.profileMismatch !== null) { profile.title = app.profileMismatch; fill(profile, app.profileMismatch); }
 
   // The job's progress bar.
   renderJob(byId('job'), view);
 
-  // Sections bar: built once and then only marked, so that the bar under the open tab (Smooth) can slide to the next one.
+  // The tabs of the sections: built once and then only marked. Settings, which is no view yet, is a button after them.
   const sections = byId('sections');
   if (sections.childElementCount === 0) {
-    fill(sections,
-      h('div', { class: 'hd' }, h('h2', { class: 'hd-title', 'data-fit': '' }, 'Sections'), h('span', { class: 'count' }, SECTION_ORDER.length)),
-      ...SECTION_ORDER.map((id, index) => h('button', {
-        type: 'button', class: 'nv', 'data-section': id, 'data-key': `section:${id}`, onClick: () => on.openSection(id),
-      }, h('span', { 'data-fit': '' }, SECTION_NAMES[id]), kbd(String(index + 1)))),
-      h('button', { type: 'button', class: 'nv about', 'data-key': ABOUT_KEY, onClick: () => on.openAbout() }, h('span', { 'data-fit': '' }, 'Settings'), kbd('?')));
+    // The views of the app, and Settings last.
+    fill(sections, ...[...SECTION_ORDER, 'settings' as const].map((id) => h('button', {
+      type: 'button', role: 'tab', class: 'im-tab', 'aria-selected': 'false', 'data-section': id, 'data-key': `section:${id}`,
+      onClick: () => (id === 'settings' ? on.openSettings() : on.openSection(id)),
+    }, id === 'settings' ? 'Settings' : SECTION_NAMES[id])));
   }
-  for (const tab of sections.querySelectorAll<HTMLElement>('.nv[data-section]')) {
-    const here = tab.dataset.section === view.section;
-    tab.classList.toggle('on', here);
+  for (const tab of sections.querySelectorAll<HTMLElement>('.im-tab[data-section]')) {
+    const here = tab.dataset.section === (ui.settings ? 'settings' : view.section);
     tab.removeAttribute('aria-busy');
+    tab.setAttribute('aria-selected', String(here));
     if (here) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
   }
 
-  // Bar 2: categories and options.
-  renderBar2(byId('bar2'), view, ui, on);
+  // The sidebar: categories and options.
+  renderSidebar(byId('sidebar'), view, ui, on);
 
   // List header: title, subtitle and the switch of the details (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
-    h('h1', { class: 'hd-title', 'data-fit': '' }, view.title),
-    h('span', { class: 'hd-right' }, h('span', { class: 'sub' }, ellipsis(view.subtitle)),
-      view.report === null ? h('button', {
-        type: 'button', class: 'btn sm details-toggle', 'data-key': 'details', 'aria-expanded': String(ui.details), 'aria-controls': 'detail',
-        title: ui.details ? 'Hide the details of the selected row' : 'Show the details of the selected row: paths, files in use, why',
-        onClick: () => on.toggleDetails(),
-      }, h('span', { 'data-fit': '' }, ui.details ? 'Hide details' : 'Details'), kbd('i')) : null));
-  byId('main').classList.toggle('details-open', ui.details);
+    h('h4', { class: 'im-panel-title xi-head-title', 'data-fit': '' }, view.title),
+    h('span', { class: 'im-panel-sub xi-head-sub' }, ellipsis(view.subtitle)),
+    h('span', { class: 'im-spacer' }),
+    view.report === null ? inspectorButton('details', 'Details', 'i', ui, 'The details of the selected row: paths, files in use, why', on) : null,
+    view.report === null ? inspectorButton('options', 'Options', 'o', ui, 'The options of this section', on, panelOptions(view).length === 0 ? 'This section has no options' : null) : null);
 
   // Notices, then the list and the detail of the focused row.
   const noticeCtx: NoticeCtx = { expanded: ui.expanded, on };
   fill(byId('notices'),
-    ...(screen.error === null ? [] : [noticeNode({ tone: 'error', text: screen.error, more: [] })]),
+    ...(app.profileMismatch === null ? [] : [profileNote(app.profileMismatch)]),
     ...view.notices.map((notice) => noticeNode(notice, noticeCtx)));
   const rowsArea = byId('rows');
+  let detailRow: RowView | null = null;
   if (view.report !== null) {
     // The report replaces the list (and its search box and detail) until it is closed.
     rowsArea.classList.add('is-report');
     renderReport(rowsArea, view.section, view.report, ui.expanded, on);
-    renderDetail(byId('detail'), null);
   } else {
     if (rowsArea.classList.contains('is-report')) { rowsArea.classList.remove('is-report'); fill(rowsArea); }
     renderList(rowsArea, view, ui, on);
     const focus = currentFocus(ui, view);
     const focused = shownRows(ui, view).find((r) => r.id === focus) ?? null;
     // A category or a sub-heading has nothing to add to its own line (its note is on it).
-    renderDetail(byId('detail'), focused?.kind === 'group' || focused?.kind === 'header' ? null : focused);
+    detailRow = focused?.kind === 'group' || focused?.kind === 'header' ? null : focused;
   }
+  syncPanelState(view, ui, on);
+  renderInspector(byId('app'), view, ui, detailRow, on);
 
   // Footer.
   fill(byId('foot'),
-    h('span', { class: 'dot' }),
-    h('span', { class: 'foot-left' }, ellipsis(view.footer ?? '')),
-    h('span', { class: 'foot-right', 'data-fit': '' }, footerHint(view)));
+    h('span', { class: 'im-dot', 'data-im-tone': 'ok' }),
+    h('span', { class: 'im-footer-text foot-left' }, ellipsis(view.footer ?? '')),
+    h('span', { class: 'im-spacer' }),
+    footerKeys(document, screen.registry, footerEntries(view, (id) => screen.registry.get(id) !== undefined)));
 
   // The confirmation, last: it takes the focus when it opens and gives it back when it closes.
-  renderDialog(view, on, screen.focused);
+  renderDialog(view, on, screen.opener);
 }

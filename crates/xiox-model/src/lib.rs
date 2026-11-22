@@ -522,7 +522,7 @@ pub fn fmt_size(bytes: u64) -> String {
     } else if b >= 1024.0 {
         format!("{:.0} KB", b / 1024.0)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 

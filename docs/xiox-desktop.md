@@ -59,10 +59,11 @@ The window has two looks. **Smooth** is the default: modern and clean, in the ma
 the amber of Xiox as its only accent, the sections as tabs at the top and the buttons of the section
 under the list. Its title bar is the app's own: drag it to move the window, double-click it to
 maximize, and use its minimize, maximize and close buttons (hovering maximize offers the Windows 11
-snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is the look of the first version, three
-columns in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
-`Smooth` there to go back); the choice is kept for the next start. Everything else (the lists, the boxes, the
-keys, what each button does) is the same in both.
+snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is Imago's other look, with
+squared corners and capitals in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
+`Smooth` there to go back); the choice is kept for the next start. The window is Imago's (the design system of the suite):
+both looks have the same layout, the same title bar and window buttons, the same light and dark themes and the same glass. Everything
+else (the lists, the boxes, the keys, what each button does) is the same in both.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -84,13 +85,13 @@ keys, what each button does) is the same in both.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-In ONI MODE the window gets the Windows title bar back and no glass, the sections are the first of
-three columns, the buttons sit at the top right next to the version, and the detail is always shown
-under the list.
+Both looks draw this layout: ONI MODE has the same title bar (with the window buttons and the snap layouts), the same glass and the
+same Auto, Light and Dark switch as Smooth. The title bar's mark is the initial of the name on the amber of Xiox, and the executables'
+icons are the same mark. Open the window menu (`Alt`+`Space`) for `Reload interface`, which reloads the page when it hangs.
 
 **Top bar and buttons.** The Xiox wordmark, the sections and `Settings`. The buttons
 of the open section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...) sit under the list,
-the main one last and in the accent colour (in ONI MODE: at the top right). A small key next to a
+the main one last and in the accent colour. A small key next to a
 label says which key presses it. A button that cannot be used right now is greyed out; the chapters
 below say when. The style sheet writes the button labels in capitals; this guide names them as
 they are written in the sentences of the app.
@@ -182,10 +183,10 @@ Developers: a message asks `Add "<folder>" to the folders Developers analyzes?` 
 until you answer `Add`; anything that is not a folder only gets a message saying so.
 
 **Theme.** Smooth follows the Windows theme, light or dark, title bar included, unless you pick
-`Light` or `Dark` instead of `Auto` in the switch at the top right (the choice is kept for the next
-start); ONI MODE is dark whatever Windows says, and hides that switch. The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
-is part of the product's identity and its contrasts are tested (`tests/contrast.test.ts`), so the
-window does not follow the system's light theme or accent colour. What follows the system is what
+`Light` or `Dark` instead of `Windows` under `Look` in Settings or with the palette (the choice is kept for the next
+start); the same choice serves ONI MODE, which has a light theme too (with `Auto` it is dark, as ONI is a dark look). The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
+is Imago's (its contrasts are tested in the package), so the
+window does not follow the system's accent colour. What follows the system is what
 accessibility needs: the high-contrast (forced colours) themes, reduced motion and the text size.
 
 ## Cleanup
@@ -210,7 +211,7 @@ above the list looks through every category (name and description).
    to stay without a figure, and a notice says so.
 3. **Clean** (`Enter`; the button reads `Clean 8 items`, with the number of ticked entries).
    The button is greyed out until an analysis is on screen: *Clean works on the analysis on
-   screen.* It opens a confirmation; only `Continue` starts the removal.
+   screen.* It opens a confirmation; only its confirming button (`Clean 8 items`) starts the removal.
 
 **Columns.** `Item`, `Level`, `Files` and `Size`. The level comes from the rule set:
 `Recommended` when the entry is on by default, `Optional` when it is off by default, `Caution`
@@ -278,8 +279,8 @@ or press `None` and tick only what you want. Nothing is changed until you press
 
 | Button | What it does |
 |---|---|
-| `Yes, back up and fix` | saves a `.reg` copy of the keys it is about to change in `Documents\Xiox` (the file is named `registry-backup-<date>_<time>.reg`, and an existing file is never overwritten), then fixes |
-| `Fix without backup` | fixes without saving anything |
+| `Back up and fix N issues` | saves a `.reg` copy of the keys it is about to change in `Documents\Xiox` (the file is named `registry-backup-<date>_<time>.reg`, and an existing file is never overwritten), then fixes |
+| `Fix N issues without a backup` | fixes without saving anything |
 | `Cancel` | closes the question, nothing happens |
 
 If the backup cannot be written, **nothing is fixed** and a notice says why (*Registry backup
@@ -370,7 +371,7 @@ permanently.*), then the figures (`2 folders · 6.80 GB`) and one line per folde
   warnings`. The `Clean` button stays greyed out until you tick it.
 - **The Recycle Bin is too small.** When the Recycle Bin of a drive cannot take what you chose,
   the confirmation says so (*The Recycle Bin of D: has 0 B free, the cleanup moves 6.80 GB.
-  Delete permanently this time?*) and the `Clean` button is replaced by `Permanently`. Press it
+  Delete permanently this time?*) and the `Clean` button is replaced by the same words with `permanently` (`Delete 3 sessions permanently`). Press it
   to delete for good for this run only (the `Deletion` option does not change), or `Cancel` and
   make room. The Recycle Bin is never skipped silently.
 - **A stale analysis.** An analysis older than 30 minutes is refused (*The analysis is too old:
@@ -420,7 +421,7 @@ warnings describe must be what runs). `Esc` or `Cancel` closes it and nothing ru
 - **Cleanup** asks `Start cleaning?` with *The selected files will be deleted permanently. Files in
   use are left where they are.*, followed by `Warnings for the chosen options`: one line for each
   chosen entry that has a warning (cookies, emptying the Recycle Bin, an application cache that
-  has to be downloaded again, ...). `Continue` starts.
+  has to be downloaded again, ...). The confirming button (`Clean 8 items`) starts.
 - **Developers** asks about folders, worktrees or sessions, as described above.
 - **Registry** is described in its chapter.
 
@@ -504,33 +505,36 @@ that is greyed out ignores its key.
 | Key | What it does |
 |---|---|
 | `1` `2` `3` | open Cleanup, Registry, Developers |
-| `?` | open Settings (not while a confirmation is open) |
+| `4` or `?` | open Settings (not while a confirmation is open) |
+| `Ctrl`+`K` | the command palette: every command with its key, and the look and theme commands (`Smooth look`, `ONI look`, `Follow Windows`, `Light theme`, `Dark theme`) |
+| `Ctrl`+`F` | the search box of the list |
+| `F6` `Shift`+`F6` | move between the sidebar, the content and the inspector |
 | `↑` `↓` | move the selection one row |
 | `PageUp` `PageDown` | move ten rows |
 | `Home` `End` | first and last row |
 | `→` `←` | unfold and fold the rows under a project or an entry |
 | `Space` | tick or untick the selected row, or every row under the selected heading (not while a job runs, not on a blocked row) |
 | `s` / `S` | order the list by the next column / turn the order round |
-| `i` | open or close the details of the selected row (Smooth) |
+| `i` / `o` | open or close the inspector on the details of the selected row / on the options of the section |
 | `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry |
-| `Enter` | the section's main button: `Clean` or `Fix selected`; it opens the confirmation |
-| `Esc` | in this order: close Settings or the confirmation; leave a text field; close the report; cancel the running job |
+| `Enter` | in the list, the section's main button: `Clean` or `Fix selected`; it opens the confirmation (a focused button presses itself) |
+| `Esc` | in this order: the open menu, palette or inspector; the confirmation; leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
 
 A key held down does not repeat an action: one `Enter` is one press, so a held `Enter` cannot run
 on past the confirmation it just opened. The arrows do repeat, that is how a long list is crossed.
-The footer shows the keys of the open section, taken from the buttons themselves, so what it says
-and what the keys do agree.
+The footer shows the keys of the open section, taken from the command registry, so what it says
+and what the keys do agree. The commands are Imago's registry: `Ctrl`+`K` lists them all, with the actions of the open section.
 
-**Tab order.** The sections (the three sections and `Settings`), the categories and options of
-the sidebar, then the main panel (`Details`, the search box, the list with its top check box, the
-detail), and last the buttons of the section and Smooth's theme (`Auto`, `Light`, `Dark`). The list is **one** Tab stop: once in it, move with the
-arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The detail
-panel can be reached too, so a long reason can be scrolled with the arrows. A visible ring shows
+**Tab order.** The title bar (the tabs: the three sections and `Settings`; the `Commands` button; the window buttons), the categories of
+the sidebar, then the main panel (`Details` and `Options`, the search box, the list with its top check box), the inspector when it is
+open, and last the buttons of the section. The list is **one** Tab stop: once in it, move with the
+arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The inspector
+can be reached too (`F6`), so a long reason can be scrolled with the arrows. A visible ring shows
 where the focus is.
 
-**In a confirmation.** `Tab` and `Shift`+`Tab` cycle through its controls and never leave it;
-`Enter` or `Space` press the button that has the focus; `Esc` closes it. Because of the guard
+**In a confirmation.** The focus starts on `Cancel`. `Tab` and `Shift`+`Tab` cycle through its controls and never leave it;
+`Enter` or `Space` press the button that has the focus; `Esc` or a click outside closes it; the title bar stays free, so the window can be moved and closed. Because of the guard
 described above, the buttons ignore `Enter` and `Space` for 300 ms after the confirmation opens
 and while the key is held down. When it closes, the focus goes back to where it was.
 
@@ -538,13 +542,13 @@ and while the key is held down. When it closes, the focus goes back to where it 
 
 | Key | What it does |
 |---|---|
-| `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 67 % to 200 % |
+| `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 50 % to 200 % in steps of 10 % |
 | `Ctrl`+wheel | the same, one step per notch |
 | `Ctrl`+`0` | back to 100 % |
 | `Ctrl`+`A` | in a text field, its text; in the detail panel, a confirmation or the report, the text you can copy; anywhere else, nothing |
 | `Ctrl`+`C` | copy what is selected |
 
-The zoom is remembered for the next start. The window is not a web page: buttons, rows and titles
+The zoom is remembered for the next start (a level saved by an earlier version, 67 %, 125 % or 175 %, reads as the nearest step: 70 %, 130 %, 180 %). The window is not a web page: buttons, rows and titles
 cannot be selected and keep the arrow pointer, the right button opens a menu only on selected text
 (`Copy`) and in a text field (the editing commands), and the browser keys (`F5`, `Ctrl`+`R`,
 `Ctrl`+`P`, `Ctrl`+`F`, `F12`, `Alt`+`←`, the mouse's back button) do nothing. What is worth copying
@@ -553,9 +557,10 @@ and the text of a confirmation.
 
 ## Settings
 
-Open it with the `Settings` entry of the sections bar or with `?`. At the top, `Look`: `Smooth`
-(the default) or `ONI mode (the original look)`; the window changes at once and keeps the choice
-for the next start. Under it, `About Xiox`: the version (`Version 0.1.0`), the state of the
+Settings is a view, the fourth tab: open it with the `Settings` tab, `4` or `?`. Its sidebar lists its two sections, `Look` and
+`About`, and a click scrolls to one. `Look` has the look, `Smooth` (the default) or `ONI mode`, and the theme, `Windows`, `Light` or
+`Dark`; the window changes at once and keeps the choice for the next start (the same choices are commands of the palette, `Ctrl`+`K`).
+`About Xiox`: the version (`Version 0.1.0`), the state of the
 cleaning rules and where they come from:
 
 - `Winapp2: version 260915` when the rules are loaded, `Winapp2: loading` while they are being
@@ -564,8 +569,7 @@ cleaning rules and where they come from:
   from Winapp2 (https://github.com/MoscaDotTo/Winapp2), licence CC-BY-SA-4.0, downloaded at every
   start.*
 
-`Close` or `Esc` closes it; `Tab` goes between the chosen look and `Close`, the arrows change the
-look. Settings does not open while a confirmation is up.
+Leave Settings by opening a section. Settings does not open while a confirmation is up.
 
 The Winapp2 rules are downloaded when the app starts and stored outside the executable (see the
 next chapter). Their licence stays their own.
@@ -576,6 +580,7 @@ next chapter). Their licence stays their own.
 |---|---|
 | Developers options (`Days of inactivity`, `Deletion`, extra folders) | `%APPDATA%\Xiox\settings.json` |
 | The window's size and position | `%APPDATA%\Xiox\window.json` (next to the settings file) |
+| The window's theme (`system`, `light` or `dark`), for the first frame of the next start | `%APPDATA%\Xiox\window-theme` |
 | Registry backups | `Documents\Xiox\registry-backup-<date>_<time>.reg` |
 | Backup of the registry keys an `Applications` rule is about to delete | `Documents\Xiox\rules-backup-<date>_<time>.reg` |
 | The cookie keep list | `Documents\Xiox\cookie-keep-list.txt` |
@@ -585,7 +590,8 @@ next chapter). Their licence stays their own.
 | Reports | nowhere, unless you press `Save as text…` and choose a place |
 
 `Documents` is your Documents folder (`%USERPROFILE%\Documents`). The app writes nothing else
-outside the places you choose. A window position that no longer fits is ignored; a settings file
+outside the places you choose. A window saved on a monitor that is gone comes back inside the monitors there are now; the fixtures window
+and `--only-root` keep neither the position nor the theme; a settings file
 that cannot be written is reported in the window (`Settings not saved: ...`).
 
 ## Troubleshooting

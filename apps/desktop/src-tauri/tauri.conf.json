@@ -13,16 +13,17 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Xiox",
         "width": 1280,
         "height": 800,
-        "minWidth": 960,
+        "minWidth": 500,
         "minHeight": 540,
         "decorations": false,
         "transparent": true,
         "shadow": true,
         "backgroundColor": "#00000000",
-        "windowEffects": { "effects": ["acrylic"], "color": [18, 22, 30, 150] },
+        "windowEffects": { "effects": ["acrylic"], "color": [12, 17, 29, 204] },
         "visible": false,
         "center": true
       }

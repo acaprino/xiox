@@ -125,17 +125,15 @@ fn build(segments: &[Simple], closers: &[Option<usize>], range: Range<usize>, sh
     let mut at = range.start;
     while at < range.end {
         let segment = &segments[at];
-        if shell == Shell::Bash && segment.cut == Cut::No {
-            if let Some((var, items)) = for_header(segment) {
-                // A loop whose `done` lies outside this range is unclosed: it takes the rest.
-                let done = closers[at].filter(|done| *done < range.end);
-                let end = done.unwrap_or(range.end);
-                let done_redirects = done.map(|done| segments[done].redirects.clone()).unwrap_or_default();
-                let body = build(segments, closers, at + 1..end, shell);
-                nodes.push(Node::For { var, items, body, done_redirects });
-                at = end + 1;
-                continue;
-            }
+        if shell == Shell::Bash && segment.cut == Cut::No && let Some((var, items)) = for_header(segment) {
+            // A loop whose `done` lies outside this range is unclosed: it takes the rest.
+            let done = closers[at].filter(|done| *done < range.end);
+            let end = done.unwrap_or(range.end);
+            let done_redirects = done.map(|done| segments[done].redirects.clone()).unwrap_or_default();
+            let body = build(segments, closers, at + 1..end, shell);
+            nodes.push(Node::For { var, items, body, done_redirects });
+            at = end + 1;
+            continue;
         }
         nodes.extend(node(segment, shell));
         at += 1;

@@ -219,6 +219,8 @@ const BLOCKED: [SectionId, string, string][] = [
 
 test('Rust has no protected registry issue: every row of the Registry fixture can be ticked', () => {
   for (const name of Object.keys(fixture.views.registry)) {
+    // While a job runs Rust freezes the list (the rows are disabled for it): that is not a protected issue.
+    if (fixture.views.registry[name]?.job) continue;
     assert.ok(fixture.views.registry[name]?.rows.every((r) => r.enabled && !r.muted && r.why === null), `registry:${name}`);
   }
   const model = fresh();

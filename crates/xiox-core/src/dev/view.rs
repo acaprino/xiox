@@ -484,7 +484,8 @@ impl DevState {
         let mut buttons = if c.shortfall.is_empty() {
             vec![button("clean", confirm_button(c), ready, true)]
         } else {
-            vec![button("permanent", "Permanently".into(), ready, true)]
+            // The section's verb and its object, with the word that says it is for good: "Delete 3 sessions permanently".
+            vec![button("permanent", format!("{} permanently", confirm_button(c)), ready, true)]
         };
         buttons.push(button("cancel", "Cancel".into(), true, false));
         Some(DialogView {
