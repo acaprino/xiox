@@ -413,7 +413,10 @@ async function checkCopy(page, label, section, view) {
       rowsMax: d.rows.length ? '180px' : null, rowsOverflow: d.rows.length ? 'auto' : null,
       warnTitle: d.warningsTitle, warnings: d.warnings, cautionTitle: d.cautionTitle, cautions: d.cautions,
       ack: d.ack === null ? null : [String(d.ack), 'I have read the warnings', 'checkbox'],
-      buttons: d.buttons.map((b) => [b.id, b.label, b.enabled, b.primary]), behind: true,
+      // The page puts Cancel first and the confirming button last, the others as Rust wrote them (render/dialog.ts `ordered`).
+      buttons: [...d.buttons.filter((b) => b.id === 'cancel'), ...d.buttons.filter((b) => b.id !== 'cancel' && !b.primary), ...d.buttons.filter((b) => b.id !== 'cancel' && b.primary)]
+        .map((b) => [b.id, b.label, b.enabled, b.primary]),
+      behind: true,
     });
   }
   if (view.report === null) want('report', found.report, null);
@@ -856,9 +859,11 @@ async function sectionFlows(page, size, shot) {
     const grid = document.querySelector('#rows .xi-list');
     const anchor = document.querySelector('#rows .xi-anchor[data-anchor="rules:Browser"]');
     const head = grid.querySelector('thead th').getBoundingClientRect().bottom;
-    return Math.abs(anchor.getBoundingClientRect().top - head);
+    // A category near the end cannot reach the top when the list is tall (nothing under it to scroll): the list is then at its end.
+    const atEnd = grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 1;
+    return { off: Math.abs(anchor.getBoundingClientRect().top - head), atEnd };
   });
-  check(atTop < 4, `the menu did not scroll Browser to the top of the list (${atTop}px off)`);
+  check(atTop.off < 4 || atTop.atEnd, `the menu did not scroll Browser to the top of the list (${atTop.off}px off, the list is ${atTop.atEnd ? '' : 'not '}at its end)`);
   check((await page.locator('#sidebar [data-key="nav:rules:Browser"][aria-current="true"]').count()) === 1 && await page.locator('#sidebar .xi-row[aria-current]').count() === 1, 'the menu does not mark Browser as the category the list is at');
   // Scrolling by hand moves the mark.
   await page.locator('#rows .xi-list').evaluate((n) => { n.scrollTop = 0; });
@@ -1242,7 +1247,8 @@ async function tabAudit(page, size, shot) {
       const stop = await page.evaluate((regions) => {
         const el = document.activeElement;
         if (!el || el === document.body || el === document.documentElement) return null;
-        const style = getComputedStyle(el);
+        // A text field draws its ring on the box round it (Imago's input), not on the input itself.
+        const style = getComputedStyle(el instanceof HTMLInputElement ? el.closest('.im-input') ?? el : el);
         const ring = style.boxShadow;
         const outlined = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
         let clipped = false;
