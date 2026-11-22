@@ -110,6 +110,7 @@
   Release (l'installer di `release\installer\` e uno zip portabile con tutto `release\` in una cartella; nessun
   programma sciolto), e `main` torna in `develop`. Se la build
   fallisce non si pubblica nulla.
+- A release is the pull request develop → main, merged only when the Verify run on develop's tip is green: the release workflow builds and publishes, it does not run the tests again.
 - Mai cambiare la versione o creare tag di release a mano: lo fa il workflow (`.github/release.json` elenca i
   file della versione, `.github/scripts/release.mjs` li scrive).
 

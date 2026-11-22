@@ -1,13 +1,24 @@
 name: Verify
 
-# Every push to develop, and every pull request: the page (tests, build, smoke test on the mocked commands), the
-# desktop crate (format, lint, tests) and the lock. Rust is compiled, formatted, linted and tested here only: nobody
-# runs cargo on a developer's machine (AGENTS.md). release.yml stays the release's own.
+# Every push to develop, every pull request into develop, and by hand: the page (tests, build, smoke test on the mocked
+# commands), the desktop crate (format, lint, tests) and the lock. Rust is compiled, formatted, linted and tested here
+# only: nobody runs cargo on a developer's machine (AGENTS.md). release.yml stays the release's own.
+#
+# The release pull request (develop into main) is not run: it is the commit the push to develop has just verified, and
+# running it again only spent the same minutes twice. Nothing waits for it: main has no required check.
+#
+# Cargo's dependency build is kept between runs. Each job that compiles Rust restores a cache of its own: clippy's, the
+# tests' and the window's artifacts are not the same files, and the jobs run together, so with one key the job that
+# finishes first would save it and the other would never be saved. A cache is saved by a job that succeeds, and only when
+# none of the exact key exists. The crates of this workspace are compiled at every run (their sources are new at every
+# checkout); what the cache gives back is the dependencies (tauri, wry, windows-sys, rusqlite ...), most of the compile.
 
 on:
   push:
     branches: [develop]
   pull_request:
+    branches: [develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -52,10 +63,28 @@ jobs:
       - name: Build the page
         run: npm run build
 
+      # The browser Playwright downloads is kept between runs, keyed on the version of playwright-core. The install below still
+      # runs: it finds the restored browser and downloads only what the folder lacks. It is saved right after the install and
+      # not at the end of the job, because the smoke test after it is the step that can be red, and a cache saved only by a
+      # green job would never be made.
+      - name: Restore the browser
+        id: browser
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
+
       # Last: the smoke test drives a browser, and it is the one step known to be red until it is repaired for the new page. It
       # does not hide the Rust job, which is its own.
       - name: Install the browser
         run: npx playwright install chromium
+
+      - name: Keep the browser
+        if: steps.browser.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: ${{ steps.browser.outputs.cache-primary-key }}
 
       - name: Smoke test the page
         run: npm run smoke
@@ -72,12 +101,45 @@ jobs:
         shell: pwsh
     env:
       CARGO_TERM_COLOR: always
+      # No incremental state: the cached target stays smaller, and the same for the same inputs.
+      CARGO_INCREMENTAL: '0'
 
     steps:
       - name: Check out sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The key of the cargo cache has two parts. The compiler: the image moves stable Rust from time to time, every artifact of
+      # the old one is then useless, and a key without it would still hit and never be saved again. The dependencies: the source
+      # and checksum lines of Cargo.lock, not the whole file, which also holds the version of every crate of this workspace and
+      # which the release rewrites each time: the whole file would start a new cache after every release.
+      - name: Cargo cache key
+        id: cargo-key
+        run: |
+          $info = rustc -vV
+          if ($LASTEXITCODE) { exit 1 }
+          $release = ($info | Select-String '^release: (\S+)').Matches[0].Groups[1].Value
+          $commit = ($info | Select-String '^commit-hash: (\w{9})').Matches[0].Groups[1].Value
+          $pins = Select-String -Path Cargo.lock -Pattern '^(source|checksum) = ' | ForEach-Object Line
+          $lock = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($pins -join "`n"))).Substring(0, 20).ToLower()
+          "toolchain=$release-$commit" >> $env:GITHUB_OUTPUT
+          "lock=$lock" >> $env:GITHUB_OUTPUT
+
+      # Restored before the lock check: `cargo metadata` downloads every dependency, and the registry is in the cache. Clippy
+      # and the tests build into the same target, so one cache serves both. When the lock moves, the restore key starts from the
+      # last build and cargo compiles only what changed.
+      - name: Restore the compiled Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-rust-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rust-${{ steps.cargo-key.outputs.toolchain }}-
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -138,12 +200,41 @@ jobs:
         shell: pwsh
     env:
       CARGO_TERM_COLOR: always
+      # No incremental state: the cached target stays smaller, and the same for the same inputs.
+      CARGO_INCREMENTAL: '0'
 
     steps:
       - name: Check out sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The key of the cargo cache: the compiler and the dependencies Cargo.lock pins, as in the job above.
+      - name: Cargo cache key
+        id: cargo-key
+        run: |
+          $info = rustc -vV
+          if ($LASTEXITCODE) { exit 1 }
+          $release = ($info | Select-String '^release: (\S+)').Matches[0].Groups[1].Value
+          $commit = ($info | Select-String '^commit-hash: (\w{9})').Matches[0].Groups[1].Value
+          $pins = Select-String -Path Cargo.lock -Pattern '^(source|checksum) = ' | ForEach-Object Line
+          $lock = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($pins -join "`n"))).Substring(0, 20).ToLower()
+          "toolchain=$release-$commit" >> $env:GITHUB_OUTPUT
+          "lock=$lock" >> $env:GITHUB_OUTPUT
+
+      # Its own cache, apart from the crate job's: this job builds the window (the dev profile, linked into xiox-ui.exe), the other
+      # one checks and tests, and the two run together.
+      - name: Restore the compiled Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-desktop-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-desktop-${{ steps.cargo-key.outputs.toolchain }}-
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -154,6 +245,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # target is restored from the cache: a build that fails would leave the previous commit's program there, to be uploaded
+      # under this commit's name.
+      - name: Remove the previous build's files
+        run: Remove-Item target/debug/xiox-ui.exe -Force -ErrorAction SilentlyContinue
 
       - name: Build the desktop window
         run: npm run desktop:build
