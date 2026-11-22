@@ -115,8 +115,13 @@ jobs:
         run: cargo clippy -p xiox-ui --all-targets -- -D warnings
 
       # xiox-core holds the drift test of fixtures/views.json.
+      # The runner's temporary folder is C:\Users\RUNNER~1\...: a path with an 8.3 short name, which the rules guard refuses ("cannot be
+      # compared with certainty"), so every test that cleans inside a temporary folder found nothing. The runner's own temp folder has none.
       - name: Test the Rust
         run: cargo test -p xiox-ui -p xiox-core
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
       # Last, so that a formatting difference does not hide the lock, the lint and the tests behind it. The Rust of this repository
       # was never put through rustfmt (no rustfmt.toml, lines of 150 columns): the first run fails here until `cargo fmt --all` has

@@ -459,14 +459,14 @@ fn under(rows: &[RowView], at: usize) -> &[RowView] {
     let end = rest
         .iter()
         .position(|r| {
-            if !matches!(r.kind, RowKind::Header | RowKind::Group) {
-                return false;
-            }
             let nested = r.parent.as_deref().is_some_and(|p| inside.contains(&p));
             if nested {
                 inside.push(&r.id);
+                return false;
             }
-            !nested
+            // A sub-heading or category that is not inside this one ends it, and so does a row of another folder (a project beside the
+            // folders comes after them and belongs to the folder above: its parent is not inside this one).
+            matches!(r.kind, RowKind::Header | RowKind::Group) || r.parent.is_some()
         })
         .unwrap_or(rest.len());
     &rest[..end]
