@@ -246,6 +246,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # target is restored from the cache: a build that fails would leave the previous commit's program there, to be uploaded
+      # under this commit's name.
+      - name: Remove the previous build's files
+        run: Remove-Item target/debug/xiox-ui.exe -Force -ErrorAction SilentlyContinue
+
       - name: Build the desktop window
         run: npm run desktop:build
 
