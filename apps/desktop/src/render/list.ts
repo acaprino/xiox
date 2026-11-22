@@ -200,7 +200,7 @@ function syncFold(tools: HTMLElement, view: SectionView, ui: UiState, on: Handle
   const groups = view.rows.filter((r) => r.kind === 'group');
   if (groups.length < 2) { btn?.remove(); return; }
   if (!btn) {
-    const node = h('button', { type: 'button', class: 'im-btn im-btn--sm xi-foldall', 'data-key': 'fold:all' });
+    const node = h('button', { type: 'button', class: 'im-btn im-btn--sm xi-foldall', 'data-key': 'fold:all' }, 'Fold all');
     node.addEventListener('click', () => on.foldAll(node.dataset.mode === 'fold'));
     tools.append(node);
     btn = node;

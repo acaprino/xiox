@@ -169,9 +169,11 @@ test('every button of the page has a name: a text or an aria-label, icon-only on
   let buttons = 0;
   for (const [name, text] of sources) {
     for (const m of text.matchAll(/h\('button'|(?<![\w.])button\(/g)) {
-      const call = callAt(text, m.index + m[0].length - 1);
+      // The call from its own parenthesis to the matching one (`h(` is two characters, `button(` ends at its parenthesis).
+      const call = callAt(text, m[0].startsWith('h(') ? m.index + 1 : m.index + m[0].length - 1);
       buttons++;
-      const named = /aria-label|aria-labelledby|h\('span'|, '[^']|`[^`]+`\)|\bkeyCaps\(/.test(call) || /^\(\s*h\('(?!i')/.test(call);
+      // A name: an aria-label or a title, a child that is a span or key caps, or any child after the attributes (a text, a label).
+      const named = /aria-label|aria-labelledby|title:|h\('span'|\bkeyCaps\(|\},\s*[^\s)]/.test(call);
       assert.ok(named, `${name}: a button without text or aria-label: ${call.slice(0, 80)}`);
     }
   }

@@ -39,8 +39,9 @@ function element(): HTMLDialogElement {
 
 /** The confirming button of a permanent delete is Imago's confirming danger button: still the one primary action of the dialog. */
 function dialogButton(view: SectionView, b: ButtonView, danger: boolean, cancel: boolean, on: Handlers): HTMLButtonElement {
+  const cls = b.primary ? (danger ? 'im-btn im-btn--confirm-danger' : 'im-btn im-btn--primary') : 'im-btn';
   return h('button', {
-    type: 'button', class: b.primary ? (danger ? 'im-btn im-btn--confirm-danger' : 'im-btn im-btn--primary') : 'im-btn',
+    type: 'button', class: cls,
     'data-button': b.id, 'data-key': `dlg:${b.id}`, disabled: !b.enabled, autofocus: cancel,
     onClick: () => on.send(view.section, buttonIntent(view.section, b.id)),
   }, h('span', { 'data-fit': '' }, b.label));
