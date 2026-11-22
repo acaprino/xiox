@@ -383,7 +383,7 @@ fn finish_tree(ctx: &Ctx<'_>, job: &Prepared, st: &ItemState) {
 /// folder is cheap; no nested parallel work on a pool thread's stack).
 fn remove_dirs(st: &ItemState) {
     let mut dirs = std::mem::take(&mut *lock(&st.seen_dirs));
-    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    dirs.sort_by_key(|a| std::cmp::Reverse(a.0));
     for (_, d) in dirs {
         if lock(&st.blocked).contains(&d) {
             if let Some(parent) = d.parent() {

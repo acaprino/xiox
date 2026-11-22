@@ -42,11 +42,9 @@ impl Recognizer for Interpreters {
 }
 
 fn python(inv: &Invocation, words: &[&str], ctx: &mut Context) -> Vec<RawOp> {
-    if let Some(at) = words.iter().position(|word| *word == "-m") {
-        if matches!(words.get(at + 1), Some(&("venv" | "virtualenv"))) {
-            let dirs = posix(&text_args(&words[at + 2..]), &["--prompt"]).positional;
-            return dirs.into_iter().map(|dir| path_op(OpKind::Create, None, Some(dir))).collect();
-        }
+    if let Some(at) = words.iter().position(|word| *word == "-m") && matches!(words.get(at + 1), Some(&("venv" | "virtualenv"))) {
+        let dirs = posix(&text_args(&words[at + 2..]), &["--prompt"]).positional;
+        return dirs.into_iter().map(|dir| path_op(OpKind::Create, None, Some(dir))).collect();
     }
     run_source(inv, words, &PYTHON_SOURCE, Lang::Python, ctx)
 }

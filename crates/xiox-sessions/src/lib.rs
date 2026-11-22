@@ -71,7 +71,7 @@ pub fn delete_sessions_in(
     items
         .iter()
         .map(|s| SessionOutcome {
-            agent: s.agent.clone(),
+            agent: s.agent,
             id: s.id.clone(),
             outcome: delete_one(s, mode, cli, trash, scratch),
         })
@@ -181,10 +181,8 @@ fn delete_opencode(
 ) -> ItemOutcome {
     if mode == RemoveMode::Recycle {
         let export = scratch.join(format!("opencode-{}.json", s.id));
-        if let Some(parent) = export.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return failed(e.to_string());
-            }
+        if let Some(parent) = export.parent() && let Err(e) = std::fs::create_dir_all(parent) {
+            return failed(e.to_string());
         }
         if let Err(e) = cli.opencode_export(&s.id, &export) {
             let _ = std::fs::remove_file(&export);

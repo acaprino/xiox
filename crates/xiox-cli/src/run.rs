@@ -307,11 +307,9 @@ fn clean(f: &CleanFlags, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 /// run, the outcome) goes to stdout. Errors always go to stderr.
 fn clean_run(f: &CleanFlags, s: &mut Sink, scan: ProjectScan, deps: &mut Deps) -> Result<i32, i32> {
     // A path JSON cannot carry must stop the run before anything is removed, not after.
-    if f.json {
-        if let Err(e) = json::scan_json(&scan) {
-            s.fail(&format!("error: cannot write the result as JSON: {e}"));
-            return Ok(EXIT_ERROR);
-        }
+    if f.json && let Err(e) = json::scan_json(&scan) {
+        s.fail(&format!("error: cannot write the result as JSON: {e}"));
+        return Ok(EXIT_ERROR);
     }
     // 1. Nothing named: the listing, as `analyze` prints it.
     if f.categories.is_empty() && f.include.is_empty() {

@@ -896,6 +896,6 @@ pub fn clean_report(
             r.skipped.push((PathBuf::from(label), never.to_string()));
         }
     }
-    r.by_category.sort_by(|a, b| b.1.cmp(&a.1));
+    r.by_category.sort_by_key(|a| std::cmp::Reverse(a.1));
     r
 }
