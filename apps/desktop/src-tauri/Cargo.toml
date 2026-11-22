@@ -1,6 +1,6 @@
 [package]
 name = "xiox-ui"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Xiox desktop window (Tauri): the cleanup, registry and developer sections over xiox-core"
 publish = false
