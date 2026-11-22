@@ -174,7 +174,7 @@ function render(): void {
   viewActions.sync(view);
   const active = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
   const scrolls = SCROLLERS.map((selector) => document.querySelector(selector)?.scrollTop ?? 0);
-  renderShell({ app, view, ui, registry }, handlers);
+  renderShell({ app, view, ui, registry, opener: active }, handlers);
   // Settings is drawn over the section's sidebar, header, content and action bar; the status row, the footer and the window title stay the section's.
   if (ui.settings && about !== null) renderSettings(about, { look, theme }, applyAppearance);
   SCROLLERS.forEach((selector, i) => {

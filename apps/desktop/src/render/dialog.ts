@@ -19,6 +19,8 @@ let shown: { id: string; section: SectionView['section']; on: Handlers } | null 
 let closingByView = false;
 /** When the dialog on screen opened (`performance.now()`): its buttons ignore Enter and Space for a moment (commands.ts). */
 let openedAt = 0;
+/** The `data-key` of the control the dialog was opened from (the Clean button, pressed with the mouse); null when it was the list or nothing. */
+let openerKey: string | null = null;
 
 /** The dialog element, made once: its keys are guarded for its whole life. */
 function element(): HTMLDialogElement {
@@ -91,14 +93,20 @@ function content(view: SectionView, d: DialogView, on: Handlers): HTMLElement[] 
   ];
 }
 
-/** Where the focus goes when the dialog has closed and the package found nothing to give it back to: the list. */
+/**
+ * Where the focus goes when the dialog has closed and the package found nothing to give it back to: the control it was opened from, when
+ * it is still there (the page draws its buttons again at every render, so the package's own opener is a button that is gone), else the list.
+ */
 function focusList(): void {
   const active = document.activeElement;
-  if (active === null || active === document.body) (document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
+  if (active !== null && active !== document.body) return;
+  const opener = openerKey === null ? null : document.querySelector<HTMLElement>(`[data-key="${CSS.escape(openerKey)}"]`);
+  if (opener !== null && !opener.hasAttribute('disabled') && !opener.closest('[inert]')) { opener.focus(); return; }
+  (document.querySelector<HTMLElement>('#rows .xi-table') ?? document.getElementById('rows'))?.focus();
 }
 
 /** Draws the open dialog of `view`, or closes it. Call it last in a render. */
-export function renderDialog(view: SectionView, on: Handlers): void {
+export function renderDialog(view: SectionView, on: Handlers, opener?: string): void {
   const d = view.dialog;
   if (d === null) {
     if (layer === null) return;
@@ -120,6 +128,7 @@ export function renderDialog(view: SectionView, on: Handlers): void {
   shown = { id: d.id, section: view.section, on };
   if (layer === null) {
     openedAt = performance.now();
+    openerKey = opener ?? null;
     layer = openContentDialog(shell, root, {
       onClose: () => {
         layer = null;

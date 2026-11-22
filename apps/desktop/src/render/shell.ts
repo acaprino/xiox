@@ -54,6 +54,8 @@ export interface Screen {
   ui: UiState;
   /** The commands, for the footer's key list. */
   registry: Registry;
+  /** The `data-key` of the control that had the focus before this render: the dialog that opens in it gives the focus back to it. */
+  opener?: string;
 }
 
 const SECTION_NAMES: Record<SectionId, string> = {
@@ -158,6 +160,7 @@ export function noticeNode(notice: NoticeView, ctx?: NoticeCtx): HTMLElement {
 function profileNote(text: string): HTMLElement {
   const note = fromHtml(document, noteHtml({ message: text, tone: 'warn' })).firstElementChild as HTMLElement;
   note.title = text;
+  note.classList.add('xi-profile');
   return note;
 }
 
@@ -315,5 +318,5 @@ export function renderShell(screen: Screen, on: Handlers): void {
     footerKeys(document, screen.registry, footerEntries(view, (id) => screen.registry.get(id) !== undefined)));
 
   // The confirmation, last: it takes the focus when it opens and gives it back when it closes.
-  renderDialog(view, on);
+  renderDialog(view, on, screen.opener);
 }
