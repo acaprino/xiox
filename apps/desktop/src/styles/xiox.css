@@ -8,6 +8,9 @@
 /* Imago gives a button a line height of 1 and clips its label: this font is taller than that, and the label (and the descender of a p or a y) was cut
    by a pixel. A text that must fit takes its font's own line height; the button keeps its height. */
 [data-fit] { white-space: nowrap; line-height: normal; }
+/* The content header: the two buttons that open the inspector keep their words; the subtitle gives way (it ends in an ellipsis). */
+.xi-toggle { flex: none; }
+.xi-head-sub { min-width: 0; overflow: hidden; }
 /* The warning of a profile that is not the user's: a name with no space in it wraps instead of running out of the note. */
 .xi-profile { overflow-wrap: anywhere; }
 .xi-profile > div { min-width: 0; }

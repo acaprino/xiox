@@ -242,7 +242,7 @@ export function renderFailure(message: string, retry: () => void): void {
 function inspectorButton(kind: 'details' | 'options', label: string, key: string, ui: UiState, hint: string, on: Handlers, disabledReason: string | null = null): HTMLElement {
   const open = ui.inspector === kind;
   return h('button', {
-    type: 'button', class: 'im-btn im-btn--ghost im-btn--sm', 'data-key': `inspect:${kind}`, 'aria-expanded': String(open), disabled: disabledReason !== null,
+    type: 'button', class: 'im-btn im-btn--ghost im-btn--sm xi-toggle', 'data-key': `inspect:${kind}`, 'aria-expanded': String(open), disabled: disabledReason !== null,
     title: disabledReason ?? (open ? `Close the ${label.toLowerCase()}` : hint), onClick: () => on.toggleInspector(kind),
   }, h('span', { 'data-fit': '' }, label), keyCaps(key));
 }
@@ -283,7 +283,7 @@ export function renderShell(screen: Screen, on: Handlers): void {
   // List header: title, subtitle and the switch of the details (the master check box is the first cell of the list's own column header).
   fill(byId('list-head'),
     h('h4', { class: 'im-panel-title', 'data-fit': '' }, view.title),
-    h('span', { class: 'im-panel-sub' }, ellipsis(view.subtitle)),
+    h('span', { class: 'im-panel-sub xi-head-sub' }, ellipsis(view.subtitle)),
     h('span', { class: 'im-spacer' }),
     view.report === null ? inspectorButton('details', 'Details', 'i', ui, 'The details of the selected row: paths, files in use, why', on) : null,
     view.report === null ? inspectorButton('options', 'Options', 'o', ui, 'The options of this section', on, panelOptions(view).length === 0 ? 'This section has no options' : null) : null);
