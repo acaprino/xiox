@@ -1084,7 +1084,8 @@ fn parallel_probes_keep_the_order_largest_first() {
     let r = analyze(&cfg(), &scanner, None, &[], &git);
     let sizes: Vec<u64> = r.reports.iter().map(|p| p.reclaimable_bytes).collect();
     let mut sorted = sizes.clone();
-    sorted.sort_by(|a, b| b.cmp(a));
+    sorted.sort();
+    sorted.reverse();
     assert_eq!(sizes, sorted);
     let ids: HashSet<&String> = r.reports.iter().map(|p| &p.id).collect();
     assert_eq!(ids.len(), 12, "every project once");

@@ -68,7 +68,7 @@ fn powershell_prefix_alias_inline_and_arrays() {
 #[test]
 fn powershell_value_param_without_value_is_a_switch() {
     let parsed = powershell(&text(&["-Path"]), &PARAMS);
-    assert!(parsed.named.get("path").is_none());
+    assert!(!parsed.named.contains_key("path"));
     assert!(parsed.switches.contains("path"));
 }
 
