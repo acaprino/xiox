@@ -323,8 +323,7 @@ fn analyze_all(
             let tx = tx.clone();
             let (queue, next) = (&queue, &next);
             scope.spawn(move || {
-                loop {
-                    let Some(slot) = queue.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                while let Some(slot) = queue.get(next.fetch_add(1, Ordering::Relaxed)) {
                     let job = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
                     let Some((id, cand, m)) = job else { continue };
                     if tx.send(analyze_one(cfg, git, m, worktree_keys, cand, id)).is_err() {

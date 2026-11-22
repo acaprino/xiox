@@ -339,7 +339,7 @@ fn read_mft(vol: &impl ReadAt, g: Geometry, progress: &Progress) -> Result<Vec<N
     let mut covered = 0u64;
     for &(_, clusters) in &runs {
         let run_bytes = clusters.checked_mul(cluster).ok_or(BAD_VOLUME)?;
-        if run_bytes % rs != 0 {
+        if !run_bytes.is_multiple_of(rs) {
             return Err("MFT segment not aligned to the records".into());
         }
         covered = covered.checked_add(run_bytes / rs).ok_or(BAD_VOLUME)?;
