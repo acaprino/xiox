@@ -78,6 +78,12 @@ pub struct DevCleaned {
     pub interrupted: bool,
 }
 
+impl Default for DevCleaned {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DevCleaned {
     pub fn new() -> Self {
         DevCleaned { report: CleanReport::default(), labels: HashMap::new(), errors: Vec::new(), interrupted: false }

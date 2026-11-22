@@ -173,6 +173,12 @@ impl CleanupWorkers {
     pub const REAL: CleanupWorkers = CleanupWorkers { job: real_job };
 }
 
+impl Default for CleanupState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CleanupState {
     pub fn new() -> Self {
         Self::with(native::all(), rules::processes(), CleanupWorkers::REAL)
@@ -765,7 +771,7 @@ fn real_job(job: CleanJob, outbox: Outbox<CleanMsg>) {
     let env = env.unwrap_or_else(xiox_rules::Env::for_rules);
     let guard = xiox_rules::Guard::new(&env);
     let processes = rules::processes;
-    let nctx = native::NativeCtx { env: &env, cancel: &*cancel, guard: &guard };
+    let nctx = native::NativeCtx { env: &env, cancel: &cancel, guard: &guard };
     let nprogress = |k: usize, text: String| {
         outbox.send(CleanMsg::Progress(text, (cats.len() + k) as f32 / total));
     };
@@ -779,7 +785,7 @@ fn real_job(job: CleanJob, outbox: Outbox<CleanMsg>) {
         reg: &rules::RealRegistry,
         reg_exists: &rules::reg_exists,
         processes: &processes,
-        cancel: &*cancel,
+        cancel: &cancel,
     };
     let progress = |k: usize, text: String| {
         outbox.send(CleanMsg::Progress(text, (cats.len() + natives.len() + k) as f32 / total));

@@ -177,7 +177,7 @@ pub fn load_with(
         }
         // `read_valid` lo dice così quando il file non c'è ancora.
         Err(e) if e == "no local copy" => ("Winapp2 not downloaded yet".to_string(), None),
-        Err(e) => (format!("Winapp2 not read: {}", &e), None),
+        Err(e) => (format!("Winapp2 not read: {e}"), None),
     };
     let first = cleaners.len();
     let groups = embedded_groups(&cleaners);

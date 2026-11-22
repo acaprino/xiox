@@ -571,7 +571,7 @@ pub(crate) fn observe_with(
     let mut emitter = Emitter {
         out: Tap::new(out),
         err,
-        now_ms: &*deps.now_ms,
+        now_ms: &deps.now_ms,
     };
     if let Err(code) = emitter.write(&first) {
         return code;
