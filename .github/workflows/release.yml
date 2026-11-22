@@ -15,8 +15,6 @@ name: Release
 # Nothing is published when the build fails. Run by hand (Actions, Run workflow) it only builds, unless "publish"
 # is ticked. RELEASE_TOKEN (a token that reads the owner's other private repositories) is needed where the build
 # downloads from them; without it the workflow's own token is used.
-# Where the repository has a Cargo.lock, the build restores the compiled Rust dependencies (see "Cargo cache key"); the
-# two steps are skipped where it has none.
 
 on:
   push:
@@ -126,7 +124,6 @@ jobs:
       # "Next version" has just rewritten it: the whole file would give every release a cache of its own.
       - name: Cargo cache key
         id: cargo-key
-        if: ${{ hashFiles('Cargo.lock') != '' }}
         run: |
           $info = rustc -vV
           if ($LASTEXITCODE) { exit 1 }
@@ -138,7 +135,6 @@ jobs:
           "lock=$lock" >> $env:GITHUB_OUTPUT
 
       - name: Restore the compiled Rust dependencies
-        if: ${{ hashFiles('Cargo.lock') != '' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
