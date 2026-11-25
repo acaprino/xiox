@@ -153,6 +153,3 @@ export function createInflight(): Inflight {
 
 /** All / None follow the check boxes: while a job runs the list is frozen and Rust refuses a bulk change. */
 export const bulkLocked = (view: SectionView): boolean => view.job !== null;
-
-/** The key under which the page remembers that a notice's extra lines are open (`UiState.expanded` holds it with the rows' keys). */
-export const noticeKey = (text: string): string => `notice:${text}`;

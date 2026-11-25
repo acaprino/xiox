@@ -1,7 +1,7 @@
-// Small pure decisions of the views, apart from the DOM so that tests/policy.test.ts can state them: why an action is
+// Small pure decisions of the views, apart from the screens so that tests/policy.test.ts can state them: why an action is
 // disabled, which action an empty list offers. (Whether a confirmation deletes for good is the view's `permanent`, not a reading of its words.)
 
-import type { ActionView, DialogView, SectionView } from '../types.ts';
+import type { ActionView, DialogView, SectionView } from './types.ts';
 
 /** The actions that start the work of a section: an empty list offers the one that is enabled. */
 const START_ACTIONS: ReadonlySet<string> = new Set(['analyze', 'scan']);

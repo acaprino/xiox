@@ -8,7 +8,7 @@
 //! is given back when it closes.
 
 use crate::backend::{Backend, BackendState};
-use crate::desktop;
+use crate::focus;
 use crate::error::{CmdError, CmdResult};
 use crate::files;
 #[cfg(any(debug_assertions, test))]
@@ -145,7 +145,7 @@ pub async fn developers_add_root(app: tauri::AppHandle, window: tauri::WebviewWi
         }
         let _slot = DialogSlot::take()?;
         let picked = app.dialog().file().set_parent(&window).set_title("Folder to analyze").blocking_pick_folder();
-        desktop::give_back_focus(window.as_ref());
+        focus::give_back(window.as_ref());
         match picked.and_then(|path| path.into_path().ok()) {
             Some(dir) => b.add_root(dir),
             None => Ok(b.view(SectionId::Developers)),
@@ -176,7 +176,7 @@ pub async fn save_report(app: tauri::AppHandle, window: tauri::WebviewWindow, st
             .set_file_name("Xiox report.txt")
             .add_filter("Text", &["txt"])
             .blocking_save_file();
-        desktop::give_back_focus(window.as_ref());
+        focus::give_back(window.as_ref());
         match picked.and_then(|path| path.into_path().ok()) {
             Some(path) => {
                 let (saved, ok) = files::write_report(&path, &text);
