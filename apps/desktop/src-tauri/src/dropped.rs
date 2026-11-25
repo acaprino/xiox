@@ -6,7 +6,7 @@
 
 use crate::backend::BackendState;
 use crate::commands::DialogSlot;
-use crate::desktop;
+use crate::focus;
 use std::path::{Path, PathBuf};
 use tauri::{DragDropEvent, Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -42,7 +42,7 @@ fn offer(window: &WebviewWindow, paths: &[PathBuf]) {
         None => ask(window, ONLY_FOLDERS, MessageDialogKind::Info, MessageDialogButtons::Ok),
     };
     drop(slot);
-    desktop::give_back_focus(window.as_ref());
+    focus::give_back(window.as_ref());
     let Some(dir) = dir.filter(|_| answer) else { return };
     let backend = window.state::<BackendState>();
     match backend.0.add_root(dir.to_path_buf()) {
@@ -51,7 +51,7 @@ fn offer(window: &WebviewWindow, paths: &[PathBuf]) {
         }
         Err(refused) => {
             ask(window, &refused.message, MessageDialogKind::Warning, MessageDialogButtons::Ok);
-            desktop::give_back_focus(window.as_ref());
+            focus::give_back(window.as_ref());
         }
     }
 }

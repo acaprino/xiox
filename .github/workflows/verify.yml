@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The page: the design check, the node tests, tsc and Vite, then the smoke test on the mocked commands.
+  # The page: the design checks (Imago's and Sigrid's), the node tests, tsc and Vite, then the smoke test on the mocked commands.
   verify:
     name: Verify the page (Windows x64)
     runs-on: windows-latest
@@ -53,9 +53,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Imago's design check: no literal colour, size or space, no class of the package restyled, the mount, the keys, the icons.
+      # Imago's check: the pins of the package and the crate, the icons, the agent files, the names the package removed, the parts the
+      # shell draws. Sigrid's check, with the rule own-class (sigrid-check.config.json): no class, style or stylesheet of the app's own,
+      # no literal colour, size or space in the screens.
       - name: Check the design
         run: npx imago-check
+
+      - name: Check the screens (Sigrid)
+        run: npx --no sigrid-check apps/desktop/src
 
       - name: Test the page
         run: npm test
@@ -74,7 +79,7 @@ jobs:
           path: ~/AppData/Local/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
 
-      # Last: the smoke test drives a browser, and it is the one step known to be red until it is repaired for the new page. It
+      # Last: the smoke test drives a browser through roles and names (no class), at four widths and in the flows of the sections. It
       # does not hide the Rust job, which is its own.
       - name: Install the browser
         run: npx playwright install chromium

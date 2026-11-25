@@ -1,6 +1,6 @@
-// The commands of src-tauri (Task 11), typed. Outside Tauri (the browser at `npm run dev`, the
-// Playwright smoke test) the same calls answer from `mock.ts`, so every view can be seen and
-// tested without the engine.
+// The commands of src-tauri, typed. Outside Tauri (the browser at `npm run dev`, the Playwright smoke test) the same calls
+// answer from `mock.ts`, so every view can be seen and tested without the engine. The window itself (its theme, its title, its
+// taskbar) is the shell's, not a command of the app.
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -38,15 +38,6 @@ export const api = {
   /** The folder picker opens in Rust; the page never sees a path. */
   addRoot: () => invoke<SectionView>('developers_add_root'),
   saveReport: (s: SectionId) => invoke<SectionView>('save_report', { section: s }),
-  /** The first frame is drawn: Rust shows the window, which opens hidden so that the page is the first thing seen. */
-  ready: () => invoke<void>('window_ready'),
-  /** The open section (its name goes in the window title) and the running job's percent, if any (the taskbar button shows it). */
-  chrome: (section: SectionId, job: number | null) => invoke<void>('window_chrome', { section, job }),
-  /**
-   * The window's theme (`system`, `light` or `dark`), with the look and the theme the page draws: the window keeps the first for
-   * the next start and tints its acrylic from the other two (Imago's `applyLook` calls this at every change).
-   */
-  setWindowTheme: (theme: string, look: string, resolved: string) => invoke<void>('set_window_theme', { theme, look, resolved }),
 };
 
 /** Views pushed by the core (`xiox:view` in Tauri, the mock's emitter outside). */

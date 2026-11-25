@@ -1,29 +1,27 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 //! The Xiox window (Tauri). The page draws what Rust sends and sends intents back; this crate is the
 //! thin layer between the two: `Backend` (the engine behind `xiox_core::app::Core`, or the fixtures in
-//! debug builds), the ten commands and the `xiox:view` event the view pump emits. Around it: one
-//! instance at a time (`single_instance`), and the window itself, which is `imago-shell`'s: built from the glass config with
-//! the navigation guard (`build_main`), placed where it was (`shell::place`), its theme, Snap Layouts, context menu and
-//! WebView2 recovery from the crate (`shell`, `desktop`).
+//! debug builds), the commands and the `xiox:view` event the view pump emits. The window itself is `imago-shell`'s
+//! (`plugin`, `open_main`, `on_run_event`, `single_instance`): its material and theme, its place, Snap Layouts, the
+//! navigation guard, the title and the taskbar, and WebView2 recovery. What is left here is the folder the shell keeps its
+//! files in, the drop of a folder on the window (`dropped`) and the keyboard after a native dialog (`focus`).
 
 mod backend;
-mod chrome;
 mod commands;
-mod desktop;
 mod dropped;
 mod error;
 #[cfg(debug_assertions)]
 mod fake;
 mod files;
+mod focus;
 mod real;
-mod shell;
-mod single_instance;
 
 use backend::{Backend, BackendState};
-use imago_shell::{glass_window_config, guard_navigation_with_scheme, load_state, save_state, saved_theme, state_to_save, WindowState};
-use std::path::{Path, PathBuf};
+use imago_shell::single_instance::{launch, Launch};
+use imago_shell::{on_run_event, open_main, plugin, show_main, Material, Options, DARK_GROUND, LIGHT_GROUND};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use xiox_core::app::{Core, CoreOptions};
 use xiox_core::pump::{pump_channel, spawn_pump, ViewSink};
 use xiox_core::view::SectionView;
@@ -109,57 +107,28 @@ fn real_backend(sink: Arc<dyn ViewSink>, only_root: Option<PathBuf>) -> Arc<dyn 
     Arc::new(real::RealBackend::new(core))
 }
 
-/// The title bar and borders around the page: the window's outer size minus its inner size.
-fn frame_of(window: &WebviewWindow) -> (u32, u32) {
-    match (window.outer_size(), window.inner_size()) {
-        (Ok(outer), Ok(inner)) => (outer.width.saturating_sub(inner.width), outer.height.saturating_sub(inner.height)),
-        _ => (0, 0),
+/// The folder the shell keeps the window theme, the glass and the window's place in: next to the Developers `settings.json`. None for
+/// the fixtures window, which reads and writes nothing of the user's, and under `--only-root`, which promises that no file outside
+/// its folder is written: then nothing is read or kept.
+fn data_dir(fake: bool, only_root: bool) -> Option<PathBuf> {
+    if fake || only_root {
+        return None;
     }
+    xiox_app::settings_path().parent().map(PathBuf::from)
 }
 
-/// The window as it is now, measured (only meaningful when it is neither maximized nor minimized).
-fn measure(window: &WebviewWindow) -> Option<WindowState> {
-    let (position, size) = (window.outer_position().ok()?, window.inner_size().ok()?);
-    Some(WindowState { x: position.x, y: position.y, width: size.width, height: size.height, maximized: false })
-}
-
-/// What to remember of the window: see `imago_shell::state_to_save`.
-fn current_state(window: &WebviewWindow, normal: Option<WindowState>) -> Option<WindowState> {
-    let maximized = window.is_maximized().unwrap_or(false);
-    let minimized = window.is_minimized().unwrap_or(false);
-    state_to_save(maximized, minimized, normal, || measure(window))
-}
-
-/// Puts the window where it opens, before it is shown: the place saved when there is one, else a first-launch size inside the
-/// work area, centred (`shell::place`). Either way the window is inside the work area it opens on.
-fn place_window(window: &WebviewWindow, saved: Option<WindowState>) {
-    let size = window.inner_size().map_or((0, 0), |size| (size.width, size.height));
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let placed = shell::place(saved, size, &shell::screens(window), scale, frame_of(window));
-    let state = placed.state;
-    let _ = window.set_size(PhysicalSize::new(state.width, state.height));
-    if placed.centred {
-        let _ = window.center();
+/// The folder that names the one running copy. The real window and a `--only-root` run share the real folder's name (one at a time,
+/// as before); the fixtures window has a name of its own, so it can run beside a real one.
+fn instance_dir(fake: bool) -> PathBuf {
+    if fake {
+        std::env::temp_dir().join("xiox-ui-fixtures")
     } else {
-        let _ = window.set_position(PhysicalPosition::new(state.x, state.y));
-    }
-    if state.maximized {
-        let _ = window.maximize();
+        xiox_app::settings_path().parent().map_or_else(|| std::env::temp_dir().join("xiox-ui"), PathBuf::from)
     }
 }
 
-/// Builds the main window, hidden: the glass config of the app's own (`tauri.conf.json` has `"create": false`) with the theme
-/// the window had last time, so the first frame has the right acrylic, and the navigation guard on the builder (in a
-/// development build also the dev server's origin). Then the native wiring (`desktop::wire`).
-fn build_main(app: &AppHandle, data_dir: Option<&Path>) -> tauri::Result<WebviewWindow> {
-    let base = app.config().app.windows.iter().find(|window| window.label == "main").cloned().ok_or(tauri::Error::WindowNotFound)?;
-    let config = glass_window_config(base, data_dir.and_then(saved_theme));
-    let dev_origin = if tauri::is_dev() { app.config().build.dev_url.as_ref().map(|url| url.origin().ascii_serialization()) } else { None };
-    let origins: Vec<&str> = dev_origin.iter().map(String::as_str).collect();
-    let window = guard_navigation_with_scheme(WebviewWindowBuilder::from_config(app, &config)?, &origins, config.use_https_scheme).build()?;
-    desktop::wire(app, &window)?;
-    Ok(window)
-}
+/// What the window is made of without glass: the ground of the look, the same as the page's, until the person chooses glass.
+const MATERIAL: Material = Material::Opaque { dark: DARK_GROUND, light: LIGHT_GROUND };
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -172,50 +141,27 @@ fn main() {
         }
     };
     let fake = fake_requested();
-    // Where the shell remembers the window theme and the window's place: not on fixtures, and not under `--only-root` (the flag
-    // promises that no file outside its folder is written).
-    let data_dir = shell::data_dir(fake, only_root.is_some());
-    // A restart after the engine failed (`desktop`): the old process still holds the instance until it exits.
-    if let Some(pid) = desktop::restarted_from(&args) {
-        single_instance::wait_for_exit(pid, std::time::Duration::from_secs(10));
-    }
-    // One window at a time (the fixtures window has its own name, so it can run beside a real one).
-    let Some(_instance) = single_instance::acquire(if fake { r"Local\XioxUiFake" } else { r"Local\XioxUi" }) else {
-        single_instance::focus_existing(chrome::APP_NAME);
-        return;
+    // Where the shell remembers the window theme, the glass and the window's place: not on fixtures, and not under `--only-root` (the
+    // flag promises that no file outside its folder is written).
+    let data_dir = data_dir(fake, only_root.is_some());
+    // One window at a time: a copy started later shows the window of the one that runs, and ends.
+    let raised = match launch(&instance_dir(fake), false) {
+        Ok(Launch::First(instance)) => Some(instance),
+        Ok(Launch::Running | Launch::Closing) => return,
+        Err(error) => {
+            eprintln!("xiox: single instance: {error}");
+            None
+        }
     };
-    // The last normal (neither maximized nor minimized) state, kept as the window moves.
-    let normal: Arc<Mutex<Option<WindowState>>> = Arc::new(Mutex::new(None));
-    let tracked = normal.clone();
-    let remembered = data_dir.clone();
     tauri::Builder::default()
+        .plugin(plugin())
         .plugin(tauri_plugin_dialog::init())
-        .on_window_event(move |window, event| {
-            if let WindowEvent::DragDrop(drag) = event {
-                if let Some(window) = window.app_handle().get_webview_window(window.label()) {
-                    dropped::on_event(&window, drag);
-                }
-                return;
-            }
-            let Some(dir) = remembered.as_deref() else { return };
-            let Some(window) = window.app_handle().get_webview_window(window.label()) else { return };
-            match event {
-                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                    if !window.is_maximized().unwrap_or(true)
-                        && !window.is_minimized().unwrap_or(true)
-                        && let Some(state) = measure(&window)
-                    {
-                        *tracked.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
-                    }
-                }
-                WindowEvent::CloseRequested { .. } => {
-                    let last = *tracked.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(state) = current_state(&window, last) {
-                        // Failing to remember the window must never keep it from closing.
-                        let _ = save_state(dir, &state);
-                    }
-                }
-                _ => {}
+        .on_window_event(|window, event| {
+            // A folder dropped on the window is offered to Developers (`dropped`).
+            if let WindowEvent::DragDrop(drag) = event
+                && let Some(window) = window.app_handle().get_webview_window(window.label())
+            {
+                dropped::on_event(&window, drag);
             }
         })
         .setup(move |app| {
@@ -225,18 +171,21 @@ fn main() {
                 None => real_backend(sink, only_root.clone()),
             };
             app.manage(BackendState(backend));
-            // The state the wiring and the two commands of the shell read, before the window exists.
-            app.manage(shell::DataDir(data_dir.clone()));
-            app.manage(shell::Overlays::default());
-            app.manage(desktop::Failures::default());
-            let window = build_main(app.handle(), data_dir.as_deref())?;
-            // The fixtures window opens where its config says; every other run is placed: where it was last closed, or by the
-            // first-launch size (`--only-root` reads no saved place: that would reach the real profile).
-            if !fake {
-                place_window(&window, data_dir.as_deref().and_then(load_state));
+            if let Some(instance) = raised {
+                let handle = app.handle().clone();
+                instance.on_raise(move || show_main(&handle));
             }
-            // Hidden until the page has drawn (`desktop::window_ready`), so the first frame is the page.
-            desktop::show_when_drawn(&window);
+            // The window is the shell's: hidden until the page has drawn, where it was last time, in the theme and the glass it had.
+            // Glass is the person's choice (Settings, or the palette): off at the first start.
+            let options = Options {
+                material: MATERIAL,
+                data_dir,
+                reload_label: "Reload interface".into(),
+                stopped_message: "The Xiox window stopped responding. Reload it?".into(),
+                lost_message: "The Xiox window could not be restored. Xiox will close.".into(),
+                ..Options::for_app(app)?
+            };
+            open_main(app.handle(), options)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -248,14 +197,11 @@ fn main() {
             commands::developers,
             commands::developers_add_root,
             commands::save_report,
-            desktop::window_ready,
-            chrome::window_chrome,
-            shell::set_window_theme,
-            shell::window_caption_maximize,
         ])
         .build(tauri::generate_context!())
         .expect("the Xiox window failed to start")
-        .run(desktop::on_run_event);
+        // Without it a window that is built again, after its browser process was lost, ends the app.
+        .run(on_run_event);
 }
 
 #[cfg(test)]
@@ -289,5 +235,20 @@ mod tests {
         // Without the flag the rules load as before; whether they update is the rules' own decision.
         assert_eq!(rules_policy(None, || true), (true, true));
         assert_eq!(rules_policy(None, || false), (true, false));
+    }
+
+    #[test]
+    fn the_data_folder_is_the_settings_folder_unless_the_run_remembers_nothing() {
+        assert!(data_dir(false, false).is_some());
+        assert_eq!(data_dir(false, false).as_deref(), xiox_app::settings_path().parent(), "next to settings.json, where window.json always was");
+        assert_eq!(data_dir(true, false), None, "the fixtures window reads and writes nothing of the user's");
+        assert_eq!(data_dir(false, true), None, "--only-root writes no file outside its folder");
+        assert_eq!(data_dir(true, true), None);
+    }
+
+    #[test]
+    fn the_fixtures_window_has_a_copy_of_its_own() {
+        assert_ne!(instance_dir(true), instance_dir(false), "it runs beside a real window");
+        assert_eq!(instance_dir(false).as_path(), xiox_app::settings_path().parent().unwrap(), "a real window and a --only-root run are one copy");
     }
 }

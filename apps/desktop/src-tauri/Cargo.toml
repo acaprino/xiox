@@ -19,14 +19,12 @@ tauri-build = { version = "=2.7.4", features = [] }
 xiox-app = { path = "../../../crates/xiox-app" }
 xiox-core = { path = "../../../crates/xiox-core" }
 tauri = { version = "=2.12.5", features = [] }
-# The window code the apps of the suite share: glass window, window theme, Snap Layouts, the guard, WebView2 recovery and the
-# window's place. The tag is the one @acaprino/imago has in package.json.
-imago-shell = { git = "https://github.com/acaprino/imago", tag = "v0.4.1" }
+# The window the apps of the suite share, as a Tauri plugin: its material and theme, glass, Snap Layouts, the guard, WebView2 recovery,
+# its place, the title and the taskbar, one running copy. The tag is the one @acaprino/imago has in package.json.
+imago-shell = { git = "https://github.com/acaprino/imago", tag = "v1.2.0" }
 tauri-plugin-dialog = "=2.8.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# The single instance (src/single_instance.rs). The Snap Layouts overlay and the WebView2 settings and events are imago-shell's.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
