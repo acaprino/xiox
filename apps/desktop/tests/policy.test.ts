@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { disabledReason, emptyAction } from '../src/render/policy.ts';
+import { disabledReason, emptyAction } from '../src/policy.ts';
 import type { ActionView, DialogView, SectionView } from '../src/types.ts';
 
 const action = (id: string, enabled: boolean, label = id): ActionView => ({ id, label, key: null, enabled, primary: false });

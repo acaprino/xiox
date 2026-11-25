@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptView, bulkCheck, bulkLocked, createGate, createInflight, createUi, currentFocus, foldedGroups, LONG_GROUP, moveFocus, noticeKey, shownRows } from '../src/state.ts';
+import { acceptView, bulkCheck, bulkLocked, createGate, createInflight, createUi, currentFocus, foldedGroups, LONG_GROUP, moveFocus, shownRows } from '../src/state.ts';
 import { visibleRows } from '../src/rows.ts';
 import type { RowView, SectionId, SectionView } from '../src/types.ts';
 
@@ -114,11 +114,6 @@ test('All and None are locked while a job runs', () => {
   const busy = { job: { label: 'Scanning the registry…', fraction: 0.3, detail: null } } as unknown as SectionView;
   assert.equal(bulkLocked(idle), false);
   assert.equal(bulkLocked(busy), true);
-});
-
-test('a notice is remembered by its text, apart from the rows', () => {
-  assert.equal(noticeKey('Fixed 2 issues.'), 'notice:Fixed 2 issues.');
-  assert.notEqual(noticeKey('a'), noticeKey('b'));
 });
 
 const group = (id: string, check: RowView['check'] = 'off', extra: Partial<RowView> = {}): RowView => row(id, { kind: 'group', check, ...extra });
