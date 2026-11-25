@@ -152,16 +152,9 @@ is its layout, which follows its functions, its accent and its icon.
 - The base of the app is Imago, the suite's shell in Xiox's style (window, title bar, frame, commands, palette, theme,
   notices), built with Sigrid; Sigrid gives the components. The app brings only its screens, made of Sigrid's
   components, and has no shell, window, frame or look of its own. What is missing in the shell is added to Imago, what
-  is missing in a component is added to Sigrid. Until Imago's shell on Sigrid exists, the app keeps the shell and the
-  parts it has today (Imago's) and adds none of its own.
+  is missing in a component is added to Sigrid. The app has no shell of its own: it stands on Imago.
 
 ## UI: Imago
-
-Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
-Apply its tokens and confirmed design choices within the requested scope.
-Use the package's im- classes and --im- tokens; never build a control of your own ("One look for the whole suite").
-Report conflicts and keep unresolved choices explicit.
-Run npx imago-check before you say UI work is done.
 
 Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the files it references.
 The frame is the shell's (AppWindow of @acaprino/imago). Lay out with Sigrid's parts: write no class, no style and no stylesheet,
