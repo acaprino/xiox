@@ -33,8 +33,16 @@ const intent = (args: Args): AnyIntent => (args as { intent: AnyIntent }).intent
 /** Every command the page sent, in order (the smoke script reads it: what the page asked, not what it drew). */
 const calls: { command: string; args: unknown }[] = [];
 
+/** The next call of these commands fails, once, with this message (the smoke script drives the page's error handling with it). */
+const failing = new Map<string, string>();
+
 export async function answer(command: string, args?: Args): Promise<unknown> {
   calls.push({ command, args: structuredClone(args ?? null) });
+  const refusal = failing.get(command);
+  if (refusal !== undefined) {
+    failing.delete(command);
+    throw { kind: 'failed', message: refusal };
+  }
   switch (command) {
     case 'app_info': return { ...structuredClone((fixture as unknown as Fixture).app), ...(mismatch === null ? {} : { profileMismatch: mismatch }) };
     case 'about': return structuredClone((fixture as unknown as Fixture).about);
@@ -55,6 +63,8 @@ setInterval(() => { if (!paused) for (const view of model.tick()) emit(view); },
   /** The commands received so far; `clearCalls` starts the list again. */
   calls,
   clearCalls(): void { calls.length = 0; },
+  /** The next call of `command` fails once with `message`. */
+  failNext(command: string, message: string): void { failing.set(command, message); },
   /** The smoke script holds the timer while it inspects a busy state. */
   pause(on: boolean): void { paused = on; },
   /** The next app info (the next page load) carries this profile warning; `null` removes it. */

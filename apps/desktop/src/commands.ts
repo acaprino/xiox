@@ -45,8 +45,10 @@ export function actionForKey(view: SectionView, key: ActionKey): ActionView | nu
 export function footerEntries(view: SectionView): Array<string | Hint> {
   const entries: Array<string | Hint> = [{ keys: '↑ ↓', label: 'Move' }, { keys: 'Space', label: 'Tick' }, { keys: '← →', label: 'Fold' }, COMMAND.sort];
   for (const action of view.actions) {
-    if (action.key === 'Enter') entries.push({ keys: 'Enter', label: action.label });
-    else if (actionKeys(action) !== undefined) entries.push(actionCommandId(action));
+    // Enter is named while it can press something: a disabled Clean answers nothing.
+    if (action.key === 'Enter') {
+      if (action.enabled) entries.push({ keys: 'Enter', label: action.label });
+    } else if (actionKeys(action) !== undefined) entries.push(actionCommandId(action));
   }
   return entries;
 }

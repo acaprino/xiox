@@ -64,6 +64,7 @@ test('the footer lists the list\'s keys, the sort and each action with its key, 
   const clean = analyzed.actions.find((a) => a.key === 'Enter');
   assert.ok(analyze && clean);
   assert.equal(entries('cleanup', 'analyzed'), `↑ ↓:Move Space:Tick ← →:Fold ${COMMAND.sort} ${actionCommandId(analyze)} Enter:${clean.label}`);
+  assert.ok(!entries('cleanup', 'idle').includes('Enter:'), 'Enter is not named while Clean is disabled');
   assert.ok(!entries('cleanup', 'cleaning').includes('Esc'), 'Esc is not in the footer, busy or not');
   assert.equal(footerEntries(viewWith('cleanup')).length, 4, 'with no action: the list\'s keys and the sort');
 });

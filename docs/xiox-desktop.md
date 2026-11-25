@@ -55,46 +55,41 @@ interrupted (see [Cleanup](#cleanup)).
 
 ## The window
 
-The window has two looks. **Smooth** is the default: modern and clean, in the manner of Qamille, with
-the amber of Xiox as its only accent, the sections as tabs at the top and the buttons of the section
-under the list. Its title bar is the app's own: drag it to move the window, double-click it to
-maximize, and use its minimize, maximize and close buttons (hovering maximize offers the Windows 11
-snap layouts). Behind the title bar and the sidebar the window is glass, Windows' acrylic. **ONI MODE** is Imago's other look, with
-squared corners and capitals in the style of the approved mock-up; choose it under `Look` in [Settings](#settings) (and
-`Smooth` there to go back); the choice is kept for the next start. The window is Imago's (the design system of the suite):
-both looks have the same layout, the same title bar and window buttons, the same light and dark themes and the same glass. Everything
-else (the lists, the boxes, the keys, what each button does) is the same in both.
+The window is the shell of the suite (Imago, on Sigrid's parts), with Xiox's own screens in it: the amber of Xiox is its only
+accent, the views are tabs in the title bar and the buttons of the view are under the content. The title bar is the shell's: drag it
+to move the window, double-click it to maximize, use its minimize, maximize and close buttons (hovering maximize offers the Windows
+11 snap layouts), the switch of light and dark, and `Commands` (`Ctrl`+`K`). The window is opaque, in the ground of the look, until
+you choose **glass** (Windows' acrylic behind the page) in [Settings](#settings) or with the command `Glass` of the palette: it
+changes at once, with no restart, and the next start opens as you left it. A browser has no glass. Everything else (the lists, the
+boxes, the keys, what each button does) is the same either way.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ XIOX        CLEANUP 1  REGISTRY 2  DEVELOPERS 3  ABOUT ? ◯ONI                │  top bar: sections as tabs
+│ XIOX   CLEANUP  REGISTRY  DEVELOPERS  SETTINGS          ☀  Commands Ctrl K │  title bar: the views as tabs
 │ ANALYSIS DONE   13.48 GB to delete (46,999 files)  administrator · RAM 32 GB │  status row
 │ Cleaning…  ████████░░░░  64%  Windows temporary files                        │  progress (while a job runs)
 │ Xiox is cleaning the profile of “…”, not that of “…” …                       │  profile strip (when it applies)
 ├────────────┬───────────────────────────────────────────────────────────────┤
-│ CATEGORIES │ title ...............................................  Details i│
+│ Categories │ title ................................  Details i  Options o │
 │ System     │ ☐  ITEM ▲          LEVEL        FILES        SIZE ▼            │  list
 │ Explorer   │ ☑  SYSTEM                       30,389     11.29 GB            │
 │ …          │   ☑ Windows temporary files     18,204      4.10 GB            │
-│ OPTIONS    │                                                                │
-│ …          ├───────────────────────────────────────────────────────────────┤
-│            │ item … files … size … level … mode … why …  (on request)       │  detail
-│            │                              [ Analyze a ] [ Clean 8 items ↵ ] │  buttons
+│            │                                    │ Details (on request)      │  inspector
+│            │                              [ Analyze ] [ Clean 8 items ]     │  buttons
 ├────────────┴───────────────────────────────────────────────────────────────┤
 │ ● ↑↓ move · space toggle · s sort · a analyze · ↵ clean                     │  footer
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Both looks draw this layout: ONI MODE has the same title bar (with the window buttons and the snap layouts), the same glass and the
-same Auto, Light and Dark switch as Smooth. The title bar's mark is the initial of the name on the amber of Xiox, and the executables'
-icons are the same mark. Open the window menu (`Alt`+`Space`) for `Reload interface`, which reloads the page when it hangs.
+The title bar's mark is the initial of the name on the amber of Xiox, and the executables' icons are the same mark. Open the window
+menu (`Alt`+`Space`) for `Reload interface`, which reloads the page when it hangs. A window narrower than 860 px puts the views in a
+row under the bar, and a sidebar narrower than its place folds into a drawer or a rail; nothing runs off the page from 340 px.
 
-**Top bar and buttons.** The Xiox wordmark, the sections and `Settings`. The buttons
+**Title bar and buttons.** The Xiox wordmark, the views (`Cleanup`, `Registry`, `Developers`, `Settings`, each also a command of the palette) and `Commands`. The buttons
 of the open section (`Analyze`, `Clean 8 items`, `Find issues`, `Refresh`, ...) sit under the list,
 the main one last and in the accent colour. A small key next to a
 label says which key presses it. A button that cannot be used right now is greyed out; the chapters
-below say when. The style sheet writes the button labels in capitals; this guide names them as
-they are written in the sentences of the app.
+below say when. A reason a button is greyed out is its hint.
 
 **Status row.** On the left a badge (`Ready`, `Analyzing`, `Analysis done`, `Cleaning`,
 `Cleanup done`, ...) and a sentence with the figures (`13.48 GB to delete (46,999 files)`,
@@ -111,9 +106,8 @@ approved with another administrator's password. "Your" Temp folder, browser data
 per-user locations are then those of account A, not of the person sitting at the screen. Close
 the app and start it again from the right account if that is not what you want.
 
-**Sections.** Cleanup `1`, Registry `2`, Developers `3`, and `Settings` (`?`):
-tabs at the top, with a bar under the open one (in ONI MODE: the first sidebar). The number is
-the key that opens the section.
+**Views.** Cleanup, Registry, Developers and `Settings`: tabs in the title bar, with a line under the open one. Each is also a
+command of the palette (`Go to Cleanup`, ...).
 
 **Categories bar (the sidebar).** In Registry its heading is `Look for`: the kinds of issue a scan
 looks through. The categories of the open section, each with its
@@ -155,20 +149,19 @@ it. A category with more than 40 rows (`Applications`) starts folded; `Fold all`
 above the list does every category at once, and a search opens the categories it found
 something in.
 
-**Detail.** Under the list, when you ask for it with `Details` (above the list) or `i` (in ONI
-MODE it is always there): what the selected row says about itself, as `item`, `files`,
+**Detail.** In the inspector at the right of the list, when you ask for it with `Details` (above the list) or `i`: what the selected row says about itself, as `item`, `files`,
 `size`, `level`, `mode` (`permanently`, `empties the Recycle Bin`, `to the Recycle Bin`,
 `permanently (git)`), `why` and, when there is one, `warning`. A blocked row also gets a
 `blocked` line with the reason. Some rows add lines below, for example which browser profile
 holds how many cookies.
 
 **Notices.** Coloured one-line strips above the list: a result, a warning, or an error or
-refusal. A strip that has more to say ends with a `+2 more` button: reach it with `Tab` and press
-`Enter` or `Space` to open the extra lines under the strip, and again to close them. A result that
+refusal. A strip that has more to say holds a `Show 2 more lines` row: reach it with `Tab` and press
+`Enter` or `Space` to open the extra lines under it, and again to close them. A result that
 only half worked (some keys not fixed) is shown in the warning colour,
 not as a success.
 
-**Footer.** The keys of the open section (`↑↓ move · space toggle · s sort · a analyze · ↵ clean`) and,
+**Footer.** The keys of the open section that work now (`↑↓ move · space tick · ←→ fold · s order · a analyze · ↵ clean · ctrl f search · f6 next region`) and,
 in some sections, a line about the selection (`Selected in Projects: 6.80 GB · 2 folders`).
 
 While a job runs the lists are frozen: you cannot tick or untick anything, because the
@@ -178,16 +171,15 @@ selection is what the job is working on.
 and the taskbar tell the sections apart. While a job runs the taskbar button shows its progress, and
 when it ends while Xiox is behind other windows the button flashes once. The window never opens
 larger than the work area of the screen it opens on (the saved size included), and the smallest size
-(960 x 540, title bar included) fits the work area of a 1366 x 768 laptop at 125 % scaling. A folder dragged onto the window is offered to
+(500 x 540, title bar included) fits the work area of a 1366 x 768 laptop at 125 % scaling. A folder dragged onto the window is offered to
 Developers: a message asks `Add "<folder>" to the folders Developers analyzes?` and nothing is added
 until you answer `Add`; anything that is not a folder only gets a message saying so.
 
-**Theme.** Smooth follows the Windows theme, light or dark, title bar included, unless you pick
-`Light` or `Dark` instead of `Windows` under `Look` in Settings or with the palette (the choice is kept for the next
-start); the same choice serves ONI MODE, which has a light theme too (with `Auto` it is dark, as ONI is a dark look). The accents are fixed (the amber of Xiox): a deliberate choice, not a gap. The palette
-is Imago's (its contrasts are tested in the package), so the
-window does not follow the system's accent colour. What follows the system is what
-accessibility needs: the high-contrast (forced colours) themes, reduced motion and the text size.
+**Theme.** Light or dark with the switch of the title bar, or with the three commands of the palette (`Ctrl`+`K`): `Light`, `Dark` and
+the system's look, which follows the Windows theme, title bar included; the choice is kept for the next start. The accents are fixed
+(the amber of Xiox): a deliberate choice, not a gap. The palette is the suite's (its contrasts are tested in Imago), so the window
+does not follow the system's accent colour. What follows the system is what accessibility needs: the high-contrast (forced colours)
+themes, reduced motion and the text size.
 
 ## Cleanup
 
@@ -504,9 +496,7 @@ that is greyed out ignores its key.
 
 | Key | What it does |
 |---|---|
-| `1` `2` `3` | open Cleanup, Registry, Developers |
-| `4` or `?` | open Settings (not while a confirmation is open) |
-| `Ctrl`+`K` | the command palette: every command with its key, and the look and theme commands (`Smooth look`, `ONI look`, `Follow Windows`, `Light theme`, `Dark theme`) |
+| `Ctrl`+`K` | the command palette: every command with its key, the views, and the look commands (`Light`, `Dark`, the system's, `Glass`) |
 | `Ctrl`+`F` | the search box of the list |
 | `F6` `Shift`+`F6` | move between the sidebar, the content and the inspector |
 | `↑` `↓` | move the selection one row |
@@ -518,15 +508,15 @@ that is greyed out ignores its key.
 | `i` / `o` | open or close the inspector on the details of the selected row / on the options of the section |
 | `a` | `Analyze` in Cleanup and Developers, `Find issues` in Registry |
 | `Enter` | in the list, the section's main button: `Clean` or `Fix selected`; it opens the confirmation (a focused button presses itself) |
-| `Esc` | in this order: the open menu, palette or inspector; the confirmation; leave a text field; close the report; cancel the running job |
+| `Esc` | in this order: the open menu, palette or inspector; the confirmation (its `Cancel`); leave a text field; close the report; cancel the running job |
 | `Tab` `Shift`+`Tab` | next and previous control |
 
 A key held down does not repeat an action: one `Enter` is one press, so a held `Enter` cannot run
 on past the confirmation it just opened. The arrows do repeat, that is how a long list is crossed.
 The footer shows the keys of the open section, taken from the command registry, so what it says
-and what the keys do agree. The commands are Imago's registry: `Ctrl`+`K` lists them all, with the actions of the open section.
+and what the keys do agree. The commands are Sigrid's registry (`useCommand`): `Ctrl`+`K` lists them all, with the actions of the open section.
 
-**Tab order.** The title bar (the tabs: the three sections and `Settings`; the `Commands` button; the window buttons), the categories of
+**Tab order.** The title bar (the views; the switch of light and dark; the `Commands` button; the window buttons), the categories of
 the sidebar, then the main panel (`Details` and `Options`, the search box, the list with its top check box), the inspector when it is
 open, and last the buttons of the section. The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The inspector
@@ -545,7 +535,7 @@ and while the key is held down. When it closes, the focus goes back to where it 
 | `Ctrl`+`+` (or `Ctrl`+`=`), `Ctrl`+`-` | make the window's content larger or smaller, from 50 % to 200 % in steps of 10 % |
 | `Ctrl`+wheel | the same, one step per notch |
 | `Ctrl`+`0` | back to 100 % |
-| `Ctrl`+`A` | in a text field, its text; in the detail panel, a confirmation or the report, the text you can copy; anywhere else, nothing |
+| `Ctrl`+`A` | in a text field, its text |
 | `Ctrl`+`C` | copy what is selected |
 
 The zoom is remembered for the next start (a level saved by an earlier version, 67 %, 125 % or 175 %, reads as the nearest step: 70 %, 130 %, 180 %). The window is not a web page: buttons, rows and titles
@@ -557,9 +547,10 @@ and the text of a confirmation.
 
 ## Settings
 
-Settings is a view, the fourth tab: open it with the `Settings` tab, `4` or `?`. Its sidebar lists its two sections, `Look` and
-`About`, and a click scrolls to one. `Look` has the look, `Smooth` (the default) or `ONI mode`, and the theme, `Windows`, `Light` or
-`Dark`; the window changes at once and keeps the choice for the next start (the same choices are commands of the palette, `Ctrl`+`K`).
+Settings is a view, the fourth tab: open it with the `Settings` tab or the command `Go to Settings`. Its sidebar lists its two
+sections, `Appearance` and `About`, and a click scrolls to one. `Appearance` says where the theme is (the switch of the title bar and
+the palette: there is no switch of its own here) and, in the window and not in a browser, has the switch `Glass window`: it changes
+at once and the window keeps the choice for the next start (the same choice is the command `Glass` of the palette).
 `About Xiox`: the version (`Version 0.1.0`), the state of the
 cleaning rules and where they come from:
 
