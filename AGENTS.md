@@ -137,7 +137,31 @@
 - This holds for every agent and every subagent. A plan, a skill or a brief that says to run cargo locally is
   wrong on that point: write the code and the tests, do not run them, and say they wait for CI.
 
+## One look for the whole suite (the owner's rule, 2026-11-23)
+
+Every app of the suite (Daodan, Xiox, Shinatama, Mukade, Muro and the others on Sigrid) has the same look and feel:
+the same surfaces, shadows, spacing, type and motion, and the same component for the same need. What is the app's own
+is its layout, which follows its functions, its accent and its icon.
+
+- The suite's design system is Sigrid (`acaprino/sigrid`). The UI uses only its components: it makes no component of
+  its own that draws (no stylesheet, no class, no primitive, no copy or restyling of a part of the design system); the
+  app's code composes the design system's components into screens and wires them to its data.
+- The app adapts to the design system, never the other way round. Sigrid changes only when a component or a primitive
+  that a function needs is really missing: it is then added to Sigrid, generic, for every app. The app's former look
+  is no reason to change Sigrid.
+- The base of the app is Imago, the suite's shell in Xiox's style (window, title bar, frame, commands, palette, theme,
+  notices), built with Sigrid; Sigrid gives the components. The app brings only its screens, made of Sigrid's
+  components, and has no shell, window, frame or look of its own. What is missing in the shell is added to Imago, what
+  is missing in a component is added to Sigrid. Until Imago's shell on Sigrid exists, the app keeps the shell and the
+  parts it has today (Imago's) and adds none of its own.
+
 ## UI: Imago
+
+Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
+Apply its tokens and confirmed design choices within the requested scope.
+Use the package's im- classes and --im- tokens; never build a control of your own ("One look for the whole suite").
+Report conflicts and keep unresolved choices explicit.
+Run npx imago-check before you say UI work is done.
 
 Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the files it references.
 The frame is the shell's (AppWindow of @acaprino/imago). Lay out with Sigrid's parts: write no class, no style and no stylesheet,
