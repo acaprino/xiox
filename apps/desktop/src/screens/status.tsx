@@ -26,7 +26,7 @@ export function Status({ app, view, settings }: { app: AppInfo | null; view: Sec
         </>
       ) : view?.status.text ? <Text variant="soft" truncate>{view.status.text}</Text> : null}
       <Spacer />
-      {app === null ? null : <Text variant="muted">{app.admin ? 'administrator' : 'standard user'} · {ramText(app.ramTotalBytes)}</Text>}
+      {app === null ? null : <Text variant="muted" truncate>{app.admin ? 'administrator' : 'standard user'} · {ramText(app.ramTotalBytes)}</Text>}
     </>
   );
 }
