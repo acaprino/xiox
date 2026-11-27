@@ -1021,3 +1021,133 @@ fn cleanup_counts_are_grouped_and_agree_with_their_word() {
     assert_eq!(one_row, "1 item");
     assert!(v.nav.iter().all(|n| n.note.as_deref().is_some_and(|t| t.contains(" selected"))));
 }
+
+// ---------- choices kept between starts ----------
+
+use xiox_app::prefs::{Store, CLEANUP};
+
+fn category(name: &str) -> usize {
+    cleaner::CATEGORIES.iter().position(|c| c.name == name).expect("a built-in category")
+}
+
+fn defaults() -> CleanupState {
+    CleanupState::with(natives_for_test(), vec![], QUIET)
+}
+
+/// What pref.json brings back, over the defaults: categories by name (an unknown one is ignored), items by key, and a file
+/// or a section that is missing, broken or empty leaves the defaults as they are.
+#[test]
+fn a_saved_file_is_applied_over_the_defaults() {
+    let thumbs = category("Thumbnail cache");
+    let bin = category("Recycle Bin");
+    struct Case {
+        name: &'static str,
+        /// `None`: no file at all.
+        json: Option<&'static str>,
+        cats: Vec<(usize, bool)>,
+        items: Vec<(&'static str, bool)>,
+        only_old: bool,
+    }
+    let cases = [
+        Case { name: "missing", json: None, cats: vec![], items: vec![], only_old: true },
+        Case { name: "broken", json: Some("{ not json"), cats: vec![], items: vec![], only_old: true },
+        Case { name: "no cleanup section", json: Some(r#"{"developers": {}}"#), cats: vec![], items: vec![], only_old: true },
+        Case { name: "empty section", json: Some(r#"{"cleanup": {}}"#), cats: vec![], items: vec![], only_old: true },
+        Case {
+            name: "by name, unknown ignored",
+            json: Some(r#"{"cleanup": {"categories": {"Thumbnail cache": true, "Recycle Bin": false, "A category that left": true}}}"#),
+            cats: vec![(thumbs, true), (bin, false)],
+            items: vec![],
+            only_old: true,
+        },
+        Case {
+            name: "items on and off, only_old",
+            json: Some(r#"{"cleanup": {"items": {"w_alpha/cache": true, "native:env_path": false}, "onlyOld": false}}"#),
+            cats: vec![],
+            items: vec![("w_alpha/cache", true), ("native:env_path", false)],
+            only_old: false,
+        },
+    ];
+    for case in cases {
+        let name = case.name;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pref.json");
+        if let Some(json) = case.json {
+            std::fs::write(&path, json).unwrap();
+        }
+        let st = defaults().persisted(Store::at(path));
+        let mut sel = defaults().clean_sel;
+        for (i, on) in case.cats {
+            sel[i] = on;
+        }
+        assert_eq!(st.clean_sel, sel, "{name}: categories");
+        for (key, on) in case.items {
+            assert_eq!(st.rule_sel.contains(key), on, "{name}: {key}");
+        }
+        assert_eq!(st.only_old, case.only_old, "{name}: only_old");
+    }
+}
+
+/// Only the differences from the defaults are written: a category or a native a later version adds
+/// is not in the file, so it starts at its own default.
+#[test]
+fn only_what_differs_from_the_defaults_is_written() {
+    let st = defaults();
+    assert_eq!(prefs::Prefs::capture(&st.clean_sel, &st.rule_sel, &st.natives, st.only_old), prefs::Prefs::default());
+}
+
+/// Every intent that changes a choice writes it, and the next start (whose rules have not loaded yet)
+/// gets the same choices back; a change made before the rules load keeps the options it cannot see,
+/// and the other sections of pref.json stay as they were.
+#[test]
+fn choices_come_back_at_the_next_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pref.json");
+    std::fs::write(&path, r#"{"windowTheme": "dark"}"#).unwrap();
+    let mut st = state().persisted(Store::at(path.clone()));
+    let thumbs = category("Thumbnail cache");
+    st.toggle(&format!("cat:{thumbs}")).unwrap();
+    st.toggle("native:clipboard").unwrap();
+    st.toggle("w_alpha/cache").unwrap();
+    st.set_only_old(false).unwrap();
+    assert!(st.store_err.is_none());
+
+    let mut next = defaults().persisted(Store::at(path.clone()));
+    assert!(next.rules.is_none(), "Winapp2 is not loaded yet");
+    assert_eq!(next.clean_sel, st.clean_sel);
+    assert_eq!(next.rule_sel, st.rule_sel);
+    assert!(!next.only_old);
+
+    next.toggle(&format!("cat:{thumbs}")).unwrap();
+    let saved: prefs::Prefs = Store::at(path.clone()).read(CLEANUP).unwrap();
+    assert_eq!(saved.items.get("w_alpha/cache"), Some(&true), "an option of rules not loaded yet stays chosen");
+    assert!(!saved.categories.contains_key("Thumbnail cache"), "back to its default: nothing to keep");
+    assert_eq!(Store::at(path).read::<String>("windowTheme").as_deref(), Some("dark"), "another section is untouched");
+}
+
+/// A refused intent writes nothing, and a state made without a store never writes.
+#[test]
+fn a_refused_intent_or_a_state_without_a_store_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pref.json");
+    let mut st = state().persisted(Store::at(path.clone()));
+    st.confirm_clean = true;
+    assert!(st.toggle("w_alpha/cache").is_err());
+    assert!(!path.exists());
+
+    let mut memory = state();
+    memory.toggle("w_alpha/cache").unwrap();
+    assert!(memory.store.is_none() && memory.store_err.is_none());
+}
+
+/// A file that cannot be written says so under the options; the choice is still made.
+#[test]
+fn a_write_that_fails_is_shown_under_the_options() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A folder where the file should be: it cannot be read nor written.
+    let mut st = state().persisted(Store::at(tmp.path().to_path_buf()));
+    st.toggle("w_alpha/cache").unwrap();
+    assert!(st.rule_sel.contains("w_alpha/cache"));
+    let v = st.view(false);
+    assert!(v.options.iter().any(|o| matches!(o, OptionView::Text { text, tone: Tone::Error, .. } if text.starts_with("Choices not saved: "))));
+}

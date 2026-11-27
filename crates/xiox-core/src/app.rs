@@ -54,7 +54,12 @@ impl Core {
             None => DevState::new(dev::Section::Projects),
         };
         let (load, update) = (o.load_rules, o.update_rules);
-        let mut core = Core::with_states(o, notifier.clone(), CleanupState::new(), RegistryState::new(), dev);
+        // `--only-root` writes nothing outside its folder: the choices of Cleanup stay in memory.
+        let cleanup = match &o.only_root {
+            Some(_) => CleanupState::new(),
+            None => CleanupState::new().persisted(xiox_app::prefs::Store::beside_exe()),
+        };
+        let mut core = Core::with_states(o, notifier.clone(), cleanup, RegistryState::new(), dev);
         core.mismatch = sys::profile_mismatch();
         if load {
             core.cleanup.start_rules(notifier, false, update);
