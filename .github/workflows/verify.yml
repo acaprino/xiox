@@ -181,11 +181,11 @@ jobs:
       - name: Lint the Rust
         run: cargo clippy -p xiox-ui --all-targets -- -D warnings
 
-      # xiox-core holds the drift test of fixtures/views.json.
+      # xiox-core holds the drift test of fixtures/views.json; xiox-app holds pref.json (its sections, the old settings.json).
       # The runner's temporary folder is C:\Users\RUNNER~1\...: a path with an 8.3 short name, which the rules guard refuses ("cannot be
       # compared with certainty"), so every test that cleans inside a temporary folder found nothing. The runner's own temp folder has none.
       - name: Test the Rust
-        run: cargo test -p xiox-ui -p xiox-core
+        run: cargo test -p xiox-ui -p xiox-core -p xiox-app
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
