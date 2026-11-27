@@ -399,6 +399,9 @@ impl CleanupState {
             let hint: Vec<&str> = why.as_deref().into_iter().chain(rs.warnings.iter().map(String::as_str)).collect();
             v.push(OptionView::Text { text, tone: Tone::Info, hint: (!hint.is_empty()).then(|| hint.join("\n")) });
         }
+        if let Some(e) = &self.store_err {
+            v.push(OptionView::Text { text: format!("Choices not saved: {e}"), tone: Tone::Error, hint: None });
+        }
         v
     }
 

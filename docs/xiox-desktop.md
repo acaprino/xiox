@@ -45,7 +45,8 @@ screens (a monitor was unplugged), the window opens in the centre instead. The s
 1000 x 640 pixels. The window is always dark and has the system title bar.
 
 **`--only-root <folder>`.** An optional argument that restricts the Developers section to one
-folder. In this mode the Developers options stay in memory instead of in `settings.json`, and
+folder. In this mode nothing is read from or written to `pref.json`: the Developers options and the
+Cleanup choices stay in memory, the window's place and theme are not kept, and
 the Winapp2 rules are neither loaded nor downloaded. The argument needs a folder: without one
 the app prints a message and exits with code 2, instead of falling back to your real profile.
 
@@ -219,6 +220,11 @@ cleaned of files at least a day old, so a program that is writing a file right n
 `Browser`, `Edit cookie keep list` opens `Documents\Xiox\cookie-keep-list.txt` in Notepad
 (it creates the file if it is missing): one domain per line, and the cookies of those sites are
 not removed. In `Applications`, a line says whether the Winapp2 rules are up to date.
+
+**Your choices are kept.** What you tick and untick, and `Only delete Temp files older than 24
+hours`, come back at the next start. Only the choices that differ from the defaults are saved, so
+an item that a later version adds starts at its own default. A file that cannot be written is
+reported under the options (`Choices not saved: ...`).
 
 **Special entries.** Besides the file rules the section has entries that act on something other
 than plain files. Each has a `Caution` warning that you read in the confirmation:
@@ -569,9 +575,9 @@ next chapter). Their licence stays their own.
 
 | What | Where |
 |---|---|
-| Developers options (`Days of inactivity`, `Deletion`, extra folders) | `%APPDATA%\Xiox\settings.json` |
-| The window's size and position | `%APPDATA%\Xiox\window.json` (next to the settings file) |
-| The window's theme (`system`, `light` or `dark`), for the first frame of the next start | `%APPDATA%\Xiox\window-theme` |
+| The settings of the app: the Developers options (`developers`) and the Cleanup choices (`cleanup`), one section each | `pref.json` in the program's folder, beside `xiox-ui.exe` |
+| The window's size and position, its theme for the first frame of the next start, and its glass | `window.json`, `window-theme` and `window-material` in the program's folder (Imago's files) |
+| The look, the theme, the folded sidebar and the zoom of the page | the window's own storage (Imago keeps them there) |
 | Registry backups | `Documents\Xiox\registry-backup-<date>_<time>.reg` |
 | Backup of the registry keys an `Applications` rule is about to delete | `Documents\Xiox\rules-backup-<date>_<time>.reg` |
 | The cookie keep list | `Documents\Xiox\cookie-keep-list.txt` |
@@ -583,7 +589,12 @@ next chapter). Their licence stays their own.
 `Documents` is your Documents folder (`%USERPROFILE%\Documents`). The app writes nothing else
 outside the places you choose. A window saved on a monitor that is gone comes back inside the monitors there are now; the fixtures window
 and `--only-root` keep neither the position nor the theme; a settings file
-that cannot be written is reported in the window (`Settings not saved: ...`).
+that cannot be written is reported in the window (`Settings not saved: ...`, `Choices not saved: ...`).
+
+The settings and the window's files sit beside the program, so the portable copy keeps them in its own folder; an update keeps
+them. The first start of a version that keeps them there takes what an older version kept in `%APPDATA%\Xiox` (`settings.json`,
+`window.json`, `window-theme`, `window-material`) and leaves those files where they are; the Developers options are read from the
+old `settings.json` until you change one. A `pref.json` broken by hand is kept as `pref.json.bad` before a new one is written.
 
 ## Troubleshooting
 

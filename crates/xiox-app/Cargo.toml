@@ -13,6 +13,8 @@ xiox-engine = { path = "../xiox-engine" }
 xiox-mukade = { path = "../xiox-mukade" }
 xiox-disktree = { path = "../xiox-disktree" }
 xiox-sessions = { path = "../xiox-sessions" }
+# The sections of pref.json (prefs.rs).
+serde = "1"
 serde_json = "1"
 
 [dev-dependencies]

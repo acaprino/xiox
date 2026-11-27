@@ -19,7 +19,7 @@ mod real;
 use backend::{Backend, BackendState};
 use imago_shell::single_instance::{launch, Launch};
 use imago_shell::{on_run_event, open_main, plugin, show_main, Material, Options, DARK_GROUND, LIGHT_GROUND};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, WindowEvent};
 use xiox_core::app::{Core, CoreOptions};
@@ -107,14 +107,33 @@ fn real_backend(sink: Arc<dyn ViewSink>, only_root: Option<PathBuf>) -> Arc<dyn 
     Arc::new(real::RealBackend::new(core))
 }
 
-/// The folder the shell keeps the window theme, the glass and the window's place in: next to the Developers `settings.json`. None for
-/// the fixtures window, which reads and writes nothing of the user's, and under `--only-root`, which promises that no file outside
-/// its folder is written: then nothing is read or kept.
+/// The files the shell keeps in its folder (imago-shell 1.4): the window's place, its theme and its glass.
+const SHELL_FILES: [&str; 3] = ["window.json", "window-theme", "window-material"];
+
+/// The folder the shell keeps the window theme, the glass and the window's place in: the program's folder, beside `pref.json`, so
+/// the portable copy keeps them in its own folder. The first start there takes the files an older version kept beside the
+/// Developers `settings.json` (`%APPDATA%\Xiox`). None for the fixtures window, which reads and writes nothing of the user's, and
+/// under `--only-root`, which promises that no file outside its folder is written: then nothing is read or kept.
 fn data_dir(fake: bool, only_root: bool) -> Option<PathBuf> {
     if fake || only_root {
         return None;
     }
-    xiox_app::settings_path().parent().map(PathBuf::from)
+    let dir = xiox_app::prefs::Store::beside_exe().path().parent()?.to_path_buf();
+    if let Some(old) = xiox_app::settings_path().parent() {
+        adopt_old_files(old, &dir);
+    }
+    Some(dir)
+}
+
+/// Copies into `dir` the shell's files that `old` has and `dir` has not yet; a file already in `dir` wins. A copy that fails
+/// is not an error: the window then opens as at a first start.
+fn adopt_old_files(old: &Path, dir: &Path) {
+    for name in SHELL_FILES {
+        let (from, to) = (old.join(name), dir.join(name));
+        if !to.exists() && from.is_file() {
+            let _ = std::fs::copy(&from, &to);
+        }
+    }
 }
 
 /// The folder that names the one running copy. The real window and a `--only-root` run share the real folder's name (one at a time,
@@ -238,12 +257,31 @@ mod tests {
     }
 
     #[test]
-    fn the_data_folder_is_the_settings_folder_unless_the_run_remembers_nothing() {
-        assert!(data_dir(false, false).is_some());
-        assert_eq!(data_dir(false, false).as_deref(), xiox_app::settings_path().parent(), "next to settings.json, where window.json always was");
+    fn the_data_folder_is_the_programs_folder_unless_the_run_remembers_nothing() {
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(data_dir(false, false).as_deref(), exe.parent(), "beside the executable and pref.json: the portable copy keeps them");
         assert_eq!(data_dir(true, false), None, "the fixtures window reads and writes nothing of the user's");
         assert_eq!(data_dir(false, true), None, "--only-root writes no file outside its folder");
         assert_eq!(data_dir(true, true), None);
+    }
+
+    /// The first start beside the executable takes the window's files of an older version; one already there wins.
+    #[test]
+    fn the_old_window_files_are_taken_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (old, dir) = (tmp.path().join("old"), tmp.path().join("app"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(old.join("window.json"), "old place").unwrap();
+        std::fs::write(old.join("window-theme"), "light").unwrap();
+        std::fs::write(dir.join("window-theme"), "dark").unwrap();
+        adopt_old_files(&old, &dir);
+        assert_eq!(std::fs::read_to_string(dir.join("window.json")).unwrap(), "old place", "taken from the old folder");
+        assert_eq!(std::fs::read_to_string(dir.join("window-theme")).unwrap(), "dark", "the one already there wins");
+        assert!(!dir.join("window-material").exists(), "a file the old folder lacks is not made up");
+        std::fs::write(old.join("window.json"), "older still").unwrap();
+        adopt_old_files(&old, &dir);
+        assert_eq!(std::fs::read_to_string(dir.join("window.json")).unwrap(), "old place", "taken once");
     }
 
     #[test]

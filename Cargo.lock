@@ -4678,6 +4678,7 @@ dependencies = [
 name = "xiox-app"
 version = "0.5.2"
 dependencies = [
+ "serde",
  "serde_json",
  "tempfile",
  "xiox-cleaner",

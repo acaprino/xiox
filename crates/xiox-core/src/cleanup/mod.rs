@@ -22,6 +22,7 @@ mod intent_tests;
 mod script_tests;
 #[cfg(test)]
 mod tests;
+pub mod prefs;
 mod view;
 
 // Why an intent is refused (English: the page shows them as they are). The first four are
@@ -145,6 +146,11 @@ pub struct CleanupState {
     processes: Vec<String>,
     /// Il lavoro del thread di analisi e pulizia (quello vero per default).
     workers: CleanupWorkers,
+    /// Where the choices are kept between starts ([`prefs`]); `None` keeps them in memory (the tests,
+    /// `--only-root`).
+    store: Option<xiox_app::prefs::Store>,
+    /// Why the last write of the choices failed, shown under the options.
+    store_err: Option<String>,
 }
 
 /// Tutto ciò che il thread di analisi e pulizia riceve: la scelta fatta all'avvio e i segnali di
@@ -216,7 +222,25 @@ impl CleanupState {
             native_cleaned: vec![],
             processes,
             workers,
+            store: None,
+            store_err: None,
         }
+    }
+
+    /// The same state with the choices kept in `store`: those saved there come back now, and every
+    /// change of a choice is written there.
+    pub fn persisted(mut self, store: xiox_app::prefs::Store) -> Self {
+        let saved: prefs::Prefs = store.read(xiox_app::prefs::CLEANUP).unwrap_or_default();
+        saved.apply(&mut self.clean_sel, &mut self.rule_sel, &mut self.only_old);
+        self.store = Some(store);
+        self
+    }
+
+    /// Writes the choices to the store, if there is one.
+    fn save(&mut self) {
+        let Some(store) = &self.store else { return };
+        let choices = prefs::Prefs::capture(&self.clean_sel, &self.rule_sel, &self.natives, self.only_old);
+        self.store_err = store.write(xiox_app::prefs::CLEANUP, &choices).err();
     }
 
     /// Carica le regole esterne in un thread; finché non arrivano, i gruppi dinamici non ci sono.
@@ -505,6 +529,13 @@ impl CleanupState {
     /// unsupported option, a program that runs).
     pub fn toggle(&mut self, row: &str) -> Result<(), String> {
         self.editable()?;
+        self.toggle_row(row)?;
+        self.save();
+        Ok(())
+    }
+
+    /// [`toggle`](Self::toggle) once the page may change its choices.
+    fn toggle_row(&mut self, row: &str) -> Result<(), String> {
         if self.groups().iter().any(|g| g.id == row) {
             return self.toggle_group(row);
         }
@@ -581,6 +612,7 @@ impl CleanupState {
         for row in &ids {
             self.set_chosen(row, on);
         }
+        self.save();
         Ok(())
     }
 
@@ -599,6 +631,7 @@ impl CleanupState {
     pub fn set_only_old(&mut self, on: bool) -> Result<(), String> {
         self.editable()?;
         self.only_old = on;
+        self.save();
         Ok(())
     }
 

@@ -91,7 +91,8 @@ fn default_settings_for(home: Option<&Path>) -> Settings {
     }
 }
 
-/// `%APPDATA%\Xiox\settings.json`.
+/// `%APPDATA%\Xiox\settings.json`: where versions before `pref.json` ([`prefs`]) kept the Developers options, read
+/// once when `pref.json` has no Developers section yet.
 pub fn settings_path() -> PathBuf {
     settings_path_in(&env_dir("APPDATA", &["AppData", "Roaming"]))
 }
@@ -112,28 +113,25 @@ pub fn cache_dir_in(local_appdata: &Path) -> PathBuf {
     local_appdata.join(APP_DIR).join("mukade")
 }
 
-/// Missing or unreadable file: the defaults.
+/// The Developers section of `pref.json`; without one, the old `settings.json`; without that, the defaults.
 pub fn load_settings() -> Settings {
-    read_settings(&settings_path())
+    load_settings_from(&prefs::Store::beside_exe(), &settings_path())
 }
 
 pub fn save_settings(s: &Settings) -> Result<(), String> {
-    write_settings(&settings_path(), s)
+    prefs::Store::beside_exe().write(prefs::DEVELOPERS, s)
 }
 
+fn load_settings_from(store: &prefs::Store, legacy: &Path) -> Settings {
+    store.read_over(prefs::DEVELOPERS, default_settings()).unwrap_or_else(|| read_settings(legacy))
+}
+
+/// Missing or unreadable file: the defaults.
 fn read_settings(path: &Path) -> Settings {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(default_settings)
-}
-
-fn write_settings(path: &Path, s: &Settings) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
 // ─────────────────────────────────── scan ───────────────────────────────────
@@ -872,6 +870,8 @@ pub fn delete_archived(
     }
     Ok(xiox_sessions::delete_sessions(&items, mode, cli, trash))
 }
+
+pub mod prefs;
 
 #[cfg(test)]
 mod tests;

@@ -916,19 +916,94 @@ fn settings_and_cache_live_under_xiox() {
 #[test]
 fn settings_round_trip_and_fall_back_to_defaults() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("nested").join("settings.json");
-    assert_eq!(read_settings(&path).remove_mode, RemoveMode::Recycle);
+    let store = prefs::Store::at(tmp.path().join("nested").join("pref.json"));
+    let legacy = tmp.path().join("settings.json");
+    assert_eq!(load_settings_from(&store, &legacy).remove_mode, RemoveMode::Recycle, "neither file: the defaults");
     let mut s = settings_walking(vec![PathBuf::from(r"D:\Projects")]);
     s.inactive_days = 30;
     s.remove_mode = RemoveMode::Permanent;
-    write_settings(&path, &s).unwrap();
-    let back = read_settings(&path);
+    store.write(prefs::DEVELOPERS, &s).unwrap();
+    let back = load_settings_from(&store, &legacy);
     assert_eq!(back.inactive_days, 30);
     assert_eq!(back.remove_mode, RemoveMode::Permanent);
     assert_eq!(back.roots, vec![PathBuf::from(r"D:\Projects")]);
     assert!(back.scan_roots);
-    std::fs::write(&path, "{ not json").unwrap();
-    assert_eq!(read_settings(&path).remove_mode, RemoveMode::Recycle);
+}
+
+/// The settings.json of an older version is read while pref.json has no Developers section, and pref.json wins once it has one.
+#[test]
+fn the_old_settings_file_is_read_until_pref_json_has_its_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = prefs::Store::at(tmp.path().join("pref.json"));
+    let legacy = tmp.path().join("settings.json");
+    let mut old = settings_walking(vec![]);
+    old.inactive_days = 45;
+    std::fs::write(&legacy, serde_json::to_string(&old).unwrap()).unwrap();
+    store.write(prefs::CLEANUP, &serde_json::json!({ "onlyOld": false })).unwrap();
+    assert_eq!(load_settings_from(&store, &legacy).inactive_days, 45, "another section is not the Developers one");
+    old.inactive_days = 7;
+    store.write(prefs::DEVELOPERS, &old).unwrap();
+    assert_eq!(load_settings_from(&store, &legacy).inactive_days, 7);
+    std::fs::write(&legacy, "{ not json").unwrap();
+    assert_eq!(load_settings_from(&store, &legacy).inactive_days, 7, "the old file no longer matters");
+}
+
+/// A Developers section written before a field existed keeps its other values: the missing field takes its default,
+/// and the old settings.json is not read.
+#[test]
+fn a_developers_section_without_a_new_field_keeps_the_others() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = prefs::Store::at(tmp.path().join("pref.json"));
+    let legacy = tmp.path().join("settings.json");
+    let mut old = settings_walking(vec![]);
+    old.inactive_days = 99;
+    std::fs::write(&legacy, serde_json::to_string(&old).unwrap()).unwrap();
+    let mut saved = serde_json::to_value(settings_walking(vec![PathBuf::from(r"D:\Work")])).unwrap();
+    saved["inactiveDays"] = 12.into();
+    saved.as_object_mut().unwrap().remove("allDrives").expect("the field exists today");
+    store.write(prefs::DEVELOPERS, &saved).unwrap();
+    let back = load_settings_from(&store, &legacy);
+    assert_eq!(back.inactive_days, 12, "the saved value, not the old file's");
+    assert_eq!(back.roots, vec![PathBuf::from(r"D:\Work")]);
+    assert_eq!(back.all_drives, default_settings().all_drives, "the missing field takes its default");
+    store.write(prefs::DEVELOPERS, &serde_json::json!({ "inactiveDays": "not a number" })).unwrap();
+    assert_eq!(load_settings_from(&store, &legacy).inactive_days, default_settings().inactive_days, "unreadable: the defaults, never the old file");
+}
+
+/// A write replaces its own section only: the others, also one this version does not know, stay as they were.
+#[test]
+fn a_section_write_keeps_every_other_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pref.json");
+    std::fs::write(&path, r#"{ "future": { "x": 1 }, "cleanup": { "onlyOld": false } }"#).unwrap();
+    let store = prefs::Store::at(path.clone());
+    store.write("theme", &"dark").unwrap();
+    store.write(prefs::CLEANUP, &serde_json::json!({ "onlyOld": true })).unwrap();
+    assert_eq!(store.read::<String>("theme").as_deref(), Some("dark"));
+    assert_eq!(store.read::<serde_json::Value>("future"), Some(serde_json::json!({ "x": 1 })));
+    assert_eq!(store.read::<serde_json::Value>(prefs::CLEANUP), Some(serde_json::json!({ "onlyOld": true })));
+    assert_eq!(store.read::<u32>(prefs::CLEANUP), None, "a section of another shape is no section");
+    assert!(!path.with_extension("json.tmp").exists(), "the temporary file is renamed over pref.json");
+}
+
+/// A file broken by hand is kept as pref.json.bad, and the next write starts a new one.
+#[test]
+fn a_broken_file_is_kept_aside_before_a_new_one_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pref.json");
+    std::fs::write(&path, "{ broken").unwrap();
+    let store = prefs::Store::at(path.clone());
+    assert_eq!(store.read::<String>("theme"), None);
+    store.write("theme", &"light").unwrap();
+    assert_eq!(std::fs::read_to_string(path.with_extension("json.bad")).unwrap(), "{ broken");
+    assert_eq!(store.read::<String>("theme").as_deref(), Some("light"));
+}
+
+/// The file sits beside the program, so a portable copy keeps its own settings.
+#[test]
+fn pref_json_is_beside_the_executable() {
+    let exe = std::env::current_exe().unwrap();
+    assert_eq!(prefs::Store::beside_exe().path(), exe.parent().unwrap().join("pref.json"));
 }
 
 // ───────────────────────────── recycle_shortfall ─────────────────────────────
