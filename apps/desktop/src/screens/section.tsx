@@ -59,7 +59,7 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
       variant="ghost" size="sm" aria-pressed={toggle.pressed} disabled={!layout.enabled}
       title="Every project in one list, with its full path: the order by size runs over the whole list"
       onClick={() => { void c.send(view.section, optionIntent(view.section, layout, toggle.next)); }}
-    ><Icon name="layout" />{toggle.label}</Button>
+    ><Icon name="bulletList" />{toggle.label}</Button>
   ) : null;
 
   if (view.report !== null) return <Report c={c} section={view.section} report={view.report} />;
