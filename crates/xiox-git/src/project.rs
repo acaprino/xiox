@@ -188,6 +188,25 @@ pub fn head_kept_elsewhere(worktree: &Path) -> Option<bool> {
     }))
 }
 
+/// How many commits HEAD of `worktree` reaches that no other ref does (the other local branches, every remote branch,
+/// every tag): what only the branch checked out there holds, or, on a detached HEAD, what nothing holds. None when git
+/// cannot answer or there is no HEAD.
+pub fn own_commits(worktree: &Path) -> Option<u32> {
+    git(worktree, &["rev-parse", "--verify", "-q", "HEAD"]).filter(|o| o.ok)?;
+    let current = git(worktree, &["branch", "--show-current"])
+        .filter(|o| o.ok)
+        .map(|o| o.text())
+        .filter(|b| !b.is_empty());
+    // `--exclude` applies to the `--branches` after it: the branch checked out here does not count as "elsewhere".
+    let exclude = current.map(|b| format!("--exclude=refs/heads/{b}"));
+    let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+    if let Some(e) = &exclude {
+        args.push(e);
+    }
+    args.extend(["--branches", "--remotes", "--tags"]);
+    git(worktree, &args).filter(|o| o.ok)?.text().parse().ok()
+}
+
 /// Untracked files relative to `root`: `ignored = true` -> `git ls-files -z --others --ignored --exclude-standard`,
 /// `false` -> `git ls-files -z --others --exclude-standard`. None when not a repository.
 pub fn untracked_files(root: &Path, ignored: bool) -> Option<Vec<PathBuf>> {
@@ -500,6 +519,35 @@ mod tests {
 
         commit_file(&det, "b.txt", "b");
         assert_eq!(head_kept_elsewhere(&det), Some(false));
+    }
+
+    #[test]
+    fn own_commits_counts_what_only_the_worktree_branch_holds() {
+        let t = Tmp::new();
+        let main = t.sub("main");
+        init(&main);
+        commit_file(&main, "a.txt", "a");
+        let wt = t.0.join("wt");
+        g(&main, &["worktree", "add", "-q", "-b", "feature", &wt.to_string_lossy()]);
+        assert_eq!(own_commits(&wt), Some(0), "a new branch at main's commit holds nothing of its own");
+        commit_file(&wt, "b.txt", "b");
+        commit_file(&wt, "c.txt", "c");
+        assert_eq!(own_commits(&wt), Some(2));
+        g(&main, &["branch", "keep", "feature"]);
+        assert_eq!(own_commits(&wt), Some(0), "another local branch now holds them");
+    }
+
+    #[test]
+    fn own_commits_on_a_detached_head_counts_the_new_commit() {
+        let t = Tmp::new();
+        let main = t.sub("main");
+        init(&main);
+        commit_file(&main, "a.txt", "a");
+        let det = t.0.join("det");
+        g(&main, &["worktree", "add", "-q", "--detach", &det.to_string_lossy()]);
+        assert_eq!(own_commits(&det), Some(0));
+        commit_file(&det, "b.txt", "b");
+        assert_eq!(own_commits(&det), Some(1));
     }
 
     #[test]
