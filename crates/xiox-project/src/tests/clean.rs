@@ -247,6 +247,25 @@ fn include_of_a_dirty_worktree_is_refused_as_blocked() {
 }
 
 #[test]
+fn an_included_caution_worktree_that_became_detached_with_a_private_commit_is_skipped() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let own = worktree(&root, &base.join("proj-own"), "own");
+    commit(&own, "on-its-branch.txt");
+    let scan = scan_of(&root);
+    let chosen = select(&scan, &req(&[], &[&own])).unwrap();
+
+    git(&own, &["checkout", "-q", "--detach"]);
+    commit(&own, "on-no-branch.txt");
+    let out = run(&scan, &chosen, RemoveMode::Permanent, false);
+    match outcome_of(&out, &own) {
+        Outcome::Skipped { reason } => assert!(reason.starts_with("now blocked:"), "{reason}"),
+        o => panic!("{o:?}"),
+    }
+    assert!(own.join("on-no-branch.txt").exists());
+}
+
+#[test]
 fn the_worktrees_flag_takes_a_recommended_worktree_but_not_a_caution_one() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));

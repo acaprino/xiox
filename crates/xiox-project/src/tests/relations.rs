@@ -20,7 +20,7 @@ struct World {
 fn world() -> World {
     let (t, base) = tmp();
     let proj = repo(&base.join("proj"));
-    fs::create_dir_all(proj.join("target")).unwrap();
+    rust_build(&proj, 1000);
     let wt = worktree(&proj, &base.join("far").join("proj-wt"), "feature");
     let copy = clone(&proj, &base.join("elsewhere").join("copy"));
     let old = base.join("proj-old");
@@ -64,6 +64,34 @@ fn a_relations_scan_round_trips_through_select_and_clean_dry_run() {
     let item = out.items.iter().find(|o| o.path.as_ref() == Some(&w.copy)).unwrap();
     assert!(!matches!(item.outcome, Outcome::Skipped { .. }), "the copy is found again, not skipped as changed: {:?}", item.outcome);
     assert!(w.copy.exists(), "a dry run removes nothing");
+}
+
+#[test]
+fn a_relations_scan_round_trips_for_a_caution_copy_a_confirmed_named_folder_and_a_worktree() {
+    let w = world();
+    // Three days old: no recent activity with the real clock that `clean` checks again with.
+    let old = xiox_app::now_ms() - 3 * 24 * 60 * 60 * 1000;
+    for dir in [&w.copy, &w.old, &w.wt] {
+        set_times(dir, None, old);
+    }
+    let input = RelationsInput { sessions: &[], sessions_failed: false, now_ms: xiox_app::now_ms() };
+    let scan = analyze_relations(&w.proj, &[w.copy.clone()], &input).unwrap();
+    let level = |p: &PathBuf| scan.items.iter().find(|i| i.path.as_ref() == Some(p)).unwrap().level;
+    // A folder known only by its name and without git is always danger (no git): it goes with its own confirmation.
+    assert_eq!((level(&w.copy), level(&w.old), level(&w.wt)), (Level::Caution, Level::Danger, Level::Recommended));
+    let req = CleanRequest {
+        categories: vec![],
+        include: vec![w.copy.clone(), w.old.clone(), w.wt.clone()],
+        confirm_danger: vec![w.old.clone()],
+        mode: RemoveMode::Recycle,
+    };
+    let chosen = select(&scan, &req).unwrap();
+    let out = clean_without_sessions(&scan, &chosen, RemoveMode::Recycle, true, &[]);
+    for p in [&w.copy, &w.old, &w.wt] {
+        let item = out.items.iter().find(|o| o.path.as_ref() == Some(p)).unwrap();
+        assert!(matches!(item.outcome, Outcome::Removed { .. }), "{} was not taken: {:?}", p.display(), item.outcome);
+        assert!(p.exists(), "a dry run removes nothing");
+    }
 }
 
 // ───────────────────────────── keep_once ─────────────────────────────
@@ -120,17 +148,30 @@ fn keys(roots: &[&str]) -> HashSet<String> {
 
 #[test]
 fn keep_once_leaves_each_folder_in_one_scan() {
+    // The scan that is not a reference comes first: only the reference rank can give the copy to the reference.
     let mut scans = vec![
+        scan_at(r"D:\q\supads", vec![listed(Category::Copies, r"D:\x\supads-copy")]),
         scan_at(r"D:\p\supads", vec![listed(Category::Copies, r"D:\x\supads-copy"), listed(Category::Named, r"D:\p\supads-work")]),
         scan_at(r"D:\x\supads-copy", vec![listed(Category::Copies, r"D:\p\supads")]),
         scan_at(r"D:\p\supads-studio", vec![listed(Category::Named, r"D:\p\supads-studio-old")]),
-        scan_at(r"D:\q\supads", vec![listed(Category::Copies, r"D:\x\supads-copy")]),
     ];
     keep_once(&mut scans, &keys(&[r"D:\p\supads"]));
-    assert_eq!(paths(&scans[0]), [r"D:\x\supads-copy", r"D:\p\supads-work"]);
-    assert!(paths(&scans[1]).is_empty(), "the reference is never a copy");
-    assert_eq!(paths(&scans[2]), [r"D:\p\supads-studio-old"]);
-    assert!(paths(&scans[3]).is_empty(), "the reference's scan keeps the copy");
+    assert!(paths(&scans[0]).is_empty(), "the reference's scan keeps the copy");
+    assert_eq!(paths(&scans[1]), [r"D:\x\supads-copy", r"D:\p\supads-work"]);
+    assert!(paths(&scans[2]).is_empty(), "the reference is never a copy");
+    assert_eq!(paths(&scans[3]), [r"D:\p\supads-studio-old"]);
+}
+
+#[test]
+fn a_folder_that_is_named_here_and_a_copy_there_stays_a_copy() {
+    let mut scans = vec![
+        scan_at(r"D:\p\supads", vec![listed(Category::Named, r"D:\p\supads-x")]),
+        scan_at(r"D:\q\other", vec![listed(Category::Copies, r"D:\p\supads-x")]),
+    ];
+    keep_once(&mut scans, &HashSet::new());
+    assert!(paths(&scans[0]).is_empty());
+    assert_eq!(paths(&scans[1]), [r"D:\p\supads-x"]);
+    assert_eq!(scans[1].items[0].category, Category::Copies);
 }
 
 #[test]

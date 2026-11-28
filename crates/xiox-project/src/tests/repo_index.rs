@@ -55,6 +55,17 @@ fn build_groups_a_clone_and_leaves_an_unrelated_repository_alone() {
 }
 
 #[test]
+fn a_linked_worktree_is_not_a_repository_of_the_index() {
+    let (_t, base) = tmp();
+    let proj = repo(&base.join("proj"));
+    let wt = worktree(&proj, &base.join("proj-wt"), "feature");
+    let index = RepoIndex::build(&[proj.clone(), wt]);
+    let roots: Vec<&Path> = index.repos.iter().map(|r| r.root.as_path()).collect();
+    assert_eq!(roots, [proj.as_path()], "a worktree is reached through its repository, never grouped as its copy");
+    assert!(index.group_of(&proj).is_none());
+}
+
+#[test]
 fn a_folder_that_is_not_a_repository_does_not_enter() {
     let (_t, base) = tmp();
     let plain = base.join("plain");

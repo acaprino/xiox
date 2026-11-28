@@ -39,7 +39,9 @@ impl RepoIndex {
             .iter()
             .map(|r| normalize_path(r))
             .filter(|r| seen.insert(path_key(r)))
-            .filter(|r| is_git_repo(r) && git_may_read(r, home.as_deref()))
+            // A main working tree only: a linked worktree (or a submodule) has a `.git` file, and is reached through its
+            // repository, never taken for a copy of it.
+            .filter(|r| r.join(".git").is_dir() && git_may_read(r, home.as_deref()))
             .collect();
         dirs.sort_by_key(|d| path_key(d));
         let repos: Vec<RepoIdentity> = dirs

@@ -1,7 +1,7 @@
 //! Copies and name-matched folders: the rule, the walk limits, the identity of a repository.
 
 use super::fixtures::*;
-use crate::search::{mft_hits, name_matches_project, walk_candidates};
+use crate::search::{holds_worktree_data, mft_hits, name_matches_project, walk_candidates};
 use crate::{Block, Category, Env, Note, Options, ProjectScan, SearchMode, Target, Why, analyze_with, resolve_project};
 use xiox_disktree::{DiskIndex, Node};
 use xiox_model::ArtifactKind;
@@ -107,6 +107,27 @@ fn a_copy_that_has_linked_worktrees_is_blocked() {
     let c = c.unwrap_or_else(|| panic!("{:?}", s.items));
     assert!(c.blocked.contains(&Block::HoldsWorktreeData), "{:?}", c.blocked);
     assert_eq!(Block::HoldsWorktreeData.reason(), "holds the git data of linked worktrees");
+}
+
+#[test]
+fn holds_worktree_data_says_yes_no_or_cannot_tell() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let with_wt = clone(&project, &base.join("other").join("copy"));
+    worktree(&with_wt, &base.join("far").join("copy-wt"), "x");
+    let plain = base.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let broken = base.join("broken");
+    broken_repo(&broken);
+    let shared = base.join("shared");
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(shared.join(".git"), "gitdir: \\\\127.0.0.1\\share\\x.git\n").unwrap();
+
+    assert_eq!(holds_worktree_data(&with_wt), Some(true));
+    assert_eq!(holds_worktree_data(&project), Some(false));
+    assert_eq!(holds_worktree_data(&plain), Some(false), "not a repository");
+    assert_eq!(holds_worktree_data(&broken), None, "git does not answer: nothing vouches for it");
+    assert_eq!(holds_worktree_data(&shared), None, "git must not be asked about a repository on a share");
 }
 
 #[test]

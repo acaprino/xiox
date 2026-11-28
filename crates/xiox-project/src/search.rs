@@ -348,8 +348,14 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
         Why::SessionFolder { .. } => named_blocks(dir, true),
         _ => Vec::new(),
     };
-    if matches!(category, Category::Copies | Category::Named) && holds_worktree_data(dir) {
-        blocked.push(Block::HoldsWorktreeData);
+    if matches!(category, Category::Copies | Category::Named) {
+        match holds_worktree_data(dir) {
+            Some(true) => blocked.push(Block::HoldsWorktreeData),
+            Some(false) => {}
+            // Git may not be asked, or did not answer: nothing vouches for it.
+            None if !blocked.contains(&Block::UnsavedWorkUnknown) => blocked.push(Block::UnsavedWorkUnknown),
+            None => {}
+        }
     }
     if live_session_in(dir, env) {
         blocked.push(Block::LiveSession);
@@ -369,11 +375,17 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
     }
 }
 
-/// A repository with linked worktrees whose folders exist: its `.git` holds their data, so removing it would leave them
-/// broken. A worktree whose folder is gone (prunable) does not count.
-fn holds_worktree_data(dir: &Path) -> bool {
-    is_git_repo(dir)
-        && xiox_git::list_worktrees(dir).is_some_and(|entries| entries.iter().any(|e| !e.is_main && !e.prunable))
+/// Whether `dir` is a repository with linked worktrees whose folders exist: its `.git` holds their data, so removing it
+/// would leave them broken. A worktree whose folder is gone (prunable) does not count. `None` when git must not be asked
+/// about it ([`git_may_read`]) or did not answer: the caller then cannot vouch for it.
+pub(crate) fn holds_worktree_data(dir: &Path) -> Option<bool> {
+    if !is_git_repo(dir) {
+        return Some(false);
+    }
+    if !git_may_read(dir, git_home().as_deref()) {
+        return None;
+    }
+    xiox_git::list_worktrees(dir).map(|entries| entries.iter().any(|e| !e.is_main && !e.prunable))
 }
 
 /// Find the copies and the name-matched folders of `project`. `extra` are folders found some
