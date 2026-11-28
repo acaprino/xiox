@@ -324,6 +324,73 @@ fn projects_sit_in_a_tree_of_their_folders_whose_boxes_tick_the_free_ones_inside
     assert_eq!(heading(&st.view(false), top).2, Check::Mixed);
 }
 
+/// `report` with another root: its one folder to clean keeps the id `tid(id)`.
+fn rooted(id: &str, root: &str) -> ProjectReport {
+    ProjectReport { root: PathBuf::from(root), ..report(id, ProjectStatus::Inactive, false, 10) }
+}
+
+/// gw holds ui and ext, ui holds deep; app-old only shares a prefix with app.
+fn nested_scan() -> DevScan {
+    DevScan {
+        projects: vec![
+            rooted("gw", r"D:\Projects\gw"),
+            rooted("ui", r"d:\projects\GW\admin-ui"),
+            rooted("ext", r"D:\Projects\gw\tools\ext"),
+            rooted("deep", r"D:\Projects\gw\admin-ui\pkg\deep"),
+            rooted("app", r"D:\Projects\app"),
+            rooted("old", r"D:\Projects\app-old"),
+        ],
+        scanned_at_ms: xiox_app::now_ms(),
+        ..Default::default()
+    }
+}
+
+/// The rows of the list without the folders to clean: (id, parent).
+fn tree_of(v: &SectionView) -> Vec<(&str, Option<&str>)> {
+    v.rows.iter().filter(|r| r.kind != RowKind::Child).map(|r| (r.id.as_str(), r.parent.as_deref())).collect()
+}
+
+#[test]
+fn a_project_inside_another_sits_under_it_and_not_under_a_twin_folder() {
+    let v = with_scan(nested_scan()).view(false);
+    let top = r"h:folder:D:\Projects";
+    assert_eq!(
+        tree_of(&v),
+        [(top, None), ("p:gw", Some(top)), ("p:ui", Some("p:gw")), ("p:deep", Some("p:ui")), ("p:ext", Some("p:gw")), ("p:app", Some(top)), ("p:old", Some(top))]
+    );
+    assert!(!v.rows.iter().any(|r| r.kind == RowKind::Header && r.id != top), "no twin folder heading");
+    assert_eq!(row(&v, "p:ui").name, "admin-ui");
+    assert_eq!(row(&v, "p:ext").name, r"tools\ext");
+    assert_eq!(row(&v, "p:deep").name, r"pkg\deep");
+    assert_eq!(row(&v, "p:gw").bytes, Some(40), "its own and every project inside it, once");
+    assert_eq!(row(&v, "p:ui").bytes, Some(20));
+    assert_eq!(row(&v, "p:app").bytes, Some(10));
+    let with_subs = |id: &str| row(&v, id).detail.iter().any(|(k, _)| k == "with sub-projects");
+    assert!(with_subs("p:gw") && with_subs("p:ui") && !with_subs("p:app") && !with_subs("p:deep"));
+    assert_eq!(row(&v, &format!("a:{}", tid("ui"))).parent.as_deref(), Some("p:ui"));
+}
+
+#[test]
+fn a_parent_box_ticks_only_its_own_folders_and_the_folder_box_ticks_the_sub_projects_too() {
+    let mut st = with_scan(nested_scan());
+    st.toggle("p:gw").unwrap();
+    assert_eq!(st.sel_artifacts, ids(&["gw"]));
+    assert_eq!(row(&st.view(false), "p:gw").check, Check::On, "its box is about its own folders");
+    st.toggle("p:gw").unwrap();
+    st.toggle(r"h:folder:D:\Projects").unwrap();
+    assert_eq!(st.sel_artifacts, ids(&["gw", "ui", "ext", "deep", "app", "old"]));
+    st.select_all(false).unwrap();
+    assert!(st.sel_artifacts.is_empty());
+}
+
+#[test]
+fn a_drive_root_project_is_never_a_parent() {
+    let scan = DevScan { projects: vec![rooted("r", r"D:\"), rooted("a", r"D:\Projects\a")], scanned_at_ms: xiox_app::now_ms(), ..Default::default() };
+    let v = with_scan(scan).view(false);
+    assert_eq!(tree_of(&v), [("p:r", None), (r"h:folder:D:\Projects", None), ("p:a", Some(r"h:folder:D:\Projects"))]);
+    assert_eq!(row(&v, "p:r").bytes, Some(10));
+}
+
 #[test]
 fn a_worktree_that_cannot_be_removed_cannot_be_ticked() {
     let mut dirty = report("d", ProjectStatus::Inactive, true, 40);

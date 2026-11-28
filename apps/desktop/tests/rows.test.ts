@@ -52,6 +52,21 @@ test('children of a collapsed parent are not visible', () => {
   assert.deepEqual(ids(visibleRows(rows, new Set(['p1', 'p2']))), ['p1', 'c1', 'p2', 'c2']);
 });
 
+test('a project inside a project is always in sight, after the folders to clean', () => {
+  const rows = [
+    header('H'),
+    row('P', 40, { parent: 'H' }), child('A', 'P', 5), row('S', 20, { parent: 'P' }), child('B', 'S', 9),
+    row('Q', 30, { parent: 'H' }),
+  ];
+  assert.deepEqual([...rowDepths(rows)], [['H', 0], ['P', 1], ['A', 2], ['S', 2], ['B', 3], ['Q', 1]]);
+  const sorted = sortRows(rows);
+  assert.deepEqual(ids(sorted), ['H', 'P', 'A', 'S', 'B', 'Q'], 'the small folder to clean still comes before the larger sub-project');
+  assert.deepEqual(ids(visibleRows(sorted, new Set())), ['H', 'P', 'S', 'Q']);
+  assert.deepEqual(ids(visibleRows(sorted, new Set(['P']))), ['H', 'P', 'A', 'S', 'Q']);
+  assert.deepEqual(ids(visibleRows(sorted, new Set(), new Set(['H']))), ['H'], 'a folded folder hides them all');
+  assert.equal(headerBytes(rows, 'H'), 70, 'the sub-project is in its parent, not counted twice');
+});
+
 test('rowParents lists the rows that have children', () => {
   const rows = [row('p1', 100), child('c1', 'p1', 10), child('c2', 'p1', 90), row('p2', 300)];
   assert.deepEqual([...rowParents(rows)], ['p1']);

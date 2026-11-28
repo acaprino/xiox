@@ -186,22 +186,30 @@ impl DevState {
     }
 
     /// The projects under the folders they sit in (a tree: [`folder_tree`]), each folder a heading with the box of the
-    /// projects inside it; a project with no folder above it (a drive's root) comes first, under none.
+    /// projects inside it; a project with no folder above it (a drive's root) comes first, under none. A project inside
+    /// another one ([`nearest_parents`]) sits under that one, not under a heading of its own.
     fn project_rows(&self, scan: &DevScan) -> Vec<RowView> {
-        let (loose, tree) = folder_tree(&scan.projects);
+        let parents = nearest_parents(&scan.projects);
+        let mut inside = vec![Vec::new(); scan.projects.len()];
+        for (i, up) in parents.iter().enumerate() {
+            if let Some(up) = *up {
+                inside[up].push(i);
+            }
+        }
+        let (loose, tree) = folder_tree(&scan.projects, &parents);
         let mut rows = Vec::new();
         for i in loose {
-            self.push_project(&mut rows, &scan.projects[i], None);
+            self.push_project(&mut rows, scan, &inside, i, None, scan.projects[i].name.clone());
         }
         for folder in &tree {
-            self.push_folder(&mut rows, scan, folder, None);
+            self.push_folder(&mut rows, scan, &inside, folder, None);
         }
         rows
     }
 
     /// A folder's heading (named after the part of its path below the folder above it: the tree says the rest), then the
     /// folders and the projects inside it.
-    fn push_folder(&self, rows: &mut Vec<RowView>, scan: &DevScan, folder: &Folder, above: Option<(&Folder, &str)>) {
+    fn push_folder(&self, rows: &mut Vec<RowView>, scan: &DevScan, inside: &[Vec<usize>], folder: &Folder, above: Option<(&Folder, &str)>) {
         let id = format!("{FOLDER_ROW}{}", folder.path.display());
         let name = match above {
             Some((up, _)) => folder.path.components().skip(up.path.components().count()).collect::<PathBuf>().display().to_string(),
@@ -209,15 +217,18 @@ impl DevState {
         };
         rows.push(RowView { parent: above.map(|(_, up)| up.to_string()), name, ..blank_row(id.clone(), RowKind::Header) });
         for inner in &folder.folders {
-            self.push_folder(rows, scan, inner, Some((folder, &id)));
+            self.push_folder(rows, scan, inside, inner, Some((folder, &id)));
         }
         for &i in &folder.projects {
-            self.push_project(rows, &scan.projects[i], Some(&id));
+            self.push_project(rows, scan, inside, i, Some(&id), scan.projects[i].name.clone());
         }
     }
 
-    /// A project's row, then its folders to clean under it.
-    fn push_project(&self, rows: &mut Vec<RowView>, r: &ProjectReport, folder: Option<&str>) {
+    /// A project's row, its folders to clean under it, then the projects inside it (`inside[i]`), each named after its
+    /// path below this one. Its size is what it and the projects inside it free; its box is about its own folders.
+    fn push_project(&self, rows: &mut Vec<RowView>, scan: &DevScan, inside: &[Vec<usize>], i: usize, parent: Option<&str>, name: String) {
+        let r = &scan.projects[i];
+        let total = freed_with_inside(&scan.projects, inside, i);
         let mode = self.mode_text();
         let free = status_allows(r);
         let locked = (!free).then(|| locked_why(r));
@@ -237,6 +248,9 @@ impl DevState {
             ("last use".to_string(), date.clone()),
             ("size".to_string(), sys::fmt_size(r.reclaimable_bytes)),
         ];
+        if !inside[i].is_empty() {
+            detail.push(("with sub-projects".into(), sys::fmt_size(total)));
+        }
         if let Some(why) = locked.clone().or_else(|| (!r.reason.is_empty()).then(|| r.reason.clone())) {
             detail.push(("why".into(), why));
         }
@@ -244,14 +258,14 @@ impl DevState {
         rows.push(RowView {
             check,
             enabled: free,
-            name: r.name.clone(),
+            name,
             sub: (!r.reason.is_empty()).then(|| r.reason.clone()),
             cells: vec![date],
-            bytes: Some(r.reclaimable_bytes),
+            bytes: Some(total),
             muted: !free,
             why: locked.clone(),
             detail,
-            parent: folder.map(str::to_string),
+            parent: parent.map(str::to_string),
             ..blank_row(id.clone(), RowKind::Item)
         });
         for a in &r.artifacts {
@@ -278,6 +292,9 @@ impl DevState {
                 detail,
                 ..blank_row(format!("a:{}", a.id), RowKind::Child)
             });
+        }
+        for &k in &inside[i] {
+            self.push_project(rows, scan, inside, k, Some(&id), path_below(&scan.projects[k].root, &r.root));
         }
     }
 
@@ -625,11 +642,35 @@ impl Folder {
     }
 }
 
+/// For each project, the project its folder is inside, the nearest one: an ancestor of its root that is another project's
+/// root (compared with `path_key`, never as a prefix of the text: `app-old` is not inside `app`). A drive's root is never
+/// one: a project there does not hold the whole drive.
+fn nearest_parents(projects: &[ProjectReport]) -> Vec<Option<usize>> {
+    let roots: HashMap<String, usize> =
+        projects.iter().enumerate().filter(|(_, r)| r.root.parent().is_some()).map(|(i, r)| (path_key(&r.root), i)).collect();
+    projects.iter().map(|r| r.root.ancestors().skip(1).find_map(|a| roots.get(&path_key(a)).copied())).collect()
+}
+
+/// What a project and every project inside it free (each counted once: a project has one parent).
+fn freed_with_inside(projects: &[ProjectReport], inside: &[Vec<usize>], i: usize) -> u64 {
+    projects[i].reclaimable_bytes + inside[i].iter().map(|&k| freed_with_inside(projects, inside, k)).sum::<u64>()
+}
+
+/// `root` as the path below `up`, an ancestor of it in any spelling (`admin-ui`, `tools\ext`); the whole path if it is not.
+fn path_below(root: &Path, up: &Path) -> String {
+    let key = path_key(up);
+    root.ancestors()
+        .find(|a| path_key(a) == key)
+        .and_then(|a| root.strip_prefix(a).ok())
+        .map_or_else(|| root.display().to_string(), |below| below.display().to_string())
+}
+
 /// The projects as a tree of the folders they sit in, the folders in the order of their first project: the projects with
-/// no folder above them, and the top folders, compacted ([`Folder::compact`]).
-fn folder_tree(projects: &[ProjectReport]) -> (Vec<usize>, Vec<Folder>) {
+/// no folder above them, and the top folders, compacted ([`Folder::compact`]). A project inside another one (`parents`)
+/// is not in it: it sits under that project.
+fn folder_tree(projects: &[ProjectReport], parents: &[Option<usize>]) -> (Vec<usize>, Vec<Folder>) {
     let mut top = Folder::default();
-    for (i, r) in projects.iter().enumerate() {
+    for (i, r) in projects.iter().enumerate().filter(|(i, _)| parents[*i].is_none()) {
         let mut at = &mut top;
         let mut path = PathBuf::new();
         for part in r.root.parent().into_iter().flat_map(Path::components) {

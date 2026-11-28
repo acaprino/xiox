@@ -118,15 +118,18 @@ function sortBlock(rows: RowView[], order: Order): RowView[] {
     const list = kids.get(parent);
     if (list) list.push(row); else kids.set(parent, [row]);
   }
+  const sorted = (list: Branch[]): Branch[] => byValue(list, (b) => b.value, order.desc);
   const branch = (row: RowView): Branch => {
-    const inner = byValue((kids.get(row.id) ?? []).map(branch), (b) => b.value, order.desc);
+    const under = (kids.get(row.id) ?? []).map(branch);
+    // Under a row (a project), its folders to clean come first, then the projects inside it.
+    const inner = row.kind === 'header' ? sorted(under) : [...sorted(under.filter((b) => b.row.kind === 'child')), ...sorted(under.filter((b) => b.row.kind !== 'child'))];
     const own = order.value(row);
     const value = order.kind === 'size' ? own ?? sum(inner.map((b) => b.value)) : row.kind === 'header' ? own ?? inner[0]?.value ?? null : own;
     return { row, rows: [row, ...inner.flatMap((b) => b.rows)], value };
   };
   const tops = (kids.get(null) ?? []).map(branch);
-  const sorted = (list: Branch[]): RowView[] => byValue(list, (b) => b.value, order.desc).flatMap((b) => b.rows);
-  return [...sorted(tops.filter((b) => b.row.kind !== 'header')), ...sorted(tops.filter((b) => b.row.kind === 'header'))];
+  const flat = (list: Branch[]): RowView[] => sorted(list).flatMap((b) => b.rows);
+  return [...flat(tops.filter((b) => b.row.kind !== 'header')), ...flat(tops.filter((b) => b.row.kind === 'header'))];
 }
 
 /**
@@ -149,7 +152,8 @@ export function sortRows(rows: RowView[], order: Order = BY_SIZE): RowView[] {
 /**
  * The rows on screen: a child shows only while every parent above it is open, and the rows of a folded category are not
  * shown at all, its own row stays. A parent row is open when expanded; a folder (a header with rows hanging under it) is
- * open unless folded. `folded` holds the ids of the folded categories and folders.
+ * open unless folded. A row under a row that is not a `child` (a project inside a project) is in sight whenever its
+ * parent is: what is ticked inside never hides. `folded` holds the ids of the folded categories and folders.
  */
 export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, folded: ReadonlySet<string> = new Set()): RowView[] {
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -157,7 +161,7 @@ export function visibleRows(rows: RowView[], expanded: ReadonlySet<string>, fold
     if (row.parent === null) return true;
     const parent = byId.get(row.parent);
     if (!parent) return true;
-    const open = parent.kind === 'header' ? !folded.has(parent.id) : expanded.has(parent.id);
+    const open = parent.kind === 'header' ? !folded.has(parent.id) : row.kind !== 'child' || expanded.has(parent.id);
     if (!open || seen.has(parent.id)) return false;
     return shown(parent, seen.add(row.id));
   };
