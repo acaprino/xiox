@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { disabledReason, emptyAction } from '../src/policy.ts';
-import type { ActionView, DialogView, SectionView } from '../src/types.ts';
+import { disabledReason, emptyAction, layoutChoice, panelOptions } from '../src/policy.ts';
+import type { ActionView, DialogView, OptionView, SectionView } from '../src/types.ts';
 
 const action = (id: string, enabled: boolean, label = id): ActionView => ({ id, label, key: null, enabled, primary: false });
 const dialog = (extra: Partial<DialogView> = {}): DialogView => ({
@@ -37,4 +37,18 @@ test('a disabled action says why', () => {
 test('an empty list offers the enabled action that starts the work', () => {
   assert.equal(emptyAction(view({ actions: [action('scan', true, 'Find issues'), action('fix', false)] }))?.label, 'Find issues');
   assert.equal(emptyAction(view({ actions: [action('analyze', false)] })), null);
+});
+
+test('the layout of the projects is a choice of the header, not of the Options panel', () => {
+  const layout: OptionView = { kind: 'choice', id: 'layout', label: 'Layout', value: 'tree', enabled: true, choices: [{ id: 'tree', label: 'Tree' }, { id: 'flat', label: 'Flat' }] };
+  const days: OptionView = { kind: 'number', id: 'inactiveDays', label: 'Days of inactivity', value: 14, min: 1, max: 365, enabled: true };
+  const nav = (active: string) => ['projects', 'worktrees', 'sessions'].map((id) => ({ id, name: id, note: null, bytes: null, active: id === active }));
+  const dev = (active: string): SectionView => view({ section: 'developers', nav: nav(active), options: [layout, days] });
+  assert.deepEqual(layoutChoice(dev('projects')), layout);
+  assert.equal(layoutChoice(dev('worktrees')), null, 'only the list of the projects has a layout');
+  assert.deepEqual(panelOptions(dev('projects')), [days]);
+  assert.deepEqual(panelOptions(dev('sessions')), [days]);
+  // Registry keeps its rule: its kinds of issue are its sidebar, not options.
+  const kind: OptionView = { kind: 'toggle', id: 'cat:0', label: 'Fonts', on: true, enabled: true, hint: null };
+  assert.deepEqual(panelOptions(view({ section: 'registry', nav: [], options: [kind, days] })), [days]);
 });

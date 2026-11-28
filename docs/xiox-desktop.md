@@ -303,13 +303,16 @@ those agents worked in; you can add more folders to look through.
 
 | Option | Meaning |
 |---|---|
-| `Layout` | how `Projects` is listed: `Tree` (default), the projects in the folders they sit in; `Flat`, one list of every project with its full path under its name, so the order by size runs over the whole list |
 | `Days of inactivity` | how long a project must have been untouched to be suggested for cleaning (1 to 365, default 14) |
 | `Deletion` | `To the Recycle Bin (recoverable)` (default) or `Permanently` |
 | `Also analyze these folders` | also look through the folders in the list below |
 | `Extra folders` | the folders you add with `Add folder…` (a folder picker opens) and take away with `Remove` (select one first) |
 
-These options are saved (see [Where things are stored](#where-things-are-stored)). A note under
+**Tree or Flat.** Above the list of `Projects`, a switch of two, `Tree` (default) and `Flat`, says how the
+projects are listed: in the folders they sit in, or as one list of every project with its full path under
+its name, so that the order by size runs over the whole list. It changes the rows, never what is ticked.
+
+These options, and the switch, are saved (see [Where things are stored](#where-things-are-stored)). A note under
 `Deletion` reminds you that the Recycle Bin frees no space until you empty it, and that the
 `Recycle Bin` entry of Cleanup empties it. If the settings cannot be saved a red line says so
 (`Settings not saved: ...`) and the options only last until you close the app.
@@ -345,7 +348,8 @@ above is closed. The project above shows what it and the projects inside it add 
 has both figures, `size` and `with sub-projects`); its box and its arrow are about its own folders
 only, which come before the projects inside it. A project at the root of a drive (`D:\`) never holds
 the others. With `Layout: Flat` there are no folders: every project, those inside others too, is a
-row of the list with its full path as its second line and its own size only.
+row of the list with its full path as its second line and its own size only (`Tree` and `Flat` are the
+switch above the list).
 Each project has a box that ticks all its folders (half-ticked when only some are)
 and, under it, the folders themselves (`target`, `node_modules`, `.venv`, ...), each with its own
 box, level, size and reason (*Build output that cargo recreates.*, *Restored by npm install.*).
@@ -531,7 +535,8 @@ The footer shows the keys of the open section, taken from the command registry, 
 and what the keys do agree. The commands are Sigrid's registry (`useCommand`): `Ctrl`+`K` lists them all, with the actions of the open section.
 
 **Tab order.** The title bar (the views; the switch of light and dark; the `Commands` button; the window buttons), the categories of
-the sidebar, then the main panel (`Details` and `Options`, the search box, the list with its top check box), the inspector when it is
+the sidebar, then the main panel (`Details` and `Options`, the search box or, in `Projects`, the switch `Tree` / `Flat`
+(one Tab stop: the arrows move between its two), the list with its top check box), the inspector when it is
 open, and last the buttons of the section. The list is **one** Tab stop: once in it, move with the
 arrows and tick with `Space`; the boxes and carets of its rows are for the mouse. The inspector
 can be reached too (`F6`), so a long reason can be scrolled with the arrows. A visible ring shows

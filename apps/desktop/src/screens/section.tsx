@@ -1,18 +1,17 @@
-// The content of a section: its panel (the title, what is chosen, the search, Details and Options) and in it the list, the report that
-// replaces it, or what stands in its place: nothing to show (with the action that starts the work), a wait, an error.
+// The content of a section: its panel (the title, what is chosen, Details and Options; under them the search and the layout of the list) and in it the
+// list, the report that replaces it, or what stands in its place: nothing to show (with the action that starts the work), a wait, an error.
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { Empty, SearchField } from '@acaprino/sigrid/components';
 import { Panel } from '@acaprino/sigrid/layout';
-import { Button, Cell, Icon, Progress } from '@acaprino/sigrid/primitives';
+import { Button, Cell, Icon, Progress, ToggleGroup, ToggleGroupItem } from '@acaprino/sigrid/primitives';
 import type { Controller } from '../controller.ts';
-import { actionIntent, searchIntent } from '../intents.ts';
-import { emptyAction } from '../policy.ts';
+import { actionIntent, optionIntent, searchIntent } from '../intents.ts';
+import { emptyAction, layoutChoice, panelOptions } from '../policy.ts';
 import { foldedGroups, searching, shownRows } from '../state.ts';
 import type { AppInfo, SectionView } from '../types.ts';
 import { useAfter } from './hooks.ts';
 import { List } from './list.tsx';
 import { Notice, ProfileNote } from './notices.tsx';
-import { panelOptions } from './options.tsx';
 import { Report } from './report.tsx';
 
 const SEARCH_DELAY_MS = 150;
@@ -50,6 +49,7 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
   const groups = view.rows.filter((r) => r.kind === 'group');
   const anyOpen = groups.some((g) => !foldedGroups(ui, view).has(g.id));
   const hasOptions = panelOptions(view).length > 0;
+  const layout = layoutChoice(view);
 
   if (view.report !== null) return <Report c={c} section={view.section} report={view.report} />;
 
@@ -60,6 +60,12 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
       {view.search ? <Cell grow><Search c={c} view={view} field={field} /></Cell> : null}
       {groups.length >= 2 ? (
         <Button variant="outline" size="sm" disabled={searching(view)} onClick={() => c.foldAll(anyOpen)}>{anyOpen ? 'Fold all' : 'Open all'}</Button>
+      ) : null}
+      {/* How the list is laid out sits with the list's other tools: this row wraps in a narrow window, the header's does not. */}
+      {layout ? (
+        <ToggleGroup aria-label={layout.label} value={layout.value} onValueChange={(next) => { void c.send(view.section, optionIntent(view.section, layout, next)); }}>
+          {layout.choices.map((choice) => <ToggleGroupItem key={choice.id} value={choice.id} disabled={!layout.enabled}>{choice.label}</ToggleGroupItem>)}
+        </ToggleGroup>
       ) : null}
     </>
   );

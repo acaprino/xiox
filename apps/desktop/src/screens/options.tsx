@@ -88,9 +88,3 @@ export function OptionControl({ c, section, option }: { c: Controller; section: 
     case 'text': return <Note tone={noteTone(option.tone)} title={option.text} />;
   }
 }
-
-/** The options the inspector shows: all of the section's, but Registry's kinds of issue, which are its categories in the sidebar. */
-export function panelOptions(view: { nav: unknown[]; section: SectionId; options: OptionView[] }): OptionView[] {
-  const kinds = view.nav.length === 0 && view.section === 'registry';
-  return kinds ? view.options.filter((o) => o.kind !== 'toggle') : view.options;
-}

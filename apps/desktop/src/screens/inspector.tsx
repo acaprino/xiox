@@ -5,8 +5,9 @@ import { DescriptionList, Note } from '@acaprino/sigrid/components';
 import { Column, Text, TextList } from '@acaprino/sigrid/primitives';
 import { Inspector } from '@acaprino/sigrid/layout';
 import type { Controller } from '../controller.ts';
+import { panelOptions } from '../policy.ts';
 import type { RowView, SectionView } from '../types.ts';
-import { OptionControl, panelOptions } from './options.tsx';
+import { OptionControl } from './options.tsx';
 
 const NUMBERS = new Set(['files', 'size']);
 const word = (key: string): string => key.charAt(0).toUpperCase() + key.slice(1);

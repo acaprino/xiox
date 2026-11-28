@@ -1,7 +1,24 @@
 // Small pure decisions of the views, apart from the screens so that tests/policy.test.ts can state them: why an action is
 // disabled, which action an empty list offers. (Whether a confirmation deletes for good is the view's `permanent`, not a reading of its words.)
 
-import type { ActionView, DialogView, SectionView } from './types.ts';
+import type { ActionView, DialogView, OptionView, SectionView } from './types.ts';
+
+type ChoiceOption = Extract<OptionView, { kind: 'choice' }>;
+
+/** The layout of the list (Tree / Flat), a choice of the panel's header: Developers sends it, and only its projects have one. */
+export function layoutChoice(view: Pick<SectionView, 'nav' | 'options'>): ChoiceOption | null {
+  if (view.nav.find((n) => n.active)?.id !== 'projects') return null;
+  return view.options.find((o): o is ChoiceOption => o.kind === 'choice' && o.id === 'layout') ?? null;
+}
+
+/**
+ * The options the inspector shows: all of the section's, but the layout of the list (in the panel's header) and Registry's kinds
+ * of issue, which are its categories in the sidebar.
+ */
+export function panelOptions(view: Pick<SectionView, 'nav' | 'section' | 'options'>): OptionView[] {
+  const kinds = view.nav.length === 0 && view.section === 'registry';
+  return view.options.filter((o) => !(kinds && o.kind === 'toggle') && !(o.kind === 'choice' && o.id === 'layout'));
+}
 
 /** The actions that start the work of a section: an empty list offers the one that is enabled. */
 const START_ACTIONS: ReadonlySet<string> = new Set(['analyze', 'scan']);
