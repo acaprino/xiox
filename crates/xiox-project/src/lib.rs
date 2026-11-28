@@ -38,7 +38,7 @@ pub use history::{
     SessionEvidence, SourceReport,
 };
 pub use owned::key_within;
-pub use relations::{RelationsInput, analyze_relations};
+pub use relations::{RelationsInput, analyze_relations, keep_once};
 pub use repo_index::{RepoIdentity, RepoIndex, repositories_under};
 pub use provenance::{
     Candidate, Completeness, Coverage, Env as PathEnv, EvidenceRef, Extraction, Flags, FolderEvidence, Ledger, OpKind,

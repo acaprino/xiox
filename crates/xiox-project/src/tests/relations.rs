@@ -60,3 +60,93 @@ fn a_relations_scan_round_trips_through_select_and_clean_dry_run() {
     assert!(!matches!(item.outcome, Outcome::Skipped { .. }), "the copy is found again, not skipped as changed: {:?}", item.outcome);
     assert!(w.copy.exists(), "a dry run removes nothing");
 }
+
+// ───────────────────────────── keep_once ─────────────────────────────
+
+fn listed(cat: Category, path: &str) -> Item {
+    let p = PathBuf::from(path);
+    Item {
+        key: xiox_model::path_key(&p),
+        category: cat,
+        path: Some(p),
+        bytes: Some(1),
+        level: Level::Caution,
+        risks: Vec::new(),
+        identity: None,
+        blocked: Vec::new(),
+        why: match cat {
+            Category::Worktrees => Why::LinkedWorktree { branch: None, head: None, own_commits: None },
+            Category::Copies => Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: Some(false) },
+            _ => Why::NameOnly,
+        },
+        target: Target::Dir { kind: xiox_model::ArtifactKind::ProjectFolder },
+        provenance: None,
+    }
+}
+
+fn scan_at(root: &str, items: Vec<Item>) -> ProjectScan {
+    let root = PathBuf::from(root);
+    ProjectScan {
+        schema: SCHEMA,
+        project: Project {
+            name: root.file_name().unwrap().to_string_lossy().into_owned(),
+            root,
+            is_repo: true,
+            origin: None,
+            worktrees: Vec::new(),
+        },
+        items,
+        branches: Vec::new(),
+        notes: Vec::new(),
+        history: None,
+        search: SearchMode::ParentOnly,
+        scanned_at_ms: 0,
+        elapsed_ms: 0,
+    }
+}
+
+fn paths(scan: &ProjectScan) -> Vec<String> {
+    scan.items.iter().map(|i| i.path.as_ref().unwrap().display().to_string()).collect()
+}
+
+fn keys(roots: &[&str]) -> HashSet<String> {
+    roots.iter().map(|r| xiox_model::path_key(std::path::Path::new(r))).collect()
+}
+
+#[test]
+fn keep_once_leaves_each_folder_in_one_scan() {
+    let mut scans = vec![
+        scan_at(r"D:\p\supads", vec![listed(Category::Copies, r"D:\x\supads-copy"), listed(Category::Named, r"D:\p\supads-work")]),
+        scan_at(r"D:\x\supads-copy", vec![listed(Category::Copies, r"D:\p\supads")]),
+        scan_at(r"D:\p\supads-studio", vec![listed(Category::Named, r"D:\p\supads-studio-old")]),
+        scan_at(r"D:\q\supads", vec![listed(Category::Copies, r"D:\x\supads-copy")]),
+    ];
+    keep_once(&mut scans, &keys(&[r"D:\p\supads"]));
+    assert_eq!(paths(&scans[0]), [r"D:\x\supads-copy", r"D:\p\supads-work"]);
+    assert!(paths(&scans[1]).is_empty(), "the reference is never a copy");
+    assert_eq!(paths(&scans[2]), [r"D:\p\supads-studio-old"]);
+    assert!(paths(&scans[3]).is_empty(), "the reference's scan keeps the copy");
+}
+
+#[test]
+fn a_folder_named_after_two_projects_goes_to_the_longer_name() {
+    let mut scans = vec![
+        scan_at(r"D:\p\supads", vec![listed(Category::Named, r"D:\p\supads-work-build")]),
+        scan_at(r"D:\p\supads-work", vec![listed(Category::Named, r"D:\p\supads-work-build")]),
+    ];
+    keep_once(&mut scans, &HashSet::new());
+    assert!(paths(&scans[0]).is_empty());
+    assert_eq!(paths(&scans[1]), [r"D:\p\supads-work-build"]);
+}
+
+#[test]
+fn a_worktree_listed_as_a_copy_elsewhere_stays_a_worktree() {
+    let mut scans = vec![
+        scan_at(r"D:\p\supads", vec![listed(Category::Copies, r"D:\w\clone-wt")]),
+        scan_at(r"D:\x\clone", vec![listed(Category::Worktrees, r"D:\w\clone-wt")]),
+    ];
+    keep_once(&mut scans, &keys(&[r"D:\p\supads"]));
+    assert!(paths(&scans[0]).is_empty(), "never removed as a folder: git would keep a broken registration");
+    assert_eq!(paths(&scans[1]), [r"D:\w\clone-wt"]);
+    assert_eq!(scans[1].items[0].category, Category::Worktrees);
+}
