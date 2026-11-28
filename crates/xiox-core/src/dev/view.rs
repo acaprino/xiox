@@ -115,6 +115,20 @@ impl DevState {
         let enabled = !self.busy();
         let s = &self.settings;
         let mut v = vec![
+            OptionView::Choice {
+                id: "layout".into(),
+                label: "Layout".into(),
+                value: match s.layout {
+                    ProjectLayout::Tree => "tree",
+                    ProjectLayout::Flat => "flat",
+                }
+                .into(),
+                choices: vec![
+                    ChoiceItem { id: "tree".into(), label: "Tree".into() },
+                    ChoiceItem { id: "flat".into(), label: "Flat".into() },
+                ],
+                enabled,
+            },
             OptionView::Number {
                 id: "inactiveDays".into(),
                 label: "Days of inactivity".into(),
@@ -187,8 +201,17 @@ impl DevState {
 
     /// The projects under the folders they sit in (a tree: [`folder_tree`]), each folder a heading with the box of the
     /// projects inside it; a project with no folder above it (a drive's root) comes first, under none. A project inside
-    /// another one ([`nearest_parents`]) sits under that one, not under a heading of its own.
+    /// another one ([`nearest_parents`]) sits under that one, not under a heading of its own. Flat: every project is a
+    /// row of the list, in the scan's order, with its own size.
     fn project_rows(&self, scan: &DevScan) -> Vec<RowView> {
+        if self.settings.layout == ProjectLayout::Flat {
+            let none: Vec<Vec<usize>> = vec![Vec::new(); scan.projects.len()];
+            let mut rows = Vec::new();
+            for (i, r) in scan.projects.iter().enumerate() {
+                self.push_project(&mut rows, scan, &none, i, None, r.name.clone());
+            }
+            return rows;
+        }
         let parents = nearest_parents(&scan.projects);
         let mut inside = vec![Vec::new(); scan.projects.len()];
         for (i, up) in parents.iter().enumerate() {
@@ -259,7 +282,12 @@ impl DevState {
             check,
             enabled: free,
             name,
-            sub: (!r.reason.is_empty()).then(|| r.reason.clone()),
+            // Flat: the full path says where the project is (inside which other one); the reason stays in the details.
+            sub: if self.settings.layout == ProjectLayout::Flat {
+                Some(r.root.display().to_string())
+            } else {
+                (!r.reason.is_empty()).then(|| r.reason.clone())
+            },
             cells: vec![date],
             bytes: Some(total),
             muted: !free,

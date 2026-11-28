@@ -396,6 +396,7 @@ pub enum DevIntent {
     SelectAll { on: bool },
     SetInactiveDays { days: u32 },
     SetRemoveMode { mode: RemoveModeView },
+    SetLayout { layout: xiox_model::ProjectLayout },
     SetScanRoots { on: bool },
     SelectRoot { index: Option<usize> },
     RemoveRoot,
@@ -752,5 +753,8 @@ mod tests {
         assert_eq!(serde_json::to_value(CleanupIntent::SelectAll { on: true }).unwrap(), json!({ "kind": "selectAll", "on": true }));
         assert!(serde_json::from_value::<CleanupIntent>(json!({ "kind": "select", "category": "builtin:System" })).is_err());
         assert!(serde_json::from_value::<DevIntent>(json!({ "kind": "format-c" })).is_err());
+        let intent: DevIntent = serde_json::from_value(json!({ "kind": "setLayout", "layout": "flat" })).unwrap();
+        assert_eq!(intent, DevIntent::SetLayout { layout: xiox_model::ProjectLayout::Flat });
+        assert!(serde_json::from_value::<DevIntent>(json!({ "kind": "setLayout", "layout": "grid" })).is_err());
     }
 }

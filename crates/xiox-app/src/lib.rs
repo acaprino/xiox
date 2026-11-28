@@ -14,7 +14,7 @@
 pub use xiox_cleaner::{Cancel, Tick};
 use xiox_model::{
     APP_DIR, Agent, AnalysisResult, CleanPlan, CleanReport, CleanResult, DEFAULT_INACTIVE_DAYS, DirIndex, EngineConfig, ItemOutcome,
-    Level, Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
+    Level, Loaded, PlanAction, PlanItem, ProjectCandidate, ProjectLayout, ProjectReport, ProjectScanner, RemoveMode, ScanOptions,
     Selection, SessionRecord, SessionSource, Settings, normalize_path, path_key,
 };
 use xiox_mukade::{ArchivedSession, Descriptor, MukadeSessions};
@@ -88,6 +88,7 @@ fn default_settings_for(home: Option<&Path>) -> Settings {
         inactive_days: DEFAULT_INACTIVE_DAYS,
         remove_mode: RemoveMode::Recycle,
         all_drives: true,
+        layout: ProjectLayout::Tree,
     }
 }
 

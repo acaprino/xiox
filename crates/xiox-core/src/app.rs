@@ -212,6 +212,7 @@ impl Core {
             DevIntent::SelectAll { on } => st.select_all(on),
             DevIntent::SetInactiveDays { days } => st.set_inactive_days(days),
             DevIntent::SetRemoveMode { mode } => st.set_remove_mode(mode.into()),
+            DevIntent::SetLayout { layout } => st.set_layout(layout),
             DevIntent::SetScanRoots { on } => st.set_scan_roots(on),
             DevIntent::SelectRoot { index } => st.select_root(index),
             DevIntent::RemoveRoot => st.remove_root(),

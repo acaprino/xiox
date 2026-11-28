@@ -687,6 +687,7 @@ fn settings_walking(roots: Vec<PathBuf>) -> Settings {
         inactive_days: 14,
         remove_mode: RemoveMode::Recycle,
         all_drives: false,
+        layout: ProjectLayout::Tree,
     }
 }
 
@@ -946,6 +947,27 @@ fn the_old_settings_file_is_read_until_pref_json_has_its_section() {
     assert_eq!(load_settings_from(&store, &legacy).inactive_days, 7);
     std::fs::write(&legacy, "{ not json").unwrap();
     assert_eq!(load_settings_from(&store, &legacy).inactive_days, 7, "the old file no longer matters");
+}
+
+/// Files written before the layout existed have no such field: they read, and the layout is the tree.
+#[test]
+fn settings_without_a_layout_read_as_the_tree_and_a_layout_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = prefs::Store::at(tmp.path().join("pref.json"));
+    let legacy = tmp.path().join("settings.json");
+    let mut old = serde_json::to_value(settings_walking(vec![])).unwrap();
+    old["inactiveDays"] = 45.into();
+    old.as_object_mut().unwrap().remove("layout").expect("Settings writes its layout");
+    std::fs::write(&legacy, old.to_string()).unwrap();
+    let back = load_settings_from(&store, &legacy);
+    assert_eq!((back.inactive_days, back.layout), (45, ProjectLayout::Tree), "the old settings.json");
+    store.write(prefs::DEVELOPERS, &old).unwrap();
+    let back = load_settings_from(&store, &legacy);
+    assert_eq!((back.inactive_days, back.layout), (45, ProjectLayout::Tree), "a pref.json section without the field");
+    let mut flat = settings_walking(vec![]);
+    flat.layout = ProjectLayout::Flat;
+    store.write(prefs::DEVELOPERS, &flat).unwrap();
+    assert_eq!(load_settings_from(&store, &legacy).layout, ProjectLayout::Flat);
 }
 
 /// A Developers section written before a field existed keeps its other values: the missing field takes its default,

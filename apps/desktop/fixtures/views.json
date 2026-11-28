@@ -30524,6 +30524,23 @@
         ],
         "options": [
           {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
+          {
             "kind": "number",
             "id": "inactiveDays",
             "label": "Days of inactivity",
@@ -30663,6 +30680,23 @@
         ],
         "options": [
           {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": false,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
+          {
             "kind": "number",
             "id": "inactiveDays",
             "label": "Days of inactivity",
@@ -30797,6 +30831,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",
@@ -31320,6 +31371,23 @@
         ],
         "options": [
           {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
+          {
             "kind": "number",
             "id": "inactiveDays",
             "label": "Days of inactivity",
@@ -31642,6 +31710,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",
@@ -32123,6 +32208,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",
@@ -32691,6 +32793,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": true,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",
@@ -33265,6 +33384,23 @@
         ],
         "options": [
           {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": false,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
+          {
             "kind": "number",
             "id": "inactiveDays",
             "label": "Days of inactivity",
@@ -33403,6 +33539,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": false,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",
@@ -33567,6 +33720,23 @@
           }
         ],
         "options": [
+          {
+            "kind": "choice",
+            "id": "layout",
+            "label": "Layout",
+            "value": "tree",
+            "enabled": false,
+            "choices": [
+              {
+                "id": "tree",
+                "label": "Tree"
+              },
+              {
+                "id": "flat",
+                "label": "Flat"
+              }
+            ]
+          },
           {
             "kind": "number",
             "id": "inactiveDays",

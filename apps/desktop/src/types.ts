@@ -65,7 +65,8 @@ export type RegistryIntent =
   | { kind: 'scan' } | { kind: 'openFix' } | { kind: 'fix'; backup: boolean } | { kind: 'closeDialog' };
 export type DevIntent =
   | { kind: 'select'; category: 'projects' | 'worktrees' | 'sessions' } | { kind: 'toggle'; row: string } | { kind: 'selectAll'; on: boolean }
-  | { kind: 'setInactiveDays'; days: number } | { kind: 'setRemoveMode'; mode: 'recycle' | 'permanent' } | { kind: 'setScanRoots'; on: boolean }
+  | { kind: 'setInactiveDays'; days: number } | { kind: 'setRemoveMode'; mode: 'recycle' | 'permanent' } | { kind: 'setLayout'; layout: 'tree' | 'flat' }
+  | { kind: 'setScanRoots'; on: boolean }
   | { kind: 'selectRoot'; index: number | null } | { kind: 'removeRoot' } | { kind: 'analyze' } | { kind: 'openConfirm' }
   | { kind: 'setAck'; on: boolean } | { kind: 'confirm' } | { kind: 'permanent' } | { kind: 'closeDialog' } | { kind: 'cancel' };
 export type AnyIntent = CleanupIntent | RegistryIntent | DevIntent;

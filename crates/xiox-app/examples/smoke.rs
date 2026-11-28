@@ -6,7 +6,7 @@
 //! `SMOKE_ROOTS=1` lists the roots found from sessions and the folders skipped, with the reason.
 //!
 //! The only write is mukade's listing cache in `xiox_app::cache_dir()`.
-use xiox_model::{Agent, DEFAULT_INACTIVE_DAYS, ProjectReport, RemoveMode, Settings};
+use xiox_model::{Agent, DEFAULT_INACTIVE_DAYS, ProjectLayout, ProjectReport, RemoveMode, Settings};
 use std::path::PathBuf;
 
 fn gb(b: u64) -> f64 {
@@ -36,6 +36,7 @@ fn main() {
         inactive_days: DEFAULT_INACTIVE_DAYS,
         remove_mode: RemoveMode::Recycle,
         all_drives: false,
+        layout: ProjectLayout::Tree,
     };
 
     let (sessions, _) = xiox_app::load_sessions(Some(xiox_app::cache_dir()));

@@ -614,6 +614,18 @@ pub struct Settings {
     /// Look for projects on every fixed drive (MFT for NTFS, walker for the others), not only
     /// in the folders above. Default on; `--only-root` turns it off.
     pub all_drives: bool,
+    /// How the desktop lists the projects. A file written before it existed reads as the tree.
+    #[serde(default)]
+    pub layout: ProjectLayout,
+}
+
+/// How the desktop lists the projects: in the folders they sit in, or as one list with their full paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectLayout {
+    #[default]
+    Tree,
+    Flat,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

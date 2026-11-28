@@ -56,6 +56,10 @@ test('actions, buttons and options map to their section\'s intent', () => {
   assert.deepEqual(optionIntent('developers', removeMode, 'permanent'), { kind: 'setRemoveMode', mode: 'permanent' });
   assert.deepEqual(optionIntent('developers', removeMode, 'recycle'), { kind: 'setRemoveMode', mode: 'recycle' });
   assert.equal(optionIntent('developers', removeMode, 'delete'), null);
+  const layout = choice('layout');
+  assert.deepEqual(optionIntent('developers', layout, 'flat'), { kind: 'setLayout', layout: 'flat' });
+  assert.deepEqual(optionIntent('developers', layout, 'tree'), { kind: 'setLayout', layout: 'tree' });
+  assert.equal(optionIntent('developers', layout, 'grid'), null);
   assert.deepEqual(optionIntent('developers', toggle('scanRoots'), true), { kind: 'setScanRoots', on: true });
   assert.deepEqual(optionIntent('developers', list('roots'), 1), { kind: 'selectRoot', index: 1 });
   assert.deepEqual(optionIntent('developers', list('roots'), null), { kind: 'selectRoot', index: null });

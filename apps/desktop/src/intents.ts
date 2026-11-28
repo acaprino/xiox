@@ -45,6 +45,7 @@ export function optionIntent(s: SectionId, o: OptionView, value: boolean | numbe
   } else {
     if (o.id === 'inactiveDays' && o.kind === 'number' && typeof value === 'number' && Number.isFinite(value)) return { kind: 'setInactiveDays', days: value };
     if (o.id === 'removeMode' && o.kind === 'choice' && (value === 'recycle' || value === 'permanent')) return { kind: 'setRemoveMode', mode: value };
+    if (o.id === 'layout' && o.kind === 'choice' && (value === 'tree' || value === 'flat')) return { kind: 'setLayout', layout: value };
     if (o.id === 'scanRoots' && o.kind === 'toggle' && typeof value === 'boolean') return { kind: 'setScanRoots', on: value };
     if (o.id === 'roots' && o.kind === 'list') {
       if (value === 'remove') return { kind: 'removeRoot' };

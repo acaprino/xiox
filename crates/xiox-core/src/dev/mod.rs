@@ -12,8 +12,8 @@ use crate::sys;
 use crate::view::DevCategory;
 use xiox_app::{Cancel, DevScan, Tick, ANALYSIS_FAILED};
 use xiox_model::{
-    path_key, Agent, Artifact, CleanPlan, CleanReport, ItemOutcome, Level, PlanAction, PlanItem, ProjectReport, ProjectStatus,
-    RemoveMode, Selection, Settings,
+    path_key, Agent, Artifact, CleanPlan, CleanReport, ItemOutcome, Level, PlanAction, PlanItem, ProjectLayout, ProjectReport,
+    ProjectStatus, RemoveMode, Selection, Settings,
 };
 use xiox_mukade::ArchivedSession;
 use xiox_sessions::{SystemCli, SystemTrash};
@@ -663,6 +663,14 @@ impl DevState {
     pub fn set_remove_mode(&mut self, mode: RemoveMode) -> Result<(), String> {
         self.editable()?;
         self.settings.remove_mode = mode;
+        self.save();
+        Ok(())
+    }
+
+    /// How the projects are listed: it changes the rows, never what is ticked.
+    pub fn set_layout(&mut self, layout: ProjectLayout) -> Result<(), String> {
+        self.editable()?;
+        self.settings.layout = layout;
         self.save();
         Ok(())
     }

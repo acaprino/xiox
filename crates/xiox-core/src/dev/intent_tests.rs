@@ -392,6 +392,44 @@ fn a_drive_root_project_is_never_a_parent() {
 }
 
 #[test]
+fn flat_lists_every_project_once_with_its_full_path_and_its_own_size() {
+    let mut st = with_scan(nested_scan());
+    st.set_layout(ProjectLayout::Flat).unwrap();
+    let v = st.view(false);
+    assert_eq!(tree_of(&v), [("p:gw", None), ("p:ui", None), ("p:ext", None), ("p:deep", None), ("p:app", None), ("p:old", None)]);
+    assert_eq!(row(&v, "p:ui").name, "ui");
+    assert_eq!(row(&v, "p:ui").sub.as_deref(), Some(r"d:\projects\GW\admin-ui"));
+    assert_eq!(row(&v, "p:gw").bytes, Some(10), "its own size only: nothing is counted twice");
+    assert!(!row(&v, "p:gw").detail.iter().any(|(k, _)| k == "with sub-projects"));
+    assert_eq!(row(&v, &format!("a:{}", tid("ui"))).parent.as_deref(), Some("p:ui"));
+    // The ticks do not depend on the layout.
+    st.toggle("p:ui").unwrap();
+    st.set_layout(ProjectLayout::Tree).unwrap();
+    assert_eq!(st.sel_artifacts, ids(&["ui"]));
+    assert_eq!(row(&st.view(false), "p:ui").parent.as_deref(), Some("p:gw"));
+}
+
+#[test]
+fn the_layout_is_the_first_option_and_follows_the_setting() {
+    let mut st = with_scan(nested_scan());
+    let layout = |st: &DevState| match st.view(false).options.into_iter().next() {
+        Some(OptionView::Choice { id, label, value, choices, enabled: true }) if id == "layout" && label == "Layout" => {
+            (value, choices.into_iter().map(|c| (c.id, c.label)).collect::<Vec<_>>())
+        }
+        other => panic!("the first option is not Layout: {other:?}"),
+    };
+    let choices = vec![("tree".to_string(), "Tree".to_string()), ("flat".to_string(), "Flat".to_string())];
+    assert_eq!(layout(&st), ("tree".to_string(), choices.clone()));
+    st.set_layout(ProjectLayout::Flat).unwrap();
+    assert_eq!(layout(&st), ("flat".to_string(), choices));
+    // Like the other settings: not while a confirmation is open.
+    st.toggle("p:gw").unwrap();
+    st.open_confirm_with(xiox_app::now_ms(), |_| vec![]);
+    assert_eq!(err(st.set_layout(ProjectLayout::Tree)), DIALOG_OPEN);
+    assert_eq!(st.settings.layout, ProjectLayout::Flat);
+}
+
+#[test]
 fn a_worktree_that_cannot_be_removed_cannot_be_ticked() {
     let mut dirty = report("d", ProjectStatus::Inactive, true, 40);
     dirty.is_agent_worktree = true;
@@ -858,7 +896,7 @@ fn dev_view_without_a_scan_and_while_scanning() {
     assert_eq!(e.text, "Press “Analyze”: the projects come from the Claude Code, Codex, OpenCode and Pi sessions.");
     assert!(action(&v, "analyze").enabled && !action(&v, "clean").enabled);
     assert_eq!(action(&v, "clean").label, clean_button(Section::Projects, 0));
-    assert_eq!(v.options.len(), 5, "days, deletion, the Recycle Bin note, scan roots, folders: no error text");
+    assert_eq!(v.options.len(), 6, "layout, days, deletion, the Recycle Bin note, scan roots, folders: no error text");
 
     // A failure to start leaves the reason on screen.
     st.error = Some("The job was interrupted by an internal error.".into());
@@ -1191,6 +1229,7 @@ fn apply(st: &mut DevState, intent: DevIntent) -> Result<(), String> {
         DevIntent::SelectAll { on } => st.select_all(on),
         DevIntent::SetInactiveDays { days } => st.set_inactive_days(days),
         DevIntent::SetRemoveMode { mode } => st.set_remove_mode(mode.into()),
+        DevIntent::SetLayout { layout } => st.set_layout(layout),
         DevIntent::SetScanRoots { on } => st.set_scan_roots(on),
         DevIntent::SelectRoot { index } => st.select_root(index),
         DevIntent::RemoveRoot => st.remove_root(),
