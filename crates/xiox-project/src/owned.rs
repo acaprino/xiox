@@ -260,7 +260,7 @@ fn live_in(dir: &Path, reports: &[ProjectReport], env: &Env) -> bool {
     reports.iter().any(|r| r.status == ProjectStatus::InUse && within_any(&r.root, &k)) || live_session_in(dir, env)
 }
 
-fn worktrees(
+pub(crate) fn worktrees(
     project: &Project,
     entries: &[WorktreeEntry],
     reports: &[ProjectReport],
@@ -282,7 +282,11 @@ fn worktrees(
         if GitCli.state(&path).dirty != Some(false) {
             blocked.push(Block::DirtyGit);
         }
-        if xiox_git::head_kept_elsewhere(&path) != Some(true) {
+        // Its commits are only on the branch checked out here: `git worktree remove` keeps the branch, so nothing is
+        // lost, but the person decides (caution). On a detached HEAD, or when git cannot tell, they would be lost.
+        let kept = xiox_git::head_kept_elsewhere(&path);
+        let own_branch = kept == Some(false) && e.branch.is_some();
+        if kept != Some(true) && !own_branch {
             blocked.push(Block::UnpushedCommits);
         }
         if live_in(&path, reports, env) {
@@ -292,11 +296,15 @@ fn worktrees(
             key: path_key(&path),
             category: Category::Worktrees,
             bytes: opts.measure.then(|| xiox_cleaner::measure_dir(&path).effective_bytes()),
-            level: if blocked.is_empty() { Level::Recommended } else { Level::Caution },
+            level: if blocked.is_empty() && !own_branch { Level::Recommended } else { Level::Caution },
             risks: Vec::new(),
             identity: crate::identity::folder_id(&path),
             blocked,
-            why: Why::LinkedWorktree { branch: e.branch.clone(), head: e.head.clone() },
+            why: Why::LinkedWorktree {
+                branch: e.branch.clone(),
+                head: e.head.clone(),
+                own_commits: if own_branch { xiox_git::own_commits(&path) } else { None },
+            },
             target: Target::Worktree { repo: project.root.clone() },
             path: Some(path),
             provenance: None,

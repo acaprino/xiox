@@ -770,6 +770,7 @@ pub(crate) mod fakes {
             why: Why::LinkedWorktree {
                 branch: None,
                 head: None,
+                own_commits: None,
             },
             target: Target::Worktree {
                 repo: PathBuf::from(r"D:\Projects\mukade"),
@@ -985,6 +986,7 @@ mod tests {
         wt.why = xiox_project::Why::LinkedWorktree {
             branch: Some("a\u{2028}b\u{2029}c".into()),
             head: None,
+            own_commits: None,
         };
         let r = run_ticking(
             vec![Ok(scan(vec![build()])), Ok(scan(vec![build(), wt]))],

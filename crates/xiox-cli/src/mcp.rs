@@ -1103,6 +1103,7 @@ mod tests {
         wt.why = Why::LinkedWorktree {
             branch: Some(BRANCH.into()),
             head: None,
+            own_commits: None,
         };
         let script = vec![
             Ok(scan(vec![build()])),

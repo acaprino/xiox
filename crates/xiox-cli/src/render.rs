@@ -99,9 +99,12 @@ fn short_head(head: &str) -> &str {
 fn why_text(why: &Why) -> String {
     match why {
         Why::CatalogFolder { label_en } => label_en.clone(),
+        Why::LinkedWorktree { branch: Some(b), own_commits: Some(n), .. } => {
+            format!("clean, {n} {} only on branch {b} (the branch stays)", if *n == 1 { "commit" } else { "commits" })
+        }
         Why::LinkedWorktree { branch: Some(b), .. } => format!("clean, on branch {b}"),
-        Why::LinkedWorktree { branch: None, head: Some(h) } => format!("clean, detached at {}", short_head(h)),
-        Why::LinkedWorktree { branch: None, head: None } => "clean".to_string(),
+        Why::LinkedWorktree { branch: None, head: Some(h), .. } => format!("clean, detached at {}", short_head(h)),
+        Why::LinkedWorktree { branch: None, head: None, .. } => "clean".to_string(),
         Why::SameRepository { shared_root_commit, same_origin, has_own_work } => {
             let identity = match (same_origin, shared_root_commit) {
                 (true, true) => "same origin and first commit",
@@ -667,7 +670,7 @@ mod tests {
             Some(10 * MB),
             Level::Recommended,
             vec![],
-            Why::LinkedWorktree { branch: Some("x".into()), head: None },
+            Why::LinkedWorktree { branch: Some("x".into()), head: None, own_commits: None },
         );
         let log = item(Category::Logs, r"D:\app.log", Some(MB), Level::Recommended, vec![], Why::LogFile { ignored: false });
         let out = render_scan(&scan(vec![wt.clone(), log]));
@@ -681,6 +684,15 @@ mod tests {
         let out = render_scan(&scan(vec![wt, build()]));
         assert!(out.trim_end().ends_with("--builds"), "{out}");
         assert!(!out.contains("--worktrees"), "{out}");
+    }
+
+    #[test]
+    fn a_worktree_whose_commits_are_only_on_its_branch_says_the_branch_stays() {
+        let on_branch = |n| Why::LinkedWorktree { branch: Some("feature".into()), head: None, own_commits: Some(n) };
+        assert_eq!(why_text(&on_branch(1)), "clean, 1 commit only on branch feature (the branch stays)");
+        assert_eq!(why_text(&on_branch(3)), "clean, 3 commits only on branch feature (the branch stays)");
+        let plain = Why::LinkedWorktree { branch: Some("feature".into()), head: None, own_commits: None };
+        assert_eq!(why_text(&plain), "clean, on branch feature");
     }
 
     #[test]

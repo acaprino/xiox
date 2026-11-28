@@ -128,11 +128,17 @@ always `caution`, labelled `Personal data (<name>)`. Selected with `--builds` (t
 ones, so not `node_modules`, and never the personal-data ones) or `--include <path>`.
 
 **`worktrees`: linked git worktrees.** The linked worktrees git lists for the repository
-(`git worktree list`), wherever they are on disk. A worktree is `recommended` when it is clean
-and its HEAD commit is also contained in a remote branch or in a local branch other than the
-one checked out there, so no commit can be lost. Otherwise it is blocked (see the table
-below); so it is when an agent session is open in it, and when it was locked with `git worktree
-lock`. A worktree used or changed in the last 24
+(`git worktree list`), wherever they are on disk. Removing a worktree runs `git worktree remove`
+(never forced) and `prune`: **its branch is never deleted**. A clean worktree is:
+
+| Its commits | Level |
+|---|---|
+| HEAD is also in a remote branch or in a local branch other than the one checked out there | `recommended` |
+| only on the branch checked out there, which stays in the repository | `caution`: the listing says `clean, <n> commits only on branch <b> (the branch stays)`; only `--include` takes it |
+| on no branch (a detached HEAD with commits of its own) | blocked (`unpushed-commits`): removing it would lose them |
+
+It is blocked, too, when it has uncommitted changes, when an agent session is open in it, and
+when it was locked with `git worktree lock`. A worktree used or changed in the last 24
 hours (a session worked in it, or its folder changed) is `danger`. A registered worktree whose folder no longer exists is not an item: it appears as a
 `note:` ("git still lists a worktree whose folder is gone"), and `git worktree prune` clears
 it. Selected with `--worktrees` or `--include <path>`.

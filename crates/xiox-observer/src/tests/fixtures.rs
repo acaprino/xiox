@@ -43,7 +43,7 @@ pub fn item(category: Category, path: &str, bytes: Option<u64>, level: Level, bl
     let (target, why) = match category {
         Category::Worktrees => (
             Target::Worktree { repo: PathBuf::from(r"D:\Projects\mukade") },
-            Why::LinkedWorktree { branch: None, head: None },
+            Why::LinkedWorktree { branch: None, head: None, own_commits: None },
         ),
         Category::Logs => (Target::File, Why::LogFile { ignored: false }),
         _ => (Target::Dir { kind: ArtifactKind::Catalog }, Why::CatalogFolder { label_en: "Rust build".into() }),

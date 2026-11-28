@@ -139,7 +139,9 @@ impl fmt::Display for Block {
 pub enum Why {
     /// A folder of the build/cache catalog; English label from `ArtifactKind`/`Class`, e.g. "Rust build".
     CatalogFolder { label_en: String },
-    LinkedWorktree { branch: Option<String>, head: Option<String> },
+    /// `own_commits`: the commits only the worktree's branch holds, when that is why it is `caution` (the branch stays
+    /// when the worktree goes); `None` otherwise.
+    LinkedWorktree { branch: Option<String>, head: Option<String>, own_commits: Option<u32> },
     SameRepository { shared_root_commit: bool, same_origin: bool, has_own_work: Option<bool> },
     NameOnly,
     LogFile { ignored: bool },

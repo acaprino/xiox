@@ -158,7 +158,7 @@ fn clean_worktree_at_a_commit_main_has_is_recommended_and_not_blocked() {
     assert!(w.blocked.is_empty(), "{:?}", w.blocked);
     assert_eq!(w.target, Target::Worktree { repo: root.clone() });
     match &w.why {
-        Why::LinkedWorktree { branch, head } => {
+        Why::LinkedWorktree { branch, head, .. } => {
             assert_eq!(branch.as_deref(), Some("feature"));
             assert_eq!(head.as_deref(), Some(git(&root, &["rev-parse", "HEAD"]).as_str()));
         }
@@ -198,7 +198,7 @@ fn locked_worktree_is_blocked_worktree_locked() {
 }
 
 #[test]
-fn worktree_with_a_commit_nobody_else_has_is_blocked_unpushed_commits() {
+fn a_worktree_whose_commits_are_only_on_its_branch_is_caution_and_not_blocked() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));
     let wt = worktree(&root, &base.join("proj-wt"), "feature");
@@ -206,8 +206,46 @@ fn worktree_with_a_commit_nobody_else_has_is_blocked_unpushed_commits() {
 
     let scan = analyze_with(&root, &Options::default(), &env()).unwrap();
     let w = item(&scan, &wt);
+    assert!(w.blocked.is_empty(), "the branch stays: no commit is lost: {:?}", w.blocked);
+    assert_eq!(w.level, Level::Caution);
+    assert!(
+        matches!(&w.why, Why::LinkedWorktree { branch: Some(b), own_commits: Some(1), .. } if b == "feature"),
+        "{:?}",
+        w.why
+    );
+}
+
+#[test]
+fn a_detached_worktree_with_a_commit_on_no_branch_is_blocked_unpushed_commits() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let det = base.join("proj-det");
+    git(&root, &["worktree", "add", "-q", "--detach", &det.to_string_lossy()]);
+    commit(&det, "only-here.txt");
+
+    let scan = analyze_with(&root, &Options::default(), &env()).unwrap();
+    let w = item(&scan, &det);
     assert_eq!(w.blocked, vec![Block::UnpushedCommits]);
     assert_eq!(w.level, Level::Caution);
+    assert!(matches!(&w.why, Why::LinkedWorktree { branch: None, own_commits: None, .. }), "{:?}", w.why);
+}
+
+#[test]
+fn a_worktree_whose_branch_is_pushed_is_recommended() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let remote = base.join("remote.git");
+    git(&base, &["init", "-q", "--bare", "-b", "main", &remote.to_string_lossy()]);
+    git(&root, &["remote", "add", "origin", &remote.to_string_lossy()]);
+    let wt = worktree(&root, &base.join("proj-wt"), "feature");
+    commit(&wt, "pushed.txt");
+    git(&wt, &["push", "-q", "origin", "feature"]);
+
+    let scan = analyze_with(&root, &Options::default(), &env()).unwrap();
+    let w = item(&scan, &wt);
+    assert!(w.blocked.is_empty(), "{:?}", w.blocked);
+    assert_eq!(w.level, Level::Recommended);
+    assert!(matches!(&w.why, Why::LinkedWorktree { own_commits: None, .. }), "{:?}", w.why);
 }
 
 #[test]

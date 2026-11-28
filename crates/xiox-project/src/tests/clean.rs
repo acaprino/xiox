@@ -247,6 +247,23 @@ fn include_of_a_dirty_worktree_is_refused_as_blocked() {
 }
 
 #[test]
+fn the_worktrees_flag_takes_a_recommended_worktree_but_not_a_caution_one() {
+    let (_t, base) = tmp();
+    let root = repo(&base.join("proj"));
+    let kept = worktree(&root, &base.join("proj-kept"), "kept");
+    let own = worktree(&root, &base.join("proj-own"), "own");
+    commit(&own, "only-here.txt");
+    let scan = scan_of(&root);
+    let key = |p: &Path| path_key(p);
+
+    let chosen = select(&scan, &req(&[Category::Worktrees], &[])).unwrap();
+    assert!(chosen.keys.contains(&key(&kept)), "the recommended worktree goes with the flag: {:?}", chosen.keys);
+    assert!(!chosen.keys.contains(&key(&own)), "the caution one does not: {:?}", chosen.keys);
+    let chosen = select(&scan, &req(&[], &[&own])).unwrap();
+    assert!(chosen.keys.contains(&key(&own)), "--include takes it");
+}
+
+#[test]
 fn sessions_flag_takes_unblocked_sessions_only() {
     let (_t, base) = tmp();
     let root = repo(&base.join("proj"));

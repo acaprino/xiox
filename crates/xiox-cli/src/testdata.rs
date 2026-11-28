@@ -74,7 +74,7 @@ pub fn clean_worktree() -> Item {
         Some(265 * MB),
         Level::Recommended,
         vec![],
-        Why::LinkedWorktree { branch: None, head: Some("b574bc7e1d0f3a9c2f6a8e4b5c7d9e0f1a2b3c4d".into()) },
+        Why::LinkedWorktree { branch: None, head: Some("b574bc7e1d0f3a9c2f6a8e4b5c7d9e0f1a2b3c4d".into()), own_commits: None },
     )
 }
 
@@ -85,7 +85,7 @@ pub fn blocked_worktree() -> Item {
         Some(40 * MB),
         Level::Recommended,
         vec![Block::DirtyGit, Block::UnpushedCommits],
-        Why::LinkedWorktree { branch: Some("wip".into()), head: None },
+        Why::LinkedWorktree { branch: Some("wip".into()), head: None, own_commits: None },
     )
 }
 
@@ -174,8 +174,8 @@ pub fn every_variant_scan() -> ProjectScan {
     ];
     let mut s = scan(vec![
         build(),
-        item(Category::Worktrees, "D:\\Projects\\w1", Some(1), Level::Caution, all_blocks, Why::LinkedWorktree { branch: Some("b".into()), head: None }),
-        item(Category::Worktrees, "D:\\Projects\\w2", None, Level::Recommended, vec![], Why::LinkedWorktree { branch: None, head: None }),
+        item(Category::Worktrees, "D:\\Projects\\w1", Some(1), Level::Caution, all_blocks, Why::LinkedWorktree { branch: Some("b".into()), head: None, own_commits: None }),
+        item(Category::Worktrees, "D:\\Projects\\w2", None, Level::Recommended, vec![], Why::LinkedWorktree { branch: None, head: None, own_commits: None }),
         item(Category::Copies, "D:\\Projects\\c1", Some(1), Level::Caution, vec![], Why::SameRepository { shared_root_commit: true, same_origin: true, has_own_work: Some(false) }),
         item(Category::Copies, "D:\\Projects\\c2", Some(1), Level::Caution, vec![], Why::SameRepository { shared_root_commit: false, same_origin: true, has_own_work: None }),
         item(Category::Copies, "D:\\Projects\\c3", Some(1), Level::Caution, vec![], Why::SameRepository { shared_root_commit: true, same_origin: false, has_own_work: Some(true) }),
