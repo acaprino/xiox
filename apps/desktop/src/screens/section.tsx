@@ -1,12 +1,13 @@
 // The content of a section: its panel (the title, what is chosen, Details and Options; under them the search and the layout of the list) and in it the
 // list, the report that replaces it, or what stands in its place: nothing to show (with the action that starts the work), a wait, an error.
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useMedia } from '@acaprino/sigrid';
 import { Empty, SearchField } from '@acaprino/sigrid/components';
 import { Panel } from '@acaprino/sigrid/layout';
-import { Button, Cell, Icon, Progress, ToggleGroup, ToggleGroupItem } from '@acaprino/sigrid/primitives';
+import { Button, Cell, Icon, Progress } from '@acaprino/sigrid/primitives';
 import type { Controller } from '../controller.ts';
 import { actionIntent, optionIntent, searchIntent } from '../intents.ts';
-import { emptyAction, layoutChoice, panelOptions } from '../policy.ts';
+import { emptyAction, flatToggle, layoutChoice, panelOptions } from '../policy.ts';
 import { foldedGroups, searching, shownRows } from '../state.ts';
 import type { AppInfo, SectionView } from '../types.ts';
 import { useAfter } from './hooks.ts';
@@ -50,6 +51,16 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
   const anyOpen = groups.some((g) => !foldedGroups(ui, view).has(g.id));
   const hasOptions = panelOptions(view).length > 0;
   const layout = layoutChoice(view);
+  // Beside Options in a wide window; under the header in a narrow one, whose row wraps (the header's does not, and would run off the page).
+  const wide = useMedia('(width >= 860px)');
+  const toggle = layout ? flatToggle(layout) : null;
+  const flat = layout && toggle ? (
+    <Button
+      variant="ghost" size="sm" aria-pressed={toggle.pressed} disabled={!layout.enabled}
+      title="Every project in one list, with its full path: the order by size runs over the whole list"
+      onClick={() => { void c.send(view.section, optionIntent(view.section, layout, toggle.next)); }}
+    ><Icon name="layout" />{toggle.label}</Button>
+  ) : null;
 
   if (view.report !== null) return <Report c={c} section={view.section} report={view.report} />;
 
@@ -61,12 +72,7 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
       {groups.length >= 2 ? (
         <Button variant="outline" size="sm" disabled={searching(view)} onClick={() => c.foldAll(anyOpen)}>{anyOpen ? 'Fold all' : 'Open all'}</Button>
       ) : null}
-      {/* How the list is laid out sits with the list's other tools: this row wraps in a narrow window, the header's does not. */}
-      {layout ? (
-        <ToggleGroup aria-label={layout.label} value={layout.value} onValueChange={(next) => { void c.send(view.section, optionIntent(view.section, layout, next)); }}>
-          {layout.choices.map((choice) => <ToggleGroupItem key={choice.id} value={choice.id} disabled={!layout.enabled}>{choice.label}</ToggleGroupItem>)}
-        </ToggleGroup>
-      ) : null}
+      {wide ? null : flat}
     </>
   );
   return (
@@ -75,6 +81,7 @@ export function SectionScreen({ c, app, view, field }: { c: Controller; app: App
       subtitle={view.subtitle}
       actions={
         <>
+          {wide ? flat : null}
           <Button variant="ghost" size="sm" aria-pressed={ui.inspector === 'details'} title="The details of the selected row (i)" onClick={() => c.toggleInspector('details')}><Icon name="info" />Details</Button>
           <Button variant="ghost" size="sm" aria-pressed={ui.inspector === 'options'} disabled={!hasOptions} title={hasOptions ? 'The options of this section (o)' : 'This section has no options'} onClick={() => c.toggleInspector('options')}><Icon name="settings" />Options</Button>
         </>

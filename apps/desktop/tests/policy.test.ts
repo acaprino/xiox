@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { disabledReason, emptyAction, layoutChoice, panelOptions } from '../src/policy.ts';
+import { disabledReason, emptyAction, flatToggle, layoutChoice, panelOptions } from '../src/policy.ts';
 import type { ActionView, DialogView, OptionView, SectionView } from '../src/types.ts';
 
 const action = (id: string, enabled: boolean, label = id): ActionView => ({ id, label, key: null, enabled, primary: false });
@@ -51,4 +51,10 @@ test('the layout of the projects is a choice of the header, not of the Options p
   // Registry keeps its rule: its kinds of issue are its sidebar, not options.
   const kind: OptionView = { kind: 'toggle', id: 'cat:0', label: 'Fonts', on: true, enabled: true, hint: null };
   assert.deepEqual(panelOptions(view({ section: 'registry', nav: [], options: [kind, days] })), [days]);
+});
+
+test('the layout is one small button, pressed for the flat list, that asks for the other one', () => {
+  const layout = (value: string): Extract<OptionView, { kind: 'choice' }> => ({ kind: 'choice', id: 'layout', label: 'Layout', value, enabled: true, choices: [{ id: 'tree', label: 'Tree' }, { id: 'flat', label: 'Flat' }] });
+  assert.deepEqual(flatToggle(layout('tree')), { label: 'Flat', pressed: false, next: 'flat' });
+  assert.deepEqual(flatToggle(layout('flat')), { label: 'Flat', pressed: true, next: 'tree' });
 });

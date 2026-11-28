@@ -11,6 +11,12 @@ export function layoutChoice(view: Pick<SectionView, 'nav' | 'options'>): Choice
   return view.options.find((o): o is ChoiceOption => o.kind === 'choice' && o.id === 'layout') ?? null;
 }
 
+/** The layout as one small button beside Options, pressed for the flat list: its label, whether it is pressed, what a press asks for. */
+export function flatToggle(layout: ChoiceOption): { label: string; pressed: boolean; next: string } {
+  const flat = layout.value === 'flat';
+  return { label: layout.choices.find((c) => c.id === 'flat')?.label ?? 'Flat', pressed: flat, next: flat ? 'tree' : 'flat' };
+}
+
 /**
  * The options the inspector shows: all of the section's, but the layout of the list (in the panel's header) and Registry's kinds
  * of issue, which are its categories in the sidebar.
