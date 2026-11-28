@@ -19,6 +19,7 @@ mod logs;
 mod nested;
 mod owned;
 mod provenance;
+mod repo_index;
 mod resolve;
 mod search;
 
@@ -36,6 +37,7 @@ pub use history::{
     SessionEvidence, SourceReport,
 };
 pub use owned::key_within;
+pub use repo_index::{RepoIdentity, RepoIndex, repositories_under};
 pub use provenance::{
     Candidate, Completeness, Coverage, Env as PathEnv, EvidenceRef, Extraction, Flags, FolderEvidence, Ledger, OpKind,
     PatchAction, RawOp, Resolved, SessionKey, Shell, ShellCommand, Source, Strength, effective_cwd, extract,

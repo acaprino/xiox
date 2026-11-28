@@ -5,6 +5,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+rayon = "1.12.0"
 xiox-model = { path = "../xiox-model" }
 xiox-git = { path = "../xiox-git" }
 xiox-engine = { path = "../xiox-engine" }
