@@ -278,20 +278,18 @@ impl DevState {
             detail.push(("why".into(), why));
         }
         let id = format!("p:{}", r.id);
+        let flat = self.settings.layout == ProjectLayout::Flat;
         rows.push(RowView {
             check,
             enabled: free,
             name,
-            // Flat: the full path says where the project is (inside which other one); the reason stays in the details.
-            sub: if self.settings.layout == ProjectLayout::Flat {
-                Some(r.root.display().to_string())
-            } else {
-                (!r.reason.is_empty()).then(|| r.reason.clone())
-            },
+            // Flat: the full path says where the project is (inside which other one), also on a row that cannot be ticked;
+            // the reason, and why it cannot be ticked, stay in the details.
+            sub: if flat { Some(r.root.display().to_string()) } else { (!r.reason.is_empty()).then(|| r.reason.clone()) },
             cells: vec![date],
             bytes: Some(total),
             muted: !free,
-            why: locked.clone(),
+            why: if flat { None } else { locked.clone() },
             detail,
             parent: parent.map(str::to_string),
             ..blank_row(id.clone(), RowKind::Item)

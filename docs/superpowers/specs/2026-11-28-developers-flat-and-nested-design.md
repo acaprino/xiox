@@ -54,7 +54,12 @@ pulizia restano identici; cambia solo come le righe sono disposte.
    proposto la sola dimensione propria, ma da chiuso un sotto-progetto pesante sarebbe invisibile.)*
 3. **Dimensione in flat:** ogni riga mostra solo la propria, quindi nessun doppio conteggio.
 4. **Seconda riga in flat:** il percorso completo al posto del motivo ("Recent activity…"); il
-   motivo resta nei dettagli. Una riga bloccata continua a mostrare perché è bloccata.
+   motivo resta nei dettagli. *(Aggiornato dall'utente il 2026-11-28: anche una riga bloccata
+   mostra il percorso, così la struttura resta visibile; resta grigia e senza casella, e perché è
+   bloccata è nei dettagli.)*
+5b. **Il controllo** *(aggiornato dall'utente il 2026-11-28)*: non nel pannello Options ma un
+   pulsante piccolo `Flat` accanto a Options (premuto = lista piatta); sotto 860 px scende nella
+   riga degli strumenti sotto il titolo, che va a capo.
 5. **Il controllo sta nel pannello Options**, non sopra la lista: usa un componente che c'è già.
    Un interruttore in vista sopra la lista richiederebbe di verificare un componente di Sigrid.
 6. **Un sotto-progetto è sempre in vista sotto il padre**, anche col padre chiuso, e viene dopo le

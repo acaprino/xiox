@@ -410,6 +410,24 @@ fn flat_lists_every_project_once_with_its_full_path_and_its_own_size() {
 }
 
 #[test]
+fn flat_keeps_the_path_of_a_project_in_use_and_puts_why_in_its_details() {
+    let mut scan = nested_scan();
+    scan.projects[1].status = ProjectStatus::InUse;
+    let why = locked_why(&scan.projects[1]);
+    let mut st = with_scan(scan);
+    st.set_layout(ProjectLayout::Flat).unwrap();
+    let v = st.view(false);
+    let ui = row(&v, "p:ui");
+    assert!(!ui.enabled && ui.muted, "it still cannot be ticked");
+    assert_eq!(ui.sub.as_deref(), Some(r"d:\projects\GW\admin-ui"));
+    assert_eq!(ui.why, None, "the path stays in sight: the page shows `why` in its place");
+    assert!(ui.detail.iter().any(|(k, text)| k == "why" && *text == why), "why is in the details");
+    // The tree keeps the reason on the row: the folders say where the project is.
+    st.set_layout(ProjectLayout::Tree).unwrap();
+    assert_eq!(row(&st.view(false), "p:ui").why.as_deref(), Some(why.as_str()));
+}
+
+#[test]
 fn the_layout_is_the_first_option_and_follows_the_setting() {
     let mut st = with_scan(nested_scan());
     let layout = |st: &DevState| match st.view(false).options.into_iter().next() {
