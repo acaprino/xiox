@@ -348,6 +348,9 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
         Why::SessionFolder { .. } => named_blocks(dir, true),
         _ => Vec::new(),
     };
+    if matches!(category, Category::Copies | Category::Named) && holds_worktree_data(dir) {
+        blocked.push(Block::HoldsWorktreeData);
+    }
     if live_session_in(dir, env) {
         blocked.push(Block::LiveSession);
     }
@@ -364,6 +367,13 @@ pub(crate) fn item_for(opts: &Options, env: &Env, dir: &Path, category: Category
         path: Some(dir.to_path_buf()),
         provenance: None,
     }
+}
+
+/// A repository with linked worktrees whose folders exist: its `.git` holds their data, so removing it would leave them
+/// broken. A worktree whose folder is gone (prunable) does not count.
+fn holds_worktree_data(dir: &Path) -> bool {
+    is_git_repo(dir)
+        && xiox_git::list_worktrees(dir).is_some_and(|entries| entries.iter().any(|e| !e.is_main && !e.prunable))
 }
 
 /// Find the copies and the name-matched folders of `project`. `extra` are folders found some

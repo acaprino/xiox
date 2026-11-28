@@ -96,6 +96,34 @@ fn clone_elsewhere_is_a_copy_even_with_another_name() {
 }
 
 #[test]
+fn a_copy_that_has_linked_worktrees_is_blocked() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("copy"));
+    worktree(&copy, &base.join("far").join("copy-wt"), "x");
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let c = s.items.iter().find(|i| i.category == Category::Copies && i.path.as_deref() == Some(copy.as_path()));
+    let c = c.unwrap_or_else(|| panic!("{:?}", s.items));
+    assert!(c.blocked.contains(&Block::HoldsWorktreeData), "{:?}", c.blocked);
+    assert_eq!(Block::HoldsWorktreeData.reason(), "holds the git data of linked worktrees");
+}
+
+#[test]
+fn a_copy_whose_only_worktree_was_deleted_is_not_blocked_for_it() {
+    let (_t, base) = tmp();
+    let project = project_in(&base);
+    let copy = clone(&project, &base.join("other").join("copy"));
+    let wt = worktree(&copy, &base.join("far").join("copy-wt"), "x");
+    fs::remove_dir_all(&wt).unwrap();
+
+    let s = scan(&project, vec![base.join("other")], &Options::default());
+    let c = s.items.iter().find(|i| i.category == Category::Copies && i.path.as_deref() == Some(copy.as_path()));
+    let c = c.unwrap_or_else(|| panic!("{:?}", s.items));
+    assert!(!c.blocked.contains(&Block::HoldsWorktreeData), "a prunable worktree holds nothing: {:?}", c.blocked);
+}
+
+#[test]
 fn clone_with_an_extra_commit_has_own_work_true_and_plain_clone_false() {
     let (_t, base) = tmp();
     let project = project_in(&base);

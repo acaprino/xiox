@@ -754,6 +754,7 @@ fn block_wording_has_one_source_of_truth() {
         Block::SessionLocked,
         Block::UnsavedWork,
         Block::UnsavedWorkUnknown,
+        Block::HoldsWorktreeData,
         Block::Unknown,
     ] {
         assert_eq!(b.to_string(), b.reason());
@@ -761,4 +762,6 @@ fn block_wording_has_one_source_of_truth() {
     }
     assert_eq!(Block::LiveSession.reason(), "an agent session is open");
     assert_eq!(Block::UnsavedWorkUnknown.reason(), "could not be checked for unsaved work");
+    assert_eq!(Block::HoldsWorktreeData.reason(), "holds the git data of linked worktrees");
+    assert_eq!(serde_json::to_value(Block::HoldsWorktreeData).unwrap(), serde_json::json!("holds-worktree-data"));
 }

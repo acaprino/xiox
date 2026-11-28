@@ -620,6 +620,7 @@ mod tests {
             Block::HoldsRepositories,
             Block::TrackedFiles,
             Block::WorktreeLocked,
+            Block::HoldsWorktreeData,
             Block::Unknown,
         ];
         let reasons: std::collections::HashSet<_> = all.iter().map(|b| block_reason(*b)).collect();

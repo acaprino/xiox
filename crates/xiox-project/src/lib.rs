@@ -90,6 +90,8 @@ pub enum Block {
     TrackedFiles,
     /// A worktree someone kept with `git worktree lock`.
     WorktreeLocked,
+    /// A repository whose linked worktrees still exist: removing it would remove their git data.
+    HoldsWorktreeData,
     Unknown,
 }
 
@@ -108,6 +110,7 @@ impl Block {
             Block::HoldsRepositories => "holds git repositories",
             Block::TrackedFiles => "holds files tracked by git",
             Block::WorktreeLocked => "locked with git worktree lock",
+            Block::HoldsWorktreeData => "holds the git data of linked worktrees",
             Block::Unknown => "unknown reason",
         }
     }

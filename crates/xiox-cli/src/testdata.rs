@@ -170,6 +170,7 @@ pub fn every_variant_scan() -> ProjectScan {
         Block::HoldsRepositories,
         Block::TrackedFiles,
         Block::WorktreeLocked,
+        Block::HoldsWorktreeData,
         Block::Unknown,
     ];
     let mut s = scan(vec![

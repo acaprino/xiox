@@ -268,6 +268,7 @@ description; in JSON the `blocked` array holds the value of the first column.
 | `dirty-git` | uncommitted changes (also when git cannot tell) | worktrees |
 | `unpushed-commits` | commits not kept anywhere else (also when git cannot tell) | worktrees |
 | `worktree-locked` | locked with git worktree lock | worktrees |
+| `holds-worktree-data` | holds the git data of linked worktrees | copies, named folders that are repositories |
 | `unreachable` | could not be checked | builds |
 | `session-locked` | session locked by its harness | sessions |
 | `unsaved-work` | has commits or changes the project does not have | copies, named folders that are repositories |
