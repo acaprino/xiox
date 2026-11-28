@@ -100,6 +100,10 @@ Il risultato deve poter passare da `clean::select` e `clean::clean` come oggi un
 
 ### 2. L'indice dei repository, una volta per Analyze
 
+*(Corretto il 2026-11-28 dopo la lettura del codice: Analyze oggi butta via l'indice del disco e le
+sessioni a fine scansione. Analyze conserva **l'elenco dei repository** trovati, non l'indice del disco;
+"Refresh this project" rilegge le sessioni.)*
+
 Un tipo nuovo in `xiox-project` (nome indicativo `RepoIndex`) costruito una volta per scansione:
 
 - **I repository del PC.** Con l'indice MFT (amministratore): le cartelle chiamate `.git` sui dischi
@@ -115,9 +119,10 @@ Un tipo nuovo in `xiox-project` (nome indicativo `RepoIndex`) costruito una volt
   transitiva: se A è legato a B e B a C, stanno insieme).
 - **Le cartelle col nome:** per ogni progetto che è la radice principale di un repository, le
   cartelle **sorelle** nella sua cartella padre che `name_matches_project` accetta, come la modalità
-  `ParentOnly` di oggi: è lì che stanno `supads-work-0.3.5` e `-build`. Non sono cartelle col nome:
-  un repository git (è una copia per identità o un progetto a sé), un worktree collegato, un progetto
-  di Analyze che è un repository. Una cartella che corrisponde a più progetti va a quello col nome più
+  `ParentOnly` di oggi: è lì che stanno `supads-work-0.3.5` e `-build`. **Nella lista del desktop** non
+  sono cartelle col nome: un repository git (è una copia per identità o un progetto a sé), un worktree
+  collegato, un progetto di Analyze che è un repository. È un filtro della lista del desktop: `classify`
+  e la riga di comando restano come sono, con i loro test. Una cartella che corrisponde a più progetti va a quello col nome più
   lungo. *(Scelte di Claude: sulla ricerca a tutto il PC i nomi su tutti i dischi darebbero centinaia
   di progetti veri come "copie"; un worktree avrebbe due modi di essere tolto.)*
 
@@ -202,18 +207,32 @@ Le voci di `Worktrees` e `Copies` si puliscono con `clean::select` + `clean::cle
   nel Cestino;
 - la conferma elenca ogni voce `caution` e `danger` con i suoi rischi, e una voce `danger` va
   confermata da sola (una casella per voce), come `--confirm-danger` nella riga di comando;
-- prima di togliere, l'identità della cartella, i rischi e il metodo si ricontrollano
-  (`clean/admit.rs`): se qualcosa è cambiato, la voce si salta con il motivo;
+- prima di togliere, l'identità della cartella, i rischi e il metodo si ricontrollano (`recheck` e
+  `Run::admitted` in `clean/mod.rs`, che rifanno l'analisi del progetto con le cartelle scelte come
+  `known`, senza camminare sui dischi quando la scansione è `ParentOnly`): se qualcosa è cambiato, la
+  voce si salta con il motivo;
 - un'analisi più vecchia di 30 minuti si rifiuta, come oggi.
 
 ### 7. Tempo
 
-La ricerca su tutto il PC fa per repository: 2 chiamate a git per l'identità, 1 per i worktree, e per
-le sole copie trovate le chiamate di `has_own_work`. Obiettivo: meno di 60 s in più su Analyze sul PC
+La ricerca su tutto il PC costa, in chiamate a git: 3 per repository (`resolve_full`), 2 per l'identità,
+circa 12 per ogni worktree collegato (`GitCli::state` più `head_kept_elsewhere`), 5 o più per ogni copia
+trovata (`has_own_work`). *(Corretto il 2026-11-28: la prima stima diceva 1 chiamata per i worktree.)* Obiettivo: meno di 60 s in più su Analyze sul PC
 del proprietario (circa 135 progetti), misurato con l'eseguibile di CI; Analyze riporta quanto ha
 aggiunto. Il tempo vero va misurato prima di deciderne il tetto: il piano include una misura, da fare
 solo con il permesso del proprietario. *(Obiettivo: scelta di Claude.)*
 Se la ricerca supera il tetto, si ferma, mostra quello che ha trovato e lo dice in un avviso.
+
+## I piani
+
+Il lavoro si fa in quattro piani, ognuno pubblicabile da solo *(consiglio del revisore, 2026-11-28)*:
+
+1. **Motore e riga di comando:** i tre stati dei worktree, il blocco delle copie con worktree,
+   l'indice dei repository, l'entrata nuova di `xiox-project`, l'eliminazione dei doppioni; Verify
+   prova anche `xiox-project`, `xiox-git` e `xiox-cli`.
+2. **`Copies` nel desktop** (si aggiunge, non toglie nulla).
+3. **`Worktrees` del desktop** passa alle voci di `xiox-project` (la parte che può peggiorare).
+4. **"Refresh this project".**
 
 ## Lasciato a chi costruisce
 
