@@ -6,5 +6,6 @@ mod identity;
 mod logs;
 mod owned;
 mod provenance;
+mod relations;
 mod repo_index;
 mod search;
