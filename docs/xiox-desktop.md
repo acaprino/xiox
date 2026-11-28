@@ -303,6 +303,7 @@ those agents worked in; you can add more folders to look through.
 
 | Option | Meaning |
 |---|---|
+| `Layout` | how `Projects` is listed: `Tree` (default), the projects in the folders they sit in; `Flat`, one list of every project with its full path under its name, so the order by size runs over the whole list |
 | `Days of inactivity` | how long a project must have been untouched to be suggested for cleaning (1 to 365, default 14) |
 | `Deletion` | `To the Recycle Bin (recoverable)` (default) or `Permanently` |
 | `Also analyze these folders` | also look through the folders in the list below |
@@ -338,6 +339,13 @@ sessions.*). Dates are written `YYYY-MM-DD`.
 folder inside it is one row (`D:\Projects`, not `D:\` then `Projects`). Each folder shows what its
 projects add up to, folds and opens with its arrow, a click or ←/→ (it starts open), and has a box
 that ticks every project inside it that is not in use. The sort works inside each folder.
+A project inside another project (`admin-ui` inside `tri-llm-gateway`) is not a folder of its own: it
+sits under that project, named by its path below it, and is always in sight, even when the project
+above is closed. The project above shows what it and the projects inside it add up to (its detail
+has both figures, `size` and `with sub-projects`); its box and its arrow are about its own folders
+only, which come before the projects inside it. A project at the root of a drive (`D:\`) never holds
+the others. With `Layout: Flat` there are no folders: every project, those inside others too, is a
+row of the list with its full path as its second line and its own size only.
 Each project has a box that ticks all its folders (half-ticked when only some are)
 and, under it, the folders themselves (`target`, `node_modules`, `.venv`, ...), each with its own
 box, level, size and reason (*Build output that cargo recreates.*, *Restored by npm install.*).
