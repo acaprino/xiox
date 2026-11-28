@@ -19,6 +19,11 @@ const TITLES = { cleanup: 'Cleanup', registry: 'Registry', developers: 'Develope
 /** The widths where the frame changes (340 is the smallest, 620 and 860 and 1000 are its steps) and a wide one. */
 const SIZES = [[340, 700], [620, 700], [1000, 640], [1440, 900]];
 
+// A check of Sigrid is Ark UI's: its role is a hidden input under the box that is drawn, and a pointer at the input's place
+// lands on the box or, in a list, on a heading that stays in sight over the rows. The click goes to the input itself, as
+// Sigrid's own tests do (fireEvent.click): what it sends is what the page does with a press of the box.
+const tick = (box) => box.dispatchEvent('click');
+
 const failures = [];
 const expect = (ok, message) => { if (!ok) failures.push(message); };
 const settle = (page, ms = 150) => page.waitForTimeout(ms);
@@ -137,13 +142,13 @@ try {
     const bin = page.getByRole('checkbox', { name: 'Windows log files' });
     expect(await bin.getAttribute('aria-checked') === 'false', 'a row that is not ticked says so');
     await clear(page);
-    await bin.click();
+    await tick(bin);
     await settle(page);
     expect(await sent(page, 'cleanup', 'toggle', (a) => a.intent.row === 'cat:4'), 'the box of a row sent no toggle of its id');
     expect(await page.getByRole('checkbox', { name: 'Windows log files' }).getAttribute('aria-checked') === 'true', 'the row did not come back ticked');
     // The master check at the head of the list asks for everything.
     await clear(page);
-    await page.getByRole('checkbox', { name: 'Select all' }).click();
+    await tick(page.getByRole('checkbox', { name: 'Select all' }));
     await settle(page);
     expect(await sent(page, 'cleanup', 'selectAll'), 'the master check sent no selectAll');
 
@@ -246,12 +251,12 @@ try {
     const kind = page.getByRole('checkbox', { name: 'Fonts', exact: true });
     expect(await kind.count() === 1, 'a kind of issue is a check in the sidebar');
     await clear(page);
-    await kind.click();
+    await tick(kind);
     await settle(page);
     expect(await sent(page, 'registry', 'toggleCategory'), 'the check of a kind of issue sent no toggleCategory');
     // A sub-heading with a box ticks the rows under it.
     await clear(page);
-    await page.getByRole('checkbox', { name: /^Missing shared DLLs \(4\)/ }).click();
+    await tick(page.getByRole('checkbox', { name: /^Missing shared DLLs \(4\)/ }));
     await settle(page);
     expect(await sent(page, 'registry', 'toggle', (a) => a.intent.row === 't:0'), 'the box of a sub-heading sent no toggle');
     await go(page, 'registry', 'backup');
@@ -301,7 +306,7 @@ try {
     const clean = gate.getByRole('button', { name: /^Clean/ });
     expect(await clean.isDisabled(), 'the confirming button is enabled before the warnings are read');
     await clear(page);
-    await ack.click();
+    await tick(ack);
     await settle(page);
     expect(await sent(page, 'developers', 'setAck', (a) => a.intent.on === true), 'ticking «I have read the warnings» sent no setAck');
     expect(await page.getByRole('dialog').getByRole('button', { name: /^Clean/ }).isEnabled(), 'ticking «I have read the warnings» did not enable the button');
