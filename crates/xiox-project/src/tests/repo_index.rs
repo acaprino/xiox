@@ -38,7 +38,12 @@ fn build_groups_a_clone_and_leaves_an_unrelated_repository_alone() {
     let (_t, base) = tmp();
     let proj = repo(&base.join("proj"));
     let zzz = clone(&proj, &base.join("elsewhere").join("zzz"));
-    let other = repo(&base.join("other"));
+    // Not `repo()`: its fixed first commit would be the same commit in every repository it makes.
+    let other = base.join("other");
+    fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    commit(&other, "OTHER.md");
+    let other = canon(&other);
 
     let index = RepoIndex::build(&[proj.clone(), zzz.clone(), other.clone(), proj.clone()]);
     assert_eq!(index.repos.len(), 3, "the double of proj is dropped: {:?}", index.repos);

@@ -52,8 +52,13 @@ fn relations_list_worktrees_copies_and_named_folders_and_nothing_else() {
 #[test]
 fn a_relations_scan_round_trips_through_select_and_clean_dry_run() {
     let w = world();
-    let scan = analyze_relations(&w.proj, &[w.copy.clone()], &input()).unwrap();
-    let req = CleanRequest { categories: vec![], include: vec![w.copy.clone()], confirm_danger: vec![], mode: RemoveMode::Recycle };
+    // The real clock, the one `clean` checks again with: the copy made a moment ago is recent activity, so `danger`, and
+    // it goes only with its own confirmation, as the desktop will ask for it.
+    let input = RelationsInput { sessions: &[], sessions_failed: false, now_ms: xiox_app::now_ms() };
+    let scan = analyze_relations(&w.proj, &[w.copy.clone()], &input).unwrap();
+    let listed = scan.items.iter().find(|i| i.path.as_ref() == Some(&w.copy)).unwrap();
+    assert_eq!(listed.level, Level::Danger, "{listed:?}");
+    let req = CleanRequest { categories: vec![], include: vec![w.copy.clone()], confirm_danger: vec![w.copy.clone()], mode: RemoveMode::Recycle };
     let chosen = select(&scan, &req).unwrap();
     let out = clean_without_sessions(&scan, &chosen, RemoveMode::Recycle, true, &[]);
     let item = out.items.iter().find(|o| o.path.as_ref() == Some(&w.copy)).unwrap();

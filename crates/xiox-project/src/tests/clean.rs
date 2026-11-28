@@ -373,7 +373,8 @@ fn worktree_that_gained_a_private_commit_after_the_analysis_is_skipped() {
     commit(&wt, "only-here.txt");
     let out = run(&scan, &chosen, RemoveMode::Permanent, false);
     match outcome_of(&out, &wt) {
-        Outcome::Skipped { reason } => assert!(reason.starts_with("now blocked:"), "{reason}"),
+        // Its commit is only on its branch now: no longer blocked, but caution, so the flag that chose it no longer does.
+        Outcome::Skipped { reason } => assert!(reason.starts_with("now needs a manual review"), "{reason}"),
         o => panic!("{o:?}"),
     }
     assert!(wt.join("only-here.txt").exists());
