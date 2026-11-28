@@ -197,8 +197,9 @@ pub fn own_commits(worktree: &Path) -> Option<u32> {
         .filter(|o| o.ok)
         .map(|o| o.text())
         .filter(|b| !b.is_empty());
-    // `--exclude` applies to the `--branches` after it: the branch checked out here does not count as "elsewhere".
-    let exclude = current.map(|b| format!("--exclude=refs/heads/{b}"));
+    // `--exclude` applies to the `--branches` after it, and with `--branches` its pattern is the branch name without
+    // `refs/heads/` (git-rev-list(1)): the branch checked out here does not count as "elsewhere".
+    let exclude = current.map(|b| format!("--exclude={b}"));
     let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
     if let Some(e) = &exclude {
         args.push(e);
